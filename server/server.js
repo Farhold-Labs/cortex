@@ -6713,6 +6713,15 @@ app.get('/api/notifications/by-wave', authenticateToken, (req, res) => {
   res.json({ countsByWave });
 });
 
+// Get pending notifications for polling/sync (marks as delivered)
+app.get('/api/notifications/pending', authenticateToken, (req, res) => {
+  const pending = db.getPendingNotifications(req.user.userId);
+  if (pending.length > 0) {
+    db.markNotificationsPushSent(pending.map(n => n.id));
+  }
+  res.json({ notifications: pending });
+});
+
 // Mark notification as read
 app.post('/api/notifications/:id/read', authenticateToken, (req, res) => {
   const success = db.markNotificationRead(req.params.id);
@@ -16599,31 +16608,9 @@ app.post('/api/droplets', authenticateToken, (req, res) => {
     createDropletNotifications(droplet, wave, author);
   }
 
-  // Create push notification payload
-  const senderName = droplet.sender_name || db.findUserById(req.user.userId)?.displayName || 'Someone';
-  // For encrypted droplets, don't reveal content in push notification
-  const contentPreview = req.body.encrypted
-    ? 'Encrypted message'
-    : content.replace(/<[^>]*>/g, '').substring(0, 100);
-  const pushPayload = {
-    type: 'message',
-    title: `New droplet in ${wave.title}`,
-    body: `${senderName}: ${contentPreview}${!req.body.encrypted && content.length > 100 ? '...' : ''}`,
-    url: `/?wave=${waveId}`,
-    waveId,
-    messageId: droplet.id,
-    dropletId: droplet.id,
-    encrypted: !!req.body.encrypted
-  };
-
-  // Broadcast to connected users and send push to offline users
-  broadcastToWaveWithPush(
-    waveId,
-    { type: 'new_droplet', data: droplet },
-    pushPayload,
-    null,
-    req.user.userId // Exclude sender from push notifications
-  );
+  // Broadcast to connected users via WebSocket only
+  // Push notifications are now handled by createDropletNotifications() for mentions/replies
+  broadcastToWave(waveId, { type: 'new_droplet', data: droplet });
 
   // Also broadcast legacy event for backward compatibility
   broadcastToWave(waveId, { type: 'new_message', data: droplet });
@@ -16966,26 +16953,7 @@ app.post('/api/messages', authenticateToken, deprecatedEndpoint, (req, res) => {
     privacy: wave.privacy,
   });
 
-  // Create push notification payload
-  const senderName = message.sender_name || db.findUserById(req.user.userId)?.displayName || 'Someone';
-  const contentPreview = content.replace(/<[^>]*>/g, '').substring(0, 100);
-  const pushPayload = {
-    type: 'message',
-    title: `New message in ${wave.title}`,
-    body: `${senderName}: ${contentPreview}${content.length > 100 ? '...' : ''}`,
-    url: `/?wave=${waveId}`,
-    waveId,
-    messageId: message.id
-  };
-
-  // Broadcast to connected users and send push to offline users
-  broadcastToWaveWithPush(
-    waveId,
-    { type: 'new_message', data: message },
-    pushPayload,
-    null,
-    req.user.userId // Exclude sender from push notifications
-  );
+  broadcastToWave(waveId, { type: 'new_message', data: message });
 
   // Trigger outgoing webhooks (async, non-blocking)
   triggerWaveWebhooks(waveId, message, wave);
@@ -17783,6 +17751,26 @@ function createDropletNotifications(droplet, wave, author) {
         groupKey: `mention:${wave.id}:${droplet.id}`
       });
 
+      // Delivery routing: WS-connected → mark delivered; offline → send push immediately
+      const mentionIsOnline = clients.has(mentionedUser.id) && clients.get(mentionedUser.id).size > 0;
+      if (mentionIsOnline) {
+        db.markNotificationPushSent(notification.id);
+      } else {
+        db.markNotificationPushSent(notification.id);
+        const isEncrypted = droplet.encrypted || droplet.nonce;
+        sendPushNotification(mentionedUser.id, {
+          type: 'direct_mention',
+          title: notification.title,
+          body: `in ${wave.title}`,
+          url: `/?wave=${wave.id}`,
+          waveId: wave.id,
+          messageId: droplet.id,
+          senderId: author.id,
+          senderHandle: author.handle,
+          encrypted: !!isEncrypted,
+        });
+      }
+
       notificationsToSend.push({ userId: mentionedUser.id, notification });
     }
   }
@@ -17804,6 +17792,25 @@ function createDropletNotifications(droplet, wave, author) {
           preview: contentPreview,
           groupKey: `reply:${wave.id}:${parentDroplet.id}`
         });
+
+        const replyIsOnline = clients.has(parentDroplet.authorId) && clients.get(parentDroplet.authorId).size > 0;
+        if (replyIsOnline) {
+          db.markNotificationPushSent(notification.id);
+        } else {
+          db.markNotificationPushSent(notification.id);
+          const isEncrypted = droplet.encrypted || droplet.nonce;
+          sendPushNotification(parentDroplet.authorId, {
+            type: 'reply',
+            title: notification.title,
+            body: `in ${wave.title}`,
+            url: `/?wave=${wave.id}`,
+            waveId: wave.id,
+            messageId: droplet.id,
+            senderId: author.id,
+            senderHandle: author.handle,
+            encrypted: !!isEncrypted,
+          });
+        }
 
         notificationsToSend.push({ userId: parentDroplet.authorId, notification });
       }
@@ -17844,6 +17851,13 @@ function createDropletNotifications(droplet, wave, author) {
       preview: contentPreview,
       groupKey: `wave:${wave.id}`
     });
+
+    // wave_activity: mark as delivered if online (WS handles it), leave push_sent=0 if offline
+    // No push sent for wave_activity — polling routine catches these
+    const activityIsOnline = clients.has(participant.id) && clients.get(participant.id).size > 0;
+    if (activityIsOnline) {
+      db.markNotificationPushSent(notification.id);
+    }
 
     notificationsToSend.push({ userId: participant.id, notification });
   }

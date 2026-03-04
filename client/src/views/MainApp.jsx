@@ -10,6 +10,7 @@ import { updateAppBadge, subscribeToPush } from '../utils/pwa.js';
 import { setupCapacitorPushListeners } from '../utils/capacitor-push.js';
 import { updateDocumentTitle, startFaviconFlash, stopFaviconFlash } from '../utils/favicon.js';
 import { getCachedWaveList, cacheWaveList } from '../utils/waveCache.js';
+import { NotificationSync } from '../utils/notification-sync.js';
 import BottomNav from '../components/ui/BottomNav.jsx';
 import { Toast, OfflineIndicator, VersionMismatchBanner, ScanLines, GlowText } from '../components/ui/SimpleComponents.jsx';
 import NotificationBell from '../components/notifications/NotificationBell.jsx';
@@ -95,6 +96,8 @@ function MainApp({ sharePingId }) {
   const [notifPrefs, setNotifPrefs] = useState(null); // Notification preferences (v2.32.0)
   const notifPrefsRef = useRef(null); // Ref for WebSocket handler to avoid stale closure
   const typingTimeoutsRef = useRef({});
+  const notifSyncRef = useRef(null);
+  const selectedWaveRef = useRef(null);
   const { width, isMobile, isTablet, isDesktop, hasMeasured } = useWindowSize();
 
   // Keyboard shortcut: Ctrl+B / Cmd+B to toggle sidebar (desktop only)
@@ -108,6 +111,27 @@ function MainApp({ sharePingId }) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isMobile]);
+
+  // Keep selectedWaveRef fresh for notification sync
+  useEffect(() => { selectedWaveRef.current = selectedWave; }, [selectedWave]);
+
+  // Notification polling sync — catches missed notifications when push is unreliable
+  useEffect(() => {
+    if (!token) return;
+    const sync = new NotificationSync({
+      token,
+      getCurrentWaveId: () => selectedWaveRef.current?.id,
+      onNotificationsReceived: () => {
+        fetchAPI('/notifications/by-wave').then(result => {
+          setWaveNotifications(result.countsByWave || {});
+        }).catch(() => {});
+      },
+      onRefreshBell: () => setNotificationRefreshTrigger(prev => prev + 1),
+    });
+    sync.start();
+    notifSyncRef.current = sync;
+    return () => { sync.stop(); notifSyncRef.current = null; };
+  }, [token]);
 
   // Calculate font scale from user preferences
   const fontSizePreference = user?.preferences?.fontSize || 'medium';
@@ -745,6 +769,15 @@ function MainApp({ sharePingId }) {
 
   const { connected: wsConnected, sendMessage: sendWSMessage, serverVersion } = useWebSocket(token, handleWSMessage);
 
+  // Trigger notification poll on WebSocket reconnect
+  const prevWsConnectedRef = useRef(false);
+  useEffect(() => {
+    if (wsConnected && !prevWsConnectedRef.current) {
+      notifSyncRef.current?.onWebSocketReconnect();
+    }
+    prevWsConnectedRef.current = wsConnected;
+  }, [wsConnected]);
+
   const loadContacts = useCallback(async () => {
     try { setContacts(await fetchAPI('/contacts')); } catch (e) { console.error(e); }
   }, [fetchAPI]);
@@ -1061,7 +1094,8 @@ function MainApp({ sharePingId }) {
     const setupPushNotifications = async () => {
       // Capacitor native apps: always auto-register for FCM/APNs
       // User accepted permissions at install, no need for explicit opt-in
-      if (window.Capacitor?.isNativePlatform) {
+      // Also handles remote-origin WebView where bridge is unavailable but FCM token is stored
+      if (window.Capacitor?.isNativePlatform || localStorage.getItem('farhold_is_capacitor') === 'true') {
         console.log('[Push] Capacitor detected — auto-subscribing via native push');
         const result = await subscribeToPush(token, { silent: true });
         if (result.success) {
