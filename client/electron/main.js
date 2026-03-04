@@ -203,12 +203,26 @@ async function createWindow() {
   // Load the app
   if (isDev) {
     await mainWindow.loadURL('http://localhost:3000');
-    // Open DevTools in development
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // Load the user's saved server URL directly (or default)
     const serverUrl = getSavedServerUrl();
     await mainWindow.loadURL(serverUrl);
+
+    // Migration: if the web UI previously saved a server URL to localStorage
+    // (before Electron IPC persistence existed), pick it up and redirect.
+    // This runs once — after redirect the origins match and the check becomes a no-op.
+    mainWindow.webContents.once('did-finish-load', async () => {
+      try {
+        const storedUrl = await mainWindow.webContents.executeJavaScript(
+          `localStorage.getItem('farhold_server_url')`
+        );
+        if (storedUrl && storedUrl !== serverUrl) {
+          saveServerUrl(storedUrl);
+          await mainWindow.webContents.session.clearCache();
+          mainWindow.loadURL(storedUrl);
+        }
+      } catch {}
+    });
   }
 }
 
