@@ -159,39 +159,43 @@ const LoginScreen = ({ onAbout }) => {
     }
     setTestingServer(false);
 
+    storage.removeToken();
+    storage.removeUser();
+    storage.removeSessionStart();
+
     if (isCapacitorNative) {
-      // Native: save to Capacitor Preferences (cross-origin safe) and redirect
+      // Capacitor native: save to Preferences (cross-origin safe) and redirect
       const { Preferences } = await import('@capacitor/preferences');
       await Preferences.set({ key: 'cortex_server_url', value: url });
-      storage.removeToken();
-      storage.removeUser();
-      storage.removeSessionStart();
+      window.location.replace(url);
+    } else if (window.electronAPI?.setServerUrl) {
+      // Electron: persist in userData and navigate to new server
+      window.electronAPI.setServerUrl(url);
       window.location.replace(url);
     } else {
       // Web: use localStorage and reload
       storage.setServerUrl(url);
-      storage.removeToken();
-      storage.removeUser();
-      storage.removeSessionStart();
       window.location.reload();
     }
   };
 
   const handleResetServer = async () => {
+    storage.removeToken();
+    storage.removeUser();
+    storage.removeSessionStart();
+
     if (isCapacitorNative) {
-      // Native: clear Preferences and redirect to default server
+      // Capacitor native: clear Preferences and redirect to default
       const { Preferences } = await import('@capacitor/preferences');
       await Preferences.remove({ key: 'cortex_server_url' });
-      storage.removeToken();
-      storage.removeUser();
-      storage.removeSessionStart();
+      window.location.replace('https://cortex.farhold.com');
+    } else if (window.electronAPI?.removeServerUrl) {
+      // Electron: clear userData preference and navigate to default
+      window.electronAPI.removeServerUrl();
       window.location.replace('https://cortex.farhold.com');
     } else {
       // Web: clear localStorage and reload
       storage.removeServerUrl();
-      storage.removeToken();
-      storage.removeUser();
-      storage.removeSessionStart();
       window.location.reload();
     }
   };
