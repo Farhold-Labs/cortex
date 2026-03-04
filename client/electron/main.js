@@ -110,6 +110,14 @@ ipcMain.on('show-notification', (_event, { title, body }) => {
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
+ipcMain.on('clear-cache-and-reload', async () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    await win.webContents.session.clearCache();
+    win.webContents.reloadIgnoringCache();
+  }
+});
+
 // ============ CREATE WINDOW ============
 
 let mainWindow = null;

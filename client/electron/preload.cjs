@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('deep-link', (_event, url) => callback(url));
   },
 
+  // Clear cache and hard-reload (for version mismatch refresh)
+  clearCacheAndReload: () => ipcRenderer.send('clear-cache-and-reload'),
+
   // Listen for auto-update events
   onUpdateAvailable: (callback) => {
     ipcRenderer.on('update-available', (_event, version) => callback(version));

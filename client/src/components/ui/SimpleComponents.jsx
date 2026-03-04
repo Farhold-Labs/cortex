@@ -186,7 +186,13 @@ export const VersionMismatchBanner = ({ serverVersion, clientVersion }) => {
     }}>
       <span>{VERSION_CHECK.outdated} (v{serverVersion})</span>
       <button
-        onClick={() => window.location.reload()}
+        onClick={() => {
+          if (window.electronAPI?.clearCacheAndReload) {
+            window.electronAPI.clearCacheAndReload();
+          } else {
+            window.location.reload();
+          }
+        }}
         style={{
           background: 'var(--bg-base)',
           color: 'var(--accent-amber)',
