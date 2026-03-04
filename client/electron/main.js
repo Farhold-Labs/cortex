@@ -2,22 +2,44 @@ import { app, BrowserWindow, ipcMain, Notification, screen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import serve from 'electron-serve';
 import electronUpdater from 'electron-updater';
 const { autoUpdater } = electronUpdater;
+import contextMenu from 'electron-context-menu';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const isDev = !app.isPackaged;
-const APP_PROTOCOL = 'cortex';
 
-// Serve redirect page in production via custom protocol
-const loadURL = isDev ? null : serve({ directory: path.join(__dirname, 'app') });
+contextMenu({
+  showSaveImageAs: true,
+  showCopyImage: true,
+  showCopyImageAddress: true,
+  showInspectElement: isDev,
+  showLookUpSelection: process.platform === 'darwin',
+  showSearchWithGoogle: true,
+});
+const APP_PROTOCOL = 'cortex';
 
 // ============ WINDOW STATE PERSISTENCE ============
 
 const stateFile = path.join(app.getPath('userData'), 'window-state.json');
+const serverUrlFile = path.join(app.getPath('userData'), 'server-url.txt');
+const DEFAULT_SERVER_URL = 'https://cortex.farhold.com';
+
+function getSavedServerUrl() {
+  try {
+    if (fs.existsSync(serverUrlFile)) {
+      const url = fs.readFileSync(serverUrlFile, 'utf-8').trim();
+      if (url) return url;
+    }
+  } catch {}
+  return DEFAULT_SERVER_URL;
+}
+
+function saveServerUrl(url) {
+  try { fs.writeFileSync(serverUrlFile, url); } catch {}
+}
 
 function loadWindowState() {
   try {
@@ -100,6 +122,24 @@ ipcMain.on('show-notification', (_event, { title, body }) => {
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
+ipcMain.on('set-server-url', (_event, url) => {
+  saveServerUrl(url);
+});
+
+ipcMain.handle('get-server-url', () => getSavedServerUrl());
+
+ipcMain.on('remove-server-url', () => {
+  try { fs.unlinkSync(serverUrlFile); } catch {}
+});
+
+ipcMain.on('clear-cache-and-reload', async () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    await win.webContents.session.clearCache();
+    win.webContents.reloadIgnoringCache();
+  }
+});
+
 // ============ CREATE WINDOW ============
 
 let mainWindow = null;
@@ -138,6 +178,7 @@ async function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
+      spellcheck: true,
     },
     // Hide frame on macOS for native title bar integration
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
@@ -162,12 +203,26 @@ async function createWindow() {
   // Load the app
   if (isDev) {
     await mainWindow.loadURL('http://localhost:3000');
-    // Open DevTools in development
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // electron-serve loads the redirect page, which navigates to the remote URL.
-    // The navigation aborts the original load — catch the expected ERR_ABORTED.
-    await loadURL(mainWindow).catch(() => {});
+    const serverUrl = getSavedServerUrl();
+    await mainWindow.loadURL(serverUrl);
+
+    // Migration: if the web UI previously saved a server URL to localStorage
+    // (before Electron IPC persistence existed), pick it up and redirect.
+    // This runs once — after redirect the origins match and the check becomes a no-op.
+    mainWindow.webContents.once('did-finish-load', async () => {
+      try {
+        const storedUrl = await mainWindow.webContents.executeJavaScript(
+          `localStorage.getItem('farhold_server_url')`
+        );
+        if (storedUrl && storedUrl !== serverUrl) {
+          saveServerUrl(storedUrl);
+          await mainWindow.webContents.session.clearCache();
+          mainWindow.loadURL(storedUrl);
+        }
+      } catch {}
+    });
   }
 }
 

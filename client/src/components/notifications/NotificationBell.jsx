@@ -252,7 +252,7 @@ const NotificationBell = ({ fetchAPI, onNavigateToWave, isMobile, refreshTrigger
   // Load on mount and periodically
   useEffect(() => {
     loadNotifications();
-    const interval = setInterval(loadNotifications, 60000); // Refresh every minute
+    const interval = setInterval(loadNotifications, 120000); // Refresh every 2 min (sync routine handles freshness)
     return () => clearInterval(interval);
   }, [loadNotifications]);
 

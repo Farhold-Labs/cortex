@@ -1,7 +1,7 @@
 // ============ PWA UTILITIES ============
 
 import { API_URL, isNativeApp } from '../config/constants.js';
-import { registerCapacitorPush, unregisterCapacitorPush } from './capacitor-push.js';
+import { registerCapacitorPush, unregisterCapacitorPush, registerStoredFcmToken, unregisterStoredFcmToken } from './capacitor-push.js';
 
 // PWA Badge API - shows unread count on installed app icon
 // Note: Only works when installed as PWA (not in browser tab)
@@ -36,6 +36,13 @@ export async function subscribeToPush(token, { silent = false } = {}) {
   if (window.Capacitor?.isNativePlatform) {
     console.log('[Push] Capacitor detected — delegating to native push');
     return registerCapacitorPush(token);
+  }
+
+  // Capacitor WebView on remote server — bridge unavailable, use stored FCM token
+  // The launcher script obtains the FCM token on local origin and passes it via URL hash
+  if (localStorage.getItem('farhold_is_capacitor') === 'true') {
+    console.log('[Push] Capacitor WebView (remote origin) — using stored FCM token');
+    return registerStoredFcmToken(token);
   }
 
   // Other native apps (Electron) don't support web push
@@ -221,6 +228,12 @@ export async function unsubscribeFromPush(token) {
   // Capacitor native apps — unregister FCM token
   if (window.Capacitor?.isNativePlatform) {
     await unregisterCapacitorPush(token);
+    return true;
+  }
+
+  // Capacitor WebView on remote origin — unregister stored FCM token
+  if (localStorage.getItem('farhold_is_capacitor') === 'true') {
+    await unregisterStoredFcmToken(token);
     return true;
   }
 

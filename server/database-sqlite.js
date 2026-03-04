@@ -6589,6 +6589,50 @@ export class DatabaseSQLite {
     `).run(notificationId);
   }
 
+  getPendingNotifications(userId) {
+    // Clean up: mark notifications as read if user already read the underlying message
+    const stale = this.db.prepare(`
+      SELECT n.id FROM notifications n
+      INNER JOIN ping_read_by prb ON prb.ping_id = n.ping_id AND prb.user_id = n.user_id
+      WHERE n.user_id = ? AND n.push_sent = 0 AND n.read = 0 AND n.dismissed = 0
+        AND n.ping_id IS NOT NULL
+    `).all(userId);
+    if (stale.length > 0) {
+      const now = new Date().toISOString();
+      const stmt = this.db.prepare('UPDATE notifications SET push_sent = 1, read = 1, read_at = ? WHERE id = ?');
+      const tx = this.db.transaction(() => { for (const r of stale) stmt.run(now, r.id); });
+      tx();
+    }
+
+    // Fetch genuinely pending notifications
+    const rows = this.db.prepare(`
+      SELECT n.*, u.handle as actor_handle, u.display_name as actor_display_name,
+             u.avatar_url as actor_avatar_url, w.title as wave_title
+      FROM notifications n
+      LEFT JOIN users u ON n.actor_id = u.id
+      LEFT JOIN waves w ON n.wave_id = w.id
+      WHERE n.user_id = ? AND n.push_sent = 0 AND n.read = 0 AND n.dismissed = 0
+      ORDER BY n.created_at ASC LIMIT 50
+    `).all(userId);
+
+    return rows.map(r => ({
+      id: r.id, type: r.type, waveId: r.wave_id, dropletId: r.ping_id,
+      actorId: r.actor_id, title: r.title, body: r.body, preview: r.preview,
+      createdAt: r.created_at, groupKey: r.group_key,
+      actorHandle: r.actor_handle, actorDisplayName: r.actor_display_name,
+      actorAvatarUrl: r.actor_avatar_url, waveTitle: r.wave_title,
+    }));
+  }
+
+  markNotificationsPushSent(notificationIds) {
+    if (!notificationIds?.length) return 0;
+    const stmt = this.db.prepare('UPDATE notifications SET push_sent = 1 WHERE id = ?');
+    const tx = this.db.transaction((ids) => {
+      let c = 0; for (const id of ids) c += stmt.run(id).changes; return c;
+    });
+    return tx(notificationIds);
+  }
+
   deleteOldNotifications(daysOld = 30) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - daysOld);

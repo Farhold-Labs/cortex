@@ -642,7 +642,152 @@
         }
       })();
     </script>
+
+    <!-- Detect Capacitor native context from launcher redirect (runs on ANY origin) -->
+    <script>
+      (function() {
+        var hash = window.location.hash;
+        if (!hash) return;
+        try {
+          if (hash.indexOf('#cap=') === 0) {
+            // Launcher passed FCM token — store it and mark as Capacitor WebView
+            var fcmToken = decodeURIComponent(hash.substring(5));
+            localStorage.setItem('farhold_fcm_token', fcmToken);
+            localStorage.setItem('farhold_is_capacitor', 'true');
+          } else if (hash === '#capacitor') {
+            // Launcher redirect without FCM token (permission not granted yet)
+            localStorage.setItem('farhold_is_capacitor', 'true');
+          } else {
+            return; // Not a Capacitor hash — don't touch URL
+          }
+          if (history.replaceState) {
+            history.replaceState(null, '', window.location.pathname + window.location.search);
+          }
+        } catch(e) {}
+      })();
+    </script>
+
+    <!-- Capacitor native app: server selector / redirect launcher -->
+    <script>
+      (function() {
+        // Only run on native Capacitor platform
+        if (!window.Capacitor || !window.Capacitor.isNativePlatform || !window.Capacitor.isNativePlatform()) return;
+
+        // If we're already on a remote server (redirected), let React load normally
+        var origin = window.location.origin.toLowerCase();
+        if (origin.indexOf('localhost') === -1 && origin.indexOf('capacitor') === -1 && origin.indexOf('ionic') === -1) return;
+
+        // Use Capacitor Preferences plugin (app-scoped, cross-origin safe)
+        var Preferences = window.Capacitor.Plugins.Preferences;
+        var DEFAULT_SERVER = 'https://cortex.farhold.com';
+
+        // Stop page from loading React while we decide
+        document.addEventListener('DOMContentLoaded', function(e) {
+          var root = document.getElementById('root');
+          if (root) root.style.display = 'none';
+        });
+
+        Preferences.get({ key: 'cortex_server_url' }).then(function(result) {
+          if (result && result.value) {
+            // Saved server found — set flag for capacitor-boot.js module to handle
+            // The module script will get the FCM token (via proper ES import) and redirect
+            window.__capRedirectUrl = result.value;
+          } else {
+            // No saved server — show selector UI
+            showServerSelector();
+          }
+        }).catch(function() {
+          showServerSelector();
+        });
+
+        function showServerSelector() {
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', renderSelector);
+          } else {
+            renderSelector();
+          }
+        }
+
+        function renderSelector() {
+          var root = document.getElementById('root');
+          if (root) root.style.display = 'none';
+          // Remove module scripts to prevent React and capacitor-boot from loading
+          var scripts = document.querySelectorAll('script[type="module"]');
+          scripts.forEach(function(s) { s.remove(); });
+
+          var container = document.createElement('div');
+          container.id = 'server-selector';
+          container.innerHTML =
+            '<div style="min-height:100vh;background:linear-gradient(180deg,#0d150d,#050805);display:flex;align-items:center;justify-content:center;font-family:\'Courier New\',monospace;padding:20px">' +
+              '<div style="width:100%;max-width:400px;padding:32px;background:linear-gradient(135deg,#0d150d,#1a2a1a);border:2px solid rgba(255,210,63,0.25)">' +
+                '<div style="text-align:center;margin-bottom:32px">' +
+                  '<div style="font-size:2rem;font-weight:700;color:#ffd23f;text-shadow:0 0 20px rgba(255,210,63,0.4)">CORTEX</div>' +
+                  '<div style="color:#5a6a5a;font-size:0.8rem;margin-top:8px">SELECT PORT</div>' +
+                '</div>' +
+                '<label style="display:block;color:#7a8a7a;font-size:0.75rem;margin-bottom:8px">SERVER URL</label>' +
+                '<input id="server-url-input" type="url" value="' + DEFAULT_SERVER + '" style="width:100%;padding:12px 16px;box-sizing:border-box;background:#0a100a;border:1px solid #2a3a2a;color:#d5e5d5;font-size:0.9rem;font-family:inherit" />' +
+                '<div style="color:#5a6a5a;font-size:0.65rem;margin-top:4px;margin-bottom:16px">Enter the URL of the Cortex port to connect to</div>' +
+                '<div id="server-error" style="display:none;color:#ff6b35;font-size:0.8rem;margin-bottom:12px;padding:8px;background:rgba(255,107,53,0.06);border:1px solid rgba(255,107,53,0.19)"></div>' +
+                '<button id="server-connect-btn" style="width:100%;padding:14px;background:rgba(255,210,63,0.13);border:1px solid #ffd23f;color:#ffd23f;cursor:pointer;font-family:monospace;font-size:0.9rem">CONNECT</button>' +
+              '</div>' +
+            '</div>';
+          document.body.appendChild(container);
+
+          var input = document.getElementById('server-url-input');
+          var btn = document.getElementById('server-connect-btn');
+          var errDiv = document.getElementById('server-error');
+
+          btn.addEventListener('click', function() {
+            var url = input.value.trim();
+            if (!url) { showError('Please enter a server URL'); return; }
+            if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+            url = url.replace(/\/+$/, '');
+            try { new URL(url); } catch(e) { showError('Invalid URL format'); return; }
+
+            btn.disabled = true;
+            btn.textContent = 'CONNECTING...';
+            btn.style.color = '#5a6a5a';
+            btn.style.borderColor = '#2a3a2a';
+            btn.style.cursor = 'not-allowed';
+            errDiv.style.display = 'none';
+
+            var controller = new AbortController();
+            var timeout = setTimeout(function() { controller.abort(); }, 5000);
+
+            fetch(url + '/api/server/info', { signal: controller.signal })
+              .then(function(res) {
+                clearTimeout(timeout);
+                if (!res.ok) throw new Error('Server returned ' + res.status);
+                return saveAndRedirect(url);
+              })
+              .catch(function(err) {
+                clearTimeout(timeout);
+                showError('Could not verify server. Connecting anyway...');
+                setTimeout(function() { saveAndRedirect(url); }, 1000);
+              });
+          });
+
+          input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') btn.click();
+          });
+
+          function showError(msg) {
+            errDiv.textContent = msg;
+            errDiv.style.display = 'block';
+          }
+
+          function saveAndRedirect(url) {
+            return Preferences.set({ key: 'cortex_server_url', value: url }).then(function() {
+              // Reload so the launcher finds the saved URL and capacitor-boot.js handles FCM + redirect
+              window.location.reload();
+            });
+          }
+        }
+      })();
+    </script>
+
     <div id="root"></div>
+    <script type="module" src="/capacitor-boot.js"></script>
     <script type="module" src="/main.jsx"></script>
   </body>
 </html>

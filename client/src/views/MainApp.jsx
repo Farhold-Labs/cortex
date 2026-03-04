@@ -10,6 +10,7 @@ import { updateAppBadge, subscribeToPush } from '../utils/pwa.js';
 import { setupCapacitorPushListeners } from '../utils/capacitor-push.js';
 import { updateDocumentTitle, startFaviconFlash, stopFaviconFlash } from '../utils/favicon.js';
 import { getCachedWaveList, cacheWaveList } from '../utils/waveCache.js';
+import { NotificationSync } from '../utils/notification-sync.js';
 import BottomNav from '../components/ui/BottomNav.jsx';
 import { Toast, OfflineIndicator, VersionMismatchBanner, ScanLines, GlowText } from '../components/ui/SimpleComponents.jsx';
 import NotificationBell from '../components/notifications/NotificationBell.jsx';
@@ -54,7 +55,17 @@ function MainApp({ sharePingId }) {
   const [waves, setWaves] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [selectedWave, setSelectedWave] = useState(null);
+  // Tab system (v2.35.0) — replaces single selectedWave
+  const MAX_TABS = 10;
+  const [openTabs, setOpenTabs] = useState([]);       // [{ id, waveId, title }]
+  const [activeTabId, setActiveTabId] = useState(null);
+  const tabIdCounter = useRef(0);
+
+  // Derived for backward compatibility
+  const activeTab = openTabs.find(t => t.id === activeTabId) || null;
+  const selectedWave = activeTab ? { id: activeTab.waveId, title: activeTab.title } : null;
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [scrollToMessageId, setScrollToMessageId] = useState(null); // Ping to scroll to after wave loads
   const [focusStack, setFocusStack] = useState([]); // Array of { waveId, pingId, ping } for Focus View navigation
   const [showNewWave, setShowNewWave] = useState(false);
@@ -85,7 +96,42 @@ function MainApp({ sharePingId }) {
   const [notifPrefs, setNotifPrefs] = useState(null); // Notification preferences (v2.32.0)
   const notifPrefsRef = useRef(null); // Ref for WebSocket handler to avoid stale closure
   const typingTimeoutsRef = useRef({});
+  const notifSyncRef = useRef(null);
+  const selectedWaveRef = useRef(null);
   const { width, isMobile, isTablet, isDesktop, hasMeasured } = useWindowSize();
+
+  // Keyboard shortcut: Ctrl+B / Cmd+B to toggle sidebar (desktop only)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'b' && !isMobile) {
+        e.preventDefault();
+        setSidebarCollapsed(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMobile]);
+
+  // Keep selectedWaveRef fresh for notification sync
+  useEffect(() => { selectedWaveRef.current = selectedWave; }, [selectedWave]);
+
+  // Notification polling sync — catches missed notifications when push is unreliable
+  useEffect(() => {
+    if (!token) return;
+    const sync = new NotificationSync({
+      token,
+      getCurrentWaveId: () => selectedWaveRef.current?.id,
+      onNotificationsReceived: () => {
+        fetchAPI('/notifications/by-wave').then(result => {
+          setWaveNotifications(result.countsByWave || {});
+        }).catch(() => {});
+      },
+      onRefreshBell: () => setNotificationRefreshTrigger(prev => prev + 1),
+    });
+    sync.start();
+    notifSyncRef.current = sync;
+    return () => { sync.stop(); notifSyncRef.current = null; };
+  }, [token]);
 
   // Calculate font scale from user preferences
   const fontSizePreference = user?.preferences?.fontSize || 'medium';
@@ -196,7 +242,7 @@ function MainApp({ sharePingId }) {
           if (data.wave?.id) {
             // Navigate to the wave and scroll to the ping
             console.log('[Share] Navigating to wave:', data.wave.id);
-            setSelectedWave({ id: data.wave.id, title: data.wave.title });
+            openWaveTab({ id: data.wave.id, title: data.wave.title });
             setScrollToMessageId(sharePingId);
             setActiveView('waves');
             // Clear the URL (works for both /?share=x and /share/x formats)
@@ -218,6 +264,68 @@ function MainApp({ sharePingId }) {
 
   const showToastMsg = useCallback((message, type) => setToast({ message, type }), []);
 
+  // ============ TAB MANAGEMENT (v2.35.0) ============
+
+  const openWaveTab = useCallback((wave, { background = false } = {}) => {
+    if (!wave?.id) return;
+
+    setOpenTabs(prev => {
+      // Check if wave is already open
+      const existing = prev.find(t => t.waveId === wave.id);
+      if (existing) {
+        // Switch to existing tab (unless background)
+        if (!background) {
+          setActiveTabId(existing.id);
+          setFocusStack([]);
+        }
+        return prev;
+      }
+
+      // Enforce tab limit
+      if (prev.length >= MAX_TABS) {
+        setToast({ message: `Maximum ${MAX_TABS} tabs allowed. Close a tab first.`, type: 'error' });
+        return prev;
+      }
+
+      // Create new tab
+      tabIdCounter.current += 1;
+      const newTab = { id: `tab-${tabIdCounter.current}`, waveId: wave.id, title: wave.title || '' };
+      if (!background) {
+        setActiveTabId(newTab.id);
+        setFocusStack([]);
+      }
+      return [...prev, newTab];
+    });
+  }, []);
+
+  const closeTab = useCallback((tabId) => {
+    setOpenTabs(prev => {
+      const idx = prev.findIndex(t => t.id === tabId);
+      if (idx === -1) return prev;
+
+      const next = prev.filter(t => t.id !== tabId);
+
+      // If closing the active tab, activate an adjacent one
+      if (tabId === activeTabId) {
+        if (next.length > 0) {
+          // Prefer the tab to the right, then left
+          const newIdx = Math.min(idx, next.length - 1);
+          setActiveTabId(next[newIdx].id);
+        } else {
+          setActiveTabId(null);
+        }
+        setFocusStack([]);
+      }
+
+      return next;
+    });
+  }, [activeTabId]);
+
+  const switchTab = useCallback((tabId) => {
+    setActiveTabId(tabId);
+    setFocusStack([]);
+  }, []);
+
   // Debounced loadWaves to prevent multiple simultaneous API calls
   const loadWavesTimerRef = useRef(null);
   const loadWavesInProgressRef = useRef(false);
@@ -228,7 +336,7 @@ function MainApp({ sharePingId }) {
       const targetWave = waves.find(w => w.id === popoutCallWaveId);
       if (targetWave) {
         console.log('📞 Pop-out call window: Auto-selecting wave', targetWave.title);
-        setSelectedWave(targetWave);
+        openWaveTab(targetWave);
       }
     }
   }, [isPopoutWindow, popoutCallWaveId, waves, selectedWave]);
@@ -416,10 +524,24 @@ function MainApp({ sharePingId }) {
       // not here — see the notification handler below
     } else if (data.type === 'wave_deleted') {
       showToastMsg(NOTIFICATION.waveDeleted(data.wave?.title || 'Unknown'), 'info');
-      if (selectedWave?.id === data.waveId) {
-        setSelectedWave(null);
-        setActiveView('waves');
-      }
+      // Close tab for deleted wave
+      setOpenTabs(prev => {
+        const tab = prev.find(t => t.waveId === data.waveId);
+        if (tab) {
+          const next = prev.filter(t => t.id !== tab.id);
+          if (tab.id === activeTabId) {
+            if (next.length > 0) {
+              const idx = prev.indexOf(tab);
+              setActiveTabId(next[Math.min(idx, next.length - 1)].id);
+            } else {
+              setActiveTabId(null);
+            }
+            setFocusStack([]);
+          }
+          return next;
+        }
+        return prev;
+      });
       loadWaves();
     } else if (data.type === 'wave_key_rotated') {
       // E2EE: Wave key was rotated, invalidate cached key
@@ -440,11 +562,9 @@ function MainApp({ sharePingId }) {
     } else if (data.type === 'participant_removed') {
       // Someone was removed from a wave we're in
       if (data.userId === user?.id) {
-        // We were removed
-        if (selectedWave?.id === data.waveId) {
-          setSelectedWave(null);
-          setActiveView('waves');
-        }
+        // We were removed — close the tab for this wave
+        const removedTab = openTabs.find(t => t.waveId === data.waveId);
+        if (removedTab) closeTab(removedTab.id);
         showToastMsg(NOTIFICATION.removedFromWave(data.wave?.title || 'a wave'), 'info');
         loadWaves();
       } else {
@@ -468,12 +588,10 @@ function MainApp({ sharePingId }) {
       loadWaves();
       loadCategories();
     } else if (data.type === 'removed_from_wave') {
-      // We were removed from a wave (by someone else)
+      // We were removed from a wave (by someone else) — close its tab
       showToastMsg(NOTIFICATION.removedFromWave(data.wave?.title || 'a wave'), 'info');
-      if (selectedWave?.id === data.wave?.id) {
-        setSelectedWave(null);
-        setActiveView('waves');
-      }
+      const removedTab2 = openTabs.find(t => t.waveId === data.wave?.id);
+      if (removedTab2) closeTab(removedTab2.id);
       loadWaves();
     } else if (data.type === 'user_typing') {
       // Handle typing indicator
@@ -577,7 +695,7 @@ function MainApp({ sharePingId }) {
                 n.onclick = () => {
                   window.focus();
                   if (notif.waveId) {
-                    setSelectedWave({ id: notif.waveId, title: '' });
+                    openWaveTab({ id: notif.waveId, title: '' });
                     setActiveView('waves');
                   }
                 };
@@ -647,9 +765,18 @@ function MainApp({ sharePingId }) {
         [waveId]: prev[waveId] ? { ...prev[waveId], participants } : prev[waveId]
       }));
     }
-  }, [loadWaves, selectedWave, showToastMsg, user, waves, setSelectedWave, setActiveView, fetchAPI, watchPartyPlayer]);
+  }, [loadWaves, selectedWave, showToastMsg, user, waves, openWaveTab, closeTab, openTabs, activeTabId, setActiveView, fetchAPI, watchPartyPlayer]);
 
   const { connected: wsConnected, sendMessage: sendWSMessage, serverVersion } = useWebSocket(token, handleWSMessage);
+
+  // Trigger notification poll on WebSocket reconnect
+  const prevWsConnectedRef = useRef(false);
+  useEffect(() => {
+    if (wsConnected && !prevWsConnectedRef.current) {
+      notifSyncRef.current?.onWebSocketReconnect();
+    }
+    prevWsConnectedRef.current = wsConnected;
+  }, [wsConnected]);
 
   const loadContacts = useCallback(async () => {
     try { setContacts(await fetchAPI('/contacts')); } catch (e) { console.error(e); }
@@ -853,15 +980,27 @@ function MainApp({ sharePingId }) {
     });
   }, []);
 
+  // Sync tab titles when waves data updates
+  useEffect(() => {
+    if (waves.length === 0 || openTabs.length === 0) return;
+    setOpenTabs(prev => prev.map(tab => {
+      const wave = waves.find(w => w.id === tab.waveId);
+      if (wave && wave.title !== tab.title) {
+        return { ...tab, title: wave.title };
+      }
+      return tab;
+    }));
+  }, [waves]);
+
   // Navigate to a different wave (used after breakout)
   const handleNavigateToWave = useCallback((wave) => {
     // Clear focus stack and navigate to the new wave
     setFocusStack([]);
-    setSelectedWave(wave);
+    openWaveTab(wave);
     setActiveView('waves');
     // Reload waves to include the new one
     loadWaves();
-  }, [loadWaves]);
+  }, [loadWaves, openWaveTab]);
 
   // Navigate to a wave by ID (used by notifications)
   const handleNavigateToWaveById = useCallback(async (waveId, pingId) => {
@@ -873,7 +1012,7 @@ function MainApp({ sharePingId }) {
       }
       if (wave) {
         setFocusStack([]);
-        setSelectedWave(wave);
+        openWaveTab(wave);
         setActiveView('waves');
 
         // If pingId provided, mark it as read and set it for WaveView to scroll to
@@ -955,7 +1094,8 @@ function MainApp({ sharePingId }) {
     const setupPushNotifications = async () => {
       // Capacitor native apps: always auto-register for FCM/APNs
       // User accepted permissions at install, no need for explicit opt-in
-      if (window.Capacitor?.isNativePlatform) {
+      // Also handles remote-origin WebView where bridge is unavailable but FCM token is stored
+      if (window.Capacitor?.isNativePlatform || localStorage.getItem('farhold_is_capacitor') === 'true') {
         console.log('[Push] Capacitor detected — auto-subscribing via native push');
         const result = await subscribeToPush(token, { silent: true });
         if (result.success) {
@@ -1006,7 +1146,7 @@ function MainApp({ sharePingId }) {
 
     setupCapacitorPushListeners(({ waveId }) => {
       console.log('[CapPush] Navigating to wave:', waveId);
-      setSelectedWave({ id: waveId, title: '' });
+      openWaveTab({ id: waveId, title: '' });
       setActiveView('waves');
     });
   }, []);
@@ -1029,7 +1169,7 @@ function MainApp({ sharePingId }) {
     // Find the wave and open it
     const wave = waves.find(w => w.id === result.waveId);
     if (wave) {
-      setSelectedWave(wave);
+      openWaveTab(wave);
       setScrollToMessageId(result.id);
       setActiveView('waves');
       setShowSearch(false);
@@ -1184,7 +1324,7 @@ function MainApp({ sharePingId }) {
               const pendingInvitations = view === 'groups' ? groupInvitations.length : 0;
               const badgeCount = totalUnread || pendingRequests || pendingInvitations;
               return (
-                <button key={view} onClick={() => { setActiveView(view); setSelectedWave(null); loadWaves(); loadWaveNotifications(); }} style={{
+                <button key={view} onClick={() => { setActiveView(view); loadWaves(); loadWaveNotifications(); }} style={{
                   padding: '8px 16px',
                   background: activeView === view ? 'var(--accent-amber)15' : 'transparent',
                   border: `1px solid ${activeView === view ? 'var(--accent-amber)50' : 'var(--border-primary)'}`,
@@ -1263,26 +1403,121 @@ function MainApp({ sharePingId }) {
         {activeView === 'waves' && (
           <>
             {(!isMobile || !selectedWave) && (
-              <WaveList
-                waves={waves}
-                categories={waveCategories}
-                selectedWave={selectedWave}
-                onSelectWave={setSelectedWave}
-                onNewWave={() => setShowNewWave(true)}
-                showArchived={showArchived}
-                onToggleArchived={() => { setShowArchived(!showArchived); loadWaves(); }}
-                isMobile={isMobile}
-                waveNotifications={waveNotifications}
-                activeCalls={activeCalls}
-                onCategoryToggle={handleCategoryToggle}
-                onWaveMove={handleWaveMove}
-                onWavePin={handleWavePin}
-                onManageCategories={() => setCategoryManagementOpen(true)}
-                ghostMode={ghostMode}
-                onToggleGhostProtocol={handleToggleGhostProtocol}
-              />
+              <div style={{
+                width: sidebarCollapsed && !isMobile ? '0px' : (isMobile ? '100%' : '300px'),
+                minWidth: 0,
+                overflow: 'hidden',
+                transition: isMobile ? 'none' : 'width 0.3s ease',
+                borderRight: sidebarCollapsed || isMobile ? 'none' : '1px solid var(--border-subtle)',
+                flexShrink: 0,
+              }}>
+                <WaveList
+                  waves={waves}
+                  categories={waveCategories}
+                  selectedWave={selectedWave}
+                  onSelectWave={(wave, opts) => openWaveTab(wave, opts)}
+                  onNewWave={() => setShowNewWave(true)}
+                  showArchived={showArchived}
+                  onToggleArchived={() => { setShowArchived(!showArchived); loadWaves(); }}
+                  isMobile={isMobile}
+                  waveNotifications={waveNotifications}
+                  activeCalls={activeCalls}
+                  onCategoryToggle={handleCategoryToggle}
+                  onWaveMove={handleWaveMove}
+                  onWavePin={handleWavePin}
+                  onManageCategories={() => setCategoryManagementOpen(true)}
+                  ghostMode={ghostMode}
+                  onToggleGhostProtocol={handleToggleGhostProtocol}
+                />
+              </div>
+            )}
+            {/* Sidebar toggle button (desktop only) */}
+            {!isMobile && (
+              <div
+                onClick={() => setSidebarCollapsed(prev => !prev)}
+                title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (Ctrl+B)`}
+                style={{
+                  width: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  background: 'var(--bg-surface)',
+                  borderRight: '1px solid var(--border-subtle)',
+                  color: 'var(--text-muted)',
+                  fontSize: '0.6rem',
+                  flexShrink: 0,
+                  userSelect: 'none',
+                  transition: 'color 0.2s ease',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent-amber)'; e.currentTarget.style.background = 'var(--bg-hover)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.background = 'var(--bg-surface)'; }}
+              >
+                {sidebarCollapsed ? '\u25B6' : '\u25C0'}
+              </div>
             )}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+              {/* Tab bar (desktop only, when tabs exist) */}
+              {!isMobile && openTabs.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'stretch',
+                  background: 'var(--bg-base)',
+                  borderBottom: '1px solid var(--border-subtle)',
+                  overflowX: 'auto',
+                  overflowY: 'hidden',
+                  flexShrink: 0,
+                  scrollbarWidth: 'thin',
+                }}>
+                  {openTabs.map(tab => {
+                    const isActive = tab.id === activeTabId;
+                    return (
+                      <div
+                        key={tab.id}
+                        onClick={() => switchTab(tab.id)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          background: isActive ? 'var(--accent-amber)10' : 'transparent',
+                          borderBottom: isActive ? '2px solid var(--accent-amber)' : '2px solid transparent',
+                          color: isActive ? 'var(--accent-amber)' : 'var(--text-dim)',
+                          fontSize: '0.75rem',
+                          fontFamily: 'monospace',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                          transition: 'background 0.15s ease',
+                          maxWidth: '200px',
+                        }}
+                        onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--bg-hover)'; }}
+                        onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                      >
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>
+                          {tab.title || 'Untitled'}
+                        </span>
+                        <span
+                          onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                          title="Close tab"
+                          style={{
+                            cursor: 'pointer',
+                            fontSize: '0.7rem',
+                            color: 'var(--text-muted)',
+                            padding: '0 2px',
+                            lineHeight: 1,
+                            borderRadius: '2px',
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent-orange)'; e.currentTarget.style.background = 'var(--bg-hover)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          ×
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               {selectedWave && focusStack.length > 0 ? (
                 // Focus View - showing focused ping and its replies
                 <ErrorBoundary key={`focus-${focusStack[focusStack.length - 1]?.pingId}`}>
@@ -1308,8 +1543,8 @@ function MainApp({ sharePingId }) {
                 </ErrorBoundary>
               ) : selectedWave ? (
                 // Normal Wave View
-                <ErrorBoundary key={selectedWave.id}>
-                  <WaveView wave={selectedWave} onBack={() => { setSelectedWave(null); setFocusStack([]); loadWaves(); loadWaveNotifications(); }}
+                <ErrorBoundary key={activeTab?.id || selectedWave.id}>
+                  <WaveView wave={selectedWave} onBack={() => { closeTab(activeTabId); loadWaves(); loadWaveNotifications(); }}
                     fetchAPI={fetchAPI} showToast={showToastMsg} currentUser={user}
                     groups={groups} onWaveUpdate={loadWaves} isMobile={isMobile}
                     sendWSMessage={sendWSMessage}
@@ -1356,7 +1591,7 @@ function MainApp({ sharePingId }) {
             fetchAPI={fetchAPI}
             showToast={showToastMsg}
             onNavigateToWave={(wave) => {
-              setSelectedWave(wave);
+              openWaveTab(wave);
               setActiveView('waves');
             }}
             onShowProfile={setProfileUserId}
@@ -1420,7 +1655,10 @@ function MainApp({ sharePingId }) {
               setShowSearch(true);
             } else {
               setActiveView(view);
-              setSelectedWave(null);
+              // On mobile, close all tabs when navigating away (mobile shows list OR wave)
+              setOpenTabs([]);
+              setActiveTabId(null);
+              setFocusStack([]);
               loadWaves();
               loadWaveNotifications();
             }
@@ -1504,12 +1742,13 @@ function MainApp({ sharePingId }) {
         onNavigateToWave={(waveId, scrollToMessageId) => {
           const wave = waves.find(w => w.id === waveId);
           if (wave) {
-            setSelectedWave(wave);
+            openWaveTab(wave);
             setActiveView('waves');
           } else {
             // Wave not in list (profile wave), fetch and navigate
             fetchAPI(`/waves/${waveId}`).then(waveData => {
-              setSelectedWave({ id: waveData.id, title: waveData.title, scrollToMessageId });
+              openWaveTab({ id: waveData.id, title: waveData.title });
+              if (scrollToMessageId) setScrollToMessageId(scrollToMessageId);
               setActiveView('waves');
             }).catch(() => showToastMsg(formatError('Failed to open wave'), 'error'));
           }

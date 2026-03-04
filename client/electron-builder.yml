@@ -13,6 +13,20 @@ win:
       arch: [x64, arm64]
   icon: public/icons/icon-512x512.png
 
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  category: public.app-category.social-networking
+  icon: electron/icon.icns
+  darkModeSupport: true
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: electron/entitlements.mac.plist
+  entitlementsInherit: electron/entitlements.mac.plist
+
 linux:
   target:
     - target: AppImage

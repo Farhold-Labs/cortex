@@ -1,25 +1,43 @@
-# Native Build Instructions — macOS (Electron) & iOS (Capacitor)
+# Native Build Instructions
 
-These instructions cover building the Cortex desktop app for macOS and the iOS mobile app.
+These instructions cover building the Cortex desktop and mobile apps for all platforms.
+
+> **Architecture note**: All Electron apps (Linux, Windows, macOS) are remote wrappers — they load the web UI from `https://cortex.farhold.com` via `electron/app/index.html`. They only need rebuilding when `electron/main.js`, `electron/preload.cjs`, or native dependencies change. The Android and iOS Capacitor apps similarly load from the server after initial launch.
 
 ---
 
 ## Table of Contents
 
-- [macOS Build — Electron](#macos-build--electron)
+- [Linux Build — Electron](#linux-build--electron)
   - [Prerequisites](#prerequisites)
-  - [Setup](#setup)
-  - [Add macOS target to electron-builder config](#add-macos-target-to-electron-builder-config)
-  - [Create the entitlements file](#create-the-entitlements-file)
+  - [Build](#build)
+  - [Output](#output)
+  - [Building specific formats](#building-specific-formats)
+- [Windows Build — Electron](#windows-build--electron)
+  - [Prerequisites](#prerequisites-1)
+  - [Build](#build-1)
+  - [Output](#output-1)
+  - [Code signing](#code-signing)
+  - [Cross-compilation from Linux](#cross-compilation-from-linux)
+- [macOS Build — Electron](#macos-build--electron)
+  - [Prerequisites](#prerequisites-2)
   - [Generate a macOS icon (.icns)](#generate-a-macos-icon-icns)
   - [Build the DMG](#build-the-dmg)
   - [Code Signing & Notarization](#code-signing--notarization-for-distribution)
   - [Unsigned local build](#unsigned-local-build-for-testing-only)
-  - [Architecture notes](#architecture-notes)
-- [iOS Build — Capacitor](#ios-build--capacitor)
-  - [Prerequisites](#prerequisites-1)
-  - [Setup](#setup-1)
+- [Android Build — Capacitor](#android-build--capacitor)
+  - [Prerequisites](#prerequisites-3)
   - [Build and sync web assets](#build-and-sync-web-assets)
+  - [Build APK (sideloading)](#build-apk-sideloading)
+  - [Build AAB (Google Play Store)](#build-aab-google-play-store)
+  - [Build from Android Studio](#build-from-android-studio)
+  - [Signing](#signing)
+  - [Key configuration](#key-configuration)
+  - [Common commands cheat sheet](#common-commands-cheat-sheet)
+  - [Troubleshooting](#troubleshooting)
+- [iOS Build — Capacitor](#ios-build--capacitor)
+  - [Prerequisites](#prerequisites-4)
+  - [Build and sync web assets](#build-and-sync-web-assets-1)
   - [Open in Xcode](#open-in-xcode)
   - [Configure signing in Xcode](#configure-signing-in-xcode)
   - [Build for Simulator](#build-for-simulator-testing)
@@ -28,9 +46,89 @@ These instructions cover building the Cortex desktop app for macOS and the iOS m
   - [Build for Ad Hoc distribution](#build-for-ad-hoc-distribution-ipa)
   - [Push Notifications setup](#push-notifications-setup)
   - [Project structure reference](#project-structure-reference)
-  - [Key configuration](#key-configuration)
-  - [Common commands cheat sheet](#common-commands-cheat-sheet)
-  - [Troubleshooting](#troubleshooting)
+  - [Key configuration](#key-configuration-1)
+  - [Common commands cheat sheet](#common-commands-cheat-sheet-1)
+  - [Troubleshooting](#troubleshooting-1)
+- [Electron architecture notes](#electron-architecture-notes)
+- [Release workflow](#release-workflow)
+
+---
+
+## Linux Build — Electron
+
+### Prerequisites
+
+- **Node.js** 18+ and npm
+
+### Build
+
+```bash
+cd client
+npm install
+npm run build
+npm run electron:build:linux
+```
+
+### Output
+
+All artifacts appear in `client/electron-dist/`:
+
+| File | Arch | Format |
+|------|------|--------|
+| `Cortex-{version}.AppImage` | x64 | AppImage (portable, no install) |
+| `Cortex-{version}-arm64.AppImage` | arm64 | AppImage |
+| `cortex_{version}_amd64.deb` | x64 | Debian/Ubuntu package |
+| `cortex-{version}.x86_64.rpm` | x64 | Fedora/RHEL package |
+
+### Building specific formats
+
+```bash
+npm run electron:build -- --linux AppImage    # AppImage only
+npm run electron:build -- --linux deb         # .deb only
+npm run electron:build -- --linux rpm         # .rpm only
+npm run electron:build -- --linux --arm64     # arm64 only
+npm run electron:build -- --linux --x64       # x64 only
+```
+
+---
+
+## Windows Build — Electron
+
+### Prerequisites
+
+- **Node.js** 18+ and npm
+
+### Build
+
+```bash
+cd client
+npm install
+npm run build
+npm run electron:build:win
+```
+
+### Output
+
+All artifacts appear in `client/electron-dist/`:
+
+| File | Arch |
+|------|------|
+| `Cortex Setup {version}.exe` | x64 |
+| `Cortex Setup {version}-arm64.exe` | arm64 |
+
+### Code signing
+
+For signed builds, set these environment variables before building:
+
+```bash
+export CSC_LINK="/path/to/certificate.pfx"
+export CSC_KEY_PASSWORD="certificate-password"
+npm run electron:build:win
+```
+
+### Cross-compilation from Linux
+
+Windows builds can be cross-compiled from Linux. electron-builder handles this automatically — `npm run electron:build:win` works on Linux. Wine is required for NSIS installers and is usually auto-downloaded by electron-builder if not present.
 
 ---
 
@@ -42,52 +140,6 @@ These instructions cover building the Cortex desktop app for macOS and the iOS m
 - **Node.js** 18+ and npm
 - **Xcode Command Line Tools**: `xcode-select --install`
 - **Apple Developer account** (for signing/notarization — optional for unsigned local builds)
-
-### Setup
-
-```bash
-cd client
-npm install
-```
-
-### Add macOS target to electron-builder config
-
-The current `electron-builder.yml` only has `win` and `linux` targets. Add a `mac` section after the `linux` block:
-
-```yaml
-mac:
-  target:
-    - target: dmg
-      arch: [x64, arm64]
-    - target: zip
-      arch: [x64, arm64]
-  category: public.app-category.social-networking
-  icon: electron/icon.icns
-  darkModeSupport: true
-  hardenedRuntime: true
-  gatekeeperAssess: false
-  entitlements: electron/entitlements.mac.plist
-  entitlementsInherit: electron/entitlements.mac.plist
-```
-
-### Create the entitlements file
-
-Create `client/electron/entitlements.mac.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.network.client</key>
-    <true/>
-</dict>
-</plist>
-```
 
 ### Generate a macOS icon (.icns)
 
@@ -116,14 +168,15 @@ cp "$SOURCE"       /tmp/Cortex.iconset/icon_512x512@2x.png
 iconutil -c icns /tmp/Cortex.iconset -o electron/icon.icns
 ```
 
+> **Note**: The `.icns` file must be generated on macOS (requires `sips` and `iconutil`). Commit it to the repo so non-Mac builders don't need to regenerate it.
+
 ### Build the DMG
 
 ```bash
-# 1. Build the web assets
+cd client
+npm install
 npm run build
-
-# 2. Build the macOS Electron app (universal — both architectures)
-npm run electron:build -- --mac
+npm run electron:build:mac
 
 # Or for a specific arch only:
 npm run electron:build -- --mac --arm64    # Apple Silicon
@@ -134,10 +187,10 @@ Output appears in `client/electron-dist/`:
 
 | File | Description |
 |------|-------------|
-| `Cortex-2.33.0-arm64.dmg` | Apple Silicon installer |
-| `Cortex-2.33.0.dmg` | Intel installer |
-| `Cortex-2.33.0-arm64-mac.zip` | Apple Silicon zip (for auto-updater) |
-| `Cortex-2.33.0-mac.zip` | Intel zip (for auto-updater) |
+| `Cortex-{version}-arm64.dmg` | Apple Silicon installer |
+| `Cortex-{version}.dmg` | Intel installer |
+| `Cortex-{version}-arm64-mac.zip` | Apple Silicon zip (for auto-updater) |
+| `Cortex-{version}-mac.zip` | Intel zip (for auto-updater) |
 
 ### Code Signing & Notarization (for distribution)
 
@@ -157,7 +210,7 @@ export APPLE_API_KEY_ID="XXXXXXXX"
 export APPLE_API_ISSUER="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # Then build — electron-builder handles signing & notarization automatically
-npm run electron:build -- --mac
+npm run electron:build:mac
 ```
 
 ### Unsigned local build (for testing only)
@@ -165,17 +218,143 @@ npm run electron:build -- --mac
 To skip signing entirely (the app will show Gatekeeper warnings on other machines):
 
 ```bash
-CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:build -- --mac
+CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:build:mac
 ```
 
-### Architecture notes
+---
 
-- **Production mode**: The app loads a redirect page (`electron/app/index.html`) that navigates to `https://cortex.farhold.com`. There is no bundled offline app — it's a wrapper around the web app.
-- **Dev mode**: Run `npm run dev` first (starts Vite on port 3000), then `npm run electron:dev` — it connects to `http://localhost:3000` with DevTools auto-opened.
-- Window state (position/size/maximized) persists across launches in `~/Library/Application Support/Cortex/window-state.json`.
-- Deep links via `cortex://` protocol are registered automatically.
-- macOS gets `hiddenInset` title bar style for native look.
-- Auto-updater code exists but is currently disabled in `electron/main.js` — uncomment the block in `app.whenReady()` once GitHub Releases with electron-builder artifacts are being published.
+## Android Build — Capacitor
+
+### Prerequisites
+
+- **Node.js** 18+ and npm
+- **Android Studio** with SDK 36 installed
+- **Java** 17+ (bundled with Android Studio, or install separately)
+- **Android SDK Build-Tools** and **Android SDK Platform 36** (install via Android Studio → SDK Manager)
+
+### Build and sync web assets
+
+```bash
+cd client
+npm install
+
+# Build the React app into dist/
+npm run build
+
+# Sync web assets + plugins to the Android project
+npx cap sync android
+```
+
+`cap sync` does three things:
+1. Copies `dist/` into `android/app/src/main/assets/public/`
+2. Updates the native `capacitor.config.json` from `capacitor.config.ts`
+3. Resolves and links Capacitor plugin native code
+
+> **Important**: You must run `npm run build && npx cap sync android` every time the web code changes before building.
+
+### Build APK (sideloading)
+
+```bash
+npm run cap:build:android
+```
+
+Output: `client/android/app/build/outputs/apk/release/app-release-unsigned.apk`
+
+### Build AAB (Google Play Store)
+
+```bash
+npm run cap:build:android:aab
+```
+
+Output: `client/android/app/build/outputs/bundle/release/app-release.aab`
+
+### Build from Android Studio
+
+```bash
+npx cap open android    # Opens project in Android Studio
+```
+
+Then: **Build → Generate Signed Bundle / APK** and follow the wizard.
+
+### Signing
+
+For release builds, you need a keystore. Create one if you don't have one:
+
+```bash
+keytool -genkey -v -keystore cortex-release.keystore -alias cortex \
+  -keyalg RSA -keysize 2048 -validity 10000
+```
+
+**Option A** — Configure signing in `client/android/app/build.gradle`:
+
+```gradle
+android {
+    signingConfigs {
+        release {
+            storeFile file('/path/to/cortex-release.keystore')
+            storePassword 'your-store-password'
+            keyAlias 'cortex'
+            keyPassword 'your-key-password'
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+```
+
+**Option B** — Sign via Android Studio's **Build → Generate Signed Bundle / APK** wizard (no config changes needed).
+
+**Option C** — Sign after build with `apksigner`:
+
+```bash
+apksigner sign --ks cortex-release.keystore \
+  --ks-key-alias cortex \
+  app-release-unsigned.apk
+```
+
+> **Security**: Never commit keystores or passwords to the repository.
+
+### Key configuration
+
+| Setting | Value |
+|---------|-------|
+| App ID | `com.farhold.cortex` |
+| Min SDK | 24 (Android 7.0) |
+| Target SDK | 36 |
+| Compile SDK | 36 |
+| Gradle plugin | 8.13.0 |
+| Capacitor version | 8.1.0 |
+| Firebase | Included (google-services 4.4.4) |
+| Web dir | `dist` (built React app) |
+| Production server | `https://cortex.farhold.com` |
+
+### Common commands cheat sheet
+
+```bash
+npm run build                   # Build web assets into dist/
+npx cap sync android            # Copy web assets + sync plugins to Android project
+npx cap open android            # Open Android project in Android Studio
+npx cap run android             # Build & run on emulator or connected device
+npx cap copy android            # Copy web assets only (skip plugin sync — faster)
+npm run cap:build:android       # Build release APK via Gradle
+npm run cap:build:android:aab   # Build release AAB via Gradle
+```
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `SDK location not found` | Create `client/android/local.properties` with `sdk.dir=/path/to/Android/Sdk` |
+| Gradle sync fails | Open in Android Studio → File → Sync Project with Gradle Files |
+| `assets/public/` empty | Run `npm run build && npx cap sync android` before building |
+| Build fails with Java errors | Ensure Java 17+ is installed: `java -version` |
+| Firebase `google-services.json` missing | Place your `google-services.json` in `client/android/app/` |
+| Stale web assets after code change | Always run `npm run build && npx cap sync android` before building |
 
 ---
 
@@ -189,20 +368,16 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:build -- --mac
 - **Apple Developer account** (required for device builds and App Store submission)
 - An iPhone/iPad or Xcode Simulator
 
-### Setup
+### Build and sync web assets
 
 ```bash
 cd client
 npm install
-```
 
-### Build and sync web assets
-
-```bash
-# 1. Build the React app into dist/
+# Build the React app into dist/
 npm run build
 
-# 2. Sync web assets + plugins to the native iOS project
+# Sync web assets + plugins to the native iOS project
 npx cap sync ios
 ```
 
@@ -324,3 +499,30 @@ npx cap copy ios           # Copy web assets only (skip plugin sync — faster)
 | Push notifications not working on Simulator | Push only works on physical devices — this is an Apple limitation |
 | Build fails with "no such module" | Run `npx cap sync ios` to ensure all plugin native code is linked |
 | Stale web assets after code change | Always run `npm run build && npx cap sync ios` before building in Xcode |
+
+---
+
+## Electron architecture notes
+
+- **Production mode**: The app loads a redirect page (`electron/app/index.html`) that navigates to `https://cortex.farhold.com`. There is no bundled offline app — it's a wrapper around the web app.
+- **Dev mode**: Run `npm run dev` first (starts Vite on port 3000), then `npm run electron:dev` — it connects to `http://localhost:3000` with DevTools auto-opened.
+- Window state (position/size/maximized) persists across launches via `window-state.json` in the user data directory.
+- Deep links via `cortex://` protocol are registered automatically.
+- macOS gets `hiddenInset` title bar style for native look.
+- Auto-updater code exists but is currently disabled in `electron/main.js` — uncomment the block in `app.whenReady()` once GitHub Releases with electron-builder artifacts are being published.
+
+---
+
+## Release workflow
+
+1. Merge to `master` via PR chain (`develop` → `qa` → `master`)
+2. Tag the release: `git tag vX.Y.Z && git push origin vX.Y.Z`
+3. Build native artifacts on their respective platforms:
+   - **Linux**: `npm run electron:build:linux` (can run on any Linux machine or CI)
+   - **Windows**: `npm run electron:build:win` (can cross-compile from Linux)
+   - **macOS**: `npm run electron:build:mac` (requires macOS)
+   - **Android**: `npm run cap:build:android` / `npm run cap:build:android:aab`
+   - **iOS**: Archive from Xcode on macOS
+4. Create GitHub release and attach Electron artifacts (`.AppImage`, `.deb`, `.rpm`, `.exe`, `.dmg`, `.zip`)
+5. Upload Android AAB to Google Play Console
+6. Upload iOS build to App Store Connect via Xcode Organizer

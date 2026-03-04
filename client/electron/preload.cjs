@@ -21,6 +21,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('deep-link', (_event, url) => callback(url));
   },
 
+  // Server URL persistence (stored in Electron userData, survives origin changes)
+  setServerUrl: (url) => ipcRenderer.send('set-server-url', url),
+  getServerUrl: () => ipcRenderer.invoke('get-server-url'),
+  removeServerUrl: () => ipcRenderer.send('remove-server-url'),
+
+  // Clear cache and hard-reload (for version mismatch refresh)
+  clearCacheAndReload: () => ipcRenderer.send('clear-cache-and-reload'),
+
   // Listen for auto-update events
   onUpdateAvailable: (callback) => {
     ipcRenderer.on('update-available', (_event, version) => callback(version));

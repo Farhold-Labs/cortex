@@ -1,6 +1,6 @@
 {
   "name": "cortex-client",
-  "version": "2.33.0",
+  "version": "2.35.0",
   "description": "Cortex - Privacy-First Federated Communication Platform",
   "author": "Cortex Project <admin@farhold.com>",
   "homepage": "https://cortex.farhold.com",
@@ -13,6 +13,7 @@
     "electron:dev": "electron .",
     "electron:build": "electron-builder",
     "electron:build:win": "electron-builder --win",
+    "electron:build:mac": "electron-builder --mac",
     "electron:build:linux": "electron-builder --linux",
     "cap:sync": "cap sync",
     "cap:open:android": "cap open android",
@@ -29,9 +30,11 @@
     "@capacitor/core": "^8.1.0",
     "@capacitor/haptics": "^8.0.0",
     "@capacitor/ios": "^8.1.0",
+    "@capacitor/preferences": "^8.0.0",
     "@capacitor/push-notifications": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.1",
+    "electron-context-menu": "^4.1.1",
     "electron-serve": "^2.1.1",
     "electron-updater": "^6.8.3"
   },

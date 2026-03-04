@@ -5,10 +5,9 @@ const config: CapacitorConfig = {
   appName: 'Cortex',
   webDir: 'dist',
 
-  // Remote wrapper — loads web app from server (no bundled assets)
+  // Loads bundled dist/ on launch; launcher script redirects to saved server
   server: {
-    url: 'https://cortex.farhold.com',
-    allowNavigation: ['cortex.farhold.com'],
+    allowNavigation: ['*'],
   },
 
   plugins: {
