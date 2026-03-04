@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { VERSION, API_URL, BASE_URL, PRIVACY_LEVELS } from '../config/constants.js';
+import { VERSION, API_URL, BASE_URL, PRIVACY_LEVELS, isNativeApp } from '../config/constants.js';
 import { CONFIRM_DIALOG, SERVER } from '../../messages.js';
 import { storage } from '../utils/storage.js';
 import { useAuth } from '../hooks/useAPI.js';
@@ -137,6 +137,8 @@ const LoginScreen = ({ onAbout }) => {
     }
   };
 
+  const isCapacitorNative = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
+
   const handleChangeServer = async () => {
     setServerUrlError('');
     let url = serverUrl.trim();
@@ -157,19 +159,41 @@ const LoginScreen = ({ onAbout }) => {
     }
     setTestingServer(false);
 
-    storage.setServerUrl(url);
-    storage.removeToken();
-    storage.removeUser();
-    storage.removeSessionStart();
-    window.location.reload();
+    if (isCapacitorNative) {
+      // Native: save to Capacitor Preferences (cross-origin safe) and redirect
+      const { Preferences } = await import('@capacitor/preferences');
+      await Preferences.set({ key: 'cortex_server_url', value: url });
+      storage.removeToken();
+      storage.removeUser();
+      storage.removeSessionStart();
+      window.location.replace(url);
+    } else {
+      // Web: use localStorage and reload
+      storage.setServerUrl(url);
+      storage.removeToken();
+      storage.removeUser();
+      storage.removeSessionStart();
+      window.location.reload();
+    }
   };
 
-  const handleResetServer = () => {
-    storage.removeServerUrl();
-    storage.removeToken();
-    storage.removeUser();
-    storage.removeSessionStart();
-    window.location.reload();
+  const handleResetServer = async () => {
+    if (isCapacitorNative) {
+      // Native: clear Preferences and redirect to default server
+      const { Preferences } = await import('@capacitor/preferences');
+      await Preferences.remove({ key: 'cortex_server_url' });
+      storage.removeToken();
+      storage.removeUser();
+      storage.removeSessionStart();
+      window.location.replace('https://cortex.farhold.com');
+    } else {
+      // Web: clear localStorage and reload
+      storage.removeServerUrl();
+      storage.removeToken();
+      storage.removeUser();
+      storage.removeSessionStart();
+      window.location.reload();
+    }
   };
 
   const inputStyle = {

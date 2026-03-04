@@ -171,6 +171,69 @@ export async function setupCapacitorPushListeners(onNotificationTap) {
 }
 
 /**
+ * Register with server using a pre-stored FCM token (for remote-origin WebView
+ * where the Capacitor bridge is unavailable). The launcher script obtains the
+ * FCM token on the local origin and passes it via URL hash; the early bootstrap
+ * script stores it in localStorage as 'farhold_fcm_token'.
+ */
+export async function registerStoredFcmToken(authToken) {
+  const fcmToken = localStorage.getItem(FCM_TOKEN_KEY);
+  if (!fcmToken) {
+    return { success: false, reason: 'No FCM token available. Restart the app to register for push notifications.' };
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/push/fcm/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        token: fcmToken,
+        platform: getPlatform(),
+        deviceId: getOrCreateDeviceId(),
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[CapPush] Stored FCM token registration failed:', response.status, errorText);
+      return { success: false, reason: `Server rejected token: ${errorText}` };
+    }
+
+    console.log('[CapPush] Stored FCM token registered with server');
+    return { success: true };
+  } catch (error) {
+    console.error('[CapPush] Stored FCM token registration error:', error.message);
+    return { success: false, reason: error.message };
+  }
+}
+
+/**
+ * Unregister stored FCM token from the server (remote-origin WebView path).
+ * Keeps the token in localStorage so re-enabling push works without a cold start.
+ */
+export async function unregisterStoredFcmToken(authToken) {
+  const token = localStorage.getItem(FCM_TOKEN_KEY);
+  if (!token) return;
+
+  try {
+    await fetch(`${API_URL}/push/fcm/unregister`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ token }),
+    });
+    console.log('[CapPush] Stored FCM token unregistered from server');
+  } catch (error) {
+    console.warn('[CapPush] Server unregister failed:', error.message);
+  }
+}
+
+/**
  * Unregister from native push notifications.
  * Removes the FCM token from the server and clears local storage.
  */

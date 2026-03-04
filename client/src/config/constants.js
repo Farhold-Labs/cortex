@@ -7,10 +7,16 @@ const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefi
 const isElectron = typeof window !== 'undefined' && window.navigator?.userAgent?.includes('Electron');
 export const isNativeApp = isCapacitor || isElectron;
 
-// Resolve server URL: localStorage override > native app default > auto-detect from window.location
+// Resolve server URL: localStorage override > native remote origin > native default > auto-detect
 const storedServerUrl = localStorage.getItem('farhold_server_url');
+const isLocalOrigin = ['localhost', ''].includes(window.location.hostname) ||
+  window.location.protocol === 'capacitor:' || window.location.protocol === 'ionic:';
 const resolvedUrl = (() => {
   if (storedServerUrl) return storedServerUrl;
+  if (isCapacitor && !isLocalOrigin) {
+    // Native app redirected to remote server — use that origin
+    return window.location.origin;
+  }
   if (isNativeApp) return 'https://cortex.farhold.com';
   // Web app: auto-detect from current origin (unchanged behavior)
   return window.location.hostname !== 'localhost'
