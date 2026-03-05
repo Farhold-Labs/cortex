@@ -1675,7 +1675,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                 const trimmed = topicDraft.trim();
                 if (trimmed !== (waveData.topic || '')) {
                   try {
-                    await fetchAPI(`/waves/${waveId}`, { method: 'PUT', body: JSON.stringify({ topic: trimmed }) });
+                    await fetchAPI(`/waves/${waveId}`, { method: 'PUT', body: { topic: trimmed } });
                     waveData.topic = trimmed || null;
                   } catch (e) { showToast('Failed to update topic', 'error'); }
                 }

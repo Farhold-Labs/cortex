@@ -1483,7 +1483,8 @@ function MainApp({ sharePingId }) {
                   {openTabs.map(tab => {
                     const isActive = tab.id === activeTabId;
                     const notifInfo = waveNotifications[tab.waveId];
-                    const unreadCount = notifInfo?.count || 0;
+                    const waveData = waves.find(w => w.id === tab.waveId);
+                    const unreadCount = notifInfo?.count || waveData?.unread_count || 0;
                     return (
                       <div
                         key={tab.id}

@@ -2,10 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture.js';
 import { SUCCESS, EMPTY, formatError, CONFIRM_DIALOG } from '../../../messages.js';
-import { PRIVACY_LEVELS, BASE_URL } from '../../config/constants.js';
+import { PRIVACY_LEVELS, API_URL, BASE_URL } from '../../config/constants.js';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
+import { storage } from '../../utils/storage.js';
 import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
+import GifSearchModal from '../search/GifSearchModal.jsx';
 
 const FocusView = ({
   wave,
@@ -35,6 +37,8 @@ const FocusView = ({
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editContent, setEditContent] = useState('');
   const [livePing, setLivePing] = useState(initialPing); // Live data that updates
+  const [uploading, setUploading] = useState(false);
+  const [showGifSearch, setShowGifSearch] = useState(false);
   const containerRef = useRef(null);
   const messagesRef = useRef(null);
   const composerRef = useRef(null);
@@ -191,6 +195,76 @@ const FocusView = ({
       fetchFreshData();
     } catch (err) {
       showToast(err.message || formatError('Failed to send'), 'error');
+    }
+  };
+
+  const handleImageUpload = async (file) => {
+    if (!file) return;
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      showToast('Invalid file type. Allowed: jpg, png, gif, webp', 'error');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('File too large. Maximum size is 10MB', 'error');
+      return;
+    }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const token = storage.getToken();
+      const response = await fetch(`${API_URL}/uploads`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Upload failed');
+      }
+      const data = await response.json();
+      composerRef.current?.appendMessage(data.url);
+      composerRef.current?.focus();
+      showToast('Image uploaded', 'success');
+    } catch (err) {
+      showToast(err.message || formatError('Failed to upload image'), 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleFileUpload = async (file) => {
+    if (!file) return;
+    const imageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    if (imageTypes.includes(file.type)) { handleImageUpload(file); return; }
+    if (file.size > 25 * 1024 * 1024) {
+      showToast('File too large. Maximum size is 25MB', 'error');
+      return;
+    }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const token = storage.getToken();
+      const response = await fetch(`${API_URL}/uploads/file`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Upload failed');
+      }
+      const data = await response.json();
+      const marker = `[file:${data.filename}:${data.size}]${data.url}`;
+      composerRef.current?.appendMessage(marker);
+      composerRef.current?.focus();
+      showToast('File attached', 'success');
+    } catch (err) {
+      showToast(err.message || 'Failed to upload file', 'error');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -563,13 +637,28 @@ const FocusView = ({
           placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}...` : 'Type a ping... (Shift+Enter for new line, @ to mention)'}
           replyingTo={replyingTo}
           onCancelReply={() => setReplyingTo(null)}
-          showGifButton={false}
-          showPhotoButton={false}
-          showFileButton={false}
+          uploading={uploading}
+          onGifClick={() => setShowGifSearch(true)}
+          onImageUpload={(file) => handleImageUpload(file)}
+          onFileUpload={(file) => handleFileUpload(file)}
+          onCameraClick={null}
           showMoreMenu={false}
           compact
         />
       </div>
+
+      {showGifSearch && (
+        <GifSearchModal
+          isOpen={showGifSearch}
+          onClose={() => setShowGifSearch(false)}
+          onSelect={(gifUrl) => {
+            composerRef.current?.appendMessage(gifUrl);
+            setShowGifSearch(false);
+          }}
+          fetchAPI={fetchAPI}
+          isMobile={isMobile}
+        />
+      )}
     </div>
   );
 };
