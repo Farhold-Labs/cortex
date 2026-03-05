@@ -140,7 +140,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
         borderRight: isMobile ? 'none' : '1px solid var(--border-subtle)',
         borderBottom: isMobile ? '1px solid var(--border-subtle)' : 'none',
         display: 'flex', flexDirection: 'column',
-        maxHeight: isMobile ? '300px' : 'none',
+        flex: isMobile ? 1 : undefined,
       }}>
         <div style={{ padding: '16px', borderBottom: '1px solid var(--border-subtle)' }}>
           <button onClick={() => setShowNewGroup(true)} style={{
@@ -348,7 +348,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
       {/* Invite to Group Modal */}
       <InviteToGroupModal
         isOpen={showInviteModal}
-        onClose={() => setShowInviteModal(false)}
+        onClose={() => { setShowInviteModal(false); loadSentInvitations(); }}
         group={groupDetails}
         contacts={contacts || []}
         fetchAPI={fetchAPI}
