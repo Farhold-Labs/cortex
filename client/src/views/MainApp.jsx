@@ -1119,6 +1119,17 @@ function MainApp({ sharePingId }) {
           console.log('[Push] Auto-subscribe failed (this is ok):', result.reason);
         }
       }
+
+      // v2.36.0: Check if server still has our subscription (auto-resubscribe after server cleanup)
+      try {
+        const status = await fetchAPI('/push/status');
+        if (status && !status.subscribed) {
+          console.log('[Push] Server has no subscription — re-subscribing');
+          await subscribeToPush(token, { silent: true });
+        }
+      } catch (e) {
+        console.log('[Push] Status check failed (this is ok):', e.message);
+      }
     };
 
     // Delay to avoid interrupting initial page load
@@ -1471,6 +1482,8 @@ function MainApp({ sharePingId }) {
                 }}>
                   {openTabs.map(tab => {
                     const isActive = tab.id === activeTabId;
+                    const notifInfo = waveNotifications[tab.waveId];
+                    const unreadCount = notifInfo?.count || 0;
                     return (
                       <div
                         key={tab.id}
@@ -1497,6 +1510,22 @@ function MainApp({ sharePingId }) {
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>
                           {tab.title || 'Untitled'}
                         </span>
+                        {!isActive && unreadCount > 0 && (
+                          <span style={{
+                            background: 'var(--accent-amber)',
+                            color: 'var(--bg-base)',
+                            borderRadius: '50%',
+                            fontSize: '0.6rem',
+                            fontWeight: 700,
+                            minWidth: '16px',
+                            height: '16px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}>
+                            {unreadCount > 99 ? '99+' : unreadCount}
+                          </span>
+                        )}
                         <span
                           onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
                           title="Close tab"

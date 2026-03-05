@@ -256,6 +256,11 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
             <span style={{ color: config.color }}>{config.icon}</span>
           </div>
         </div>
+        {wave.topic && (
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {wave.topic}
+          </div>
+        )}
         <div style={{ color: 'var(--text-muted)', fontSize: isMobile ? '0.85rem' : '0.7rem' }}>
           {wave.creator_name || 'Unknown'} • {wave.ping_count || 0} pings
           {wave.crew_name && <span> • {wave.crew_name}</span>}
@@ -556,6 +561,11 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
                 <span style={{ color: config.color }}>{config.icon}</span>
               </div>
             </div>
+            {wave.topic && (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {wave.topic}
+              </div>
+            )}
             <div style={{ color: 'var(--text-muted)', fontSize: isMobile ? '0.85rem' : '0.7rem' }}>
               {wave.creator_name || 'Unknown'} • {wave.message_count} msgs
               {wave.group_name && <span> • {wave.group_name}</span>}

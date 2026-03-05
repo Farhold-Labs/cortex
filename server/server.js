@@ -6899,6 +6899,14 @@ app.post('/api/push/test', authenticateToken, async (req, res) => {
   res.json({ success: true, sent, total: subscriptions.length });
 });
 
+// Check push subscription status (v2.36.0 - auto-resubscribe support)
+app.get('/api/push/status', authenticateToken, (req, res) => {
+  const subs = pushSubs.getSubscriptions(req.user.userId);
+  const hasWebPush = subs.some(s => !s.endpoint?.startsWith('fcm:'));
+  const hasFcm = subs.some(s => s.endpoint?.startsWith('fcm:'));
+  res.json({ subscribed: subs.length > 0, webPush: hasWebPush, fcm: hasFcm, count: subs.length });
+});
+
 // ============ FCM Push Notifications (Capacitor Mobile App v2.31.0) ============
 
 // Register FCM push token (for Capacitor native apps)
@@ -7271,6 +7279,12 @@ app.post('/api/groups/:id/invite', authenticateToken, (req, res) => {
 // Get pending group invitations for current user
 app.get('/api/groups/invitations', authenticateToken, (req, res) => {
   const invitations = db.getGroupInvitationsForUser(req.user.userId);
+  res.json(invitations);
+});
+
+// Get all pending invitations sent by current user across all crews (v2.36.0)
+app.get('/api/groups/invitations/sent', authenticateToken, (req, res) => {
+  const invitations = db.getAllSentGroupInvitations(req.user.userId);
   res.json(invitations);
 });
 
@@ -15025,6 +15039,12 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
     wave.title = sanitizedTitle;
   }
 
+  if (req.body.topic !== undefined) {
+    const sanitizedTopic = sanitizeInput(req.body.topic).slice(0, 300);
+    db.updateWaveTopic(waveId, sanitizedTopic);
+    wave.topic = sanitizedTopic;
+  }
+
   // If wave is being promoted to crossServer and federation is enabled, broadcast to all trusted nodes
   if (FEDERATION_ENABLED && changingToCrossServer && wasLocal) {
     // Mark wave as origin
@@ -17228,6 +17248,7 @@ app.all('/api/pings/:id/ripple', (req, res, next) => { req.url = `/api/droplets/
 // /api/crews/* -> /api/groups/* (crews = new name for groups)
 app.all('/api/crews', (req, res, next) => { req.url = '/api/groups'; next('route'); });
 app.all('/api/crews/invitations', (req, res, next) => { req.url = '/api/groups/invitations'; next('route'); });
+app.all('/api/crews/invitations/sent', (req, res, next) => { req.url = '/api/groups/invitations/sent'; next('route'); });
 app.all('/api/crews/invitations/:id', (req, res, next) => { req.url = `/api/groups/invitations/${req.params.id}`; next('route'); });
 app.all('/api/crews/invitations/:id/accept', (req, res, next) => { req.url = `/api/groups/invitations/${req.params.id}/accept`; next('route'); });
 app.all('/api/crews/invitations/:id/decline', (req, res, next) => { req.url = `/api/groups/invitations/${req.params.id}/decline`; next('route'); });

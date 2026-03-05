@@ -1460,7 +1460,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
             {THEMES[user?.preferences?.theme]?.description ||
              availableThemes.find(t => `custom-${t.id}` === user?.preferences?.theme)?.description ||
-             (user?.preferences?.theme?.startsWith('custom-') ? 'Custom theme' : 'Theme')}
+             (user?.preferences?.theme?.startsWith('custom-')
+               ? 'Custom theme'
+               : 'Click "Customize" to create themes or install themes from the gallery')}
           </div>
         </div>
 
@@ -1576,9 +1578,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
           </div>
         </div>
 
-        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
-          Click "Customize" to create custom themes or install themes from the gallery. Changes take effect immediately.
-        </div>
+
       </CollapsibleSection>
 
       {/* Crawl Bar Preferences */}

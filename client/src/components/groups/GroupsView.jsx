@@ -4,6 +4,7 @@ import { SUCCESS, EMPTY, CONFIRM_DIALOG, FEDERATION, formatError } from '../../.
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { BASE_URL } from '../../config/constants.js';
 import GroupInvitationsPanel from './GroupInvitationsPanel.jsx';
+import SentCrewInvitationsPanel from './SentCrewInvitationsPanel.jsx';
 import InviteToGroupModal from './InviteToGroupModal.jsx';
 
 const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitations, onInvitationsChange, contacts }) => {
@@ -16,6 +17,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
   const [memberSearch, setMemberSearch] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [sentInvitations, setSentInvitations] = useState([]);
   const { width, isMobile, isTablet, isDesktop } = useWindowSize();
 
   useEffect(() => {
@@ -37,6 +39,15 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
     }, 300);
     return () => clearTimeout(timeout);
   }, [memberSearch, fetchAPI, groupDetails]);
+
+  const loadSentInvitations = useCallback(async () => {
+    try {
+      const data = await fetchAPI('/crews/invitations/sent');
+      setSentInvitations(Array.isArray(data) ? data : []);
+    } catch (e) { console.error('Failed to load sent invitations:', e); }
+  }, [fetchAPI]);
+
+  useEffect(() => { loadSentInvitations(); }, [loadSentInvitations]);
 
   const handleCreateGroup = async () => {
     if (!newGroupName.trim()) return;
@@ -145,6 +156,13 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
             showToast={showToast}
             onInvitationsChange={onInvitationsChange}
             onGroupsChange={onGroupsChange}
+            isMobile={isMobile}
+          />
+          <SentCrewInvitationsPanel
+            invitations={sentInvitations}
+            fetchAPI={fetchAPI}
+            showToast={showToast}
+            onInvitationsChange={loadSentInvitations}
             isMobile={isMobile}
           />
           {groups.length === 0 && (!groupInvitations || groupInvitations.length === 0) ? (

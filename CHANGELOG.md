@@ -5,6 +5,55 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.36.0] - 2026-03-05
+
+### Added
+
+#### Wave Topics
+- Waves can now have a topic (up to 300 characters) set by the wave creator
+- Topic is displayed in the wave header (italic, below the title) and in the wave list
+- Click-to-edit inline editing for wave creators; shows "+ Set topic" hint for empty topics
+- Database migration adds `topic` column to waves table
+- `PUT /api/waves/:id` accepts `topic` field alongside existing `title`
+
+#### Unread Count Badges on Wave Tabs
+- Non-active wave tabs now show an amber notification badge with unread count
+- Badges use the existing `waveNotifications` state (same data as wave list badges)
+- Only shown on inactive tabs; active tab (being viewed) never shows a badge
+
+#### Pending Sent Crew Invitations
+- New panel in Crews view showing all pending invitations sent by the current user
+- Displays invited user avatar, name, crew name, and sent date
+- Cancel button to revoke pending invitations
+- Expandable list if more than 3 pending invitations
+- New endpoint: `GET /api/groups/invitations/sent` (aliased to `/api/crews/invitations/sent`)
+
+#### Shared MessageComposer Component
+- Extracted reusable `MessageComposer` component from WaveView's inline composer
+- Includes textarea with @mention picker, GIF/photo/file/media buttons, and send button
+- Used in both WaveView (full toolbar) and FocusView (compact mode with @mentions)
+- FocusView now has @mention support (previously only had bare textarea + emoji picker)
+- Parent components handle encryption and uploads; MessageComposer returns plaintext
+
+### Fixed
+
+#### Display Preferences Theme Hint
+- Moved theme hint text ("Click Customize to create themes...") into the theme selector description area
+- Removed redundant hint div at the bottom of the Display Preferences section
+
+#### Profile Waves Hidden from Wave List
+- Profile waves no longer leak into the main wave list via the participation cache path
+- Added `is_profile_wave` filter to the final SELECT queries in `getWavesForUser()` and `getWavesForUserMinimal()`
+- Profile waves remain accessible from user profile pages
+
+#### Push Auto-Resubscribe After Server Cleanup
+- New endpoint: `GET /api/push/status` returns whether the server has active push subscriptions for the user
+- On app startup, after the existing push setup, the client checks subscription health with the server
+- If the server has no subscription (e.g., after DB cleanup), the client silently re-subscribes
+- Prevents silent notification loss when subscriptions are cleaned up server-side
+
+---
+
 ## [Unreleased]
 
 ### Changed

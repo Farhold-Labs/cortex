@@ -1842,6 +1842,17 @@ export class DatabaseSQLite {
     } catch (err) {
       // Column may already exist
     }
+
+    // v2.36.0: Add topic column to waves table
+    try {
+      const wavesCols = this.db.prepare("PRAGMA table_info(waves)").all();
+      if (!wavesCols.some(c => c.name === 'topic')) {
+        this.db.prepare('ALTER TABLE waves ADD COLUMN topic TEXT DEFAULT NULL').run();
+        console.log('✅ Added topic column to waves');
+      }
+    } catch (err) {
+      // Column may already exist
+    }
   }
 
   prepareStatements() {
@@ -3561,6 +3572,31 @@ export class DatabaseSQLite {
     }));
   }
 
+  getAllSentGroupInvitations(userId) {
+    const rows = this.db.prepare(`
+      SELECT gi.*, g.name as group_name,
+             u.handle as invited_handle, u.display_name as invited_display_name,
+             u.avatar as invited_avatar
+      FROM crew_invitations gi
+      JOIN crews g ON gi.crew_id = g.id
+      JOIN users u ON gi.invited_user_id = u.id
+      WHERE gi.invited_by = ? AND gi.status = 'pending'
+      ORDER BY gi.created_at DESC
+    `).all(userId);
+
+    return rows.map(r => ({
+      id: r.id,
+      group_id: r.crew_id,
+      group_name: r.group_name,
+      invited_user_id: r.invited_user_id,
+      invited_handle: r.invited_handle,
+      invited_display_name: r.invited_display_name,
+      invited_avatar: r.invited_avatar,
+      status: r.status,
+      created_at: r.created_at,
+    }));
+  }
+
   getGroupInvitation(invitationId) {
     const row = this.db.prepare('SELECT * FROM crew_invitations WHERE id = ?').get(invitationId);
     if (!row) return null;
@@ -4058,6 +4094,7 @@ export class DatabaseSQLite {
       LEFT JOIN users u ON w.created_by = u.id
       LEFT JOIN crews cr ON w.crew_id = cr.id
       WHERE w.id IN (${placeholders})
+        AND (w.is_profile_wave IS NULL OR w.is_profile_wave = 0)
       ORDER BY w.updated_at DESC
     `).all(...waveIds);
 
@@ -4188,11 +4225,12 @@ export class DatabaseSQLite {
 
     const placeholders = waveIds.map(() => '?').join(',');
     const rows = this.db.prepare(`
-      SELECT w.id, w.title, w.privacy, w.updated_at, w.created_by, w.encrypted,
+      SELECT w.id, w.title, w.topic, w.privacy, w.updated_at, w.created_by, w.encrypted,
         (SELECT COUNT(*) FROM pings WHERE wave_id = w.id AND deleted = 0) as ping_count,
         (SELECT COUNT(*) FROM wave_participants WHERE wave_id = w.id) as participant_count
       FROM waves w
       WHERE w.id IN (${placeholders})
+        AND (w.is_profile_wave IS NULL OR w.is_profile_wave = 0)
       ORDER BY w.updated_at DESC
     `).all(...waveIds);
 
@@ -4385,6 +4423,16 @@ export class DatabaseSQLite {
 
     const now = new Date().toISOString();
     this.db.prepare('UPDATE waves SET title = ?, updated_at = ? WHERE id = ?').run(title, now, waveId);
+
+    return this.getWave(waveId);
+  }
+
+  updateWaveTopic(waveId, topic) {
+    const wave = this.getWave(waveId);
+    if (!wave) return null;
+
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE waves SET topic = ?, updated_at = ? WHERE id = ?').run(topic || null, now, waveId);
 
     return this.getWave(waveId);
   }

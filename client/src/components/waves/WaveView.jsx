@@ -22,6 +22,7 @@ import PlexBrowserModal from '../media/PlexBrowserModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import { storage } from '../../utils/storage.js';
+import MessageComposer from '../compose/MessageComposer.jsx';
 
 const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange }) => {
   // E2EE context
@@ -78,6 +79,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [unreadCountsByWave, setUnreadCountsByWave] = useState({}); // For burst activity badges
   const [decryptionErrors, setDecryptionErrors] = useState({}); // Track pings that failed to decrypt
+  const [editingTopic, setEditingTopic] = useState(false);
+  const [topicDraft, setTopicDraft] = useState('');
   const [decryptingWave, setDecryptingWave] = useState(false); // Wave decryption in progress
   const [showWaveMenu, setShowWaveMenu] = useState(false); // Wave header actions menu
   const [showCallModal, setShowCallModal] = useState(false); // Voice/Video call modal
@@ -385,6 +388,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const composeRef = useRef(null);
   const messagesRef = useRef(null);
   const textareaRef = useRef(null);
+  const composerRef = useRef(null);
   const hasMarkedAsReadRef = useRef(false);
   const hasCheckedInitialPositionRef = useRef(false); // Only check scroll position once per wave
   const scrollPositionToRestore = useRef(null);
@@ -1060,8 +1064,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     setIsPlaying(true);
   };
 
-  const handleSendMessage = async () => {
-    if (!newMessage.trim()) return;
+  const handleSendMessage = async (messageContent) => {
+    const content = messageContent || newMessage;
+    if (!content.trim()) return;
     const isReply = replyingTo !== null;
 
     // Suppress WebSocket-triggered reloads during this operation
@@ -1074,11 +1079,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       }
 
       // E2EE: Encrypt message if wave is encrypted and E2EE is unlocked
-      let messageBody = { wave_id: wave.id, parent_id: replyingTo?.id || null, content: newMessage };
+      let messageBody = { wave_id: wave.id, parent_id: replyingTo?.id || null, content };
 
       if (waveData?.encrypted && e2ee.isUnlocked) {
         try {
-          const { ciphertext, nonce } = await e2ee.encryptPing(newMessage, wave.id);
+          const { ciphertext, nonce } = await e2ee.encryptPing(content, wave.id);
           const waveKeyVersion = await fetchAPI(`/waves/${wave.id}/key`).then(r => r.keyVersion).catch(() => 1);
           messageBody = {
             ...messageBody,
@@ -1162,9 +1167,14 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
       const data = await response.json();
       // Insert the image URL into the message - it will auto-embed when sent
-      setNewMessage(prev => prev + (prev ? '\n' : '') + data.url);
+      if (composerRef.current) {
+        composerRef.current.appendMessage(data.url);
+        composerRef.current.focus();
+      } else {
+        setNewMessage(prev => prev + (prev ? '\n' : '') + data.url);
+        textareaRef.current?.focus();
+      }
       showToast('Image uploaded', 'success');
-      textareaRef.current?.focus();
     } catch (err) {
       showToast(err.message || formatError('Failed to upload image'), 'error');
     } finally {
@@ -1213,9 +1223,14 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       const data = await response.json();
       // Insert file marker into the message
       const marker = `[file:${data.filename}:${data.size}]${data.url}`;
-      setNewMessage(prev => prev + (prev ? '\n' : '') + marker);
+      if (composerRef.current) {
+        composerRef.current.appendMessage(marker);
+        composerRef.current.focus();
+      } else {
+        setNewMessage(prev => prev + (prev ? '\n' : '') + marker);
+        textareaRef.current?.focus();
+      }
       showToast('File attached', 'success');
-      textareaRef.current?.focus();
     } catch (err) {
       showToast(err.message || 'Failed to upload file', 'error');
     } finally {
@@ -1651,6 +1666,57 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             <span style={{ color: 'var(--text-primary)', fontSize: isMobile ? '0.9rem' : '1.1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{waveData.title}</span>
             {waveData.group_name && <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>({waveData.group_name})</span>}
           </div>
+          {editingTopic ? (
+            <input
+              autoFocus
+              value={topicDraft}
+              onChange={(e) => setTopicDraft(e.target.value)}
+              onBlur={async () => {
+                const trimmed = topicDraft.trim();
+                if (trimmed !== (waveData.topic || '')) {
+                  try {
+                    await fetchAPI(`/waves/${waveId}`, { method: 'PUT', body: JSON.stringify({ topic: trimmed }) });
+                    waveData.topic = trimmed || null;
+                  } catch (e) { showToast('Failed to update topic', 'error'); }
+                }
+                setEditingTopic(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.target.blur();
+                if (e.key === 'Escape') { setTopicDraft(waveData.topic || ''); setEditingTopic(false); }
+              }}
+              placeholder="Set a topic..."
+              maxLength={300}
+              style={{
+                width: '100%', padding: '2px 4px', background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-primary)', color: 'var(--text-muted)',
+                fontSize: '0.75rem', fontStyle: 'italic', fontFamily: 'inherit',
+              }}
+            />
+          ) : waveData.topic ? (
+            <div
+              onClick={() => {
+                if (waveData.createdBy === currentUser?.id) {
+                  setTopicDraft(waveData.topic || '');
+                  setEditingTopic(true);
+                }
+              }}
+              style={{
+                color: 'var(--text-muted)', fontSize: '0.75rem', fontStyle: 'italic',
+                cursor: waveData.createdBy === currentUser?.id ? 'pointer' : 'default',
+              }}
+              title={waveData.createdBy === currentUser?.id ? 'Click to edit topic' : ''}
+            >
+              {waveData.topic}
+            </div>
+          ) : waveData.createdBy === currentUser?.id ? (
+            <div
+              onClick={() => { setTopicDraft(''); setEditingTopic(true); }}
+              style={{ color: 'var(--text-muted)', fontSize: '0.7rem', cursor: 'pointer', opacity: 0.5 }}
+            >
+              + Set topic
+            </div>
+          ) : null}
           <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
             {participants.length} participants • {total} pings
           </div>
@@ -2530,477 +2596,43 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             isMobile={isMobile}
           />
         )}
-        {/* Textarea - full width with mention picker */}
-        <div style={{ position: 'relative' }}>
-          <textarea
-            ref={textareaRef}
-            value={newMessage}
-            onChange={(e) => {
-              const value = e.target.value;
-              const cursorPos = e.target.selectionStart;
-              setNewMessage(value);
-              handleTyping();
-
-              // Detect @ mention
-              const textBeforeCursor = value.slice(0, cursorPos);
-              const atMatch = textBeforeCursor.match(/@(\w*)$/);
-              if (atMatch) {
-                setShowMentionPicker(true);
-                setMentionSearch(atMatch[1].toLowerCase());
-                setMentionStartPos(cursorPos - atMatch[0].length);
-                setMentionIndex(0);
-              } else {
-                setShowMentionPicker(false);
-                setMentionSearch('');
-                setMentionStartPos(null);
-              }
-            }}
-            onKeyDown={(e) => {
-              // Handle mention picker navigation
-              if (showMentionPicker) {
-                const mentionableUsers = [...(contacts || []), ...(participants || [])]
-                  .filter((u, i, arr) => arr.findIndex(x => x.id === u.id) === i) // dedupe
-                  .filter(u => u.id !== currentUser?.id)
-                  .filter(u => {
-                    const name = (u.displayName || u.display_name || u.handle || '').toLowerCase();
-                    const handle = (u.handle || '').toLowerCase();
-                    return name.includes(mentionSearch) || handle.includes(mentionSearch);
-                  })
-                  .slice(0, 8);
-
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setMentionIndex(i => Math.min(i + 1, mentionableUsers.length - 1));
-                  return;
-                }
-                if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setMentionIndex(i => Math.max(i - 1, 0));
-                  return;
-                }
-                if (e.key === 'Enter' || e.key === 'Tab') {
-                  if (mentionableUsers.length > 0) {
-                    e.preventDefault();
-                    const user = mentionableUsers[mentionIndex];
-                    const handle = user.handle || user.displayName || user.display_name;
-                    const before = newMessage.slice(0, mentionStartPos);
-                    const after = newMessage.slice(textareaRef.current?.selectionStart || mentionStartPos);
-                    setNewMessage(before + '@' + handle + ' ' + after);
-                    setShowMentionPicker(false);
-                    setMentionSearch('');
-                    setMentionStartPos(null);
-                    return;
-                  }
-                }
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  setShowMentionPicker(false);
-                  setMentionSearch('');
-                  setMentionStartPos(null);
-                  return;
-                }
-              }
-
-              if (e.key === 'Enter' && !e.shiftKey) {
+        <MessageComposer
+          ref={composerRef}
+          participants={participants}
+          contacts={contacts}
+          currentUser={currentUser}
+          isMobile={isMobile}
+          onSend={handleSendMessage}
+          onTyping={handleTyping}
+          onImageUpload={(file, helpers) => {
+            handleImageUpload(file);
+          }}
+          onFileUpload={(file, helpers) => {
+            handleFileUpload(file);
+          }}
+          onPaste={(e, helpers) => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            for (const item of items) {
+              if (item.type.startsWith('image/')) {
                 e.preventDefault();
-                handleSendMessage();
+                const file = item.getAsFile();
+                if (file) handleImageUpload(file);
+                return;
               }
-            }}
-            onPaste={(e) => {
-              const items = e.clipboardData?.items;
-              if (!items) return;
-              for (const item of items) {
-                if (item.type.startsWith('image/')) {
-                  e.preventDefault();
-                  const file = item.getAsFile();
-                  if (file) handleImageUpload(file);
-                  return;
-                }
-              }
-            }}
-            placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}... (Shift+Enter for new line)` : 'Type a ping... (Shift+Enter for new line, @ to mention)'}
-            rows={1}
-            style={{
-              width: '100%',
-              padding: isMobile ? '14px 16px' : '12px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              maxHeight: '200px',
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-              color: 'var(--text-primary)',
-              fontSize: isMobile ? '1rem' : '0.9rem',
-              fontFamily: 'inherit',
-              resize: 'none',
-              overflowY: 'auto',
-              boxSizing: 'border-box',
-            }}
-          />
-          {/* Mention Picker Dropdown */}
-          {showMentionPicker && (() => {
-            const mentionableUsers = [...(contacts || []), ...(participants || [])]
-              .filter((u, i, arr) => arr.findIndex(x => x.id === u.id) === i)
-              .filter(u => u.id !== currentUser?.id)
-              .filter(u => {
-                const name = (u.displayName || u.display_name || u.handle || '').toLowerCase();
-                const handle = (u.handle || '').toLowerCase();
-                return name.includes(mentionSearch) || handle.includes(mentionSearch);
-              })
-              .slice(0, 8);
-
-            if (mentionableUsers.length === 0) return null;
-
-            return (
-              <div style={{
-                position: 'absolute',
-                bottom: '100%',
-                left: 0,
-                right: 0,
-                marginBottom: '4px',
-                background: 'var(--bg-surface)',
-                border: '1px solid var(--border-primary)',
-                maxHeight: '200px',
-                overflowY: 'auto',
-                zIndex: 20,
-              }}>
-                {mentionableUsers.map((user, idx) => (
-                  <div
-                    key={user.id}
-                    onClick={() => {
-                      const handle = user.handle || user.displayName || user.display_name;
-                      const before = newMessage.slice(0, mentionStartPos);
-                      const after = newMessage.slice(textareaRef.current?.selectionStart || mentionStartPos);
-                      setNewMessage(before + '@' + handle + ' ' + after);
-                      setShowMentionPicker(false);
-                      setMentionSearch('');
-                      setMentionStartPos(null);
-                      textareaRef.current?.focus();
-                    }}
-                    style={{
-                      padding: isMobile ? '12px' : '8px 12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px',
-                      cursor: 'pointer',
-                      background: idx === mentionIndex ? 'var(--bg-hover)' : 'transparent',
-                      borderBottom: idx < mentionableUsers.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                    }}
-                  >
-                    <Avatar
-                      letter={(user.displayName || user.display_name || user.handle || '?')[0]}
-                      color="var(--accent-teal)"
-                      size={24}
-                      imageUrl={user.avatarUrl || user.avatar_url}
-                    />
-                    <div>
-                      <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem' }}>
-                        {user.displayName || user.display_name || user.handle}
-                      </div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
-                        @{user.handle}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
-        </div>
-        {/* Button row - below textarea */}
-        <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center', position: 'relative' }}>
-          {/* Left side: primary media buttons */}
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-            {/* GIF button */}
-            <button
-              onClick={() => setShowGifSearch(true)}
-              style={{
-                padding: isMobile ? '8px 10px' : '8px 10px',
-                minHeight: isMobile ? '38px' : '32px',
-                background: showGifSearch ? 'var(--accent-teal)20' : 'transparent',
-                border: `1px solid ${showGifSearch ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
-                color: 'var(--accent-teal)',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: isMobile ? '0.7rem' : '0.65rem',
-                fontWeight: 700,
-              }}
-              title="Insert GIF"
-            >
-              GIF
-            </button>
-
-            {/* Photo button with dropdown (IMG/CAM combined) */}
-            <div style={{ position: 'relative' }}>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleImageUpload(file);
-                }}
-                accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
-                style={{ display: 'none' }}
-              />
-              <button
-                onClick={() => setShowPhotoOptions(!showPhotoOptions)}
-                disabled={uploading}
-                style={{
-                  padding: isMobile ? '8px 10px' : '8px 10px',
-                  minHeight: isMobile ? '38px' : '32px',
-                  background: (showPhotoOptions || showCameraCapture) ? 'var(--accent-orange)20' : 'transparent',
-                  border: `1px solid ${(showPhotoOptions || showCameraCapture) ? 'var(--accent-orange)' : 'var(--border-subtle)'}`,
-                  color: 'var(--accent-orange)',
-                  cursor: uploading ? 'wait' : 'pointer',
-                  fontFamily: 'monospace',
-                  fontSize: isMobile ? '0.7rem' : '0.65rem',
-                  fontWeight: 700,
-                  opacity: uploading ? 0.7 : 1,
-                }}
-                title="Photo options"
-              >
-                {uploading ? '...' : '📷'}
-              </button>
-              {/* Photo options dropdown */}
-              {showPhotoOptions && (
-                <div style={{
-                  position: 'absolute',
-                  bottom: '100%',
-                  left: 0,
-                  marginBottom: '4px',
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border-primary)',
-                  borderRadius: '4px',
-                  overflow: 'hidden',
-                  zIndex: 100,
-                  minWidth: '120px',
-                }}>
-                  <button
-                    onClick={() => {
-                      setShowPhotoOptions(false);
-                      fileInputRef.current?.click();
-                    }}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      padding: '10px 12px',
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'var(--text-primary)',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      fontFamily: 'monospace',
-                      fontSize: '0.75rem',
-                    }}
-                    onMouseEnter={(e) => e.target.style.background = 'var(--bg-hover)'}
-                    onMouseLeave={(e) => e.target.style.background = 'transparent'}
-                  >
-                    📁 Upload Image
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowPhotoOptions(false);
-                      setShowCameraCapture(true);
-                    }}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      padding: '10px 12px',
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'var(--text-primary)',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      fontFamily: 'monospace',
-                      fontSize: '0.75rem',
-                    }}
-                    onMouseEnter={(e) => e.target.style.background = 'var(--bg-hover)'}
-                    onMouseLeave={(e) => e.target.style.background = 'transparent'}
-                  >
-                    📷 Take Photo
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* File attach button */}
-            <input
-              type="file"
-              ref={fileAttachInputRef}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleFileUpload(file);
-              }}
-              style={{ display: 'none' }}
-            />
-            <button
-              onClick={() => fileAttachInputRef.current?.click()}
-              disabled={uploading}
-              style={{
-                padding: isMobile ? '8px 10px' : '8px 10px',
-                minHeight: isMobile ? '38px' : '32px',
-                background: 'transparent',
-                border: '1px solid var(--border-subtle)',
-                color: 'var(--text-secondary)',
-                cursor: uploading ? 'wait' : 'pointer',
-                fontFamily: 'monospace',
-                fontSize: isMobile ? '0.7rem' : '0.65rem',
-                fontWeight: 700,
-                opacity: uploading ? 0.7 : 1,
-              }}
-              title="Attach file"
-            >
-              {uploading ? '...' : '📎'}
-            </button>
-
-            {/* More actions menu (⋮) */}
-            <div style={{ position: 'relative' }}>
-              <button
-                onClick={() => setShowActionMenu(!showActionMenu)}
-                style={{
-                  padding: isMobile ? '8px 10px' : '8px 10px',
-                  minHeight: isMobile ? '38px' : '32px',
-                  background: showActionMenu ? 'var(--bg-hover)' : 'transparent',
-                  border: `1px solid ${showActionMenu ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontFamily: 'monospace',
-                  fontSize: isMobile ? '1rem' : '0.85rem',
-                  fontWeight: 700,
-                }}
-                title="More actions"
-              >
-                ⋮
-              </button>
-              {/* Actions dropdown */}
-              {showActionMenu && (
-                <div style={{
-                  position: 'absolute',
-                  bottom: '100%',
-                  left: 0,
-                  marginBottom: '4px',
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border-primary)',
-                  borderRadius: '4px',
-                  overflow: 'hidden',
-                  zIndex: 100,
-                  minWidth: '140px',
-                }}>
-                  <button
-                    onClick={() => {
-                      setShowActionMenu(false);
-                      setShowMediaRecorder(showMediaRecorder === 'audio' ? null : 'audio');
-                    }}
-                    disabled={uploadingMedia}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      padding: '10px 12px',
-                      background: showMediaRecorder === 'audio' ? 'var(--accent-green)20' : 'transparent',
-                      border: 'none',
-                      color: showMediaRecorder === 'audio' ? 'var(--accent-green)' : 'var(--text-primary)',
-                      cursor: uploadingMedia ? 'wait' : 'pointer',
-                      textAlign: 'left',
-                      fontFamily: 'monospace',
-                      fontSize: '0.75rem',
-                      opacity: uploadingMedia ? 0.7 : 1,
-                    }}
-                    onMouseEnter={(e) => e.target.style.background = showMediaRecorder === 'audio' ? 'var(--accent-green)30' : 'var(--bg-hover)'}
-                    onMouseLeave={(e) => e.target.style.background = showMediaRecorder === 'audio' ? 'var(--accent-green)20' : 'transparent'}
-                  >
-                    🎤 Record Audio
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowActionMenu(false);
-                      setShowMediaRecorder(showMediaRecorder === 'video' ? null : 'video');
-                    }}
-                    disabled={uploadingMedia}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      padding: '10px 12px',
-                      background: showMediaRecorder === 'video' ? 'var(--accent-teal)20' : 'transparent',
-                      border: 'none',
-                      color: showMediaRecorder === 'video' ? 'var(--accent-teal)' : 'var(--text-primary)',
-                      cursor: uploadingMedia ? 'wait' : 'pointer',
-                      textAlign: 'left',
-                      fontFamily: 'monospace',
-                      fontSize: '0.75rem',
-                      opacity: uploadingMedia ? 0.7 : 1,
-                    }}
-                    onMouseEnter={(e) => e.target.style.background = showMediaRecorder === 'video' ? 'var(--accent-teal)30' : 'var(--bg-hover)'}
-                    onMouseLeave={(e) => e.target.style.background = showMediaRecorder === 'video' ? 'var(--accent-teal)20' : 'transparent'}
-                  >
-                    🎥 Record Video
-                  </button>
-                  {plexConnections.length > 0 && (
-                    <button
-                      onClick={() => {
-                        setShowActionMenu(false);
-                        setShowPlexBrowser(true);
-                      }}
-                      style={{
-                        display: 'block',
-                        width: '100%',
-                        padding: '10px 12px',
-                        background: 'transparent',
-                        border: 'none',
-                        color: '#e5a00d',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        fontFamily: 'monospace',
-                        fontSize: '0.75rem',
-                      }}
-                      onMouseEnter={(e) => e.target.style.background = 'var(--bg-hover)'}
-                      onMouseLeave={(e) => e.target.style.background = 'transparent'}
-                    >
-                      🎬 Share Plex
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Spacer */}
-          <div style={{ flex: 1 }} />
-
-          {/* Right side: send button */}
-          <button
-            onClick={handleSendMessage}
-            disabled={!newMessage.trim() || uploading}
-            style={{
-              padding: isMobile ? '10px 20px' : '8px 20px',
-              minHeight: isMobile ? '38px' : '32px',
-              background: newMessage.trim() ? 'var(--accent-amber)20' : 'transparent',
-              border: `1px solid ${newMessage.trim() ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
-              color: newMessage.trim() ? 'var(--accent-amber)' : 'var(--text-muted)',
-              cursor: newMessage.trim() ? 'pointer' : 'not-allowed',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.85rem' : '0.75rem',
-              flexShrink: 0,
-            }}
-          >
-            SEND
-          </button>
-        </div>
-
-        {/* Click outside handler for dropdowns */}
-        {(showPhotoOptions || showActionMenu) && (
-          <div
-            style={{
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              zIndex: 99,
-            }}
-            onClick={() => {
-              setShowPhotoOptions(false);
-              setShowActionMenu(false);
-            }}
-          />
-        )}
+            }
+          }}
+          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}... (Shift+Enter for new line)` : 'Type a ping... (Shift+Enter for new line, @ to mention)'}
+          uploading={uploading}
+          uploadingMedia={uploadingMedia}
+          mediaUploadStatus={mediaUploadStatus}
+          onGifClick={() => setShowGifSearch(true)}
+          onCameraClick={() => setShowCameraCapture(true)}
+          onAudioRecord={() => setShowMediaRecorder(showMediaRecorder === 'audio' ? null : 'audio')}
+          onVideoRecord={() => setShowMediaRecorder(showMediaRecorder === 'video' ? null : 'video')}
+          plexConnections={plexConnections}
+          onPlexClick={() => setShowPlexBrowser(true)}
+        />
       </div>
 
       <WaveSettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)}
@@ -3037,7 +2669,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           isOpen={showGifSearch}
           onClose={() => setShowGifSearch(false)}
           onSelect={(gifUrl) => {
-            setNewMessage(prev => prev + (prev.trim() ? ' ' : '') + gifUrl);
+            if (composerRef.current) {
+              composerRef.current.appendMessage(gifUrl);
+            } else {
+              setNewMessage(prev => prev + (prev.trim() ? ' ' : '') + gifUrl);
+            }
             setShowGifSearch(false);
           }}
           fetchAPI={fetchAPI}
@@ -3059,7 +2695,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               duration: media.duration,
               summary: media.summary,
             });
-            setNewMessage(prev => prev + (prev.trim() ? ' ' : '') + embedUrl);
+            if (composerRef.current) {
+              composerRef.current.appendMessage(embedUrl);
+            } else {
+              setNewMessage(prev => prev + (prev.trim() ? ' ' : '') + embedUrl);
+            }
             setShowPlexBrowser(false);
           }}
           fetchAPI={fetchAPI}
