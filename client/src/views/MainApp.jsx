@@ -262,7 +262,7 @@ function MainApp({ sharePingId }) {
     }
   }, [sharePingId, user]);
 
-  const showToastMsg = useCallback((message, type) => setToast({ message, type }), []);
+  const showToastMsg = useCallback((message, type, options) => setToast({ message, type, ...(typeof options === 'object' ? options : { duration: options }) }), []);
 
   // ============ TAB MANAGEMENT (v2.35.0) ============
 
@@ -1793,7 +1793,7 @@ function MainApp({ sharePingId }) {
         isMobile={isMobile}
       />
 
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      {toast && <Toast message={toast.message} type={toast.type} duration={toast.duration} dismissible={toast.dismissible} onClose={() => setToast(null)} />}
 
       {/* Alert Detail Modal */}
       <AlertDetailModal

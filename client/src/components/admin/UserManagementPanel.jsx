@@ -36,7 +36,7 @@ const UserManagementPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, 
         body: { sendEmail }
       });
       if (data.temporaryPassword) {
-        showToast(`Password reset. Temp password: ${data.temporaryPassword}`, 'success');
+        showToast(`Password reset. Temp password: ${data.temporaryPassword}`, 'success', { duration: 15000, dismissible: true });
       } else {
         showToast(data.message || 'Password reset successfully', 'success');
       }

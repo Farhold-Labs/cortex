@@ -82,18 +82,26 @@ export const PrivacyBadge = ({ level, compact = false }) => {
 };
 
 // ============ TOAST NOTIFICATION ============
-export const Toast = ({ message, type = 'info', onClose }) => {
+export const Toast = ({ message, type = 'info', duration = 4000, dismissible, onClose }) => {
   const colors = { success: 'var(--accent-green)', error: 'var(--accent-orange)', info: 'var(--accent-amber)' };
-  useEffect(() => { const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [onClose]);
+  useEffect(() => { const t = setTimeout(onClose, duration); return () => clearTimeout(t); }, [onClose, duration]);
   return (
     <div style={{
       position: 'fixed', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
-      padding: '12px 24px', background: 'var(--bg-surface)',
+      padding: dismissible ? '12px 32px 12px 24px' : '12px 24px', background: 'var(--bg-surface)',
       border: `1px solid ${colors[type]}`, color: colors[type],
       fontFamily: 'monospace', fontSize: '0.85rem', zIndex: 200,
       maxWidth: '90vw', textAlign: 'center',
     }}>
       {message}
+      {dismissible && (
+        <button onClick={onClose} style={{
+          position: 'absolute', top: '4px', right: '6px',
+          background: 'none', border: 'none', color: colors[type],
+          cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.8rem',
+          padding: '2px 4px', opacity: 0.7,
+        }}>✕</button>
+      )}
     </div>
   );
 };
