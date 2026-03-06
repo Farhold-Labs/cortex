@@ -1853,6 +1853,38 @@ export class DatabaseSQLite {
     } catch (err) {
       // Column may already exist
     }
+
+    // v2.37.0: Account moderation columns on users table
+    try {
+      const userCols = this.db.prepare("PRAGMA table_info(users)").all();
+      if (!userCols.some(c => c.name === 'account_status')) {
+        this.db.exec(`
+          ALTER TABLE users ADD COLUMN account_status TEXT DEFAULT 'active';
+          ALTER TABLE users ADD COLUMN moderation_reason TEXT;
+          ALTER TABLE users ADD COLUMN moderated_at TEXT;
+          ALTER TABLE users ADD COLUMN moderated_by TEXT;
+        `);
+        console.log('✅ Added account moderation columns to users');
+      }
+    } catch (err) {
+      // Columns may already exist
+    }
+
+    // v2.37.0: Moderation appeals table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS moderation_appeals (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        appeal_text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        admin_response TEXT,
+        reviewed_by TEXT REFERENCES users(id),
+        reviewed_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_moderation_appeals_user ON moderation_appeals(user_id);
+      CREATE INDEX IF NOT EXISTS idx_moderation_appeals_status ON moderation_appeals(status);
+    `);
   }
 
   prepareStatements() {
@@ -2018,6 +2050,10 @@ export class DatabaseSQLite {
       lastHandleChange: row.last_handle_change,
       preferences: row.preferences ? JSON.parse(row.preferences) : { theme: 'firefly', fontSize: 'medium' },
       notificationPreferences: row.notification_preferences ? JSON.parse(row.notification_preferences) : null,
+      accountStatus: row.account_status || 'active',
+      moderationReason: row.moderation_reason || null,
+      moderatedAt: row.moderated_at || null,
+      moderatedBy: row.moderated_by || null,
       handleHistory: this.getHandleHistory(row.id),
     };
   }
@@ -3137,6 +3173,7 @@ export class DatabaseSQLite {
     const pattern = `%${query}%`;
     const rows = this.db.prepare(`
       SELECT u.id, u.handle, u.display_name, u.email, u.avatar, u.avatar_url, u.is_admin, u.role, u.created_at,
+             u.account_status, u.moderation_reason, u.moderated_at,
              CASE WHEN m.totp_enabled = 1 OR m.email_mfa_enabled = 1 THEN 1 ELSE 0 END as mfa_enabled,
              m.totp_enabled, m.email_mfa_enabled
       FROM users u
@@ -3159,6 +3196,9 @@ export class DatabaseSQLite {
         isAdmin: role === 'admin',
         role: role,
         createdAt: r.created_at,
+        accountStatus: r.account_status || 'active',
+        moderationReason: r.moderation_reason || null,
+        moderatedAt: r.moderated_at || null,
         mfaEnabled: r.mfa_enabled === 1,
         totpEnabled: r.totp_enabled === 1,
         emailMfaEnabled: r.email_mfa_enabled === 1,
@@ -3994,6 +4034,109 @@ export class DatabaseSQLite {
     `).run(id, adminId, actionType, targetType, targetId, reason, details, now);
 
     return { id, adminId, actionType, targetType, targetId, reason, details, createdAt: now };
+  }
+
+  // === Account Moderation Methods (v2.37.0) ===
+
+  updateAccountStatus(userId, status, reason, moderatedBy) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE users SET account_status = ?, moderation_reason = ?, moderated_at = ?, moderated_by = ?
+      WHERE id = ?
+    `).run(status, reason, now, moderatedBy, userId);
+    return { userId, status, reason, moderatedAt: now, moderatedBy };
+  }
+
+  getUserAccountStatus(userId) {
+    const row = this.db.prepare('SELECT account_status, moderation_reason, moderated_at FROM users WHERE id = ?').get(userId);
+    if (!row) return null;
+    return {
+      accountStatus: row.account_status || 'active',
+      moderationReason: row.moderation_reason,
+      moderatedAt: row.moderated_at,
+    };
+  }
+
+  createAppeal(userId, appealText) {
+    const id = `appeal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO moderation_appeals (id, user_id, appeal_text, status, created_at)
+      VALUES (?, ?, ?, 'pending', ?)
+    `).run(id, userId, appealText, now);
+    return { id, userId, appealText, status: 'pending', createdAt: now };
+  }
+
+  getPendingAppeals() {
+    const rows = this.db.prepare(`
+      SELECT a.*, u.handle as user_handle, u.display_name as user_display_name,
+             u.account_status, u.moderation_reason, u.moderated_at
+      FROM moderation_appeals a
+      JOIN users u ON a.user_id = u.id
+      WHERE a.status = 'pending'
+      ORDER BY a.created_at ASC
+    `).all();
+    return rows.map(r => ({
+      id: r.id,
+      userId: r.user_id,
+      userHandle: r.user_handle,
+      userDisplayName: r.user_display_name,
+      accountStatus: r.account_status,
+      moderationReason: r.moderation_reason,
+      moderatedAt: r.moderated_at,
+      appealText: r.appeal_text,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
+  }
+
+  getAppealsByUser(userId) {
+    const rows = this.db.prepare(`
+      SELECT a.*, reviewer.handle as reviewed_by_handle
+      FROM moderation_appeals a
+      LEFT JOIN users reviewer ON a.reviewed_by = reviewer.id
+      WHERE a.user_id = ?
+      ORDER BY a.created_at DESC
+    `).all(userId);
+    return rows.map(r => ({
+      id: r.id,
+      appealText: r.appeal_text,
+      status: r.status,
+      adminResponse: r.admin_response,
+      reviewedByHandle: r.reviewed_by_handle,
+      reviewedAt: r.reviewed_at,
+      createdAt: r.created_at,
+    }));
+  }
+
+  resolveAppeal(appealId, status, adminResponse, reviewedBy) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE moderation_appeals SET status = ?, admin_response = ?, reviewed_by = ?, reviewed_at = ?
+      WHERE id = ?
+    `).run(status, adminResponse, reviewedBy, now, appealId);
+    const appeal = this.db.prepare('SELECT * FROM moderation_appeals WHERE id = ?').get(appealId);
+    return appeal ? {
+      id: appeal.id,
+      userId: appeal.user_id,
+      status: appeal.status,
+      adminResponse: appeal.admin_response,
+      reviewedAt: now,
+    } : null;
+  }
+
+  getPendingAppealCount() {
+    const row = this.db.prepare('SELECT COUNT(*) as count FROM moderation_appeals WHERE status = ?').get('pending');
+    return row?.count || 0;
+  }
+
+  hasRecentPendingAppeal(userId) {
+    const row = this.db.prepare(`
+      SELECT id FROM moderation_appeals
+      WHERE user_id = ? AND status = 'pending'
+      LIMIT 1
+    `).get(userId);
+    return !!row;
   }
 
   getModerationLog(limit = 50, offset = 0) {
@@ -8215,17 +8358,47 @@ export class DatabaseSQLite {
       // 19. Delete user avatar file (if exists)
       // Note: This should be handled separately by the server if avatarUrl exists
 
-      // 20. Finally, delete the user
+      // 20. Clean up ALL remaining FK references without ON DELETE CASCADE
+      //     Each in its own try/catch so one missing table doesn't skip the rest
+      const fkCleanups = [
+        ['UPDATE waves SET profile_owner_id = NULL WHERE profile_owner_id = ?', [userId]],
+        ['UPDATE warnings SET issued_by = ? WHERE issued_by = ?', [deletedUserId, userId]],
+        ['UPDATE reports SET resolved_by = NULL WHERE resolved_by = ?', [userId]],
+        ['UPDATE handle_requests SET processed_by = NULL WHERE processed_by = ?', [userId]],
+        ['UPDATE moderation_log SET admin_id = ? WHERE admin_id = ?', [deletedUserId, userId]],
+        ['UPDATE moderation_appeals SET reviewed_by = NULL WHERE reviewed_by = ?', [userId]],
+        ['UPDATE federation_nodes SET added_by = NULL WHERE added_by = ?', [userId]],
+        ['UPDATE alerts SET created_by = NULL WHERE created_by = ?', [userId]],
+        ['UPDATE alert_subscriptions SET created_by = NULL WHERE created_by = ?', [userId]],
+        ['UPDATE bot_permissions SET granted_by = ? WHERE granted_by = ?', [deletedUserId, userId]],
+        ['UPDATE wave_webhooks SET created_by = NULL WHERE created_by = ?', [userId]],
+        ['UPDATE watch_parties SET host_user_id = ? WHERE host_user_id = ?', [deletedUserId, userId]],
+        ['UPDATE call_sessions SET started_by = ? WHERE started_by = ?', [deletedUserId, userId]],
+        // Safety nets for steps 7/10 (transfer ownership) in case they missed any
+        ['UPDATE waves SET created_by = ? WHERE created_by = ?', [deletedUserId, userId]],
+        ['UPDATE crews SET created_by = ? WHERE created_by = ?', [deletedUserId, userId]],
+      ];
+      for (const [sql, params] of fkCleanups) {
+        try { this.db.prepare(sql).run(...params); } catch { /* Table may not exist */ }
+      }
+
+      // 21. Finally, delete the user
       this.db.prepare('DELETE FROM users WHERE id = ?').run(userId);
 
       return { success: true, deletedUserId: userId, handle: user.handle };
     });
 
+    // Temporarily disable FK checks around the transaction.
+    // PRAGMA foreign_keys is a no-op inside transactions, so we must set it before BEGIN.
+    // This is safe because better-sqlite3 is synchronous (same pattern as remote ping insert).
+    this.db.exec('PRAGMA foreign_keys = OFF');
     try {
       return deleteTransaction();
     } catch (err) {
       console.error('Account deletion error:', err);
       return { success: false, error: err.message };
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON');
     }
   }
 

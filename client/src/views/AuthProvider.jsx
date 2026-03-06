@@ -132,7 +132,18 @@ function AuthProvider({ children }) {
       body: JSON.stringify({ handle, password, sessionDuration }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Login failed');
+    if (!res.ok) {
+      // Propagate moderation error details (v2.37.0)
+      if (data.code === 'ACCOUNT_DISABLED' || data.code === 'ACCOUNT_BANNED') {
+        const err = new Error(data.error || 'Account moderated');
+        err.code = data.code;
+        err.reason = data.reason;
+        err.moderatedAt = data.moderatedAt;
+        err.canAppeal = data.canAppeal;
+        throw err;
+      }
+      throw new Error(data.error || 'Login failed');
+    }
     // Check if MFA is required
     if (data.mfaRequired) {
       // Store password for later E2EE unlock after MFA

@@ -23,6 +23,7 @@ import FederationAdminPanel from '../admin/FederationAdminPanel.jsx';
 import HandleRequestsList from '../admin/HandleRequestsList.jsx';
 import BotsAdminPanel from '../admin/BotsAdminPanel.jsx';
 import PrivacyDashboard from '../admin/PrivacyDashboard.jsx';
+import ModerationAppealsPanel from '../admin/ModerationAppealsPanel.jsx';
 import ThemeCustomizationModal from '../settings/ThemeCustomizationModal.jsx';
 import JellyfinConnectionManager from '../media/JellyfinConnectionManager.jsx';
 import PlexConnectionManager from '../media/PlexConnectionManager.jsx';
@@ -2079,6 +2080,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
             {/* Admin Reports Dashboard */}
             <AdminReportsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'reports'} onToggle={() => toggleAdminSection('reports')} />
+
+            {/* Moderation Appeals Panel (v2.37.0) */}
+            <ModerationAppealsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'appeals'} onToggle={() => toggleAdminSection('appeals')} />
 
             {/* Activity Log Panel */}
             <ActivityLogPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'activity'} onToggle={() => toggleAdminSection('activity')} />

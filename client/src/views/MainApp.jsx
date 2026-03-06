@@ -262,7 +262,7 @@ function MainApp({ sharePingId }) {
     }
   }, [sharePingId, user]);
 
-  const showToastMsg = useCallback((message, type) => setToast({ message, type }), []);
+  const showToastMsg = useCallback((message, type, options) => setToast({ message, type, ...(typeof options === 'object' ? options : { duration: options }) }), []);
 
   // ============ TAB MANAGEMENT (v2.35.0) ============
 
@@ -500,6 +500,13 @@ function MainApp({ sharePingId }) {
     // Log ALL incoming WebSocket messages (for debugging)
     if (data.type?.startsWith('call_')) {
       console.log('🔌 [WS] Received message:', data.type, data);
+    }
+
+    // Account moderated — show reason and force logout (v2.37.0)
+    if (data.type === 'account_moderated') {
+      showToastMsg(`Account ${data.status}: ${data.reason || 'Contact an administrator'}`, 'error');
+      setTimeout(() => logout?.(), 2000);
+      return;
     }
 
     // Handle ping/wave read events - these are always followed by unread_count_update event
@@ -765,7 +772,7 @@ function MainApp({ sharePingId }) {
         [waveId]: prev[waveId] ? { ...prev[waveId], participants } : prev[waveId]
       }));
     }
-  }, [loadWaves, selectedWave, showToastMsg, user, waves, openWaveTab, closeTab, openTabs, activeTabId, setActiveView, fetchAPI, watchPartyPlayer]);
+  }, [loadWaves, selectedWave, showToastMsg, user, waves, openWaveTab, closeTab, openTabs, activeTabId, setActiveView, fetchAPI, watchPartyPlayer, logout]);
 
   const { connected: wsConnected, sendMessage: sendWSMessage, serverVersion } = useWebSocket(token, handleWSMessage);
 
@@ -1786,7 +1793,7 @@ function MainApp({ sharePingId }) {
         isMobile={isMobile}
       />
 
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      {toast && <Toast message={toast.message} type={toast.type} duration={toast.duration} dismissible={toast.dismissible} onClose={() => setToast(null)} />}
 
       {/* Alert Detail Modal */}
       <AlertDetailModal

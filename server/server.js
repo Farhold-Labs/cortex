@@ -4513,6 +4513,20 @@ function authenticateToken(req, res, next) {
     req.user = decoded;
     req.sessionId = validation.session?.id || null;
     req.token = token; // Store token for logout/session operations
+
+    // Check account moderation status (v2.37.0)
+    if (db.getUserAccountStatus) {
+      const status = db.getUserAccountStatus(decoded.userId);
+      if (status && (status.accountStatus === 'disabled' || status.accountStatus === 'banned')) {
+        const code = status.accountStatus === 'disabled' ? 'ACCOUNT_DISABLED' : 'ACCOUNT_BANNED';
+        return res.status(403).json({
+          error: `Account ${status.accountStatus}`,
+          code,
+          reason: status.moderationReason || 'No reason provided',
+        });
+      }
+    }
+
     next();
   });
 }
@@ -4665,6 +4679,20 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    // Check account moderation status (v2.37.0)
+    const accountStatus = user.accountStatus || 'active';
+    if (accountStatus === 'disabled' || accountStatus === 'banned') {
+      const code = accountStatus === 'disabled' ? 'ACCOUNT_DISABLED' : 'ACCOUNT_BANNED';
+      if (db.logActivity) db.logActivity(user.id, 'login_blocked', 'user', user.id, { ...meta, reason: code });
+      return res.status(403).json({
+        error: `Account ${accountStatus}`,
+        code,
+        reason: user.moderationReason || 'No reason provided',
+        moderatedAt: user.moderatedAt,
+        canAppeal: true,
+      });
+    }
+
     // Check if MFA is enabled
     const hasMfa = db.hasMfaEnabled && db.hasMfaEnabled(user.id);
     if (hasMfa) {
@@ -4713,7 +4741,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 app.get('/api/auth/me', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } });
+  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' }, accountStatus: user.accountStatus || 'active' });
 });
 
 app.post('/api/auth/logout', authenticateToken, (req, res) => {
@@ -11764,6 +11792,396 @@ app.put('/api/admin/users/:id/role', authenticateToken, (req, res) => {
   }
 });
 
+// ============ Account Moderation Endpoints (v2.37.0) ============
+
+// Disable user account (moderator+)
+app.post('/api/admin/users/:id/disable', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.MODERATOR, res)) return;
+
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: 'Reason is required' });
+    }
+
+    const targetUserId = req.params.id;
+    if (targetUserId === admin.id) {
+      return res.status(400).json({ error: 'Cannot moderate yourself' });
+    }
+
+    const targetUser = db.findUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Cannot moderate users of equal or higher role
+    if (ROLE_HIERARCHY[getUserRole(targetUser)] >= ROLE_HIERARCHY[getUserRole(admin)]) {
+      return res.status(403).json({ error: 'Cannot moderate users of equal or higher role' });
+    }
+
+    if (targetUser.accountStatus && targetUser.accountStatus !== 'active') {
+      return res.status(400).json({ error: `User is already ${targetUser.accountStatus}` });
+    }
+
+    db.updateAccountStatus(targetUserId, 'disabled', reason.trim(), admin.id);
+
+    // Revoke all sessions and disconnect WebSocket
+    if (db.revokeAllUserSessions) db.revokeAllUserSessions(targetUserId);
+    broadcastToUser(targetUserId, { type: 'account_moderated', status: 'disabled', reason: reason.trim() });
+    // Close WebSocket connections
+    const userClients = clients.get(targetUserId);
+    if (userClients) {
+      for (const ws of userClients) {
+        ws.close(1008, 'Account disabled');
+      }
+    }
+
+    if (db.logModerationAction) db.logModerationAction(admin.id, 'disable_account', 'user', targetUserId, reason.trim());
+    if (db.logActivity) db.logActivity(admin.id, 'admin_disable_account', 'user', targetUserId, getRequestMeta(req));
+
+    console.log(`Admin ${admin.handle} disabled account: ${targetUser.handle} — ${reason.trim()}`);
+    res.json({ success: true, message: `Account @${targetUser.handle} disabled` });
+  } catch (err) {
+    console.error('Disable account error:', err);
+    res.status(500).json({ error: 'Failed to disable account' });
+  }
+});
+
+// Ban user account (admin only)
+app.post('/api/admin/users/:id/ban', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: 'Reason is required' });
+    }
+
+    const targetUserId = req.params.id;
+    if (targetUserId === admin.id) {
+      return res.status(400).json({ error: 'Cannot moderate yourself' });
+    }
+
+    const targetUser = db.findUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (ROLE_HIERARCHY[getUserRole(targetUser)] >= ROLE_HIERARCHY[getUserRole(admin)]) {
+      return res.status(403).json({ error: 'Cannot moderate users of equal or higher role' });
+    }
+
+    if (targetUser.accountStatus && targetUser.accountStatus !== 'active') {
+      return res.status(400).json({ error: `User is already ${targetUser.accountStatus}` });
+    }
+
+    db.updateAccountStatus(targetUserId, 'banned', reason.trim(), admin.id);
+
+    if (db.revokeAllUserSessions) db.revokeAllUserSessions(targetUserId);
+    broadcastToUser(targetUserId, { type: 'account_moderated', status: 'banned', reason: reason.trim() });
+    const userClients = clients.get(targetUserId);
+    if (userClients) {
+      for (const ws of userClients) {
+        ws.close(1008, 'Account banned');
+      }
+    }
+
+    if (db.logModerationAction) db.logModerationAction(admin.id, 'ban_account', 'user', targetUserId, reason.trim());
+    if (db.logActivity) db.logActivity(admin.id, 'admin_ban_account', 'user', targetUserId, getRequestMeta(req));
+
+    console.log(`Admin ${admin.handle} banned account: ${targetUser.handle} — ${reason.trim()}`);
+    res.json({ success: true, message: `Account @${targetUser.handle} banned` });
+  } catch (err) {
+    console.error('Ban account error:', err);
+    res.status(500).json({ error: 'Failed to ban account' });
+  }
+});
+
+// Reinstate user account (admin only)
+app.post('/api/admin/users/:id/reinstate', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+    const targetUserId = req.params.id;
+    const targetUser = db.findUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!targetUser.accountStatus || targetUser.accountStatus === 'active') {
+      return res.status(400).json({ error: 'User account is already active' });
+    }
+
+    db.updateAccountStatus(targetUserId, 'active', null, null);
+
+    if (db.logModerationAction) db.logModerationAction(admin.id, 'reinstate_account', 'user', targetUserId, `Reinstated from ${targetUser.accountStatus}`);
+    if (db.logActivity) db.logActivity(admin.id, 'admin_reinstate_account', 'user', targetUserId, getRequestMeta(req));
+
+    console.log(`Admin ${admin.handle} reinstated account: ${targetUser.handle}`);
+    res.json({ success: true, message: `Account @${targetUser.handle} reinstated` });
+  } catch (err) {
+    console.error('Reinstate account error:', err);
+    res.status(500).json({ error: 'Failed to reinstate account' });
+  }
+});
+
+// Kick user from wave (moderator+)
+app.post('/api/admin/users/:id/kick', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.MODERATOR, res)) return;
+
+    const { waveId } = req.body;
+    if (!waveId || !waveId.trim()) {
+      return res.status(400).json({ error: 'Wave ID is required' });
+    }
+
+    const targetUserId = req.params.id;
+    if (targetUserId === admin.id) {
+      return res.status(400).json({ error: 'Cannot kick yourself' });
+    }
+
+    const targetUser = db.findUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const wave = db.getWave(waveId.trim());
+    if (!wave) {
+      return res.status(404).json({ error: 'Wave not found' });
+    }
+
+    // Remove participant
+    db.removeParticipant(waveId.trim(), targetUserId);
+    broadcastToUser(targetUserId, { type: 'removed_from_wave', waveId: waveId.trim() });
+
+    if (db.logModerationAction) db.logModerationAction(admin.id, 'kick_from_wave', 'user', targetUserId, `Kicked from wave ${waveId.trim()}`);
+    if (db.logActivity) db.logActivity(admin.id, 'admin_kick', 'user', targetUserId, { ...getRequestMeta(req), waveId: waveId.trim() });
+
+    console.log(`Admin ${admin.handle} kicked ${targetUser.handle} from wave ${waveId.trim()}`);
+    res.json({ success: true, message: `@${targetUser.handle} kicked from wave` });
+  } catch (err) {
+    console.error('Kick user error:', err);
+    res.status(500).json({ error: 'Failed to kick user' });
+  }
+});
+
+// Delete user account (admin only)
+app.post('/api/admin/users/:id/delete', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+    const targetUserId = req.params.id;
+    if (targetUserId === admin.id) {
+      return res.status(400).json({ error: 'Cannot delete your own account' });
+    }
+
+    const targetUser = db.findUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (ROLE_HIERARCHY[getUserRole(targetUser)] >= ROLE_HIERARCHY[getUserRole(admin)]) {
+      return res.status(403).json({ error: 'Cannot delete users of equal or higher role' });
+    }
+
+    if (!db.deleteUserAccount) {
+      return res.status(501).json({ error: 'Account deletion not available' });
+    }
+
+    // Revoke sessions and disconnect first
+    if (db.revokeAllUserSessions) db.revokeAllUserSessions(targetUserId);
+    const userClients = clients.get(targetUserId);
+    if (userClients) {
+      for (const ws of userClients) {
+        ws.close(1008, 'Account deleted');
+      }
+    }
+
+    const result = db.deleteUserAccount(targetUserId);
+    if (!result.success) {
+      return res.status(500).json({ error: result.error || 'Failed to delete account' });
+    }
+
+    if (db.logModerationAction) db.logModerationAction(admin.id, 'delete_account', 'user', targetUserId, `Deleted account @${targetUser.handle}`);
+    if (db.logActivity) db.logActivity(admin.id, 'admin_delete_account', 'user', targetUserId, getRequestMeta(req));
+
+    console.log(`Admin ${admin.handle} deleted account: ${targetUser.handle}`);
+    res.json({ success: true, message: `Account @${targetUser.handle} deleted` });
+  } catch (err) {
+    console.error('Delete account error:', err);
+    res.status(500).json({ error: 'Failed to delete account' });
+  }
+});
+
+// Reset user encryption keys (admin only)
+app.post('/api/admin/users/:id/reset-encryption', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+    const targetUserId = req.params.id;
+    if (targetUserId === admin.id) {
+      return res.status(400).json({ error: 'Cannot reset your own encryption keys' });
+    }
+
+    const targetUser = db.findUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (ROLE_HIERARCHY[getUserRole(targetUser)] >= ROLE_HIERARCHY[getUserRole(admin)]) {
+      return res.status(403).json({ error: 'Cannot reset encryption for users of equal or higher role' });
+    }
+
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: 'Reason is required' });
+    }
+
+    // Wipe all encryption keys for the user
+    db.db.prepare('DELETE FROM user_encryption_keys WHERE user_id = ?').run(targetUserId);
+    db.db.prepare('DELETE FROM user_recovery_keys WHERE user_id = ?').run(targetUserId);
+    db.db.prepare('DELETE FROM wave_encryption_keys WHERE user_id = ?').run(targetUserId);
+
+    if (db.logModerationAction) db.logModerationAction(admin.id, 'reset_encryption', 'user', targetUserId, reason.trim());
+    if (db.logActivity) db.logActivity(admin.id, 'admin_reset_encryption', 'user', targetUserId, getRequestMeta(req));
+
+    broadcastToUser(targetUserId, { type: 'encryption_reset', message: 'Your encryption keys have been reset by an administrator' });
+
+    console.log(`Admin ${admin.handle} reset encryption keys for: ${targetUser.handle}`);
+    res.json({ success: true, message: `Encryption keys reset for @${targetUser.handle}` });
+  } catch (err) {
+    console.error('Reset encryption error:', err);
+    res.status(500).json({ error: 'Failed to reset encryption keys' });
+  }
+});
+
+// Submit moderation appeal (public, rate-limited)
+app.post('/api/auth/moderation-appeal', loginLimiter, async (req, res) => {
+  try {
+    const { handle, appealText } = req.body;
+
+    if (!handle || !handle.trim()) {
+      return res.status(400).json({ error: 'Handle is required' });
+    }
+    if (!appealText || appealText.trim().length < 10) {
+      return res.status(400).json({ error: 'Appeal must be at least 10 characters' });
+    }
+    if (appealText.length > 2000) {
+      return res.status(400).json({ error: 'Appeal must be under 2000 characters' });
+    }
+
+    const user = db.findUserByHandle(handle.trim());
+    if (!user) {
+      // Don't reveal if user exists
+      return res.json({ success: true, message: 'If the account exists, your appeal has been submitted.' });
+    }
+
+    if (!user.accountStatus || user.accountStatus === 'active') {
+      return res.status(400).json({ error: 'Account is not moderated' });
+    }
+
+    // Check for existing pending appeal
+    if (db.hasRecentPendingAppeal(user.id)) {
+      return res.status(400).json({ error: 'You already have a pending appeal' });
+    }
+
+    db.createAppeal(user.id, appealText.trim());
+    if (db.logActivity) db.logActivity(user.id, 'appeal_submitted', 'user', user.id, { ip: req.ip });
+
+    // Notify admins
+    broadcastToAdmins({ type: 'moderation_appeal_submitted', userHandle: user.handle });
+
+    res.json({ success: true, message: 'Appeal submitted. An administrator will review your case.' });
+  } catch (err) {
+    console.error('Appeal submission error:', err);
+    res.status(500).json({ error: 'Failed to submit appeal' });
+  }
+});
+
+// Check appeal status (public, rate-limited)
+app.get('/api/auth/moderation-appeal/status', loginLimiter, (req, res) => {
+  try {
+    const { handle } = req.query;
+    if (!handle || !handle.trim()) {
+      return res.status(400).json({ error: 'Handle is required' });
+    }
+
+    const user = db.findUserByHandle(handle.trim());
+    if (!user) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    const appeals = db.getAppealsByUser(user.id);
+    res.json({
+      accountStatus: user.accountStatus || 'active',
+      appeals: appeals.map(a => ({
+        status: a.status,
+        adminResponse: a.adminResponse,
+        reviewedAt: a.reviewedAt,
+        createdAt: a.createdAt,
+      })),
+    });
+  } catch (err) {
+    console.error('Appeal status error:', err);
+    res.status(500).json({ error: 'Failed to check appeal status' });
+  }
+});
+
+// List pending appeals (moderator+)
+app.get('/api/admin/moderation-appeals', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.MODERATOR, res)) return;
+
+    const appeals = db.getPendingAppeals();
+    res.json({ appeals });
+  } catch (err) {
+    console.error('Get appeals error:', err);
+    res.status(500).json({ error: 'Failed to get appeals' });
+  }
+});
+
+// Resolve appeal (admin only)
+app.post('/api/admin/moderation-appeals/:id/resolve', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+    const { status, adminResponse } = req.body;
+    if (!status || !['approved', 'denied'].includes(status)) {
+      return res.status(400).json({ error: 'Status must be approved or denied' });
+    }
+
+    const appealId = req.params.id;
+    const result = db.resolveAppeal(appealId, status, adminResponse || null, admin.id);
+    if (!result) {
+      return res.status(404).json({ error: 'Appeal not found' });
+    }
+
+    // If approved, reinstate the user
+    if (status === 'approved') {
+      db.updateAccountStatus(result.userId, 'active', null, null);
+      if (db.logModerationAction) db.logModerationAction(admin.id, 'reinstate_via_appeal', 'user', result.userId, 'Appeal approved');
+      if (db.logActivity) db.logActivity(admin.id, 'admin_reinstate_via_appeal', 'user', result.userId, getRequestMeta(req));
+    }
+
+    if (db.logModerationAction) db.logModerationAction(admin.id, 'resolve_appeal', 'moderation_appeal', appealId, `${status}: ${adminResponse || 'No response'}`);
+    if (db.logActivity) db.logActivity(admin.id, 'admin_resolve_appeal', 'moderation_appeal', appealId, getRequestMeta(req));
+
+    console.log(`Admin ${admin.handle} ${status} appeal ${appealId}`);
+    res.json({ success: true, result });
+  } catch (err) {
+    console.error('Resolve appeal error:', err);
+    res.status(500).json({ error: 'Failed to resolve appeal' });
+  }
+});
+
 // ============ Privacy Maintenance Endpoints (v2.16.0) ============
 
 // Migrate user emails to hashed/encrypted format (admin only)
@@ -17331,6 +17749,15 @@ wss.on('connection', (ws, req) => {
           const decoded = jwt.verify(message.token, JWT_SECRET);
           userId = decoded.userId;
           const user = db.findUserById(userId);
+
+          // Check account moderation status (v2.37.0)
+          if (user && (user.accountStatus === 'disabled' || user.accountStatus === 'banned')) {
+            const code = user.accountStatus === 'disabled' ? 'ACCOUNT_DISABLED' : 'ACCOUNT_BANNED';
+            ws.send(JSON.stringify({ type: 'auth_error', error: `Account ${user.accountStatus}`, code }));
+            ws.close(1008, `Account ${user.accountStatus}`);
+            return;
+          }
+
           ws.userId = userId;
           ws.userName = user?.displayName || 'Unknown';
           if (!clients.has(userId)) clients.set(userId, new Set());

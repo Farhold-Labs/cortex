@@ -29,6 +29,11 @@ const LoginScreen = ({ onAbout }) => {
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [emailCodeSending, setEmailCodeSending] = useState(false);
   const [sessionDuration, setSessionDuration] = useState('24h');
+  // Account moderation state (v2.37.0)
+  const [moderationInfo, setModerationInfo] = useState(null);
+  const [showAppealForm, setShowAppealForm] = useState(false);
+  const [appealText, setAppealText] = useState('');
+  const [appealStatus, setAppealStatus] = useState({ loading: false, message: '', error: '' });
   // Change Server state (v2.30.0)
   const [showChangeServer, setShowChangeServer] = useState(false);
   const [serverUrl, setServerUrl] = useState(storage.getServerUrl() || BASE_URL);
@@ -84,9 +89,45 @@ const LoginScreen = ({ onAbout }) => {
         }
       }
     } catch (err) {
-      setError(err.message);
+      // Handle moderation errors (v2.37.0)
+      if (err.code === 'ACCOUNT_DISABLED' || err.code === 'ACCOUNT_BANNED') {
+        setModerationInfo({
+          code: err.code,
+          reason: err.reason,
+          moderatedAt: err.moderatedAt,
+          canAppeal: err.canAppeal,
+          handle: handle,
+        });
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSubmitAppeal = async (e) => {
+    e.preventDefault();
+    if (!appealText.trim() || appealText.trim().length < 10) {
+      setAppealStatus({ loading: false, message: '', error: 'Appeal must be at least 10 characters' });
+      return;
+    }
+    setAppealStatus({ loading: true, message: '', error: '' });
+    try {
+      const res = await fetch(`${API_URL}/auth/moderation-appeal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handle: moderationInfo.handle, appealText: appealText.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAppealStatus({ loading: false, message: data.message || 'Appeal submitted successfully.', error: '' });
+        setShowAppealForm(false);
+      } else {
+        setAppealStatus({ loading: false, message: '', error: data.error || 'Failed to submit appeal' });
+      }
+    } catch (err) {
+      setAppealStatus({ loading: false, message: '', error: 'Network error. Please try again.' });
     }
   };
 
@@ -223,7 +264,117 @@ const LoginScreen = ({ onAbout }) => {
           <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '8px' }}>SECURE COMMUNICATIONS</div>
         </div>
 
-        {mfaRequired ? (
+        {moderationInfo ? (
+          <div>
+            <div style={{
+              padding: '16px',
+              background: moderationInfo.code === 'ACCOUNT_BANNED' ? 'var(--accent-orange)15' : 'var(--accent-amber)15',
+              border: `1px solid ${moderationInfo.code === 'ACCOUNT_BANNED' ? 'var(--accent-orange)' : 'var(--accent-amber)'}`,
+              marginBottom: '20px',
+            }}>
+              <div style={{
+                color: moderationInfo.code === 'ACCOUNT_BANNED' ? 'var(--accent-orange)' : 'var(--accent-amber)',
+                fontSize: '0.95rem',
+                fontWeight: 700,
+                marginBottom: '12px',
+              }}>
+                {moderationInfo.code === 'ACCOUNT_BANNED' ? 'ACCOUNT BANNED' : 'ACCOUNT DISABLED'}
+              </div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '8px' }}>
+                <strong>Reason:</strong> {moderationInfo.reason || 'No reason provided'}
+              </div>
+              {moderationInfo.moderatedAt && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                  Since: {new Date(moderationInfo.moderatedAt).toLocaleDateString()}
+                </div>
+              )}
+            </div>
+
+            {appealStatus.message && (
+              <div style={{ color: 'var(--accent-green)', fontSize: '0.85rem', marginBottom: '16px', padding: '10px', background: 'var(--accent-green)10', border: '1px solid var(--accent-green)30' }}>
+                {appealStatus.message}
+              </div>
+            )}
+
+            {appealStatus.error && (
+              <div style={{ color: 'var(--accent-orange)', fontSize: '0.85rem', marginBottom: '16px', padding: '10px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)30' }}>
+                {appealStatus.error}
+              </div>
+            )}
+
+            {moderationInfo.canAppeal && !appealStatus.message && (
+              <>
+                {!showAppealForm ? (
+                  <button
+                    onClick={() => setShowAppealForm(true)}
+                    style={{
+                      width: '100%', padding: '12px',
+                      background: 'var(--accent-teal)20',
+                      border: '1px solid var(--accent-teal)',
+                      color: 'var(--accent-teal)',
+                      cursor: 'pointer',
+                      fontFamily: 'monospace', fontSize: '0.85rem',
+                      marginBottom: '12px',
+                    }}
+                  >
+                    SUBMIT APPEAL
+                  </button>
+                ) : (
+                  <form onSubmit={handleSubmitAppeal}>
+                    <div style={{ marginBottom: '12px' }}>
+                      <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                        APPEAL (min 10 characters)
+                      </label>
+                      <textarea
+                        value={appealText}
+                        onChange={(e) => setAppealText(e.target.value.slice(0, 2000))}
+                        placeholder="Explain why your account should be reinstated..."
+                        rows={4}
+                        style={{
+                          ...inputStyle,
+                          resize: 'vertical',
+                          minHeight: '80px',
+                        }}
+                      />
+                      <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem', marginTop: '4px', textAlign: 'right' }}>
+                        {appealText.length}/2000
+                      </div>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={appealStatus.loading || appealText.trim().length < 10}
+                      style={{
+                        width: '100%', padding: '12px',
+                        background: appealStatus.loading ? 'var(--border-subtle)' : 'var(--accent-teal)20',
+                        border: `1px solid ${appealStatus.loading ? 'var(--border-primary)' : 'var(--accent-teal)'}`,
+                        color: appealStatus.loading ? 'var(--text-muted)' : 'var(--accent-teal)',
+                        cursor: appealStatus.loading || appealText.trim().length < 10 ? 'not-allowed' : 'pointer',
+                        fontFamily: 'monospace', fontSize: '0.85rem',
+                      }}
+                    >
+                      {appealStatus.loading ? 'SUBMITTING...' : 'SUBMIT APPEAL'}
+                    </button>
+                  </form>
+                )}
+              </>
+            )}
+
+            <div style={{ textAlign: 'center', marginTop: '16px' }}>
+              <button
+                onClick={() => {
+                  setModerationInfo(null);
+                  setShowAppealForm(false);
+                  setAppealText('');
+                  setAppealStatus({ loading: false, message: '', error: '' });
+                  setError('');
+                }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem' }}
+              >
+                ← Back to login
+              </button>
+            </div>
+          </div>
+        ) : mfaRequired ? (
           <div>
             <div style={{ color: 'var(--accent-teal)', fontSize: '0.9rem', marginBottom: '24px', textAlign: 'center' }}>
               🔐 Two-Factor Authentication Required

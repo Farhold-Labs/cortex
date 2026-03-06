@@ -30,7 +30,12 @@ CREATE TABLE IF NOT EXISTS users (
     require_password_change INTEGER DEFAULT 0,
     -- Preferences stored as JSON
     preferences TEXT DEFAULT '{"theme":"firefly","fontSize":"medium"}',
-    notification_preferences TEXT DEFAULT NULL
+    notification_preferences TEXT DEFAULT NULL,
+    -- Account moderation (v2.37.0)
+    account_status TEXT DEFAULT 'active',        -- active, disabled, banned
+    moderation_reason TEXT,
+    moderated_at TEXT,
+    moderated_by TEXT
 );
 
 -- Handle history for tracking username changes
@@ -252,6 +257,21 @@ CREATE TABLE IF NOT EXISTS warnings (
     report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
 );
+
+-- Moderation appeals (v2.37.0)
+CREATE TABLE IF NOT EXISTS moderation_appeals (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    appeal_text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',      -- pending, approved, denied
+    admin_response TEXT,
+    reviewed_by TEXT REFERENCES users(id),
+    reviewed_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_moderation_appeals_user ON moderation_appeals(user_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_appeals_status ON moderation_appeals(status);
 
 -- Moderation audit log
 CREATE TABLE IF NOT EXISTS moderation_log (

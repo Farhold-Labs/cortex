@@ -60,6 +60,9 @@ export function useAPI() {
         } else {
           logout?.();
         }
+      } else if (res.status === 403 && (data.code === 'ACCOUNT_DISABLED' || data.code === 'ACCOUNT_BANNED')) {
+        // Account moderated — force logout (v2.37.0)
+        logout?.();
       }
       throw new Error(data.error || `API error: ${res.status}`);
     }
