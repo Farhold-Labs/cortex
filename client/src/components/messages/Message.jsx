@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT } from '../../config/constants.js';
 import { Avatar, PrivacyBadge } from '../ui/SimpleComponents.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
-import BurstLinkCard from './BurstLinkCard.jsx';
+// BurstLinkCard import removed in v2.38.0 — burst waves migrated to threads
 import MessageWithEmbeds from './MessageWithEmbeds.jsx';
 import AudioPlayer from '../media/AudioPlayer.jsx';
 import VideoPlayer from '../media/VideoPlayer.jsx';
@@ -17,7 +17,7 @@ const getFirstLine = (content) => {
   return text.substring(0, 57) + '...';
 };
 
-const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, onCancelEdit, editingMessageId, editContent, setEditContent, currentUserId, highlightId, playbackIndex, collapsed, onToggleCollapse, isMobile, contentCollapsed = {}, onToggleContentCollapse, onReact, onMessageClick, participants = [], contacts = [], onShowProfile, onReport, onFocus, onBurst, onShare, wave, onNavigateToWave, currentWaveId, unreadCountsByWave = {}, autoFocusMessages = false, fetchAPI }) => {
+const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, onCancelEdit, editingMessageId, editContent, setEditContent, currentUserId, highlightId, playbackIndex, collapsed, onToggleCollapse, isMobile, contentCollapsed = {}, onToggleContentCollapse, onReact, onMessageClick, participants = [], contacts = [], onShowProfile, onReport, onFocus, onShare, wave, onNavigateToWave, currentWaveId, unreadCountsByWave = {}, autoFocusMessages = false, fetchAPI, onOpenThread, isInThreadPanel = false }) => {
   const config = PRIVACY_LEVELS[message.privacy] || PRIVACY_LEVELS.private;
   const isHighlighted = highlightId === message.id;
   const isVisible = playbackIndex === null || message._index <= playbackIndex;
@@ -79,40 +79,16 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
   // Deleted messages with children show placeholder to preserve thread context
   if (isDeleted && !hasChildren) return null;
 
-  // If this message has been bursted out, show a link card instead
-  // But NOT when viewing from the burst wave itself (where burstedTo === currentWaveId)
-  const isBurstd = !!(message.brokenOutTo || message.burstedTo) && (message.brokenOutTo || message.burstedTo) !== currentWaveId;
-
   const handleMessageClick = (e) => {
     e.stopPropagation(); // Prevent click from bubbling to parent messages
     if (isUnread && onMessageClick) {
       onMessageClick(message.id);
     }
     // Auto-focus if preference enabled and message has children (replies)
-    if (autoFocusMessages && hasChildren && onFocus && !isDeleted) {
-      onFocus(message);
+    if (autoFocusMessages && hasChildren && onOpenThread && !isDeleted) {
+      onOpenThread(message);
     }
   };
-
-  // Render bursted message as a link card
-  if (isBurstd) {
-    const burstedToId = message.brokenOutTo || message.burstedTo;
-    const burstedToTitle = message.brokenOutToTitle || message.burstedToTitle || 'New Wave';
-    return (
-      <div data-message-id={message.id}>
-        <BurstLinkCard
-          message={message}
-          waveTitle={burstedToTitle}
-          onClick={() => onNavigateToWave && onNavigateToWave({
-            id: burstedToId,
-            title: burstedToTitle,
-          })}
-          isMobile={isMobile}
-          unreadCount={unreadCountsByWave[burstedToId] || 0}
-        />
-      </div>
-    );
-  }
 
   // Compact styling
   const avatarSize = isMobile ? 24 : 20;
@@ -126,7 +102,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
           marginTop: isMobile ? '8px' : '6px',
           background: isHighlighted ? `${config.color}15` : isUnread ? 'var(--accent-amber)08' : 'transparent',
           borderLeft: isUnread ? '2px solid var(--accent-amber)' : '2px solid transparent',
-          cursor: (isUnread || (autoFocusMessages && hasChildren && !isDeleted)) ? 'pointer' : 'default',
+          cursor: (isUnread || (autoFocusMessages && hasChildren && onOpenThread && !isDeleted)) ? 'pointer' : 'default',
           transition: 'background 0.15s ease',
           opacity: isDeleted ? 0.5 : 1,
         }}
@@ -168,12 +144,12 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
               onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
               onMouseLeave={(e) => e.currentTarget.style.opacity = '0.6'}
             >
-              {/* Reply / Focus to Reply */}
-              {isAtDepthLimit && onFocus ? (
-                <button onClick={() => onFocus(message)} title="Focus to reply" style={{
+              {/* Reply / Thread to Reply at depth limit */}
+              {isAtDepthLimit && onOpenThread ? (
+                <button onClick={() => onOpenThread(message)} title="Open thread to reply" style={{
                   padding: isMobile ? '8px 10px' : '2px 4px', background: 'transparent', border: 'none',
                   color: 'var(--accent-teal)', cursor: 'pointer', fontSize: isMobile ? '0.85rem' : '0.7rem',
-                }}>⤢</button>
+                }}>↳</button>
               ) : (
                 <button onClick={() => onReply(message)} title="Reply" style={{
                   padding: isMobile ? '8px 10px' : '2px 4px', background: 'transparent', border: 'none',
@@ -246,30 +222,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div style={{ padding: '4px 0' }}>
-                        {/* Focus */}
-                        {hasChildren && !isAtDepthLimit && onFocus && (
-                          <div
-                            onClick={() => {
-                              onFocus(message);
-                              setShowMessageMenu(false);
-                            }}
-                            style={{
-                              padding: '8px 12px',
-                              cursor: 'pointer',
-                              fontSize: '0.8rem',
-                              color: 'var(--text-primary)',
-                              background: 'transparent',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                            }}
-                            onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                          >
-                            <span>⤢</span>
-                            <span>Focus</span>
-                          </div>
-                        )}
+                        {/* Focus removed in v2.38.0 — merged into Thread */}
                         {/* Share */}
                         {wave?.privacy === 'public' && onShare && (
                           <div
@@ -294,12 +247,23 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                             <span>Share</span>
                           </div>
                         )}
-                        {/* Burst */}
-                        {onBurst && (
+                        {/* Thread / Unthread */}
+                        {onOpenThread && !isInThreadPanel && (
                           <div
-                            onClick={() => {
-                              onBurst(message);
+                            onClick={async () => {
                               setShowMessageMenu(false);
+                              if (message.threaded) {
+                                // Unthread: toggle off, just update server
+                                if (fetchAPI) {
+                                  try { await fetchAPI(`/pings/${message.id}/thread`, { method: 'POST' }); } catch (e) { console.error('Unthread failed:', e); }
+                                }
+                              } else {
+                                // Thread: toggle on and open panel
+                                if (fetchAPI) {
+                                  try { await fetchAPI(`/pings/${message.id}/thread`, { method: 'POST' }); } catch (e) { console.error('Thread failed:', e); }
+                                }
+                                onOpenThread(message);
+                              }
                             }}
                             style={{
                               padding: '8px 12px',
@@ -314,8 +278,8 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                             onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
                             onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                           >
-                            <span>◈</span>
-                            <span>Burst</span>
+                            <span>↳</span>
+                            <span>{message.threaded ? 'Unthread' : 'Thread'}</span>
                           </div>
                         )}
                         {/* Edit (author only) */}
@@ -413,7 +377,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
             <span>⬡</span>
             <span>Thread depth limit reached</span>
             <span style={{ color: 'var(--text-dim)' }}>•</span>
-            <span style={{ color: 'var(--text-dim)' }}>Use Focus to continue deeper</span>
+            <span style={{ color: 'var(--text-dim)' }}>Open thread to continue deeper</span>
           </div>
         )}
         {depth > THREAD_DEPTH_LIMIT && (
@@ -641,8 +605,30 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
           </details>
         )}
 
-        {/* Nested replies rendered INSIDE parent message */}
-        {hasChildren && !isCollapsed && (
+        {/* Threaded: show "N replies" indicator instead of inline children */}
+        {hasChildren && message.threaded && !isInThreadPanel && onOpenThread && (
+          <div
+            onClick={() => onOpenThread(message)}
+            style={{
+              marginTop: '4px',
+              padding: isMobile ? '6px 10px' : '4px 8px',
+              cursor: 'pointer',
+              fontSize: isMobile ? '0.75rem' : '0.7rem',
+              color: 'var(--accent-teal)',
+              fontFamily: 'monospace',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span style={{ opacity: 0.7 }}>↳</span>
+            <span>{totalChildCount} {totalChildCount === 1 ? 'reply' : 'replies'}</span>
+            <span style={{ opacity: 0.5, fontSize: '0.6rem' }}>— view thread</span>
+          </div>
+        )}
+
+        {/* Nested replies rendered INSIDE parent message (not threaded, or inside thread panel) */}
+        {hasChildren && !isCollapsed && !(message.threaded && !isInThreadPanel) && (
           <div style={{
             marginTop: '2px',
             marginLeft: '0px',
@@ -658,8 +644,9 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                 contentCollapsed={contentCollapsed} onToggleContentCollapse={onToggleContentCollapse}
                 onReact={onReact} onMessageClick={onMessageClick}
                 participants={participants} contacts={contacts} onShowProfile={onShowProfile} onReport={onReport}
-                onFocus={onFocus} onBurst={onBurst} onShare={onShare} wave={wave} onNavigateToWave={onNavigateToWave} currentWaveId={currentWaveId}
-                unreadCountsByWave={unreadCountsByWave} autoFocusMessages={autoFocusMessages} fetchAPI={fetchAPI} />
+                onFocus={onFocus} onShare={onShare} wave={wave} onNavigateToWave={onNavigateToWave} currentWaveId={currentWaveId}
+                unreadCountsByWave={unreadCountsByWave} autoFocusMessages={autoFocusMessages} fetchAPI={fetchAPI}
+                onOpenThread={onOpenThread} isInThreadPanel={isInThreadPanel} />
             ))}
           </div>
         )}

@@ -61,6 +61,12 @@ const SentCrewInvitationsPanel = ({ invitations, fetchAPI, showToast, onInvitati
                 </div>
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '2px' }}>
                   {inv.group_name} • Sent {inv.created_at ? new Date(inv.created_at).toLocaleDateString() : 'Recently'}
+                  {inv.expiresAt && (() => {
+                    const daysLeft = Math.max(0, Math.ceil((new Date(inv.expiresAt) - Date.now()) / 86400000));
+                    return <span style={{ color: daysLeft <= 1 ? 'var(--accent-red, #ff4444)' : 'var(--accent-amber)', marginLeft: '6px' }}>
+                      (expires in {daysLeft}d)
+                    </span>;
+                  })()}
                 </div>
               </div>
             </div>

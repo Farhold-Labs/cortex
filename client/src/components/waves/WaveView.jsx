@@ -12,7 +12,7 @@ import PlaybackControls from './PlaybackControls.jsx';
 import DeleteConfirmModal from './DeleteConfirmModal.jsx';
 import WaveSettingsModal from './WaveSettingsModal.jsx';
 import ReportModal from '../reports/ReportModal.jsx';
-import BurstModal from './BurstModal.jsx';
+// BurstModal removed in v2.38.0 — replaced by ThreadPanel
 import CallModal from '../calls/CallModal.jsx';
 import InviteToWaveModal from './InviteToWaveModal.jsx';
 import InviteFederatedModal from './InviteFederatedModal.jsx';
@@ -24,7 +24,7 @@ import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import { storage } from '../../utils/storage.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 
-const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange }) => {
+const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread }) => {
   // E2EE context
   const e2ee = useE2EE();
 
@@ -74,10 +74,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [reportTarget, setReportTarget] = useState(null); // { type, targetId, targetPreview }
-  const [burstTarget, setBurstTarget] = useState(null); // ping to burst
   const [showFederateModal, setShowFederateModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
-  const [unreadCountsByWave, setUnreadCountsByWave] = useState({}); // For burst activity badges
   const [decryptionErrors, setDecryptionErrors] = useState({}); // Track pings that failed to decrypt
   const [editingTopic, setEditingTopic] = useState(false);
   const [topicDraft, setTopicDraft] = useState('');
@@ -793,14 +791,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       });
       setWaveData(data);
       setHasMoreMessages(data.hasMoreMessages || false);
-
-      // Load unread counts by wave for burst activity badges
-      try {
-        const countsData = await fetchAPI('/notifications/by-wave');
-        setUnreadCountsByWave(countsData.countsByWave || {});
-      } catch (e) {
-        console.error('Failed to load unread counts by wave:', e);
-      }
     } catch (err) {
       console.error('Failed to load wave:', err);
       showToast(formatError('Failed to load wave'), 'error');
@@ -2460,11 +2450,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
             onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
             contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
-            onFocus={onFocusPing ? (ping) => onFocusPing(wave.id, ping) : undefined}
-            onBurst={(ping) => setBurstTarget(ping)}
+            onOpenThread={onOpenThread}
             onShare={handleSharePing} wave={wave || waveData}
             onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
-            unreadCountsByWave={unreadCountsByWave}
             autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
             fetchAPI={fetchAPI} />
         ))}
@@ -2718,24 +2706,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           fetchAPI={fetchAPI}
           showToast={showToast}
           isMobile={isMobile}
-        />
-      )}
-
-      {burstTarget && (
-        <BurstModal
-          isOpen={!!burstTarget}
-          onClose={() => setBurstTarget(null)}
-          ping={burstTarget}
-          wave={wave}
-          participants={waveData?.participants || []}
-          fetchAPI={fetchAPI}
-          showToast={showToast}
-          isMobile={isMobile}
-          onSuccess={(newWave) => {
-            setBurstTarget(null);
-            // Navigate to the new wave
-            onNavigateToWave?.(newWave);
-          }}
         />
       )}
 

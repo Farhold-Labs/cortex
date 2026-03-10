@@ -1,6 +1,6 @@
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.37.0';
+export const VERSION = '2.38.0';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
@@ -57,7 +57,7 @@ export const canAccess = (user, requiredRole) => {
 
 // ============ THREADING DEPTH LIMIT ============
 // Maximum nesting depth before prompting user to Focus or Burst
-export const THREAD_DEPTH_LIMIT = 3;
+export const THREAD_DEPTH_LIMIT = 2;
 
 // ============ FONT SIZES ============
 export const FONT_SIZES = {

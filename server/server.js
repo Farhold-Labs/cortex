@@ -645,6 +645,7 @@ const IP_HASH_SALT = process.env.IP_HASH_SALT || 'cortex-ip-salt-default';
 // Activity log retention (days)
 const ACTIVITY_LOG_RETENTION_DAYS = parseInt(process.env.ACTIVITY_LOG_RETENTION_DAYS || '30', 10);
 const SESSION_MAX_AGE_DAYS = parseInt(process.env.SESSION_MAX_AGE_DAYS || '30', 10);
+const INVITATION_EXPIRY_DAYS = parseInt(process.env.INVITATION_EXPIRY_DAYS || '7', 10);
 
 // Validate email encryption key in production
 if (!EMAIL_ENCRYPTION_KEY) {
@@ -3301,88 +3302,7 @@ class Database {
     return { success: true, wave, participants };
   }
 
-  // Break out a droplet and its replies into a new wave
-  breakoutDroplet(dropletId, newWaveTitle, participants, userId) {
-    const now = new Date().toISOString();
-
-    // Get the original droplet
-    const droplet = this.droplets.droplets.find(m => m.id === dropletId);
-    if (!droplet) {
-      return { success: false, error: 'Droplet not found' };
-    }
-
-    // Check if already broken out
-    if (droplet.brokenOutTo) {
-      return { success: false, error: 'Droplet already broken out' };
-    }
-
-    const originalWaveId = droplet.waveId;
-    const originalWave = this.getWave(originalWaveId);
-
-    // Get all child droplets recursively
-    const getAllChildren = (parentId) => {
-      const children = this.droplets.droplets.filter(m => m.parentId === parentId);
-      let allIds = children.map(c => c.id);
-      for (const child of children) {
-        allIds = allIds.concat(getAllChildren(child.id));
-      }
-      return allIds;
-    };
-
-    const childIds = getAllChildren(dropletId);
-
-    // Build breakout chain
-    let breakoutChain = originalWave.breakoutChain || [];
-    breakoutChain = [...breakoutChain, {
-      wave_id: originalWaveId,
-      droplet_id: dropletId,
-      title: originalWave.title
-    }];
-
-    // Create the new wave
-    const newWaveId = `wave-${uuidv4()}`;
-    const newWave = {
-      id: newWaveId,
-      title: newWaveTitle.slice(0, 200),
-      privacy: originalWave.privacy || 'private',
-      groupId: originalWave.groupId || null,
-      createdBy: userId,
-      createdAt: now,
-      updatedAt: now,
-      rootDropletId: dropletId,
-      brokenOutFrom: originalWaveId,
-      breakoutChain: breakoutChain,
-    };
-    this.waves.waves.push(newWave);
-
-    // Add participants to new wave
-    const participantSet = new Set(participants);
-    participantSet.add(userId);
-    for (const participantId of participantSet) {
-      if (!this.waves.participants.some(p => p.waveId === newWaveId && p.userId === participantId)) {
-        this.waves.participants.push({ waveId: newWaveId, userId: participantId, joinedAt: now, archived: false });
-      }
-    }
-
-    // Mark the original droplet as broken out
-    droplet.brokenOutTo = newWaveId;
-
-    this.saveWaves();
-    this.saveMessages();
-
-    return {
-      success: true,
-      newWave,
-      originalWaveId,
-      dropletId,
-      childCount: childIds.length
-    };
-  }
-
-  // Alias for rippleDroplet (new terminology)
-  rippleDroplet(dropletId, newWaveTitle, participants, userId) {
-    return this.breakoutDroplet(dropletId, newWaveTitle, participants, userId);
-  }
+  // breakoutDroplet/rippleDroplet removed in v2.38.0 — replaced by threads
 
   // === Message Methods ===
   getMessagesForWave(waveId, userId = null) {
@@ -3457,78 +3377,7 @@ class Database {
     };
   }
 
-  // Get droplets for a breakout wave (includes root droplet and descendants from original wave)
-  getDropletsForBreakoutWave(waveId, userId = null) {
-    const wave = this.getWave(waveId);
-    if (!wave || !wave.rootDropletId) {
-      return this.getMessagesForWave(waveId, userId);
-    }
-
-    // Get blocked/muted users
-    let blockedIds = [];
-    let mutedIds = [];
-    if (userId) {
-      blockedIds = this.moderation.blocks
-        .filter(b => b.userId === userId)
-        .map(b => b.blockedUserId);
-      mutedIds = this.moderation.mutes
-        .filter(m => m.userId === userId)
-        .map(m => m.mutedUserId);
-    }
-
-    // Recursively get droplet and all descendants
-    const getAllDescendants = (parentId, results = []) => {
-      const droplet = this.droplets.droplets.find(m => m.id === parentId);
-      if (!droplet) return results;
-
-      // Skip blocked/muted users
-      if (blockedIds.includes(droplet.authorId) || mutedIds.includes(droplet.authorId)) {
-        return results;
-      }
-
-      results.push(droplet);
-
-      // Get children
-      const children = this.droplets.droplets.filter(m => m.parentId === parentId);
-      for (const child of children) {
-        getAllDescendants(child.id, results);
-      }
-
-      return results;
-    };
-
-    const droplets = getAllDescendants(wave.rootDropletId);
-
-    return droplets.map(m => {
-      const author = this.findUserById(m.authorId);
-      const readBy = m.readBy || [m.authorId];
-      const isUnread = m.deleted ? false : (userId ? !readBy.includes(userId) && m.authorId !== userId : false);
-
-      // Get broken-out wave title if applicable
-      let brokenOutToTitle = null;
-      if (m.brokenOutTo) {
-        const brokenOutWave = this.waves.waves.find(w => w.id === m.brokenOutTo);
-        brokenOutToTitle = brokenOutWave?.title || null;
-      }
-
-      return {
-        ...m,
-        waveId: waveId, // Report as belonging to this wave for UI purposes
-        wave_id: waveId,
-        sender_name: author?.displayName || 'Unknown',
-        sender_avatar: author?.avatar || '?',
-        sender_avatar_url: author?.avatarUrl || null,
-        sender_handle: author?.handle || 'unknown',
-        author_id: m.authorId,
-        parent_id: m.parentId,
-        created_at: m.createdAt,
-        edited_at: m.editedAt,
-        deleted_at: m.deletedAt || null,
-        is_unread: isUnread,
-        brokenOutToTitle,
-      };
-    }).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  }
+  // getDropletsForBreakoutWave removed in v2.38.0 — replaced by threads
 
   createMessage(data) {
     const now = new Date().toISOString();
@@ -7193,13 +7042,19 @@ app.delete('/api/contacts/follow/:userId', authenticateToken, (req, res) => {
 // Get received pending contact requests
 app.get('/api/contacts/requests', authenticateToken, (req, res) => {
   const requests = db.getContactRequestsForUser(req.user.userId);
-  res.json(requests);
+  res.json(requests.map(r => ({
+    ...r,
+    expiresAt: new Date(new Date(r.created_at).getTime() + INVITATION_EXPIRY_DAYS * 86400000).toISOString()
+  })));
 });
 
 // Get sent pending contact requests
 app.get('/api/contacts/requests/sent', authenticateToken, (req, res) => {
   const requests = db.getSentContactRequests(req.user.userId);
-  res.json(requests);
+  res.json(requests.map(r => ({
+    ...r,
+    expiresAt: new Date(new Date(r.created_at).getTime() + INVITATION_EXPIRY_DAYS * 86400000).toISOString()
+  })));
 });
 
 // Accept a contact request
@@ -7307,13 +7162,19 @@ app.post('/api/groups/:id/invite', authenticateToken, (req, res) => {
 // Get pending group invitations for current user
 app.get('/api/groups/invitations', authenticateToken, (req, res) => {
   const invitations = db.getGroupInvitationsForUser(req.user.userId);
-  res.json(invitations);
+  res.json(invitations.map(inv => ({
+    ...inv,
+    expiresAt: new Date(new Date(inv.created_at).getTime() + INVITATION_EXPIRY_DAYS * 86400000).toISOString()
+  })));
 });
 
 // Get all pending invitations sent by current user across all crews (v2.36.0)
 app.get('/api/groups/invitations/sent', authenticateToken, (req, res) => {
   const invitations = db.getAllSentGroupInvitations(req.user.userId);
-  res.json(invitations);
+  res.json(invitations.map(inv => ({
+    ...inv,
+    expiresAt: new Date(new Date(inv.created_at).getTime() + INVITATION_EXPIRY_DAYS * 86400000).toISOString()
+  })));
 });
 
 // Get pending invitations sent for a specific group
@@ -16979,9 +16840,9 @@ app.all('/api/pings/:id/read', (req, res, next) => {
   req.app._router.handle(req, res, next);
 });
 
-// /api/pings/:id/burst -> /api/droplets/:id/ripple
-app.all('/api/pings/:id/burst', (req, res, next) => {
-  req.url = `/api/droplets/${req.params.id}/ripple`;
+// /api/pings/:id/burst alias removed in v2.38.0
+app.all('/api/pings/:id/thread', (req, res, next) => {
+  req.url = `/api/droplets/${req.params.id}/thread`;
   req.app._router.handle(req, res, next);
 });
 
@@ -17038,6 +16899,8 @@ app.post('/api/droplets', authenticateToken, (req, res) => {
     mediaType: mediaType || null,
     mediaUrl: mediaUrl || null,
     mediaDuration: mediaDuration || null,
+    // Threading (v2.38.0)
+    isThreadReply: !!req.body.isThreadReply,
   });
 
   // Create in-app notifications for mentions, replies, and wave activity
@@ -17260,87 +17123,33 @@ app.post('/api/droplets/:id/read', authenticateToken, (req, res) => {
   res.json({ success: true });
 });
 
-// Ripple a droplet into a new wave
-app.post('/api/droplets/:id/ripple', authenticateToken, (req, res) => {
+// ============ Thread Toggle (v2.38.0) ============
+
+app.post('/api/droplets/:id/thread', authenticateToken, (req, res) => {
   const dropletId = sanitizeInput(req.params.id);
-  const { title, participants } = req.body;
+  const userId = req.user.userId;
 
-  if (!title || typeof title !== 'string' || title.trim().length === 0) {
-    return res.status(400).json({ error: 'Title is required' });
-  }
+  const droplet = db.getDroplet ? db.getDroplet(dropletId) : db.getMessage?.(dropletId);
+  if (!droplet) return res.status(404).json({ error: 'Message not found' });
 
-  // Get the droplet to check permissions
-  const droplet = db.getMessage ? db.getMessage(dropletId) : null;
-  if (!droplet) {
-    return res.status(404).json({ error: 'Droplet not found' });
-  }
+  const waveId = droplet.wave_id || droplet.waveId;
 
-  // Check if user has access to the wave containing this droplet
-  const wave = db.getWave(droplet.waveId || droplet.wave_id);
-  if (!wave) {
-    return res.status(404).json({ error: 'Wave not found' });
-  }
+  // Check wave access
+  const canAccess = canAccessWaveFromCache(waveId, userId);
+  if (!canAccess) return res.status(403).json({ error: 'Access denied' });
 
-  if (!canAccessWaveFromCache(wave.id, req.user.userId)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+  // Toggle: if already threaded, unthread; otherwise thread
+  const newState = !droplet.threaded;
+  const success = db.threadPing(dropletId, newState);
+  if (!success) return res.status(500).json({ error: 'Failed to update thread state' });
 
-  // Validate participants array
-  let participantIds = [];
-  if (Array.isArray(participants)) {
-    participantIds = participants.filter(p => typeof p === 'string');
-  }
+  // Broadcast to wave participants
+  broadcastToWave(waveId, { type: 'droplet_threaded', dropletId, waveId, threaded: newState, userId });
 
-  // Perform the ripple (uses existing breakoutDroplet method internally)
-  const result = db.rippleDroplet ? db.rippleDroplet(dropletId, title.trim(), participantIds, req.user.userId)
-    : db.breakoutDroplet(dropletId, title.trim(), participantIds, req.user.userId);
-
-  if (!result.success) {
-    return res.status(400).json({ error: result.error });
-  }
-
-  // Sync participation cache after breakout wave creation (v2.21.0)
-  if (result.newWave?.id) {
-    participation.syncWaveFromDb(result.newWave.id);
-  }
-
-  // Broadcast to original wave that a droplet was rippled
-  broadcastToWave(result.originalWaveId, {
-    type: 'droplet_rippled',
-    dropletId: dropletId,
-    newWaveId: result.newWave.id,
-    newWaveTitle: result.newWave.title,
-    waveId: result.originalWaveId,
-  });
-
-  // Broadcast to participants of the new wave
-  broadcastToWave(result.newWave.id, {
-    type: 'wave_created',
-    wave: result.newWave,
-  });
-
-  // Create ripple notifications for original wave participants
-  const actor = db.findUserById(req.user.userId);
-  if (actor) {
-    createRippleNotifications(wave, result.newWave, droplet, actor);
-  }
-
-  console.log(`🌊 Droplet ${dropletId} rippled to new wave: ${result.newWave.title}`);
-
-  res.json({
-    success: true,
-    newWave: result.newWave,
-    originalWaveId: result.originalWaveId,
-    childCount: result.childCount,
-  });
+  res.json({ success: true, threaded: newState });
 });
 
-// Legacy endpoint - backward compatibility
-app.post('/api/droplets/:id/breakout', authenticateToken, (req, res) => {
-  // Redirect to ripple endpoint
-  req.url = `/api/droplets/${req.params.id}/ripple`;
-  return app._router.handle(req, res);
-});
+// Ripple/burst endpoints removed in v2.38.0 — replaced by threaded conversations
 
 // ============ Message Routes (Legacy - v1.9.0 backward compatibility) ============
 // DEPRECATED: These endpoints are deprecated as of v1.10.0. Use /api/droplets/* instead.
@@ -18339,42 +18148,7 @@ function createDropletNotifications(droplet, wave, author) {
   return notificationsToSend.length;
 }
 
-// Create notifications when a droplet is rippled to a new wave
-function createRippleNotifications(originalWave, newWave, rippledDroplet, actor) {
-  const notificationsToSend = [];
-
-  // Get participants of the original wave (excluding the actor who rippled)
-  const originalParticipants = db.getWaveParticipants(originalWave.id);
-
-  for (const participant of originalParticipants) {
-    if (participant.id === actor.id) continue;
-
-    // Check user's notification preferences
-    if (!shouldCreateNotification(participant.id, 'ripple')) continue;
-
-    // Create ripple notification
-    const notification = db.createNotification({
-      userId: participant.id,
-      type: 'ripple',
-      waveId: newWave.id,
-      dropletId: rippledDroplet.id,
-      actorId: actor.id,
-      title: `${actor.displayName} created a ripple`,
-      body: `"${newWave.title}" from ${originalWave.title}`,
-      preview: rippledDroplet.content?.replace(/<[^>]*>/g, '').substring(0, 100) || '',
-      groupKey: `ripple:${newWave.id}`
-    });
-
-    notificationsToSend.push({ userId: participant.id, notification });
-  }
-
-  // Broadcast notifications via WebSocket
-  for (const { userId, notification } of notificationsToSend) {
-    broadcastToUser(userId, { type: 'notification', notification });
-  }
-
-  return notificationsToSend.length;
-}
+// createRippleNotifications removed in v2.38.0 — burst/ripple replaced by threads
 
 // Cortex v2.0.0 event name mappings (old -> new)
 const EVENT_ALIASES = {
@@ -18658,6 +18432,19 @@ server.listen(PORT, () => {
 ╚════════════════════════════════════════════════════════════╝
 `);
 
+  // Migrate burst waves to threads on startup (v2.38.0)
+  if (db.migrateBurstWaves) {
+    try {
+      const count = db.db.prepare('SELECT COUNT(*) as c FROM waves WHERE broken_out_from IS NOT NULL').get();
+      if (count.c > 0) {
+        const result = db.migrateBurstWaves();
+        console.log(`🔀 Migrated ${result.migrated} burst waves to threads`);
+      }
+    } catch (err) {
+      console.error('Burst wave migration error:', err.message);
+    }
+  }
+
   // Start session cleanup job if session tracking is enabled
   if (SESSION_TRACKING_ENABLED && db.cleanupExpiredSessions) {
     setInterval(() => {
@@ -18691,6 +18478,27 @@ server.listen(PORT, () => {
         const sessionsCleaned = db.cleanupOldSessions(SESSION_MAX_AGE_DAYS);
         if (sessionsCleaned > 0) {
           console.log(`🧹 Cleaned up ${sessionsCleaned} sessions older than ${SESSION_MAX_AGE_DAYS} days`);
+        }
+      }
+
+      // Expire pending contact requests and crew invitations (v2.38.0)
+      if (db.cleanupExpiredContactRequests) {
+        const contactResult = db.cleanupExpiredContactRequests(INVITATION_EXPIRY_DAYS);
+        if (contactResult.count > 0) {
+          console.log(`🧹 Expired ${contactResult.count} pending contact requests (>${INVITATION_EXPIRY_DAYS} days)`);
+          for (const req of contactResult.expired) {
+            broadcastToUser(req.from_user_id, { type: 'contact_request_expired', requestId: req.id });
+          }
+        }
+      }
+
+      if (db.cleanupExpiredCrewInvitations) {
+        const crewResult = db.cleanupExpiredCrewInvitations(INVITATION_EXPIRY_DAYS);
+        if (crewResult.count > 0) {
+          console.log(`🧹 Expired ${crewResult.count} pending crew invitations (>${INVITATION_EXPIRY_DAYS} days)`);
+          for (const inv of crewResult.expired) {
+            broadcastToUser(inv.invited_by, { type: 'crew_invitation_expired', invitationId: inv.id });
+          }
         }
       }
     } catch (err) {

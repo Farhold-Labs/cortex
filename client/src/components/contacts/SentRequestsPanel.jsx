@@ -61,6 +61,12 @@ const SentRequestsPanel = ({ requests, fetchAPI, showToast, onRequestsChange, is
                 </div>
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '2px' }}>
                   Sent {req.createdAt ? new Date(req.createdAt).toLocaleDateString() : 'Recently'}
+                  {req.expiresAt && (() => {
+                    const daysLeft = Math.max(0, Math.ceil((new Date(req.expiresAt) - Date.now()) / 86400000));
+                    return <span style={{ color: daysLeft <= 1 ? 'var(--accent-red, #ff4444)' : 'var(--accent-amber)', marginLeft: '6px' }}>
+                      (expires in {daysLeft}d)
+                    </span>;
+                  })()}
                 </div>
               </div>
             </div>
