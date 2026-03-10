@@ -1885,6 +1885,20 @@ export class DatabaseSQLite {
       CREATE INDEX IF NOT EXISTS idx_moderation_appeals_user ON moderation_appeals(user_id);
       CREATE INDEX IF NOT EXISTS idx_moderation_appeals_status ON moderation_appeals(status);
     `);
+
+    // v2.38.0: Threading columns on pings table
+    try {
+      const pingsCols = this.db.prepare("PRAGMA table_info(pings)").all();
+      if (!pingsCols.some(c => c.name === 'threaded')) {
+        this.db.exec(`
+          ALTER TABLE pings ADD COLUMN threaded INTEGER DEFAULT 0;
+          ALTER TABLE pings ADD COLUMN is_thread_reply INTEGER DEFAULT 0;
+        `);
+        console.log('✅ Added threading columns to pings table');
+      }
+    } catch (err) {
+      // Columns may already exist
+    }
   }
 
   prepareStatements() {
@@ -4930,274 +4944,49 @@ export class DatabaseSQLite {
     };
   }
 
-  // Break out a droplet and its replies into a new wave
-  breakoutDroplet(dropletId, newWaveTitle, participants, userId) {
-    const now = new Date().toISOString();
+  // breakoutDroplet/rippleDroplet/getDropletsForBreakoutWave removed in v2.38.0 — replaced by threads
 
-    // Get the original droplet
-    const droplet = this.db.prepare(`
-      SELECT d.*, w.title as wave_title, w.id as wave_id
-      FROM pings d
-      JOIN waves w ON d.wave_id = w.id
-      WHERE d.id = ?
-    `).get(dropletId);
+  /**
+   * Migrate burst waves back to threads (v2.38.0)
+   * Pings already live in parent wave. This just:
+   * 1. Clears broken_out_to on root pings
+   * 2. Deletes burst wave participants + encryption keys
+   * 3. Deletes burst wave shells
+   */
+  migrateBurstWaves() {
+    const burstWaves = this.db.prepare(
+      'SELECT id, broken_out_from, root_ping_id FROM waves WHERE broken_out_from IS NOT NULL'
+    ).all();
 
-    if (!droplet) {
-      return { success: false, error: 'Droplet not found' };
-    }
+    if (burstWaves.length === 0) return { migrated: 0 };
 
-    // Check if already broken out
-    if (droplet.broken_out_to) {
-      return { success: false, error: 'Droplet already broken out' };
-    }
-
-    const originalWaveId = droplet.wave_id;
-    const originalWave = this.getWave(originalWaveId);
-
-    // Get all child droplets recursively
-    const getAllChildren = (parentId) => {
-      const children = this.db.prepare('SELECT id FROM pings WHERE parent_id = ?').all(parentId);
-      let allIds = children.map(c => c.id);
-      for (const child of children) {
-        allIds = allIds.concat(getAllChildren(child.id));
-      }
-      return allIds;
-    };
-
-    const childIds = getAllChildren(dropletId);
-    const allDropletIds = [dropletId, ...childIds];
-
-    // Build breakout chain - append to existing chain if this wave was itself broken out
-    let breakoutChain = [];
-    if (originalWave.breakout_chain) {
-      try {
-        breakoutChain = JSON.parse(originalWave.breakout_chain);
-      } catch (e) {
-        breakoutChain = [];
-      }
-    }
-    // Add the current wave to the chain
-    breakoutChain.push({
-      wave_id: originalWaveId,
-      ping_id: dropletId,
-      title: originalWave.title
-    });
-
-    // Create the new wave with breakout metadata
-    const newWaveId = `wave-${uuidv4()}`;
-
-    // Burst waves inherit privacy and crew from parent wave
-    this.db.prepare(`
-      INSERT INTO waves (id, title, privacy, crew_id, created_by, created_at, updated_at, root_ping_id, broken_out_from, breakout_chain, encrypted)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      newWaveId,
-      newWaveTitle.slice(0, 200),
-      originalWave.privacy || 'private',
-      originalWave.crew_id || null,
-      userId,
-      now,
-      now,
-      dropletId,
-      originalWaveId,
-      JSON.stringify(breakoutChain),
-      originalWave.encrypted ? 1 : 0
-    );
-
-    // Add participants to new wave
-    const participantSet = new Set(participants);
-    participantSet.add(userId); // Ensure creator is included
-    for (const participantId of participantSet) {
-      this.db.prepare('INSERT OR IGNORE INTO wave_participants (wave_id, user_id, joined_at, archived) VALUES (?, ?, ?, 0)').run(newWaveId, participantId, now);
-    }
-
-    // If parent wave is encrypted, copy encryption keys for burst wave participants
-    if (originalWave.encrypted) {
-      const parentWaveKeys = this.db.prepare(`
-        SELECT user_id, encrypted_wave_key, sender_public_key, key_version
-        FROM wave_encryption_keys
-        WHERE wave_id = ?
-      `).all(originalWaveId);
-
-      for (const key of parentWaveKeys) {
-        if (participantSet.has(key.user_id)) {
-          this.db.prepare(`
-            INSERT OR IGNORE INTO wave_encryption_keys (id, wave_id, user_id, encrypted_wave_key, sender_public_key, key_version, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).run(`wavekey-${uuidv4()}`, newWaveId, key.user_id, key.encrypted_wave_key, key.sender_public_key, key.key_version, now);
+    const migrate = this.db.transaction(() => {
+      for (const burst of burstWaves) {
+        // Clear broken_out_to on the root ping that pointed to this burst wave
+        if (burst.root_ping_id) {
+          this.db.prepare('UPDATE pings SET broken_out_to = NULL WHERE id = ? AND broken_out_to = ?')
+            .run(burst.root_ping_id, burst.id);
         }
+        // Also clear any pings that have broken_out_to pointing to this wave
+        this.db.prepare('UPDATE pings SET broken_out_to = NULL WHERE broken_out_to = ?')
+          .run(burst.id);
+
+        // Delete burst wave participants
+        this.db.prepare('DELETE FROM wave_participants WHERE wave_id = ?').run(burst.id);
+
+        // Delete burst wave encryption keys
+        this.db.prepare('DELETE FROM wave_encryption_keys WHERE wave_id = ?').run(burst.id);
+
+        // Delete burst wave category assignments
+        this.db.prepare('DELETE FROM wave_category_assignments WHERE wave_id = ?').run(burst.id);
+
+        // Delete the burst wave itself
+        this.db.prepare('DELETE FROM waves WHERE id = ?').run(burst.id);
       }
-    }
-
-    // Move all droplets to the new wave (update wave_id, set original_wave_id)
-    // The root droplet becomes the root of the new wave (parent_id stays null or its existing value)
-    for (const id of allDropletIds) {
-      this.db.prepare(`
-        UPDATE pings SET wave_id = ?, original_wave_id = ? WHERE id = ?
-      `).run(newWaveId, originalWaveId, id);
-    }
-
-    // Mark the original droplet as broken out in the original wave
-    // We need to create a "link card" - this is done by setting broken_out_to
-    // But since the droplet has moved, we need to create a placeholder
-    // Actually, per the design doc, the root droplet itself gets broken_out_to set
-    // Let me re-read... the design says the original droplet displays as link card
-    // So we should NOT move the root droplet, just mark it and move only children
-    // Wait, re-reading design: "droplets move, not copy" and "Original droplet gets broken_out_to field set on its record in the original wave"
-
-    // Let me reconsider: The root droplet stays in original wave as a link card
-    // Only the REPLIES move to the new wave
-    // The new wave's root_droplet_id points to the droplet in original wave
-    // Actually no - looking at the diagram, Droplet B moves to new wave AND shows as link card
-
-    // I think the correct approach:
-    // 1. Root droplet stays in original wave with broken_out_to set (becomes link card)
-    // 2. Root droplet is ALSO the root of new wave (referenced, not copied)
-    // 3. Child droplets move to new wave
-
-    // But that's complex with SQLite constraints. Simpler approach per design:
-    // - The droplet ID stays the same
-    // - broken_out_to points to the new wave
-    // - When rendering original wave, droplets with broken_out_to show as link cards
-    // - The new wave loads the same droplet by ID
-
-    // Let's undo the move and do it correctly:
-    // Restore original wave_id for all droplets
-    for (const id of allDropletIds) {
-      this.db.prepare('UPDATE pings SET wave_id = ?, original_wave_id = NULL WHERE id = ?').run(originalWaveId, id);
-    }
-
-    // Set broken_out_to on the root droplet only
-    this.db.prepare('UPDATE pings SET broken_out_to = ? WHERE id = ?').run(newWaveId, dropletId);
-
-    // The new wave references the droplet via root_droplet_id
-    // When fetching droplets for the new wave, we'll check if it's a breakout wave
-    // and include the root droplet + children
-
-    const newWave = this.getWave(newWaveId);
-
-    return {
-      success: true,
-      newWave,
-      originalWaveId,
-      dropletId,
-      childCount: childIds.length
-    };
-  }
-
-  // Alias for rippleDroplet (new terminology)
-  rippleDroplet(dropletId, newWaveTitle, participants, userId) {
-    return this.breakoutDroplet(dropletId, newWaveTitle, participants, userId);
-  }
-
-  // Get droplets for a rippled wave (includes root droplet from original wave)
-  getDropletsForBreakoutWave(waveId, userId = null) {
-    const wave = this.getWave(waveId);
-    if (!wave || !wave.rootPingId) {
-      return this.getDropletsForWave(waveId, userId);
-    }
-
-    // Get blocked/muted users
-    let blockedIds = [];
-    let mutedIds = [];
-    if (userId) {
-      blockedIds = this.db.prepare('SELECT blocked_user_id FROM blocks WHERE user_id = ?').all(userId).map(r => r.blocked_user_id);
-      mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
-    }
-
-    // Get root droplet and all its descendants
-    const getAllDescendants = (parentId, results = []) => {
-      const droplet = this.db.prepare(`
-        SELECT d.*,
-               u.display_name as user_display_name, u.avatar as user_avatar, u.avatar_url as user_avatar_url, u.handle as user_handle,
-               b.name as bot_name, b.id as bot_id,
-               bow.title as broken_out_to_title
-        FROM pings d
-        JOIN users u ON d.author_id = u.id
-        LEFT JOIN bots b ON d.bot_id = b.id
-        LEFT JOIN waves bow ON d.broken_out_to = bow.id
-        WHERE d.id = ?
-      `).get(parentId);
-
-      if (!droplet) return results;
-
-      // Skip blocked/muted users
-      if (blockedIds.includes(droplet.author_id) || mutedIds.includes(droplet.author_id)) {
-        return results;
-      }
-
-      // Transform bot pings to use bot info
-      if (droplet.bot_id) {
-        droplet.sender_name = `[Bot] ${droplet.bot_name}`;
-        droplet.sender_avatar = '🤖';
-        droplet.sender_avatar_url = null;
-        droplet.sender_handle = droplet.bot_name.toLowerCase().replace(/\s+/g, '-');
-        droplet.isBot = true;
-        droplet.botId = droplet.bot_id;
-      } else {
-        droplet.sender_name = droplet.user_display_name;
-        droplet.sender_avatar = droplet.user_avatar;
-        droplet.sender_avatar_url = droplet.user_avatar_url;
-        droplet.sender_handle = droplet.user_handle;
-      }
-
-      results.push(droplet);
-
-      // Get children
-      const children = this.db.prepare('SELECT id FROM pings WHERE parent_id = ?').all(parentId);
-      for (const child of children) {
-        getAllDescendants(child.id, results);
-      }
-
-      return results;
-    };
-
-    const rows = getAllDescendants(wave.rootPingId);
-
-    return rows.map(d => {
-      const hasRead = userId ? !!this.db.prepare('SELECT 1 FROM ping_read_by WHERE ping_id = ? AND user_id = ?').get(d.id, userId) : false;
-      const isUnread = d.deleted ? false : (userId ? !hasRead && d.author_id !== userId : false);
-      const readBy = this.db.prepare('SELECT user_id FROM ping_read_by WHERE ping_id = ?').all(d.id).map(r => r.user_id);
-
-      return {
-        id: d.id,
-        waveId: waveId, // Report as belonging to this wave for UI purposes
-        parentId: d.parent_id,
-        authorId: d.author_id,
-        content: d.content,
-        privacy: d.privacy,
-        version: d.version,
-        createdAt: d.created_at,
-        editedAt: d.edited_at,
-        deleted: d.deleted === 1,
-        deletedAt: d.deleted_at,
-        reactions: d.reactions ? JSON.parse(d.reactions) : {},
-        readBy,
-        sender_name: d.sender_name,
-        sender_avatar: d.sender_avatar,
-        sender_avatar_url: d.sender_avatar_url,
-        sender_handle: d.sender_handle,
-        author_id: d.author_id,
-        parent_id: d.parent_id,
-        wave_id: waveId,
-        created_at: d.created_at,
-        edited_at: d.edited_at,
-        deleted_at: d.deleted_at,
-        is_unread: isUnread,
-        brokenOutTo: d.broken_out_to,
-        brokenOutToTitle: d.broken_out_to_title,
-        isBot: d.isBot || false,
-        botId: d.botId || undefined,
-        encrypted: d.encrypted === 1,
-        nonce: d.nonce,
-        keyVersion: d.key_version,
-        // Media fields (v2.7.0)
-        media_type: d.media_type,
-        media_url: d.media_url,
-        media_duration: d.media_duration,
-        media_encrypted: d.media_encrypted === 1,
-      };
     });
+
+    migrate();
+    return { migrated: burstWaves.length };
   }
 
   // ============ Wave Category Methods (v2.2.0) ============
@@ -5856,7 +5645,8 @@ export class DatabaseSQLite {
       SELECT d.*,
              u.display_name as user_display_name, u.avatar as user_avatar, u.avatar_url as user_avatar_url, u.handle as user_handle,
              b.name as bot_name, b.id as bot_id,
-             bow.title as broken_out_to_title
+             bow.title as broken_out_to_title,
+             (SELECT COUNT(*) FROM pings WHERE parent_id = d.id) as reply_count
       FROM pings d
       JOIN users u ON d.author_id = u.id
       LEFT JOIN bots b ON d.bot_id = b.id
@@ -5931,6 +5721,10 @@ export class DatabaseSQLite {
         media_url: d.media_url,
         media_duration: d.media_duration,
         media_encrypted: d.media_encrypted === 1,
+        // Threading fields (v2.38.0)
+        threaded: d.threaded === 1,
+        is_thread_reply: d.is_thread_reply === 1,
+        reply_count: d.reply_count || 0,
       };
     });
 
@@ -5997,6 +5791,8 @@ export class DatabaseSQLite {
       SELECT d.id, d.wave_id, d.parent_id, d.author_id, d.content,
              d.created_at, d.edited_at, d.deleted, d.deleted_at, d.encrypted, d.nonce, d.key_version,
              d.broken_out_to, d.media_type, d.media_url, d.media_duration, d.media_encrypted,
+             d.threaded, d.is_thread_reply,
+             (SELECT COUNT(*) FROM pings WHERE parent_id = d.id) as reply_count,
              u.display_name as user_display_name, u.avatar as user_avatar, u.avatar_url as user_avatar_url, u.handle as user_handle,
              b.name as bot_name, b.id as bot_id,
              bow.title as broken_out_to_title
@@ -6060,6 +5856,10 @@ export class DatabaseSQLite {
         media_url: d.media_url,
         media_duration: d.media_duration,
         media_encrypted: d.media_encrypted === 1,
+        // Threading fields (v2.38.0)
+        threaded: d.threaded === 1,
+        is_thread_reply: d.is_thread_reply === 1,
+        reply_count: d.reply_count || 0,
         // Omitted for minimal mode: reactions, readBy, is_unread
         minimal: true,
       };
@@ -6134,6 +5934,8 @@ export class DatabaseSQLite {
       mediaUrl: data.mediaUrl || null,
       mediaDuration: data.mediaDuration || null,
       mediaEncrypted: data.mediaEncrypted ? 1 : 0,
+      // Threading fields (v2.38.0)
+      is_thread_reply: data.isThreadReply ? 1 : 0,
     };
 
     // Check if parent is a remote droplet (exists in remote_pings but not in droplets)
@@ -6152,17 +5954,17 @@ export class DatabaseSQLite {
       this.db.exec('PRAGMA foreign_keys = OFF');
       try {
         this.db.prepare(`
-          INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(droplet.id, droplet.waveId, droplet.parentId, droplet.authorId, droplet.content, droplet.privacy, droplet.version, droplet.createdAt, droplet.encrypted, droplet.nonce, droplet.keyVersion, data.botId || null, droplet.mediaType, droplet.mediaUrl, droplet.mediaDuration, droplet.mediaEncrypted);
+          INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(droplet.id, droplet.waveId, droplet.parentId, droplet.authorId, droplet.content, droplet.privacy, droplet.version, droplet.createdAt, droplet.encrypted, droplet.nonce, droplet.keyVersion, data.botId || null, droplet.mediaType, droplet.mediaUrl, droplet.mediaDuration, droplet.mediaEncrypted, droplet.is_thread_reply);
       } finally {
         this.db.exec('PRAGMA foreign_keys = ON');
       }
     } else {
       this.db.prepare(`
-        INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(droplet.id, droplet.waveId, droplet.parentId, droplet.authorId, droplet.content, droplet.privacy, droplet.version, droplet.createdAt, droplet.encrypted, droplet.nonce, droplet.keyVersion, data.botId || null, droplet.mediaType, droplet.mediaUrl, droplet.mediaDuration, droplet.mediaEncrypted);
+        INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(droplet.id, droplet.waveId, droplet.parentId, droplet.authorId, droplet.content, droplet.privacy, droplet.version, droplet.createdAt, droplet.encrypted, droplet.nonce, droplet.keyVersion, data.botId || null, droplet.mediaType, droplet.mediaUrl, droplet.mediaDuration, droplet.mediaEncrypted, droplet.is_thread_reply);
     }
 
     // Author has read their own ping (skip for bot pings)
@@ -6265,12 +6067,21 @@ export class DatabaseSQLite {
       media_url: d.media_url,
       media_duration: d.media_duration,
       media_encrypted: d.media_encrypted === 1,
+      // Threading fields (v2.38.0)
+      threaded: d.threaded === 1,
+      is_thread_reply: d.is_thread_reply === 1,
     };
   }
 
   // Backward compatibility alias
   getMessage(dropletId) {
     return this.getDroplet(dropletId);
+  }
+
+  // v2.38.0: Toggle threaded flag on a ping
+  threadPing(pingId, threaded = true) {
+    const result = this.db.prepare('UPDATE pings SET threaded = ? WHERE id = ? AND deleted = 0').run(threaded ? 1 : 0, pingId);
+    return result.changes > 0;
   }
 
   updateDroplet(dropletId, content) {
@@ -8045,6 +7856,56 @@ export class DatabaseSQLite {
       WHERE created_at < ?
     `).run(cutoffDate);
     return result.changes;
+  }
+
+  /**
+   * Cleanup expired pending contact requests (v2.38.0)
+   * @param {number} expiryDays - Max age in days before expiry
+   * @returns {{ count: number, expired: Array<{ id: string, from_user_id: string, to_user_handle: string }> }}
+   */
+  cleanupExpiredContactRequests(expiryDays = 7) {
+    const cutoffDate = new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000).toISOString();
+    const expired = this.db.prepare(`
+      SELECT cr.id, cr.from_user_id, u.handle as to_user_handle
+      FROM contact_requests cr
+      JOIN users u ON cr.to_user_id = u.id
+      WHERE cr.status = 'pending' AND cr.created_at < ?
+    `).all(cutoffDate);
+
+    if (expired.length > 0) {
+      const ids = expired.map(r => r.id);
+      this.db.prepare(`
+        DELETE FROM contact_requests
+        WHERE id IN (${ids.map(() => '?').join(',')})
+      `).run(...ids);
+    }
+
+    return { count: expired.length, expired };
+  }
+
+  /**
+   * Cleanup expired pending crew invitations (v2.38.0)
+   * @param {number} expiryDays - Max age in days before expiry
+   * @returns {{ count: number, expired: Array<{ id: string, invited_by: string, crew_name: string }> }}
+   */
+  cleanupExpiredCrewInvitations(expiryDays = 7) {
+    const cutoffDate = new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000).toISOString();
+    const expired = this.db.prepare(`
+      SELECT ci.id, ci.invited_by, c.name as crew_name
+      FROM crew_invitations ci
+      JOIN crews c ON ci.crew_id = c.id
+      WHERE ci.status = 'pending' AND ci.created_at < ?
+    `).all(cutoffDate);
+
+    if (expired.length > 0) {
+      const ids = expired.map(r => r.id);
+      this.db.prepare(`
+        DELETE FROM crew_invitations
+        WHERE id IN (${ids.map(() => '?').join(',')})
+      `).run(...ids);
+    }
+
+    return { count: expired.length, expired };
   }
 
   // ============ User Data Export (v1.18.0 GDPR Compliance) ============

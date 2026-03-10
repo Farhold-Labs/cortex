@@ -27,6 +27,7 @@ import ErrorBoundary from '../components/ui/ErrorBoundary.jsx';
 import InstallPrompt from '../components/ui/InstallPrompt.jsx';
 import WaveView from '../components/waves/WaveView.jsx';
 import FocusView from '../components/focus/FocusView.jsx';
+import ThreadPanel from '../components/focus/ThreadPanel.jsx';
 import GroupsView from '../components/groups/GroupsView.jsx';
 import ProfileSettings from '../components/profile/ProfileSettings.jsx';
 import VideoFeedView from '../components/feed/VideoFeedView.jsx';
@@ -90,6 +91,7 @@ function MainApp({ sharePingId }) {
   const [categoryManagementOpen, setCategoryManagementOpen] = useState(false); // Category management modal (v2.2.0)
   const [activeWatchParties, setActiveWatchParties] = useState({}); // Active watch parties by wave ID (v2.14.0)
   const [watchPartyPlayer, setWatchPartyPlayer] = useState(null); // { waveId, partyId } for open player (v2.14.0)
+  const [activeThread, setActiveThread] = useState(null); // { waveId, rootMessage } for thread panel (v2.38.0)
   const [showGhostProtocol, setShowGhostProtocol] = useState(false); // Ghost Protocol modal (v2.27.0)
   const [ghostMode, setGhostMode] = useState(false); // Showing hidden waves (v2.27.0)
   const [ghostHasPin, setGhostHasPin] = useState(false); // Whether user has set a ghost PIN (v2.27.0)
@@ -324,6 +326,7 @@ function MainApp({ sharePingId }) {
   const switchTab = useCallback((tabId) => {
     setActiveTabId(tabId);
     setFocusStack([]);
+    setActiveThread(null);
   }, []);
 
   // Debounced loadWaves to prevent multiple simultaneous API calls
@@ -517,7 +520,7 @@ function MainApp({ sharePingId }) {
     }
 
     // Handle both legacy (new_message) and new (new_ping) event names
-    if (data.type === 'new_message' || data.type === 'new_ping' || data.type === 'message_edited' || data.type === 'ping_edited' || data.type === 'message_deleted' || data.type === 'ping_deleted' || data.type === 'wave_created' || data.type === 'wave_updated' || data.type === 'message_reaction' || data.type === 'ping_reaction' || data.type === 'wave_invite_received' || data.type === 'wave_broadcast_received') {
+    if (data.type === 'new_message' || data.type === 'new_ping' || data.type === 'message_edited' || data.type === 'ping_edited' || data.type === 'message_deleted' || data.type === 'ping_deleted' || data.type === 'wave_created' || data.type === 'wave_updated' || data.type === 'message_reaction' || data.type === 'ping_reaction' || data.type === 'wave_invite_received' || data.type === 'wave_broadcast_received' || data.type === 'droplet_threaded') {
       loadWaves();
       // If the event is for the currently viewed wave, trigger a reload
       // Extract waveId from different event structures
@@ -648,6 +651,13 @@ function MainApp({ sharePingId }) {
     } else if (data.type === 'contact_request_cancelled') {
       // Request to us was cancelled
       setContactRequests(prev => prev.filter(r => r.id !== data.requestId));
+    } else if (data.type === 'contact_request_expired') {
+      // Our contact request expired (v2.38.0)
+      setSentContactRequests(prev => prev.filter(r => r.id !== data.requestId));
+      showToastMsg(NOTIFICATION.contactRequestExpired, 'info');
+    } else if (data.type === 'crew_invitation_expired') {
+      // Our crew invitation expired (v2.38.0)
+      showToastMsg(NOTIFICATION.crewInviteExpired, 'info');
     } else if (data.type === 'group_invitation_received') {
       // Someone invited us to a crew
       setGroupInvitations(prev => [data.invitation, ...prev]);
@@ -985,6 +995,15 @@ function MainApp({ sharePingId }) {
       const currentWaveId = lastFocused.waveId;
       return [...prev, { waveId: currentWaveId, pingId: ping.id, ping }];
     });
+  }, []);
+
+  // Thread panel handlers (v2.38.0)
+  const handleOpenThread = useCallback((waveId, message) => {
+    setActiveThread({ waveId, rootMessage: message });
+  }, []);
+
+  const handleCloseThread = useCallback(() => {
+    setActiveThread(null);
   }, []);
 
   // Sync tab titles when waves data updates
@@ -1579,38 +1598,60 @@ function MainApp({ sharePingId }) {
                   />
                 </ErrorBoundary>
               ) : selectedWave ? (
-                // Normal Wave View
-                <ErrorBoundary key={activeTab?.id || selectedWave.id}>
-                  <WaveView wave={selectedWave} onBack={() => { closeTab(activeTabId); loadWaves(); loadWaveNotifications(); }}
-                    fetchAPI={fetchAPI} showToast={showToastMsg} currentUser={user}
-                    groups={groups} onWaveUpdate={loadWaves} isMobile={isMobile}
-                    sendWSMessage={sendWSMessage}
-                    typingUsers={typingUsers[selectedWave?.id] || {}}
-                    reloadTrigger={waveReloadTrigger}
-                    contacts={contacts}
-                    contactRequests={contactRequests}
-                    sentContactRequests={sentContactRequests}
-                    onRequestsChange={loadContactRequests}
-                    onContactsChange={loadContacts}
-                    blockedUsers={blockedUsers}
-                    mutedUsers={mutedUsers}
-                    onBlockUser={handleBlockUser}
-                    onUnblockUser={handleUnblockUser}
-                    onMuteUser={handleMuteUser}
-                    onUnmuteUser={handleUnmuteUser}
-                    onBlockedMutedChange={loadBlockedMutedUsers}
-                    onShowProfile={setProfileUserId}
-                    onFocusPing={handleFocusPing}
-                    onNavigateToWave={handleNavigateToWave}
-                    scrollToMessageId={scrollToMessageId}
-                    onScrollToMessageComplete={() => setScrollToMessageId(null)}
-                    federationEnabled={federationEnabled}
-                    activeWatchParty={activeWatchParties[selectedWave?.id]}
-                    onJoinWatchParty={(partyId) => handleJoinWatchParty(selectedWave?.id, partyId)}
-                    onLeaveWatchParty={handleLeaveWatchParty}
-                    onOpenWatchParty={(partyId) => handleOpenWatchParty(selectedWave?.id, partyId)}
-                    onWatchPartiesChange={loadActiveWatchParties} />
-                </ErrorBoundary>
+                // Normal Wave View + Thread Panel (v2.38.0)
+                <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+                  <ErrorBoundary key={activeTab?.id || selectedWave.id}>
+                    <WaveView wave={selectedWave} onBack={() => { closeTab(activeTabId); loadWaves(); loadWaveNotifications(); setActiveThread(null); }}
+                      fetchAPI={fetchAPI} showToast={showToastMsg} currentUser={user}
+                      groups={groups} onWaveUpdate={loadWaves} isMobile={isMobile}
+                      sendWSMessage={sendWSMessage}
+                      typingUsers={typingUsers[selectedWave?.id] || {}}
+                      reloadTrigger={waveReloadTrigger}
+                      contacts={contacts}
+                      contactRequests={contactRequests}
+                      sentContactRequests={sentContactRequests}
+                      onRequestsChange={loadContactRequests}
+                      onContactsChange={loadContacts}
+                      blockedUsers={blockedUsers}
+                      mutedUsers={mutedUsers}
+                      onBlockUser={handleBlockUser}
+                      onUnblockUser={handleUnblockUser}
+                      onMuteUser={handleMuteUser}
+                      onUnmuteUser={handleUnmuteUser}
+                      onBlockedMutedChange={loadBlockedMutedUsers}
+                      onShowProfile={setProfileUserId}
+                      onFocusPing={handleFocusPing}
+                      onNavigateToWave={handleNavigateToWave}
+                      scrollToMessageId={scrollToMessageId}
+                      onScrollToMessageComplete={() => setScrollToMessageId(null)}
+                      federationEnabled={federationEnabled}
+                      activeWatchParty={activeWatchParties[selectedWave?.id]}
+                      onJoinWatchParty={(partyId) => handleJoinWatchParty(selectedWave?.id, partyId)}
+                      onLeaveWatchParty={handleLeaveWatchParty}
+                      onOpenWatchParty={(partyId) => handleOpenWatchParty(selectedWave?.id, partyId)}
+                      onWatchPartiesChange={loadActiveWatchParties}
+                      onOpenThread={(msg) => handleOpenThread(selectedWave.id, msg)} />
+                  </ErrorBoundary>
+                  {activeThread && activeThread.waveId === selectedWave.id && (
+                    <ThreadPanel
+                      wave={selectedWave}
+                      rootMessage={activeThread.rootMessage}
+                      onClose={handleCloseThread}
+                      fetchAPI={fetchAPI}
+                      showToast={showToastMsg}
+                      currentUser={user}
+                      isMobile={isMobile}
+                      sendWSMessage={sendWSMessage}
+                      typingUsers={typingUsers[selectedWave?.id] || {}}
+                      reloadTrigger={waveReloadTrigger}
+                      onShowProfile={setProfileUserId}
+                      blockedUsers={blockedUsers}
+                      mutedUsers={mutedUsers}
+                      contacts={contacts}
+                      onWaveUpdate={loadWaves}
+                    />
+                  )}
+                </div>
               ) : !isMobile && (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--border-primary)' }}>
                   <div style={{ textAlign: 'center' }}>

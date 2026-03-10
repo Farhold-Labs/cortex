@@ -126,6 +126,8 @@ export const NOTIFICATION = {
   crewInviteReceived: (inviter, crew) => `${inviter} wants you in the ${crew} crew`,
   crewInviteAccepted: "Crew invite accepted",
   crewInviteDeclined: "Crew invite declined",
+  contactRequestExpired: "Your hail timed out — no answer from the black",
+  crewInviteExpired: "Crew invite expired — silence in the void",
   federationRequest: (node) => `Docking request from ${node}`,
   watchPartyStarted: (name) => `${name} started a watch party`,
   watchPartyEnded: "Watch party ended",

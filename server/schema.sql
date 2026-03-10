@@ -136,7 +136,10 @@ CREATE TABLE IF NOT EXISTS pings (
     -- E2EE fields (v1.19.0)
     encrypted INTEGER DEFAULT 0,           -- 1 if content is encrypted
     nonce TEXT,                            -- Base64 AES-GCM nonce (12 bytes)
-    key_version INTEGER DEFAULT 1          -- Wave key version used for encryption
+    key_version INTEGER DEFAULT 1,         -- Wave key version used for encryption
+    -- Threading fields (v2.38.0)
+    threaded INTEGER DEFAULT 0,            -- 1 if message has been burst/threaded
+    is_thread_reply INTEGER DEFAULT 0      -- 1 if reply was made within thread panel
 );
 
 -- Ping read tracking (many-to-many)
