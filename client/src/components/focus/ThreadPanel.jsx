@@ -357,12 +357,13 @@ const ThreadPanel = ({
   const parentPreview = focusedRoot.content?.replace(/<[^>]*>/g, '').substring(0, 120) || '';
   const parentAuthor = focusedRoot.user_display_name || focusedRoot.sender_name || 'Unknown';
 
-  // Desktop: side panel (or overlay when narrow). Mobile: full-screen overlay.
+  // Desktop: side panel (or overlay when narrow). Mobile: fills content area (like FocusView).
   const panelStyle = isMobile
     ? {
-        position: 'fixed', inset: 0, zIndex: 50,
+        flex: 1,
         display: 'flex', flexDirection: 'column',
         background: 'var(--bg-base)',
+        minHeight: 0, overflow: 'hidden',
       }
     : useOverlay
     ? {

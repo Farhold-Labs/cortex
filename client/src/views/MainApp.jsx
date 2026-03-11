@@ -1600,6 +1600,8 @@ function MainApp({ sharePingId }) {
               ) : selectedWave ? (
                 // Normal Wave View + Thread Panel (v2.38.0)
                 <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+                  {/* On mobile, hide WaveView when thread panel is open */}
+                  {!(isMobile && activeThread && activeThread.waveId === selectedWave.id) && (
                   <ErrorBoundary key={activeTab?.id || selectedWave.id}>
                     <WaveView wave={selectedWave} onBack={() => { closeTab(activeTabId); loadWaves(); loadWaveNotifications(); setActiveThread(null); }}
                       fetchAPI={fetchAPI} showToast={showToastMsg} currentUser={user}
@@ -1632,6 +1634,7 @@ function MainApp({ sharePingId }) {
                       onWatchPartiesChange={loadActiveWatchParties}
                       onOpenThread={(msg) => handleOpenThread(selectedWave.id, msg)} />
                   </ErrorBoundary>
+                  )}
                   {activeThread && activeThread.waveId === selectedWave.id && (
                     <ThreadPanel
                       wave={selectedWave}
