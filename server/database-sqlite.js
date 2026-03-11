@@ -2090,6 +2090,20 @@ export class DatabaseSQLite {
     return this.rowToUser(row);
   }
 
+  // Find user by handle OR display name (for @mention resolution)
+  findUserByMention(text) {
+    if (!text) return null;
+    const sanitized = text.toLowerCase().trim();
+    // Try exact handle match first
+    const byHandle = this.stmts.findUserByHandle.get(sanitized, sanitized, null);
+    if (byHandle) return this.rowToUser(byHandle);
+    // Fall back to display name match (case-insensitive)
+    const byName = this.db.prepare(
+      'SELECT * FROM users WHERE LOWER(display_name) = ? LIMIT 1'
+    ).get(sanitized);
+    return byName ? this.rowToUser(byName) : null;
+  }
+
   findUserById(id) {
     if (!id) return null;
     const row = this.stmts.findUserById.get(id);
@@ -4474,6 +4488,8 @@ export class DatabaseSQLite {
       // Profile wave fields (v2.9.0)
       isProfileWave: row.is_profile_wave === 1,
       profileOwnerId: row.profile_owner_id || null,
+      // Topic (v2.36.0)
+      topic: row.topic || null,
     };
   }
 

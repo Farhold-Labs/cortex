@@ -17988,7 +17988,7 @@ function createDropletNotifications(droplet, wave, author) {
   const mentionedUsers = new Set();
 
   for (const handle of mentionedHandles) {
-    const mentionedUser = db.findUserByHandle(handle);
+    const mentionedUser = db.findUserByMention ? db.findUserByMention(handle) : db.findUserByHandle(handle);
     if (mentionedUser && mentionedUser.id !== author.id && participantIds.has(mentionedUser.id)) {
       mentionedUsers.add(mentionedUser.id);
 
