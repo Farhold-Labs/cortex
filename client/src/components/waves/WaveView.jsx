@@ -24,7 +24,7 @@ import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import { storage } from '../../utils/storage.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 
-const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread }) => {
+const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove }) => {
   // E2EE context
   const e2ee = useE2EE();
 
@@ -2460,7 +2460,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             onShare={handleSharePing} wave={wave || waveData}
             onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
             autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
-            fetchAPI={fetchAPI} />
+            fetchAPI={fetchAPI}
+            currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
         ))}
       </div>
 

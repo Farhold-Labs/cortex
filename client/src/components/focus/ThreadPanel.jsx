@@ -25,6 +25,9 @@ const ThreadPanel = ({
   contacts = [],
   participants = [],
   onWaveUpdate,
+  moveSource,
+  onStartMove,
+  onCompleteMove,
 }) => {
   const e2ee = useE2EE();
 
@@ -525,6 +528,7 @@ const ThreadPanel = ({
               wave={wave}
               currentWaveId={wave?.id}
               fetchAPI={fetchAPI}
+              currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove}
             />
           ))
         )}

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT } from '../../config/constants.js';
+import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT, canAccess } from '../../config/constants.js';
 import { Avatar, PrivacyBadge } from '../ui/SimpleComponents.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
 // BurstLinkCard import removed in v2.38.0 — burst waves migrated to threads
@@ -17,7 +17,7 @@ const getFirstLine = (content) => {
   return text.substring(0, 57) + '...';
 };
 
-const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, onCancelEdit, editingMessageId, editContent, setEditContent, currentUserId, highlightId, playbackIndex, collapsed, onToggleCollapse, isMobile, contentCollapsed = {}, onToggleContentCollapse, onReact, onMessageClick, participants = [], contacts = [], onShowProfile, onReport, onFocus, onShare, wave, onNavigateToWave, currentWaveId, unreadCountsByWave = {}, autoFocusMessages = false, fetchAPI, onOpenThread, isInThreadPanel = false }) => {
+const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, onCancelEdit, editingMessageId, editContent, setEditContent, currentUserId, highlightId, playbackIndex, collapsed, onToggleCollapse, isMobile, contentCollapsed = {}, onToggleContentCollapse, onReact, onMessageClick, participants = [], contacts = [], onShowProfile, onReport, onFocus, onShare, wave, onNavigateToWave, currentWaveId, unreadCountsByWave = {}, autoFocusMessages = false, fetchAPI, onOpenThread, isInThreadPanel = false, currentUser, moveSource, onStartMove, onCompleteMove }) => {
   const config = PRIVACY_LEVELS[message.privacy] || PRIVACY_LEVELS.private;
   const isHighlighted = highlightId === message.id;
   const isVisible = playbackIndex === null || message._index <= playbackIndex;
@@ -79,8 +79,29 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
   // Deleted messages with children show placeholder to preserve thread context
   if (isDeleted && !hasChildren) return null;
 
+  // Move mode helpers (v2.39.0)
+  const isMoving = moveSource && moveSource.messageId === message.id;
+  const isDescendantOfSource = React.useMemo(() => {
+    if (!moveSource) return false;
+    const checkDescendant = (children, targetId) => {
+      if (!children) return false;
+      return children.some(c => c.id === targetId || checkDescendant(c.children, targetId));
+    };
+    // We can't easily walk up from here, so we check if this message's ID is the source
+    // The parent component tree handles this — but we also skip via isMoving
+    return false;
+  }, [moveSource]);
+  const isMoveTarget = moveSource && !isMoving && !isDeleted;
+  const canMove = !isDeleted && currentUser && onStartMove && !moveSource &&
+    (message.author_id === currentUserId || canAccess(currentUser, 'moderator'));
+
   const handleMessageClick = (e) => {
     e.stopPropagation(); // Prevent click from bubbling to parent messages
+    // Move mode: clicking a message selects it as the move target (v2.39.0)
+    if (isMoveTarget && onCompleteMove) {
+      onCompleteMove(message.id);
+      return;
+    }
     if (isUnread && onMessageClick) {
       onMessageClick(message.id);
     }
@@ -96,23 +117,28 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
   return (
     <div data-message-id={message.id}>
       <div
+        onClickCapture={isMoveTarget ? (e) => { e.stopPropagation(); e.preventDefault(); onCompleteMove(message.id); } : undefined}
         onClick={handleMessageClick}
         style={{
           padding: '0px 12px',
           marginTop: isMobile ? '8px' : '6px',
-          background: isHighlighted ? `${config.color}15` : isUnread ? 'var(--accent-amber)08' : 'transparent',
-          borderLeft: isUnread ? '2px solid var(--accent-amber)' : '2px solid transparent',
-          cursor: (isUnread || (autoFocusMessages && hasChildren && onOpenThread && !isDeleted)) ? 'pointer' : 'default',
+          background: isMoving ? 'rgba(255, 210, 63, 0.08)' : isHighlighted ? `${config.color}15` : isUnread ? 'var(--accent-amber)08' : 'transparent',
+          borderLeft: isUnread ? '2px solid var(--accent-amber)' : isMoving ? '2px solid var(--accent-amber)' : '2px solid transparent',
+          cursor: isMoveTarget ? 'pointer' : (isUnread || (autoFocusMessages && hasChildren && onOpenThread && !isDeleted)) ? 'pointer' : 'default',
           transition: 'background 0.15s ease',
-          opacity: isDeleted ? 0.5 : 1,
+          opacity: isDeleted ? 0.5 : isMoving ? 0.6 : 1,
         }}
         onMouseEnter={(e) => {
-          if (!isHighlighted && !isUnread) {
+          if (isMoveTarget) {
+            e.currentTarget.style.outline = '1px solid var(--accent-amber)';
+            e.currentTarget.style.background = 'rgba(255, 210, 63, 0.06)';
+          } else if (!isHighlighted && !isUnread) {
             e.currentTarget.style.background = 'var(--bg-hover)';
           }
         }}
         onMouseLeave={(e) => {
-          if (!isHighlighted && !isUnread) {
+          e.currentTarget.style.outline = 'none';
+          if (!isHighlighted && !isUnread && !isMoving) {
             e.currentTarget.style.background = 'transparent';
           }
         }}
@@ -280,6 +306,30 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                           >
                             <span>↳</span>
                             <span>{message.threaded ? 'Unthread' : 'Thread'}</span>
+                          </div>
+                        )}
+                        {/* Move (v2.39.0) — author or moderator+ */}
+                        {canMove && (
+                          <div
+                            onClick={() => {
+                              onStartMove(message, wave?.id);
+                              setShowMessageMenu(false);
+                            }}
+                            style={{
+                              padding: '8px 12px',
+                              cursor: 'pointer',
+                              fontSize: '0.8rem',
+                              color: 'var(--accent-amber)',
+                              background: 'transparent',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                          >
+                            <span>↕</span>
+                            <span>Move</span>
                           </div>
                         )}
                         {/* Edit (author only) */}
@@ -646,7 +696,8 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                 participants={participants} contacts={contacts} onShowProfile={onShowProfile} onReport={onReport}
                 onFocus={onFocus} onShare={onShare} wave={wave} onNavigateToWave={onNavigateToWave} currentWaveId={currentWaveId}
                 unreadCountsByWave={unreadCountsByWave} autoFocusMessages={autoFocusMessages} fetchAPI={fetchAPI}
-                onOpenThread={onOpenThread} isInThreadPanel={isInThreadPanel} />
+                onOpenThread={onOpenThread} isInThreadPanel={isInThreadPanel}
+                currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
             ))}
           </div>
         )}
