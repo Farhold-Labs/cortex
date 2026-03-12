@@ -98,7 +98,7 @@ export const HOLIDAYS = {
   elderxeke: {
     name: 'Elderxeke Day',
     effect: 'aurora',
-    colors: ['#2ECC71', '#3498DB', '#FFD700'], // Emerald Green, Nordic Blue, Gold
+    colors: ['#9B59B6', '#3498DB', '#FFD700'], // Purple, Blue, Gold (Bifrost)
     isActive: (date) => {
       const month = date.getMonth();
       const day = date.getDate();

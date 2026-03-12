@@ -1,129 +1,146 @@
 import React, { useMemo } from 'react';
 
 /**
- * Aurora / Bifrost Effect - Ethereal bands of shifting color
+ * Aurora / Bifrost Effect - Rainbow bands of shifting color across the top
+ * with warm ember motes rising from below.
  * Used for Elderxeke Day — a quiet, reverent tribute
  */
 
-// Parse hex color to rgba with given alpha
-const hexToRgba = (hex, alpha) => {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-};
+// Bifrost spectrum — distinct from any theme's accent colors
+const BIFROST = [
+  '#9B59B6', // Purple
+  '#6C5CE7', // Violet
+  '#3498DB', // Blue
+  '#00CEC9', // Cyan
+  '#2ECC71', // Green
+  '#F1C40F', // Yellow
+  '#E67E22', // Orange
+  '#E74C3C', // Red
+];
 
-const AuroraEffect = ({ colors = ['#2ECC71', '#3498DB', '#FFD700'] }) => {
+// Warm ember colors for rising motes
+const EMBER_COLORS = ['#FFD700', '#FF8C00', '#FF6347', '#FFA500'];
+
+const AuroraEffect = () => {
   const keyframes = useMemo(() => `
-    @keyframes aurora-drift-1 {
-      0% { transform: translateX(-5%) scaleY(1); opacity: 0.7; }
-      25% { transform: translateX(3%) scaleY(1.15); opacity: 1; }
-      50% { transform: translateX(5%) scaleY(0.9); opacity: 0.6; }
-      75% { transform: translateX(-3%) scaleY(1.1); opacity: 0.9; }
-      100% { transform: translateX(-5%) scaleY(1); opacity: 0.7; }
+    @keyframes aurora-sway-1 {
+      0%, 100% { transform: translateX(-3%) skewX(-2deg); }
+      50% { transform: translateX(3%) skewX(2deg); }
     }
-    @keyframes aurora-drift-2 {
-      0% { transform: translateX(4%) scaleY(1.1); opacity: 0.6; }
-      30% { transform: translateX(-6%) scaleY(0.85); opacity: 0.9; }
-      60% { transform: translateX(3%) scaleY(1.2); opacity: 0.5; }
-      100% { transform: translateX(4%) scaleY(1.1); opacity: 0.6; }
+    @keyframes aurora-sway-2 {
+      0%, 100% { transform: translateX(4%) skewX(1deg); }
+      50% { transform: translateX(-4%) skewX(-1deg); }
     }
-    @keyframes aurora-drift-3 {
-      0% { transform: translateX(-3%) scaleY(0.9); opacity: 0.5; }
-      35% { transform: translateX(5%) scaleY(1.15); opacity: 0.8; }
-      65% { transform: translateX(-4%) scaleY(1); opacity: 0.4; }
-      100% { transform: translateX(-3%) scaleY(0.9); opacity: 0.5; }
+    @keyframes aurora-pulse {
+      0%, 100% { opacity: 0.35; }
+      50% { opacity: 0.55; }
     }
-    @keyframes aurora-mote-rise {
-      0% { transform: translateY(0); opacity: 0; }
-      15% { opacity: 0.6; }
-      85% { opacity: 0.6; }
-      100% { transform: translateY(-30vh); opacity: 0; }
+    @keyframes ember-rise {
+      0% { transform: translateY(0) translateX(0); opacity: 0; }
+      10% { opacity: 0.7; }
+      90% { opacity: 0.5; }
+      100% { transform: translateY(-40vh) translateX(var(--drift)); opacity: 0; }
     }
   `, []);
 
-  const motes = useMemo(() =>
-    Array.from({ length: 15 }, (_, i) => ({
+  // Generate ember motes once
+  const embers = useMemo(() =>
+    Array.from({ length: 18 }, (_, i) => ({
       id: i,
       left: 5 + Math.random() * 90,
-      delay: Math.random() * 20,
-      duration: 12 + Math.random() * 10,
+      delay: Math.random() * 15,
+      duration: 10 + Math.random() * 8,
       size: 2 + Math.random() * 3,
-      color: colors[Math.floor(Math.random() * colors.length)],
-    })), [colors]);
+      drift: (Math.random() - 0.5) * 40, // px horizontal drift
+      color: EMBER_COLORS[Math.floor(Math.random() * EMBER_COLORS.length)],
+    })), []);
 
   return (
     <>
       <style>{keyframes}</style>
 
-      {/* Primary aurora band */}
+      {/* Bifrost band 1 — full rainbow gradient, slow sway */}
       <div style={{
         position: 'absolute',
         top: 0,
-        left: 0,
-        right: 0,
-        height: '40%',
-        background: `linear-gradient(180deg,
-          ${hexToRgba(colors[0], 0.25)} 0%,
-          ${hexToRgba(colors[1], 0.15)} 40%,
-          ${hexToRgba(colors[2], 0.06)} 70%,
-          transparent 100%
+        left: '-5%',
+        right: '-5%',
+        height: '25%',
+        background: `linear-gradient(90deg,
+          ${BIFROST[0]}60 0%,
+          ${BIFROST[1]}50 12%,
+          ${BIFROST[2]}50 25%,
+          ${BIFROST[3]}45 37%,
+          ${BIFROST[4]}40 50%,
+          ${BIFROST[5]}45 62%,
+          ${BIFROST[6]}50 75%,
+          ${BIFROST[7]}50 87%,
+          ${BIFROST[0]}60 100%
         )`,
-        filter: 'blur(20px)',
-        animation: 'aurora-drift-1 18s ease-in-out infinite',
+        maskImage: 'linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 50%, transparent 100%)',
+        WebkitMaskImage: 'linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 50%, transparent 100%)',
+        filter: 'blur(12px)',
+        animation: 'aurora-sway-1 20s ease-in-out infinite, aurora-pulse 8s ease-in-out infinite',
         willChange: 'transform, opacity',
       }} />
 
-      {/* Secondary band */}
+      {/* Bifrost band 2 — offset, reversed spectrum */}
       <div style={{
         position: 'absolute',
-        top: '3%',
-        left: 0,
-        right: 0,
-        height: '35%',
-        background: `linear-gradient(180deg,
-          ${hexToRgba(colors[1], 0.2)} 0%,
-          ${hexToRgba(colors[2], 0.12)} 35%,
-          ${hexToRgba(colors[0], 0.05)} 65%,
-          transparent 100%
+        top: '2%',
+        left: '-5%',
+        right: '-5%',
+        height: '20%',
+        background: `linear-gradient(90deg,
+          ${BIFROST[7]}50 0%,
+          ${BIFROST[5]}40 20%,
+          ${BIFROST[3]}45 40%,
+          ${BIFROST[1]}50 60%,
+          ${BIFROST[0]}45 80%,
+          ${BIFROST[6]}50 100%
         )`,
-        filter: 'blur(25px)',
-        animation: 'aurora-drift-2 22s ease-in-out infinite',
+        maskImage: 'linear-gradient(180deg, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.2) 60%, transparent 100%)',
+        WebkitMaskImage: 'linear-gradient(180deg, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.2) 60%, transparent 100%)',
+        filter: 'blur(18px)',
+        animation: 'aurora-sway-2 25s ease-in-out infinite, aurora-pulse 11s ease-in-out infinite 3s',
         willChange: 'transform, opacity',
       }} />
 
-      {/* Tertiary band */}
-      <div style={{
-        position: 'absolute',
-        top: '6%',
-        left: 0,
-        right: 0,
-        height: '30%',
-        background: `linear-gradient(180deg,
-          ${hexToRgba(colors[2], 0.18)} 0%,
-          ${hexToRgba(colors[0], 0.1)} 50%,
-          transparent 100%
-        )`,
-        filter: 'blur(30px)',
-        animation: 'aurora-drift-3 26s ease-in-out infinite',
-        willChange: 'transform, opacity',
-      }} />
+      {/* Subtle vertical curtain streaks */}
+      {[0, 1, 2, 3, 4].map((i) => {
+        const color = BIFROST[i + 1];
+        const left = 10 + i * 18;
+        return (
+          <div key={`curtain-${i}`} style={{
+            position: 'absolute',
+            top: 0,
+            left: `${left}%`,
+            width: '8%',
+            height: '30%',
+            background: `linear-gradient(180deg, ${color}30 0%, ${color}15 40%, transparent 100%)`,
+            filter: 'blur(15px)',
+            animation: `aurora-pulse ${7 + i * 2}s ease-in-out infinite ${i * 1.5}s`,
+            willChange: 'opacity',
+          }} />
+        );
+      })}
 
-      {/* Gentle ascending motes */}
-      {motes.map((mote) => (
+      {/* Rising ember motes */}
+      {embers.map((ember) => (
         <div
-          key={mote.id}
+          key={ember.id}
           style={{
             position: 'absolute',
-            left: `${mote.left}%`,
-            top: '60%',
-            width: `${mote.size}px`,
-            height: `${mote.size}px`,
+            left: `${ember.left}%`,
+            bottom: '10%',
+            width: `${ember.size}px`,
+            height: `${ember.size}px`,
             borderRadius: '50%',
-            background: mote.color,
-            boxShadow: `0 0 ${mote.size * 4}px ${mote.color}`,
-            animation: `aurora-mote-rise ${mote.duration}s ease-in-out infinite`,
-            animationDelay: `${mote.delay}s`,
+            background: ember.color,
+            boxShadow: `0 0 ${ember.size * 3}px ${ember.color}80`,
+            animation: `ember-rise ${ember.duration}s ease-out infinite`,
+            animationDelay: `${ember.delay}s`,
+            '--drift': `${ember.drift}px`,
             willChange: 'transform, opacity',
           }}
         />
