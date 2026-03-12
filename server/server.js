@@ -18704,7 +18704,7 @@ server.listen(PORT, () => {
       // Holiday alerts
       const holiday = getCurrentHoliday(now);
       if (holiday) {
-        const alreadyExists = activeAlerts.some(a => a.title.includes(holiday.name) && a.category === 'announcement');
+        const alreadyExists = activeAlerts.some(a => a.title.toLowerCase().includes(holiday.name.toLowerCase()) && a.category === 'announcement');
         if (!alreadyExists) {
           const holidayContent = {
             elderxeke: `Happy ElderXeke Day! ✨ May the Bifrost aurora shine bright across Cortex today!`,
