@@ -92,7 +92,7 @@ const HOLIDAYS = {
   },
 
   elderxeke: {
-    name: 'Elderxeke Day',
+    name: 'ElderXeke Day',
     emoji: '✨',
     isActive: (date) => {
       const month = date.getMonth();

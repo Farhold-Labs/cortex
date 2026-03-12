@@ -96,7 +96,7 @@ export const HOLIDAYS = {
   },
 
   elderxeke: {
-    name: 'Elderxeke Day',
+    name: 'ElderXeke Day',
     effect: 'aurora',
     colors: ['#9B59B6', '#3498DB', '#FFD700'], // Purple, Blue, Gold (Bifrost)
     isActive: (date) => {
