@@ -10,6 +10,7 @@ import PastelOverlay from './effects/PastelOverlay.jsx';
 import SpookyEffect from './effects/SpookyEffect.jsx';
 import AutumnLeaves from './effects/AutumnLeaves.jsx';
 import CandleGlow from './effects/CandleGlow.jsx';
+import AuroraEffect from './effects/AuroraEffect.jsx';
 
 /**
  * Holiday Effects Overlay (v2.20.0, fixed v2.22.1)
@@ -85,7 +86,8 @@ const HolidayEffectsOverlay = ({ enabled = true }) => {
     pastel: PastelOverlay,
     spooky: SpookyEffect,
     autumn: AutumnLeaves,
-    candle: CandleGlow
+    candle: CandleGlow,
+    aurora: AuroraEffect
   }[activeHoliday.effect];
 
   if (!EffectComponent) {

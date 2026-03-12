@@ -95,6 +95,18 @@ export const HOLIDAYS = {
     }
   },
 
+  elderxeke: {
+    name: 'Elderxeke Day',
+    effect: 'aurora',
+    colors: ['#2ECC71', '#3498DB', '#FFD700'], // Emerald Green, Nordic Blue, Gold
+    isActive: (date) => {
+      const month = date.getMonth();
+      const day = date.getDate();
+      // Mar 11-13
+      return month === 2 && day >= 11 && day <= 13;
+    }
+  },
+
   stPatricks: {
     name: "St. Patrick's Day",
     effect: 'shamrocks',
