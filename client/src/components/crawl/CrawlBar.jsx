@@ -269,9 +269,6 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
     celebration: { icon: '', color: 'var(--accent-purple)', showLabel: false },
   };
 
-  // Holiday icon images — place .png files in client/public/holidays/{key}.png
-  const holidayIconKeys = ['newYear', 'valentines', 'elderxeke', 'stPatricks', 'easter', 'independenceDay', 'halloween', 'thanksgiving', 'christmas', 'hanukkah'];
-
   if (data.alerts?.enabled && data.alerts?.data?.length > 0) {
     // Sort by priority (critical first, then warning, then info/celebration)
     const priorityOrder = { critical: 0, warning: 1, info: 2, celebration: 2 };
@@ -282,25 +279,15 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
     sortedAlerts.forEach(alert => {
       const cfg = alertPriorityConfig[alert.priority] || alertPriorityConfig.info;
 
-      // For celebration alerts, resolve holiday icon from content tag or title match
+      // For celebration alerts, match holiday name in title to resolve icon
       let holidayIcon = null;
       if (alert.priority === 'celebration') {
-        // Primary: extract holiday key from content tag [holiday:key]
-        if (alert.content) {
-          const match = alert.content.match(/\[holiday:(\w+)\]/);
-          if (match && holidayIconKeys.includes(match[1])) {
-            holidayIcon = `/holidays/${match[1]}.png`;
-          }
-        }
-        // Fallback: match holiday name in title against known keys (case-insensitive)
-        if (!holidayIcon) {
-          const holidayNameMap = { "new year": 'newYear', "valentine": 'valentines', "elderxeke": 'elderxeke', "patrick": 'stPatricks', "easter": 'easter', "independence": 'independenceDay', "halloween": 'halloween', "thanksgiving": 'thanksgiving', "christmas": 'christmas', "hanukkah": 'hanukkah' };
-          const titleLower = alert.title.toLowerCase();
-          for (const [name, key] of Object.entries(holidayNameMap)) {
-            if (titleLower.includes(name)) {
-              holidayIcon = `/holidays/${key}.png`;
-              break;
-            }
+        const holidayNameMap = { "new year": 'newYear', "valentine": 'valentines', "elderxeke": 'elderxeke', "patrick": 'stPatricks', "easter": 'easter', "independence": 'independenceDay', "halloween": 'halloween', "thanksgiving": 'thanksgiving', "christmas": 'christmas', "hanukkah": 'hanukkah' };
+        const titleLower = alert.title.toLowerCase();
+        for (const [name, key] of Object.entries(holidayNameMap)) {
+          if (titleLower.includes(name)) {
+            holidayIcon = `/holidays/${key}.png`;
+            break;
           }
         }
       }

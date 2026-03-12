@@ -18708,7 +18708,7 @@ server.listen(PORT, () => {
         if (!alreadyExists) {
           db.createAlert({
             title: `${holiday.emoji} ${holiday.name} celebration is active!`,
-            content: `Happy ${holiday.name}! Enjoy the themed visual effects. [holiday:${holiday.id}]`,
+            content: `Happy ${holiday.name}!`,
             priority: 'celebration',
             category: 'announcement',
             scope: 'local',
