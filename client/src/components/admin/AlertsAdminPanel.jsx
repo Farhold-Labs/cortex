@@ -155,7 +155,8 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
   const priorityConfig = {
     critical: { icon: '🚨', color: 'var(--accent-orange)' },
     warning: { icon: '⚠️', color: 'var(--accent-amber)' },
-    info: { icon: 'ℹ️', color: 'var(--accent-teal)' }
+    info: { icon: 'ℹ️', color: 'var(--accent-teal)' },
+    celebration: { icon: '🎉', color: 'var(--accent-purple)' }
   };
 
   return (
@@ -366,6 +367,7 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                   <option value="info">ℹ️ Info</option>
                   <option value="warning">⚠️ Warning</option>
                   <option value="critical">🚨 Critical</option>
+                  <option value="celebration">🎉 Celebration</option>
                 </select>
               </div>
               <div style={{ flex: 1 }}>
