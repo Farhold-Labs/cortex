@@ -1899,6 +1899,45 @@ export class DatabaseSQLite {
     } catch (err) {
       // Columns may already exist
     }
+
+    // v2.40.0: Birthday columns on users table + events table
+    try {
+      const userCols = this.db.prepare("PRAGMA table_info(users)").all();
+      if (!userCols.some(c => c.name === 'birthday')) {
+        this.db.exec(`
+          ALTER TABLE users ADD COLUMN birthday TEXT;
+          ALTER TABLE users ADD COLUMN birthday_visibility TEXT DEFAULT 'contacts';
+        `);
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_users_birthday ON users(birthday) WHERE birthday IS NOT NULL');
+        console.log('✅ Added birthday columns to users table');
+      }
+    } catch (err) {
+      // Columns may already exist
+    }
+
+    try {
+      const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").get();
+      if (!tables) {
+        this.db.exec(`
+          CREATE TABLE events (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT,
+            event_date TEXT NOT NULL,
+            recurring INTEGER DEFAULT 0,
+            category TEXT DEFAULT 'general',
+            created_by TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+          );
+          CREATE INDEX idx_events_date ON events(event_date);
+          CREATE INDEX idx_events_recurring ON events(recurring);
+        `);
+        console.log('✅ Events table created');
+      }
+    } catch (err) {
+      // Table may already exist
+    }
   }
 
   prepareStatements() {
@@ -1915,7 +1954,7 @@ export class DatabaseSQLite {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       updateUser: this.db.prepare(`
-        UPDATE users SET handle = ?, email = ?, display_name = ?, avatar = ?, avatar_url = ?, bio = ?, node_name = ?, status = ?, is_admin = ?, role = ?, last_seen = ?, last_handle_change = ?, preferences = ?
+        UPDATE users SET handle = ?, email = ?, display_name = ?, avatar = ?, avatar_url = ?, bio = ?, node_name = ?, status = ?, is_admin = ?, role = ?, last_seen = ?, last_handle_change = ?, preferences = ?, birthday = ?, birthday_visibility = ?
         WHERE id = ?
       `),
       updateUserStatus: this.db.prepare('UPDATE users SET status = ?, last_seen = ? WHERE id = ?'),
@@ -2069,6 +2108,8 @@ export class DatabaseSQLite {
       moderatedAt: row.moderated_at || null,
       moderatedBy: row.moderated_by || null,
       handleHistory: this.getHandleHistory(row.id),
+      birthday: row.birthday || null,
+      birthdayVisibility: row.birthday_visibility || 'contacts',
     };
   }
 
@@ -2198,12 +2239,12 @@ export class DatabaseSQLite {
       UPDATE users SET
         handle = ?, email = ?, display_name = ?, avatar = ?, avatar_url = ?,
         bio = ?, node_name = ?, status = ?, is_admin = ?, role = ?, last_seen = ?,
-        last_handle_change = ?, preferences = ?
+        last_handle_change = ?, preferences = ?, birthday = ?, birthday_visibility = ?
       WHERE id = ?
     `).run(
       updated.handle, updated.email, updated.displayName, updated.avatar, updated.avatarUrl,
       updated.bio, updated.nodeName, updated.status, updated.isAdmin ? 1 : 0, updated.role || 'user', updated.lastSeen,
-      updated.lastHandleChange, JSON.stringify(updated.preferences), userId
+      updated.lastHandleChange, JSON.stringify(updated.preferences), updated.birthday || null, updated.birthdayVisibility || 'contacts', userId
     );
 
     return this.findUserById(userId);
@@ -9816,6 +9857,112 @@ export class DatabaseSQLite {
   hasEncryptedContacts(userId) {
     const row = this.db.prepare('SELECT 1 FROM encrypted_contacts WHERE user_id = ?').get(userId);
     return !!row;
+  }
+
+  // ============ Birthday Methods (v2.40.0) ============
+
+  getTodaysBirthdays(todayMMDD) {
+    return this.db.prepare(
+      'SELECT id, handle, display_name, birthday, birthday_visibility FROM users WHERE birthday = ? AND birthday_visibility != ?'
+    ).all(todayMMDD, 'hidden');
+  }
+
+  getUserBirthday(userId, requestingUserId) {
+    const row = this.db.prepare('SELECT birthday, birthday_visibility FROM users WHERE id = ?').get(userId);
+    if (!row || !row.birthday) return null;
+
+    // Self always visible
+    if (userId === requestingUserId) return row.birthday;
+
+    if (row.birthday_visibility === 'hidden') return null;
+    if (row.birthday_visibility === 'everyone') return row.birthday;
+
+    // 'contacts' — check if requesting user is a contact
+    if (row.birthday_visibility === 'contacts') {
+      return this.isContact(requestingUserId, userId) ? row.birthday : null;
+    }
+
+    return null;
+  }
+
+  // ============ Events CRUD (v2.40.0) ============
+
+  createEvent({ title, description, eventDate, recurring, category, createdBy }) {
+    const id = `event-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const now = new Date().toISOString();
+    this.db.prepare(
+      'INSERT INTO events (id, title, description, event_date, recurring, category, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, title, description || null, eventDate, recurring ? 1 : 0, category || 'general', createdBy, now);
+    return this.getEvent(id);
+  }
+
+  getEvent(eventId) {
+    const row = this.db.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
+    if (!row) return null;
+    return {
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      eventDate: row.event_date,
+      recurring: !!row.recurring,
+      category: row.category,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  getAllEvents({ limit = 50, offset = 0 } = {}) {
+    const rows = this.db.prepare('SELECT * FROM events ORDER BY event_date ASC LIMIT ? OFFSET ?').all(limit, offset);
+    return rows.map(row => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      eventDate: row.event_date,
+      recurring: !!row.recurring,
+      category: row.category,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  updateEvent(eventId, updates) {
+    const existing = this.getEvent(eventId);
+    if (!existing) return null;
+
+    const now = new Date().toISOString();
+    const title = updates.title !== undefined ? updates.title : existing.title;
+    const description = updates.description !== undefined ? updates.description : existing.description;
+    const eventDate = updates.eventDate !== undefined ? updates.eventDate : existing.eventDate;
+    const recurring = updates.recurring !== undefined ? (updates.recurring ? 1 : 0) : (existing.recurring ? 1 : 0);
+    const category = updates.category !== undefined ? updates.category : existing.category;
+
+    this.db.prepare(
+      'UPDATE events SET title = ?, description = ?, event_date = ?, recurring = ?, category = ?, updated_at = ? WHERE id = ?'
+    ).run(title, description, eventDate, recurring, category, now, eventId);
+
+    return this.getEvent(eventId);
+  }
+
+  deleteEvent(eventId) {
+    this.db.prepare('DELETE FROM events WHERE id = ?').run(eventId);
+  }
+
+  getTodaysEvents(todayISO, todayMMDD) {
+    return this.db.prepare(
+      'SELECT * FROM events WHERE (recurring = 0 AND event_date = ?) OR (recurring = 1 AND event_date = ?)'
+    ).all(todayISO, todayMMDD).map(row => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      eventDate: row.event_date,
+      recurring: !!row.recurring,
+      category: row.category,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
   }
 
   // Placeholder for JSON compatibility - not needed with SQLite

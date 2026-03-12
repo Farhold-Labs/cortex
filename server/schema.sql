@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS users (
     account_status TEXT DEFAULT 'active',        -- active, disabled, banned
     moderation_reason TEXT,
     moderated_at TEXT,
-    moderated_by TEXT
+    moderated_by TEXT,
+    -- Birthday & calendar (v2.40.0)
+    birthday TEXT,                               -- MM-DD format (no year for privacy)
+    birthday_visibility TEXT DEFAULT 'contacts'  -- everyone, contacts, hidden
 );
 
 -- Handle history for tracking username changes
@@ -810,7 +813,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
-    priority TEXT NOT NULL DEFAULT 'info',    -- info, warning, critical
+    priority TEXT NOT NULL DEFAULT 'info',    -- info, warning, critical, celebration
     category TEXT NOT NULL DEFAULT 'system',  -- system, announcement, emergency
     scope TEXT NOT NULL DEFAULT 'local',      -- local, federated
     start_time TEXT NOT NULL,
@@ -983,3 +986,20 @@ CREATE TRIGGER IF NOT EXISTS pings_fts_update AFTER UPDATE ON pings BEGIN
     INSERT INTO pings_fts(pings_fts, rowid, id, content) VALUES ('delete', OLD.rowid, OLD.id, OLD.content);
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
 END;
+
+-- ============ Events Calendar (v2.40.0) ============
+CREATE TABLE IF NOT EXISTS events (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    event_date TEXT NOT NULL,
+    recurring INTEGER DEFAULT 0,
+    category TEXT DEFAULT 'general',
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);
+CREATE INDEX IF NOT EXISTS idx_events_recurring ON events(recurring);
+CREATE INDEX IF NOT EXISTS idx_users_birthday ON users(birthday) WHERE birthday IS NOT NULL;

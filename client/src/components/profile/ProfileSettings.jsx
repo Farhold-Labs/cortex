@@ -19,6 +19,7 @@ import ActivityLogPanel from '../admin/ActivityLogPanel.jsx';
 import CrawlBarAdminPanel from '../admin/CrawlBarAdminPanel.jsx';
 import AlertsAdminPanel from '../admin/AlertsAdminPanel.jsx';
 import AlertSubscriptionsPanel from '../admin/AlertSubscriptionsPanel.jsx';
+import EventsAdminPanel from '../admin/EventsAdminPanel.jsx';
 import FederationAdminPanel from '../admin/FederationAdminPanel.jsx';
 import HandleRequestsList from '../admin/HandleRequestsList.jsx';
 import BotsAdminPanel from '../admin/BotsAdminPanel.jsx';
@@ -34,6 +35,8 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
   const [avatar, setAvatar] = useState(user?.avatar || '');
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || null);
   const [bio, setBio] = useState(user?.bio || '');
+  const [birthday, setBirthday] = useState(user?.birthday || '');
+  const [birthdayVisibility, setBirthdayVisibility] = useState(user?.birthdayVisibility || 'contacts');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -500,7 +503,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
   const handleSaveProfile = async () => {
     try {
-      const updated = await fetchAPI('/profile', { method: 'PUT', body: { displayName, email, avatar, bio } });
+      const updated = await fetchAPI('/profile', { method: 'PUT', body: { displayName, email, avatar, bio, birthday: birthday || null, birthdayVisibility } });
       showToast(SUCCESS.profileUpdated, 'success');
       onUserUpdate?.(updated);
     } catch (err) {
@@ -737,6 +740,38 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
               resize: 'vertical',
             }}
           />
+        </div>
+
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+            BIRTHDAY <span style={{ color: 'var(--text-muted)' }}>(MM-DD)</span>
+          </label>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input
+              type="text"
+              value={birthday}
+              onChange={(e) => {
+                let val = e.target.value.replace(/[^0-9-]/g, '');
+                if (val.length === 2 && !val.includes('-') && birthday.length < val.length) val += '-';
+                setBirthday(val.slice(0, 5));
+              }}
+              maxLength={5}
+              placeholder="03-14"
+              style={{ ...inputStyle, width: '100px' }}
+            />
+            <select
+              value={birthdayVisibility}
+              onChange={(e) => setBirthdayVisibility(e.target.value)}
+              style={{ ...inputStyle, width: 'auto' }}
+            >
+              <option value="everyone">Visible to everyone</option>
+              <option value="contacts">Contacts only</option>
+              <option value="hidden">Hidden</option>
+            </select>
+          </div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
+            No year stored for privacy. Birthday alerts appear in the CrawlBar unless set to hidden.
+          </div>
         </div>
 
         <button onClick={handleSaveProfile} style={{
@@ -2103,6 +2138,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
               {/* Alerts Admin Panel */}
               <AlertsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'alerts'} onToggle={() => toggleAdminSection('alerts')} />
+
+              {/* Events Calendar Panel */}
+              <EventsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'events'} onToggle={() => toggleAdminSection('events')} />
 
               {/* Alert Subscriptions Panel */}
               <AlertSubscriptionsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'subscriptions'} onToggle={() => toggleAdminSection('subscriptions')} />

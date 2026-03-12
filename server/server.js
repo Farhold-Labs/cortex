@@ -27,6 +27,7 @@ import { storage } from './storage.js';
 import * as waveParticipationCrypto from './lib/wave-participation-crypto.js';
 import * as pushSubscriptionCrypto from './lib/push-subscription-crypto.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
+import { getCurrentHoliday } from './holidays.js';
 import admin from 'firebase-admin';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4487,7 +4488,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
     res.status(201).json({
       token,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } },
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' }, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
     });
   } catch (err) {
     console.error('Registration error:', err);
@@ -4579,7 +4580,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     res.json({
       token,
       requirePasswordChange,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: 'online', isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } },
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: 'online', isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' }, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -4590,7 +4591,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 app.get('/api/auth/me', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' }, accountStatus: user.accountStatus || 'active' });
+  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' }, accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility });
 });
 
 app.post('/api/auth/logout', authenticateToken, (req, res) => {
@@ -5875,10 +5876,30 @@ app.put('/api/profile', authenticateToken, (req, res) => {
     updates.email = email;
   }
 
+  // Birthday update with validation (v2.40.0)
+  if (req.body.birthday !== undefined) {
+    if (req.body.birthday === null || req.body.birthday === '') {
+      updates.birthday = null;
+    } else {
+      const birthdayRegex = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+      if (!birthdayRegex.test(req.body.birthday)) {
+        return res.status(400).json({ error: 'Birthday must be in MM-DD format' });
+      }
+      updates.birthday = req.body.birthday;
+    }
+  }
+
+  if (req.body.birthdayVisibility !== undefined) {
+    if (!['everyone', 'contacts', 'hidden'].includes(req.body.birthdayVisibility)) {
+      return res.status(400).json({ error: 'Birthday visibility must be everyone, contacts, or hidden' });
+    }
+    updates.birthdayVisibility = req.body.birthdayVisibility;
+  }
+
   const user = db.updateUser(req.user.userId, updates);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, preferences: user.preferences, bio: user.bio });
+  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, preferences: user.preferences, bio: user.bio, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility });
 });
 
 // Get public profile for any user (local or federated)
@@ -5894,6 +5915,7 @@ app.get('/api/users/:id/profile', authenticateToken, (req, res) => {
       avatar: user.avatar,
       avatarUrl: user.avatarUrl || null,
       bio: user.bio || null,
+      birthday: db.getUserBirthday(user.id, req.user.userId),
       createdAt: user.createdAt,
       isRemote: false,
     });
@@ -9696,8 +9718,8 @@ app.post('/api/admin/alerts', authenticateToken, async (req, res) => {
   if (!content || content.length > 1000) {
     return res.status(400).json({ error: 'Content is required (max 1000 characters)' });
   }
-  if (!['info', 'warning', 'critical'].includes(priority)) {
-    return res.status(400).json({ error: 'Priority must be info, warning, or critical' });
+  if (!['info', 'warning', 'critical', 'celebration'].includes(priority)) {
+    return res.status(400).json({ error: 'Priority must be info, warning, critical, or celebration' });
   }
   if (!['system', 'announcement', 'emergency'].includes(category)) {
     return res.status(400).json({ error: 'Category must be system, announcement, or emergency' });
@@ -9806,7 +9828,7 @@ app.put('/api/admin/alerts/:id', authenticateToken, async (req, res) => {
     });
   }
   if (priority !== undefined) {
-    if (!['info', 'warning', 'critical'].includes(priority)) {
+    if (!['info', 'warning', 'critical', 'celebration'].includes(priority)) {
       return res.status(400).json({ error: 'Invalid priority' });
     }
     updates.priority = priority;
@@ -10074,6 +10096,131 @@ app.delete('/api/admin/alert-subscriptions/:id', authenticateToken, async (req, 
   }
 
   db.deleteAlertSubscription(subscriptionId);
+  res.json({ success: true });
+});
+
+// ============ Events Calendar Endpoints (v2.40.0) ============
+
+// Get all events (admin only)
+app.get('/api/admin/events', authenticateToken, (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+  const { limit = 50, offset = 0 } = req.query;
+  const events = db.getAllEvents({
+    limit: parseInt(limit, 10),
+    offset: parseInt(offset, 10)
+  });
+
+  res.json({ events });
+});
+
+// Create event (admin only)
+app.post('/api/admin/events', authenticateToken, (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+  const { title, description, eventDate, recurring, category } = req.body;
+
+  if (!title || title.length > 100) {
+    return res.status(400).json({ error: 'Title is required (max 100 characters)' });
+  }
+  if (description && description.length > 500) {
+    return res.status(400).json({ error: 'Description max 500 characters' });
+  }
+  if (!eventDate) {
+    return res.status(400).json({ error: 'Event date is required' });
+  }
+
+  // Validate date format: MM-DD for recurring, YYYY-MM-DD for one-time
+  const mmddRegex = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+  const fullDateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+  if (recurring) {
+    if (!mmddRegex.test(eventDate)) {
+      return res.status(400).json({ error: 'Recurring events must use MM-DD format' });
+    }
+  } else {
+    if (!fullDateRegex.test(eventDate)) {
+      return res.status(400).json({ error: 'One-time events must use YYYY-MM-DD format' });
+    }
+  }
+
+  const event = db.createEvent({
+    title: sanitizeInput(title.trim()),
+    description: description ? sanitizeInput(description.trim()) : null,
+    eventDate,
+    recurring: !!recurring,
+    category: category || 'general',
+    createdBy: admin.id,
+  });
+
+  console.log(`📅 Event created: "${event.title}" by ${admin.handle}`);
+  res.status(201).json({ event });
+});
+
+// Update event (admin only)
+app.put('/api/admin/events/:id', authenticateToken, (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+  const eventId = req.params.id;
+  const existing = db.getEvent(eventId);
+  if (!existing) {
+    return res.status(404).json({ error: 'Event not found' });
+  }
+
+  const { title, description, eventDate, recurring, category } = req.body;
+  const updates = {};
+
+  if (title !== undefined) {
+    if (title.length > 100) {
+      return res.status(400).json({ error: 'Title max 100 characters' });
+    }
+    updates.title = sanitizeInput(title.trim());
+  }
+  if (description !== undefined) {
+    if (description && description.length > 500) {
+      return res.status(400).json({ error: 'Description max 500 characters' });
+    }
+    updates.description = description ? sanitizeInput(description.trim()) : null;
+  }
+  if (eventDate !== undefined) {
+    const mmddRegex = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+    const fullDateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+    const isRecurring = recurring !== undefined ? recurring : existing.recurring;
+    if (isRecurring) {
+      if (!mmddRegex.test(eventDate)) {
+        return res.status(400).json({ error: 'Recurring events must use MM-DD format' });
+      }
+    } else {
+      if (!fullDateRegex.test(eventDate)) {
+        return res.status(400).json({ error: 'One-time events must use YYYY-MM-DD format' });
+      }
+    }
+    updates.eventDate = eventDate;
+  }
+  if (recurring !== undefined) updates.recurring = !!recurring;
+  if (category !== undefined) updates.category = category;
+
+  const event = db.updateEvent(eventId, updates);
+  console.log(`📅 Event updated: "${event.title}" by ${admin.handle}`);
+  res.json({ event });
+});
+
+// Delete event (admin only)
+app.delete('/api/admin/events/:id', authenticateToken, (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+  const eventId = req.params.id;
+  const event = db.getEvent(eventId);
+  if (!event) {
+    return res.status(404).json({ error: 'Event not found' });
+  }
+
+  db.deleteEvent(eventId);
+  console.log(`🗑️ Event deleted: "${event.title}" by ${admin.handle}`);
   res.json({ success: true });
 });
 
@@ -18542,4 +18689,83 @@ server.listen(PORT, () => {
     }
   }, RETENTION_CLEANUP_INTERVAL);
   console.log(`🔐 Privacy retention enabled (activity: ${ACTIVITY_LOG_RETENTION_DAYS}d, sessions: ${SESSION_MAX_AGE_DAYS}d)`);
+
+  // ============ Daily Alert Generation (v2.40.0) ============
+  function generateDailyAlerts() {
+    try {
+      const now = new Date();
+      const todayMMDD = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const todayISO = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+
+      const activeAlerts = db.getAllAlerts({ status: 'active' });
+
+      // Holiday alerts
+      const holiday = getCurrentHoliday(now);
+      if (holiday) {
+        const alreadyExists = activeAlerts.some(a => a.title.includes(holiday.name) && a.category === 'announcement');
+        if (!alreadyExists) {
+          const holidayContent = {
+            elderxeke: `Happy ElderXeke Day! ✨ May the Bifrost aurora shine bright across Cortex today!`,
+          };
+          db.createAlert({
+            title: `${holiday.emoji} ${holiday.name} celebration is active!`,
+            content: holidayContent[holiday.id] || `Happy ${holiday.name}!`,
+            priority: 'celebration',
+            category: 'announcement',
+            scope: 'local',
+            startTime: holiday.start.toISOString(),
+            endTime: holiday.end.toISOString(),
+            createdBy: null,
+          });
+          console.log(`🎉 Holiday alert created: ${holiday.name}`);
+        }
+      }
+
+      // Birthday alerts
+      const birthdays = db.getTodaysBirthdays(todayMMDD);
+      for (const bday of birthdays) {
+        const alreadyExists = activeAlerts.some(a => a.title.includes(bday.handle) && a.title.includes('Birthday'));
+        if (!alreadyExists) {
+          db.createAlert({
+            title: `Happy Birthday @${bday.handle}!`,
+            content: `Wishing ${bday.display_name || bday.handle} a wonderful birthday! 🎂`,
+            priority: 'celebration',
+            category: 'announcement',
+            scope: 'local',
+            startTime: todayStart,
+            endTime: todayEnd,
+            createdBy: null,
+          });
+          console.log(`🎂 Birthday alert created for @${bday.handle}`);
+        }
+      }
+
+      // Event alerts
+      const todayEvents = db.getTodaysEvents(todayISO, todayMMDD);
+      for (const evt of todayEvents) {
+        const alreadyExists = activeAlerts.some(a => a.title.includes(evt.title) && a.startTime === todayStart);
+        if (!alreadyExists) {
+          db.createAlert({
+            title: evt.title,
+            content: evt.description || `Today: ${evt.title}`,
+            priority: 'celebration',
+            category: 'announcement',
+            scope: 'local',
+            startTime: todayStart,
+            endTime: todayEnd,
+            createdBy: evt.createdBy,
+          });
+          console.log(`📅 Event alert created: ${evt.title}`);
+        }
+      }
+    } catch (err) {
+      console.error('Daily alert generation error:', err.message);
+    }
+  }
+
+  generateDailyAlerts();
+  setInterval(generateDailyAlerts, 24 * 60 * 60 * 1000);
+  console.log('📆 Daily alert generation enabled');
 });
