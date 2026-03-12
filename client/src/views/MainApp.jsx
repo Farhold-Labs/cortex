@@ -92,6 +92,7 @@ function MainApp({ sharePingId }) {
   const [activeWatchParties, setActiveWatchParties] = useState({}); // Active watch parties by wave ID (v2.14.0)
   const [watchPartyPlayer, setWatchPartyPlayer] = useState(null); // { waveId, partyId } for open player (v2.14.0)
   const [activeThread, setActiveThread] = useState(null); // { waveId, rootMessage } for thread panel (v2.38.0)
+  const [moveSource, setMoveSource] = useState(null); // { messageId, waveId, preview } for move mode (v2.39.0)
   const [showGhostProtocol, setShowGhostProtocol] = useState(false); // Ghost Protocol modal (v2.27.0)
   const [ghostMode, setGhostMode] = useState(false); // Showing hidden waves (v2.27.0)
   const [ghostHasPin, setGhostHasPin] = useState(false); // Whether user has set a ghost PIN (v2.27.0)
@@ -520,7 +521,7 @@ function MainApp({ sharePingId }) {
     }
 
     // Handle both legacy (new_message) and new (new_ping) event names
-    if (data.type === 'new_message' || data.type === 'new_ping' || data.type === 'message_edited' || data.type === 'ping_edited' || data.type === 'message_deleted' || data.type === 'ping_deleted' || data.type === 'wave_created' || data.type === 'wave_updated' || data.type === 'message_reaction' || data.type === 'ping_reaction' || data.type === 'wave_invite_received' || data.type === 'wave_broadcast_received' || data.type === 'droplet_threaded') {
+    if (data.type === 'new_message' || data.type === 'new_ping' || data.type === 'message_edited' || data.type === 'ping_edited' || data.type === 'message_deleted' || data.type === 'ping_deleted' || data.type === 'wave_created' || data.type === 'wave_updated' || data.type === 'message_reaction' || data.type === 'ping_reaction' || data.type === 'wave_invite_received' || data.type === 'wave_broadcast_received' || data.type === 'droplet_threaded' || data.type === 'droplet_reparented') {
       loadWaves();
       // If the event is for the currently viewed wave, trigger a reload
       // Extract waveId from different event structures
@@ -1005,6 +1006,35 @@ function MainApp({ sharePingId }) {
   const handleCloseThread = useCallback(() => {
     setActiveThread(null);
   }, []);
+
+  // Move mode handlers (v2.39.0)
+  const handleStartMove = useCallback((message, waveId) => {
+    const preview = (message.content || '').replace(/<[^>]*>/g, '').slice(0, 50);
+    setMoveSource({ messageId: message.id, waveId, preview });
+  }, []);
+
+  const handleCancelMove = useCallback(() => {
+    setMoveSource(null);
+  }, []);
+
+  const handleCompleteMove = useCallback(async (targetMessageId) => {
+    if (!moveSource) return;
+    try {
+      const result = await fetchAPI(`/droplets/${moveSource.messageId}/reparent`, {
+        method: 'POST',
+        body: { newParentId: targetMessageId || null }
+      });
+      if (result.success) {
+        showToastMsg('Message moved');
+        setWaveReloadTrigger(prev => prev + 1);
+      } else {
+        showToastMsg(result.error || 'Failed to move message');
+      }
+    } catch (err) {
+      showToastMsg('Failed to move message');
+    }
+    setMoveSource(null);
+  }, [moveSource, fetchAPI, showToastMsg]);
 
   // Sync tab titles when waves data updates
   useEffect(() => {
@@ -1599,7 +1629,18 @@ function MainApp({ sharePingId }) {
                 </ErrorBoundary>
               ) : selectedWave ? (
                 // Normal Wave View + Thread Panel (v2.38.0)
-                <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+                  {/* Move mode banner (v2.39.0) */}
+                  {moveSource && moveSource.waveId === selectedWave.id && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px', background: 'var(--bg-surface)', borderBottom: '1px solid var(--accent-amber)', fontSize: '0.85rem', flexShrink: 0 }}>
+                      <span style={{ color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        Moving: "{moveSource.preview || '...'}"
+                      </span>
+                      <button onClick={() => handleCompleteMove(null)} style={{ background: 'none', border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>Move to Root</button>
+                      <button onClick={handleCancelMove} style={{ background: 'none', border: '1px solid var(--text-tertiary)', color: 'var(--text-tertiary)', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>Cancel</button>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                   {/* On mobile, hide WaveView when thread panel is open */}
                   {!(isMobile && activeThread && activeThread.waveId === selectedWave.id) && (
                   <ErrorBoundary key={activeTab?.id || selectedWave.id}>
@@ -1632,7 +1673,10 @@ function MainApp({ sharePingId }) {
                       onLeaveWatchParty={handleLeaveWatchParty}
                       onOpenWatchParty={(partyId) => handleOpenWatchParty(selectedWave?.id, partyId)}
                       onWatchPartiesChange={loadActiveWatchParties}
-                      onOpenThread={(msg) => handleOpenThread(selectedWave.id, msg)} />
+                      onOpenThread={(msg) => handleOpenThread(selectedWave.id, msg)}
+                      moveSource={moveSource}
+                      onStartMove={handleStartMove}
+                      onCompleteMove={handleCompleteMove} />
                   </ErrorBoundary>
                   )}
                   {activeThread && activeThread.waveId === selectedWave.id && (
@@ -1652,8 +1696,12 @@ function MainApp({ sharePingId }) {
                       mutedUsers={mutedUsers}
                       contacts={contacts}
                       onWaveUpdate={loadWaves}
+                      moveSource={moveSource}
+                      onStartMove={handleStartMove}
+                      onCompleteMove={handleCompleteMove}
                     />
                   )}
+                  </div>
                 </div>
               ) : !isMobile && (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--border-primary)' }}>

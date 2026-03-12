@@ -16845,6 +16845,10 @@ app.all('/api/pings/:id/thread', (req, res, next) => {
   req.url = `/api/droplets/${req.params.id}/thread`;
   req.app._router.handle(req, res, next);
 });
+app.all('/api/pings/:id/reparent', (req, res, next) => {
+  req.url = `/api/droplets/${req.params.id}/reparent`;
+  req.app._router.handle(req, res, next);
+});
 
 // ============ Droplet Routes (v1.10.0) ============
 // Note: /api/messages endpoints below are backward-compatible aliases
@@ -17147,6 +17151,38 @@ app.post('/api/droplets/:id/thread', authenticateToken, (req, res) => {
   broadcastToWave(waveId, { type: 'droplet_threaded', dropletId, waveId, threaded: newState, userId });
 
   res.json({ success: true, threaded: newState });
+});
+
+// ============ Message Reparent / Move (v2.39.0) ============
+
+app.post('/api/droplets/:id/reparent', authenticateToken, (req, res) => {
+  const dropletId = sanitizeInput(req.params.id);
+  const userId = req.user.userId;
+  const { newParentId } = req.body || {};
+
+  const droplet = db.getDroplet ? db.getDroplet(dropletId) : db.getMessage?.(dropletId);
+  if (!droplet) return res.status(404).json({ error: 'Message not found' });
+
+  const waveId = droplet.wave_id || droplet.waveId;
+
+  // Check wave access
+  const canAccess = canAccessWaveFromCache(waveId, userId);
+  if (!canAccess) return res.status(403).json({ error: 'Access denied' });
+
+  // Permission: author or moderator+
+  const authorId = droplet.author_id || droplet.authorId;
+  const requestingUser = db.findUserById(userId);
+  if (authorId !== userId && !hasRole(requestingUser, ROLES.MODERATOR)) {
+    return res.status(403).json({ error: 'Only the author or a moderator can move messages' });
+  }
+
+  const result = db.reparentPing(dropletId, newParentId ? sanitizeInput(newParentId) : null);
+  if (!result.success) return res.status(400).json({ error: result.error });
+
+  // Broadcast to wave participants
+  broadcastToWave(waveId, { type: 'droplet_reparented', dropletId, waveId, newParentId: newParentId || null, userId });
+
+  res.json({ success: true, ping: result.ping });
 });
 
 // Ripple/burst endpoints removed in v2.38.0 — replaced by threaded conversations

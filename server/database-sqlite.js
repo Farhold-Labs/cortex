@@ -6100,6 +6100,30 @@ export class DatabaseSQLite {
     return result.changes > 0;
   }
 
+  // v2.39.0: Reparent a message (move to new parent or root)
+  reparentPing(pingId, newParentId) {
+    const ping = this.db.prepare('SELECT * FROM pings WHERE id = ? AND deleted = 0').get(pingId);
+    if (!ping) return { success: false, error: 'Message not found' };
+
+    if (newParentId) {
+      const newParent = this.db.prepare('SELECT * FROM pings WHERE id = ? AND deleted = 0').get(newParentId);
+      if (!newParent) return { success: false, error: 'Target message not found' };
+      if (newParent.wave_id !== ping.wave_id) return { success: false, error: 'Cannot move to a different wave' };
+
+      // Cycle detection: walk ancestor chain from newParentId
+      let ancestorId = newParentId;
+      while (ancestorId) {
+        if (ancestorId === pingId) return { success: false, error: 'Cannot move a message under its own descendant' };
+        const ancestor = this.db.prepare('SELECT parent_id FROM pings WHERE id = ?').get(ancestorId);
+        ancestorId = ancestor ? ancestor.parent_id : null;
+      }
+    }
+
+    this.db.prepare('UPDATE pings SET parent_id = ? WHERE id = ?').run(newParentId || null, pingId);
+    const updated = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
+    return { success: true, ping: updated };
+  }
+
   updateDroplet(dropletId, content) {
     const droplet = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(dropletId);
     if (!droplet || droplet.deleted) return null;
