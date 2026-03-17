@@ -518,18 +518,18 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
   }, [privateKey, publicKeyBase64, fetchAPI]);
 
-  // ============ Encrypt/Decrypt Droplets ============
-  const encryptDroplet = useCallback(async (content, waveId) => {
+  // ============ Encrypt/Decrypt Pings ============
+  const encryptPing = useCallback(async (content, waveId) => {
     const waveKey = await getWaveKey(waveId);
     if (!waveKey) {
       throw new Error('Wave key not found');
     }
 
-    const { ciphertext, nonce } = await crypto.encryptDroplet(content, waveKey);
+    const { ciphertext, nonce } = await crypto.encryptPing(content, waveKey);
     return { ciphertext, nonce };
   }, [getWaveKey]);
 
-  const decryptDroplet = useCallback(async (ciphertext, nonce, waveId, keyVersion = null) => {
+  const decryptPing = useCallback(async (ciphertext, nonce, waveId, keyVersion = null) => {
     // For key rotation: may need to get specific version
     let waveKey;
 
@@ -560,7 +560,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       throw new Error('Wave key not found');
     }
 
-    return crypto.decryptDroplet(ciphertext, nonce, waveKey);
+    return crypto.decryptPing(ciphertext, nonce, waveKey);
   }, [getWaveKey, fetchAPI, privateKey]);
 
   // ============ Audio Encryption (v2.3.0) ============
@@ -719,7 +719,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
   }, [privateKey, publicKeyBase64, fetchAPI]);
 
-  // Encrypt a batch of droplets from a legacy wave
+  // Encrypt a batch of pings from a legacy wave
   const encryptLegacyWaveBatch = useCallback(async (waveId, batchSize = 50) => {
     if (!privateKey) {
       throw new Error('E2EE not unlocked');
@@ -732,25 +732,26 @@ export function E2EEProvider({ children, token, API_URL }) {
         throw new Error('Wave key not found - enable encryption first');
       }
 
-      // Fetch unencrypted droplets
-      const res = await fetchAPI(`/waves/${waveId}/unencrypted-droplets?limit=${batchSize}`);
+      // Fetch unencrypted pings
+      const res = await fetchAPI(`/waves/${waveId}/unencrypted-pings?limit=${batchSize}`);
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || 'Failed to fetch unencrypted droplets');
+        throw new Error(err.error || 'Failed to fetch unencrypted pings');
       }
 
-      const { droplets, hasMore, remaining } = await res.json();
+      const data = await res.json();
+      const unencryptedPings = data.pings || data.droplets || [];
 
-      if (droplets.length === 0) {
+      if (unencryptedPings.length === 0) {
         return { success: true, encrypted: 0, hasMore: false, remaining: 0 };
       }
 
-      // Encrypt each droplet
-      const encryptedDroplets = await Promise.all(
-        droplets.map(async (droplet) => {
-          const { ciphertext, nonce } = await crypto.encryptDroplet(droplet.content, waveKey);
+      // Encrypt each ping
+      const encryptedPings = await Promise.all(
+        unencryptedPings.map(async (ping) => {
+          const { ciphertext, nonce } = await crypto.encryptPing(ping.content, waveKey);
           return {
-            id: droplet.id,
+            id: ping.id,
             content: ciphertext,
             nonce
           };
@@ -761,24 +762,24 @@ export function E2EEProvider({ children, token, API_URL }) {
       const cached = waveKeyCacheRef.current.get(waveId);
       const keyVersion = cached?.version || 1;
 
-      // Send encrypted droplets to server
-      const uploadRes = await fetchAPI(`/waves/${waveId}/encrypt-droplets`, {
+      // Send encrypted pings to server
+      const uploadRes = await fetchAPI(`/waves/${waveId}/encrypt-pings`, {
         method: 'POST',
         body: JSON.stringify({
-          droplets: encryptedDroplets,
+          pings: encryptedPings,
           keyVersion
         })
       });
 
       if (!uploadRes.ok) {
         const err = await uploadRes.json();
-        throw new Error(err.error || 'Failed to upload encrypted droplets');
+        throw new Error(err.error || 'Failed to upload encrypted pings');
       }
 
       const result = await uploadRes.json();
       return {
         success: true,
-        encrypted: encryptedDroplets.length,
+        encrypted: encryptedPings.length,
         hasMore: result.hasMore,
         remaining: result.remaining,
         progress: result.progress,
@@ -1079,9 +1080,9 @@ export function E2EEProvider({ children, token, API_URL }) {
     enableWaveEncryption,
     encryptLegacyWaveBatch,
 
-    // Droplet operations
-    encryptDroplet,
-    decryptDroplet,
+    // Ping operations
+    encryptPing,
+    decryptPing,
 
     // Audio operations (v2.3.0)
     encryptAudioChunk,

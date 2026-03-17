@@ -9,7 +9,7 @@ const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const STORES = {
   WAVES: 'waves',
   WAVE_LIST: 'waveList',
-  DROPLETS: 'pings',
+  PINGS: 'pings',
   METADATA: 'metadata',
 };
 
@@ -47,8 +47,8 @@ async function openDatabase() {
       }
 
       // Pings store - keyed by ping ID
-      if (!db.objectStoreNames.contains(STORES.DROPLETS)) {
-        const pingStore = db.createObjectStore(STORES.DROPLETS, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(STORES.PINGS)) {
+        const pingStore = db.createObjectStore(STORES.PINGS, { keyPath: 'id' });
         pingStore.createIndex('waveId', 'waveId');
         pingStore.createIndex('timestamp', 'timestamp');
       }
@@ -184,8 +184,8 @@ export async function invalidateWave(waveId) {
 export async function cachePings(waveId, pings) {
   try {
     const db = await openDatabase();
-    const transaction = db.transaction(STORES.DROPLETS, 'readwrite');
-    const store = transaction.objectStore(STORES.DROPLETS);
+    const transaction = db.transaction(STORES.PINGS, 'readwrite');
+    const store = transaction.objectStore(STORES.PINGS);
     const timestamp = Date.now();
 
     for (const ping of pings) {
@@ -214,8 +214,8 @@ export async function getCachedPings(waveId) {
   try {
     const db = await openDatabase();
     return new Promise((resolve) => {
-      const transaction = db.transaction(STORES.DROPLETS, 'readonly');
-      const store = transaction.objectStore(STORES.DROPLETS);
+      const transaction = db.transaction(STORES.PINGS, 'readonly');
+      const store = transaction.objectStore(STORES.PINGS);
       const index = store.index('waveId');
       const request = index.getAll(waveId);
 
@@ -269,8 +269,8 @@ export async function clearOldCache() {
 
     // Clear pings
     await new Promise((resolve) => {
-      const transaction = db.transaction(STORES.DROPLETS, 'readwrite');
-      const store = transaction.objectStore(STORES.DROPLETS);
+      const transaction = db.transaction(STORES.PINGS, 'readwrite');
+      const store = transaction.objectStore(STORES.PINGS);
       const index = store.index('timestamp');
       const range = IDBKeyRange.upperBound(cutoffTime);
       const request = index.openCursor(range);
@@ -333,7 +333,7 @@ export async function getCacheStatus() {
     return {
       waveListCached: counts[STORES.WAVE_LIST] > 0,
       wavesCached: counts[STORES.WAVES],
-      pingsCached: counts[STORES.DROPLETS],
+      pingsCached: counts[STORES.PINGS],
     };
   } catch (error) {
     console.warn('[WaveCache] Failed to get cache status:', error);

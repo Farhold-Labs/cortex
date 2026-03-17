@@ -598,7 +598,7 @@ export function LegacyWaveNotice({ isCreator, onEnableEncryption, isEnabling }) 
     <div style={containerStyle}>
       <div style={contentStyle}>
         <span style={textStyle}>
-          This wave predates end-to-end encryption. {isCreator ? 'Enable encryption to secure existing and future droplets.' : 'New droplets are not encrypted.'}
+          This wave predates end-to-end encryption. {isCreator ? 'Enable encryption to secure existing and future messages.' : 'New messages are not encrypted.'}
         </span>
         {isCreator && onEnableEncryption && (
           <button
