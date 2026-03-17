@@ -5,6 +5,47 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.41.0] - 2026-03-16
+
+### Added
+
+#### Reaction Notifications
+- In-app and push notifications when someone reacts to your message
+- Shows who reacted, which emoji, and in which wave
+- New `reaction` notification type in notification bell (♡ icon, pink accent)
+- Configurable in profile notification settings (always / app closed / never)
+- Self-reactions and reaction removals do not trigger notifications
+- Added `reactions: 'always'` to default notification preferences
+- Added `reaction` to `shouldCreateNotification` preference key map
+
+#### Scroll-to-Ping Navigation
+- Added `?around=` query parameter to `GET /api/waves/:id`
+- Loads 50 messages centered on a target ping instead of the most recent 50
+- Notification clicks now correctly navigate to older messages behind the "load more" blocker
+- Search result clicks now correctly navigate to older messages behind the "load more" blocker
+- Infinite loop protection via `scrollToAroundAttemptedRef` (gives up if ping not found after one reload)
+
+### Fixed
+
+#### Notification Click Navigation
+- Fixed notification clicks not scrolling to the target message
+- Root cause: API returned `dropletId` field but client expected `pingId`
+- Fixed service worker `navigate-to-wave` postMessage sending wrong field name (`dropletId` → `pingId`)
+
+### Changed
+
+#### Notification Nomenclature Cleanup
+- `createNotification()` parameter and return field: `dropletId` → `pingId`
+- `getNotifications()` return field: `dropletId` → `pingId`
+- `getPendingNotifications()` return field: `dropletId` → `pingId`
+- `markNotificationsReadByDroplet()` → `markNotificationsReadByPing()`
+- `createDropletNotifications()` → `createPingNotifications()`
+- Wave activity notification title: "New droplet in" → "New message in"
+
+#### Holiday Date Adjustments
+- Valentine's Day: trimmed from 4 days to 3 (Feb 13–15)
+- St Patrick's Day: trimmed from 4 days to 3 (Mar 16–18)
+
 ## [2.36.0] - 2026-03-05
 
 ### Added
