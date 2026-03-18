@@ -395,6 +395,15 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const scrollToAroundAttemptedRef = useRef(null); // Track around-reload to prevent infinite loops
   const userActionInProgressRef = useRef(false); // Suppress WebSocket reloads during user actions
 
+  // Auto-focus composer when wave opens (desktop only — avoids mobile keyboard popup)
+  useEffect(() => {
+    if (!isMobile) {
+      setTimeout(() => {
+        composerRef.current?.focus();
+      }, 100);
+    }
+  }, []);
+
   useEffect(() => {
     loadWave();
     hasMarkedAsReadRef.current = false; // Reset when switching waves
@@ -731,17 +740,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     }
   }, [replyingTo, isMobile]);
 
-  // Auto-focus textarea when replying
+  // Auto-focus composer when replying
   useEffect(() => {
-    if (replyingTo && textareaRef.current) {
+    if (replyingTo) {
       setTimeout(() => {
-        const textarea = textareaRef.current;
-        if (textarea) {
-          textarea.focus();
-          const length = textarea.value.length;
-          textarea.setSelectionRange(length, length);
-        }
-      }, 150);
+        composerRef.current?.focus();
+      }, 50);
     }
   }, [replyingTo]);
 

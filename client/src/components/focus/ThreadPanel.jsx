@@ -44,6 +44,15 @@ const ThreadPanel = ({
   const lastTypingSentRef = useRef(null);
   const panelRef = useRef(null);
 
+  // Auto-focus composer when thread opens (desktop only — avoids mobile keyboard popup)
+  useEffect(() => {
+    if (!isMobile) {
+      setTimeout(() => {
+        composerRef.current?.focus();
+      }, 100);
+    }
+  }, []);
+
   // Update liveRoot when rootMessage prop changes
   useEffect(() => {
     setLiveRoot(rootMessage);
