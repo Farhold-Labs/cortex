@@ -2474,7 +2474,7 @@ class Database {
 
     const byWave = {};
     // Priority: direct_mention > reply > burst > wave_activity
-    const typePriority = { direct_mention: 4, reply: 3, burst: 2, ripple: 2, wave_activity: 1 };
+    const typePriority = { direct_mention: 4, reply: 3, burst: 2, wave_activity: 1 };
 
     for (const n of unread) {
       if (!byWave[n.waveId]) {
@@ -18232,7 +18232,6 @@ function shouldCreateNotification(userId, notificationType) {
     reaction: 'reactions',
     wave_activity: 'waveActivity',
     burst: 'burstEvents',
-    ripple: 'burstEvents', // Legacy
   };
 
   const prefKey = prefKeyMap[notificationType];
@@ -18446,7 +18445,6 @@ const EVENT_ALIASES = {
   'droplet_reaction': 'ping_reaction',
   'droplet_threaded': 'ping_threaded',
   'droplet_reparented': 'ping_reparented',
-  'droplet_rippled': 'ping_burst',
   'group_invitation_received': 'crew_invitation_received',
   'group_invitation_accepted': 'crew_invitation_accepted',
   'group_invitation_declined': 'crew_invitation_declined',

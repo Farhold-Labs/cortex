@@ -6599,7 +6599,7 @@ export class DatabaseSQLite {
 
     const byWave = {};
     // Priority: direct_mention > reply > burst > wave_activity
-    const typePriority = { direct_mention: 4, reply: 3, burst: 2, ripple: 2, wave_activity: 1 };
+    const typePriority = { direct_mention: 4, reply: 3, burst: 2, wave_activity: 1 };
 
     for (const r of rows) {
       if (!byWave[r.wave_id]) {

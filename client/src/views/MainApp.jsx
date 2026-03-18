@@ -696,7 +696,7 @@ function MainApp({ sharePingId }) {
             console.log('🔕 Suppressed browser notification (viewing wave)');
           } else {
             // Check app_closed level: skip popup if tab is visible
-            const typeToKey = { direct_mention: 'directMentions', reply: 'replies', wave_activity: 'waveActivity', ripple: 'burstEvents', burst: 'burstEvents' };
+            const typeToKey = { direct_mention: 'directMentions', reply: 'replies', wave_activity: 'waveActivity', burst: 'burstEvents' };
             const prefKey = typeToKey[notif.type];
             const level = prefKey ? (prefs[prefKey] || 'always') : 'always';
             const tabVisible = document.visibilityState === 'visible';
