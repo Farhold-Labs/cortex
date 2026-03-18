@@ -2473,8 +2473,8 @@ class Database {
       .filter(n => n.userId === userId && !n.read && !n.dismissed && n.waveId);
 
     const byWave = {};
-    // Priority: direct_mention > reply > ripple > wave_activity
-    const typePriority = { direct_mention: 4, reply: 3, ripple: 2, wave_activity: 1 };
+    // Priority: direct_mention > reply > burst > wave_activity
+    const typePriority = { direct_mention: 4, reply: 3, burst: 2, wave_activity: 1 };
 
     for (const n of unread) {
       if (!byWave[n.waveId]) {
@@ -3303,7 +3303,7 @@ class Database {
     return { success: true, wave, participants };
   }
 
-  // breakoutDroplet/rippleDroplet removed in v2.38.0 — replaced by threads
+  // breakoutPing/ripplePing removed in v2.38.0 — replaced by threads
 
   // === Message Methods ===
   getMessagesForWave(waveId, userId = null) {
@@ -3378,7 +3378,7 @@ class Database {
     };
   }
 
-  // getDropletsForBreakoutWave removed in v2.38.0 — replaced by threads
+  // getPingsForBreakoutWave removed in v2.38.0 — replaced by threads
 
   createMessage(data) {
     const now = new Date().toISOString();
@@ -3878,7 +3878,7 @@ class Database {
     return this.waves.waves.find(w => w.originNode === originNode && w.originWaveId === originWaveId) || null;
   }
 
-  // ============ Federation - Remote Droplets Methods ============
+  // ============ Federation - Remote Pings Methods ============
 
   getRemoteDroplet(id) {
     const data = this.loadFile(DATA_FILES.federation, { identity: null, nodes: [], remoteUsers: [], waveFederation: [], remoteDroplets: [], queue: [], inboxLog: [] });
@@ -6606,7 +6606,7 @@ app.get('/api/notifications/count', authenticateToken, (req, res) => {
   res.json(counts);
 });
 
-// Get unread notification counts by wave (for ripple activity badges)
+// Get unread notification counts by wave (for activity badges)
 app.get('/api/notifications/by-wave', authenticateToken, (req, res) => {
   const countsByWave = db.getUnreadCountsByWave(req.user.userId);
   res.json({ countsByWave });
@@ -10577,16 +10577,9 @@ app.post('/api/bot/ping', authenticateBotToken, botLimiter, (req, res) => {
     db.updateBotStats(req.bot.id, 'ping');
 
     // Broadcast to wave participants (ping already has bot info from createMessage)
-    broadcastToWave(waveId, {
-      type: 'new_droplet',
-      data: ping,
-    });
-
-    // Also broadcast legacy event
-    broadcastToWave(waveId, {
-      type: 'new_message',
-      data: ping,
-    });
+    broadcastToWave(waveId, { type: 'new_ping', data: ping });
+    broadcastToWave(waveId, { type: 'new_droplet', data: ping }); // Legacy
+    broadcastToWave(waveId, { type: 'new_message', data: ping }); // Legacy
 
     // Trigger outgoing webhooks (async, non-blocking)
     triggerWaveWebhooks(waveId, { ...ping, isBot: true }, wave);
@@ -10642,7 +10635,7 @@ app.get('/api/bot/waves/:id', authenticateBotToken, botLimiter, (req, res) => {
     const participants = db.getWaveParticipants(waveId);
 
     // Get recent pings (limit 50)
-    const pings = db.getWaveDroplets(waveId, 50);
+    const pings = db.getPingsForWave?.(waveId) || db.getMessagesForWave(waveId);
 
     // If encrypted, include bot's wave key
     let waveKey = null;
@@ -10775,8 +10768,9 @@ app.post('/api/webhooks/:botId/:webhookSecret', express.json({ limit: '50kb' }),
     db.updateBotStats(botId, 'ping');
 
     // Broadcast (ping already has bot info from createMessage)
-    broadcastToWave(waveId, { type: 'new_droplet', data: ping });
-    broadcastToWave(waveId, { type: 'new_message', data: ping });
+    broadcastToWave(waveId, { type: 'new_ping', data: ping });
+    broadcastToWave(waveId, { type: 'new_droplet', data: ping }); // Legacy
+    broadcastToWave(waveId, { type: 'new_message', data: ping }); // Legacy
 
     // Trigger outgoing webhooks (async, non-blocking)
     triggerWaveWebhooks(waveId, { ...ping, isBot: true }, wave);
@@ -11147,18 +11141,18 @@ app.post('/api/webhooks/:webhookId/test', authenticateToken, async (req, res) =>
 
 // ============ Share Routes (v1.17.0) ============
 
-// GET /share/:dropletId - HTML page with Open Graph meta tags for social sharing
+// GET /share/:pingId - HTML page with Open Graph meta tags for social sharing
 // This is a PUBLIC endpoint (no auth required) to allow social media crawlers to fetch previews
-app.get('/share/:dropletId', async (req, res) => {
-  const dropletId = sanitizeInput(req.params.dropletId);
+app.get('/share/:pingId', async (req, res) => {
+  const pingId = sanitizeInput(req.params.pingId);
 
-  const droplet = db.getDroplet(dropletId);
-  const wave = droplet ? db.getWave(droplet.wave_id) : null;
-  const author = droplet ? db.findUserById(droplet.author_id) : null;
+  const ping = db.getPing(pingId);
+  const wave = ping ? db.getWave(ping.wave_id) : null;
+  const author = ping ? db.findUserById(ping.author_id) : null;
   const isPublic = wave?.privacy === 'public';
 
   // Strip HTML tags from content for meta description
-  const plainContent = (droplet?.content || '')
+  const plainContent = (ping?.content || '')
     .replace(/<[^>]*>/g, '')
     .substring(0, 200);
 
@@ -11172,7 +11166,7 @@ app.get('/share/:dropletId', async (req, res) => {
   const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
   const host = req.headers['x-forwarded-host'] || req.get('host');
   const baseUrl = process.env.BASE_URL || `${protocol}://${host}`;
-  const shareUrl = `${baseUrl}/share/${dropletId}`;
+  const shareUrl = `${baseUrl}/share/${pingId}`;
   const logoUrl = `${baseUrl}/icons/icon-512.png`;
 
   const html = `<!DOCTYPE html>
@@ -11198,7 +11192,7 @@ app.get('/share/:dropletId', async (req, res) => {
 
   <!-- Redirect to app -->
   <script>
-    window.location.href = '/?share=${dropletId}';
+    window.location.href = '/?share=${pingId}';
   </script>
   <style>
     body {
@@ -11223,7 +11217,7 @@ app.get('/share/:dropletId', async (req, res) => {
 <body>
   <div class="container">
     <p>Redirecting to Cortex...</p>
-    <p><a href="/?share=${dropletId}">Click here if not redirected</a></p>
+    <p><a href="/?share=${pingId}">Click here if not redirected</a></p>
   </div>
 </body>
 </html>`;
@@ -11231,19 +11225,19 @@ app.get('/share/:dropletId', async (req, res) => {
   res.type('html').send(html);
 });
 
-// GET /api/share/:dropletId - JSON endpoint for shared droplet data
+// GET /api/share/:pingId - JSON endpoint for shared ping data
 // This is a PUBLIC endpoint (no auth required for public waves)
-app.get('/api/share/:dropletId', async (req, res) => {
-  const dropletId = sanitizeInput(req.params.dropletId);
+app.get('/api/share/:pingId', async (req, res) => {
+  const pingId = sanitizeInput(req.params.pingId);
 
-  // Get droplet
-  const droplet = db.getDroplet(dropletId);
-  if (!droplet) {
-    return res.status(404).json({ error: 'Droplet not found' });
+  // Get ping
+  const ping = db.getPing(pingId);
+  if (!ping) {
+    return res.status(404).json({ error: 'Message not found' });
   }
 
   // Get wave info (use wave_id from database)
-  const wave = db.getWave(droplet.wave_id);
+  const wave = db.getWave(ping.wave_id);
   if (!wave) {
     return res.status(404).json({ error: 'Wave not found' });
   }
@@ -11252,14 +11246,19 @@ app.get('/api/share/:dropletId', async (req, res) => {
   const isPublic = wave.privacy === 'public';
 
   // Get author info (use author_id from database)
-  const author = db.findUserById(droplet.author_id);
+  const author = db.findUserById(ping.author_id);
 
   // Return share data (limited info for privacy)
   res.json({
-    droplet: {
-      id: droplet.id,
-      content: isPublic ? droplet.content : null,
-      createdAt: droplet.created_at,
+    ping: {
+      id: ping.id,
+      content: isPublic ? ping.content : null,
+      createdAt: ping.created_at,
+    },
+    droplet: { // Legacy alias
+      id: ping.id,
+      content: isPublic ? ping.content : null,
+      createdAt: ping.created_at,
     },
     wave: {
       id: wave.id,
@@ -12838,17 +12837,17 @@ function parseFederatedIdentifier(identifier) {
   return null;
 }
 
-// Helper to send a droplet to all federated nodes on a wave
-// Called when a droplet is created, edited, or deleted on an origin wave
+// Helper to send a ping to all federated nodes on a wave
+// Called when a ping is created, edited, or deleted on an origin wave
 // Uses optimistic send (try immediately) with queue fallback on failure
-async function sendDropletToFederatedNodes(waveId, messageType, payload) {
+async function sendPingToFederatedNodes(waveId, messageType, payload) {
   if (!FEDERATION_ENABLED) return;
 
   // Get all federated nodes for this wave
   const federationNodes = db.getWaveFederationNodes(waveId);
   if (!federationNodes || federationNodes.length === 0) return;
 
-  const messageId = `${messageType}-${payload.droplet?.id || payload.dropletId}-${Date.now()}`;
+  const messageId = `${messageType}-${payload.ping?.id || payload.pingId}-${Date.now()}`;
 
   for (const fed of federationNodes) {
     const node = db.getFederationNodeByName(fed.nodeName);
@@ -12981,11 +12980,11 @@ app.post('/api/admin/federation/decoy', authenticateToken, (req, res) => {
 // Initialize or update server identity (admin only)
 // TODO: UUID collision risk when cloning databases
 // If a production database is cloned to set up a new server, all UUIDs (users, waves,
-// droplets) will be identical on both servers. The federation design assumes UUIDs are
+// pings) will be identical on both servers. The federation design assumes UUIDs are
 // globally unique - collisions would cause:
 // - User ID conflicts (same UUID = different people on different servers)
 // - Wave ID conflicts (federation state confusion)
-// - Droplet deduplication failures or incorrect message merging
+// - Ping deduplication failures or incorrect message merging
 // Potential safeguards:
 // 1. Document: "Don't clone databases between federated servers"
 // 2. Add validation: refuse to federate if remote has matching origin_wave_ids
@@ -13700,11 +13699,11 @@ app.post('/api/federation/inbox/accept', federationRequestLimiter, authenticateF
   db.recordFederationContact(node.id, true);
 
   // TODO: Federation catch-up/backfill mechanism
-  // When federation is re-established after a disconnection, droplets created during
+  // When federation is re-established after a disconnection, pings created during
   // the downtime are not synced. For robustness (e.g., server failure recovery), consider:
-  // 1. Sync on reconnection - request droplets newer than last sync point for shared waves
+  // 1. Sync on reconnection - request pings newer than last sync point for shared waves
   // 2. Admin resync button - manual option to request full wave resync
-  // 3. Version vectors - track last-seen droplet timestamps per wave per node
+  // 3. Version vectors - track last-seen ping timestamps per wave per node
   // This would require a new endpoint like GET /api/federation/waves/:id/sync?since=timestamp
 
   console.log(`✅ Federation request to ${sourceNode.nodeName} was accepted`);
@@ -13850,10 +13849,11 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
       case 'wave_broadcast': {
         // Handle public/cross-server wave broadcast from origin server
         // This creates a participant wave visible to all users on this server
-        // payload: { wave, participants, droplets }
+        // payload: { wave, participants, pings/droplets }
         console.log(`📢 Received wave_broadcast from ${sourceNode.nodeName}`);
 
-        const { wave, participants, droplets } = payload;
+        const { wave, participants, pings: broadcastPings, droplets: legacyDroplets } = payload;
+        const broadcastMessages = broadcastPings || legacyDroplets;
         if (!wave) {
           console.error('Invalid wave_broadcast payload');
           break;
@@ -13903,11 +13903,11 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             }
           }
 
-          // Cache existing droplets from the broadcast
-          if (droplets && Array.isArray(droplets)) {
-            console.log(`📥 Caching ${droplets.length} existing droplets from wave broadcast`);
-            for (const d of droplets) {
-              // Cache the droplet author if remote
+          // Cache existing pings from the broadcast
+          if (broadcastMessages && Array.isArray(broadcastMessages)) {
+            console.log(`📥 Caching ${broadcastMessages.length} existing pings from wave broadcast`);
+            for (const d of broadcastMessages) {
+              // Cache the ping author if remote
               if (d.author && d.author.nodeName) {
                 db.cacheRemoteUser({
                   id: d.author.id,
@@ -13925,8 +13925,8 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
                 try { reactions = JSON.parse(reactions); } catch { reactions = {}; }
               }
 
-              // Cache the droplet
-              db.cacheRemoteDroplet({
+              // Cache the ping
+              db.cacheRemotePing({
                 id: d.id,
                 waveId: localWave.id,
                 originWaveId: wave.id,
@@ -13974,14 +13974,16 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         break;
       }
 
-      case 'new_droplet': {
-        // Handle new droplet from federated wave
-        // payload: { droplet, originWaveId, author }
-        console.log(`📨 Received new_droplet from ${sourceNode.nodeName}`);
+      case 'new_droplet':
+      case 'new_ping': {
+        // Handle new ping from federated wave
+        // payload: { ping/droplet, originWaveId, author }
+        console.log(`📨 Received ${type} from ${sourceNode.nodeName}`);
 
-        const { droplet, originWaveId, author } = payload;
-        if (!droplet || !originWaveId) {
-          console.error('Invalid new_droplet payload');
+        const { ping: incomingPing, droplet: legacyPing, originWaveId, author } = payload;
+        const fedPing = incomingPing || legacyPing;
+        if (!fedPing || !originWaveId) {
+          console.error(`Invalid ${type} payload`);
           break;
         }
 
@@ -14000,7 +14002,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         }
 
         if (!localWave) {
-          console.error(`new_droplet: No local wave found for origin ${originWaveId} from ${sourceNode.nodeName}`);
+          console.error(`${type}: No local wave found for origin ${originWaveId} from ${sourceNode.nodeName}`);
           break;
         }
 
@@ -14017,26 +14019,26 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           });
         }
 
-        // Cache the remote droplet
-        const cachedDroplet = db.cacheRemoteDroplet({
-          id: droplet.id,
+        // Cache the remote ping
+        const cachedPing = db.cacheRemotePing({
+          id: fedPing.id,
           waveId: localWave.id,
           originWaveId,
           originNode: author?.nodeName || sourceNode.nodeName,
-          authorId: author?.id || droplet.authorId,
+          authorId: author?.id || fedPing.authorId,
           authorNode: author?.nodeName || sourceNode.nodeName,
-          parentId: droplet.parentId,
-          content: droplet.content,
-          createdAt: droplet.createdAt,
-          editedAt: droplet.editedAt,
-          reactions: droplet.reactions,
+          parentId: fedPing.parentId,
+          content: fedPing.content,
+          createdAt: fedPing.createdAt,
+          editedAt: fedPing.editedAt,
+          reactions: fedPing.reactions,
         });
 
         // Broadcast to local WebSocket clients on this wave
         broadcastToWave(localWave.id, {
-          type: 'new_droplet',
-          droplet: {
-            ...cachedDroplet,
+          type: 'new_ping',
+          ping: {
+            ...cachedPing,
             sender_name: author?.displayName || 'Unknown',
             sender_handle: author?.handle || 'unknown',
             sender_avatar: author?.avatar || '?',
@@ -14045,9 +14047,9 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           isRemote: true,
         });
 
-        console.log(`✅ Cached remote droplet ${droplet.id} in wave ${localWave.id} (origin=${isOriginServer})`);
+        console.log(`✅ Cached remote ping ${fedPing.id} in wave ${localWave.id} (origin=${isOriginServer})`);
 
-        // If this is the origin server, relay the droplet to other participant nodes
+        // If this is the origin server, relay the ping to other participant nodes
         if (isOriginServer) {
           const federationNodes = db.getWaveFederationNodes(localWave.id);
           for (const fed of federationNodes) {
@@ -14057,11 +14059,11 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             const node = db.getFederationNodeByName(fed.nodeName);
             if (!node || node.status !== 'active') continue;
 
-            const relayPayload = createFederationEnvelope(`relay-${droplet.id}-${Date.now()}`, 'new_droplet', { droplet, originWaveId, author });
+            const relayPayload = createFederationEnvelope(`relay-${fedPing.id}-${Date.now()}`, 'new_ping', { ping: fedPing, originWaveId, author });
 
             sendSignedFederationRequest(node, 'POST', '/api/federation/inbox', relayPayload)
               .then(res => {
-                if (res.ok) console.log(`✅ Relayed droplet to ${node.nodeName}`);
+                if (res.ok) console.log(`✅ Relayed ping to ${node.nodeName}`);
                 else console.error(`❌ Relay to ${node.nodeName} failed: ${res.status}`);
               })
               .catch(err => console.error(`❌ Relay error to ${node.nodeName}:`, err.message));
@@ -14071,46 +14073,48 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         break;
       }
 
-      case 'droplet_edited': {
-        // Handle droplet edit from origin server
-        // payload: { dropletId, originWaveId, content, editedAt, version }
-        console.log(`📨 Received droplet_edited from ${sourceNode.nodeName}`);
+      case 'droplet_edited':
+      case 'ping_edited': {
+        // Handle ping edit from origin server
+        // payload: { pingId/dropletId, originWaveId, content, editedAt, version }
+        console.log(`📨 Received ${type} from ${sourceNode.nodeName}`);
 
-        const { dropletId, originWaveId: editOriginWaveId, content, editedAt, version } = payload;
-        if (!dropletId || !editOriginWaveId) {
-          console.error('Invalid droplet_edited payload');
+        const editPingId = payload.pingId || payload.dropletId;
+        const { originWaveId: editOriginWaveId, content, editedAt, version } = payload;
+        if (!editPingId || !editOriginWaveId) {
+          console.error(`Invalid ${type} payload`);
           break;
         }
 
         // Find the local participant wave
         const editLocalWave = db.getWaveByOrigin(sourceNode.nodeName, editOriginWaveId);
         if (!editLocalWave) {
-          console.error(`droplet_edited: No local wave found for origin ${editOriginWaveId}`);
+          console.error(`${type}: No local wave found for origin ${editOriginWaveId}`);
           break;
         }
 
-        // Check if we have this droplet cached
-        const existingDroplet = db.getRemoteDroplet(dropletId);
-        if (existingDroplet) {
-          // Update via cacheRemoteDroplet (upsert)
-          db.cacheRemoteDroplet({
-            id: dropletId,
+        // Check if we have this ping cached
+        const existingPing = db.getRemotePing(editPingId);
+        if (existingPing) {
+          // Update via cacheRemotePing (upsert)
+          db.cacheRemotePing({
+            id: editPingId,
             waveId: editLocalWave.id,
             originWaveId: editOriginWaveId,
             originNode: sourceNode.nodeName,
-            authorId: existingDroplet.authorId,
-            authorNode: existingDroplet.authorNode,
-            parentId: existingDroplet.parentId,
+            authorId: existingPing.authorId,
+            authorNode: existingPing.authorNode,
+            parentId: existingPing.parentId,
             content,
-            createdAt: existingDroplet.createdAt,
+            createdAt: existingPing.createdAt,
             editedAt,
-            reactions: existingDroplet.reactions,
+            reactions: existingPing.reactions,
           });
 
           // Broadcast to local clients
           broadcastToWave(editLocalWave.id, {
-            type: 'droplet_edited',
-            dropletId,
+            type: 'ping_edited',
+            pingId: editPingId,
             waveId: editLocalWave.id,
             content,
             editedAt,
@@ -14118,40 +14122,42 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             isRemote: true,
           });
 
-          console.log(`✅ Updated remote droplet ${dropletId}`);
+          console.log(`✅ Updated remote ping ${editPingId}`);
         }
         break;
       }
 
-      case 'droplet_deleted': {
-        // Handle droplet deletion from origin server
-        // payload: { dropletId, originWaveId }
-        console.log(`📨 Received droplet_deleted from ${sourceNode.nodeName}`);
+      case 'droplet_deleted':
+      case 'ping_deleted': {
+        // Handle ping deletion from origin server
+        // payload: { pingId/dropletId, originWaveId }
+        console.log(`📨 Received ${type} from ${sourceNode.nodeName}`);
 
-        const { dropletId: deleteDropletId, originWaveId: deleteOriginWaveId } = payload;
-        if (!deleteDropletId || !deleteOriginWaveId) {
-          console.error('Invalid droplet_deleted payload');
+        const deletePingId = payload.pingId || payload.dropletId;
+        const deleteOriginWaveId = payload.originWaveId;
+        if (!deletePingId || !deleteOriginWaveId) {
+          console.error(`Invalid ${type} payload`);
           break;
         }
 
         // Find the local participant wave
         const deleteLocalWave = db.getWaveByOrigin(sourceNode.nodeName, deleteOriginWaveId);
         if (!deleteLocalWave) {
-          console.error(`droplet_deleted: No local wave found for origin ${deleteOriginWaveId}`);
+          console.error(`${type}: No local wave found for origin ${deleteOriginWaveId}`);
           break;
         }
 
         // Mark as deleted
-        if (db.markRemoteDropletDeleted(deleteDropletId)) {
+        if (db.markRemotePingDeleted(deletePingId)) {
           // Broadcast to local clients
           broadcastToWave(deleteLocalWave.id, {
-            type: 'droplet_deleted',
-            dropletId: deleteDropletId,
+            type: 'ping_deleted',
+            pingId: deletePingId,
             waveId: deleteLocalWave.id,
             isRemote: true,
           });
 
-          console.log(`✅ Marked remote droplet ${deleteDropletId} as deleted`);
+          console.log(`✅ Marked remote ping ${deletePingId} as deleted`);
         }
         break;
       }
@@ -14738,7 +14744,7 @@ app.post('/api/profile/wave/videos', authenticateToken, (req, res) => {
     }
 
     // Create the video ping in the profile wave
-    const ping = db.createDroplet({
+    const ping = db.createPing({
       waveId: wave.id,
       authorId: userId,
       content: content ? sanitizeInput(content).slice(0, 500) : '',
@@ -14956,13 +14962,13 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
 
   const group = wave.groupId ? db.getGroup(wave.groupId) : null;
 
-  // Low-bandwidth mode: Return only metadata, no droplets (v2.10.0)
-  // Client will fetch droplets separately using /api/waves/:id/droplets
+  // Low-bandwidth mode: Return only metadata, no pings (v2.10.0)
+  // Client will fetch pings separately using /api/waves/:id/pings
   // This saves 90%+ bandwidth on initial wave load
   if (minimal) {
-    // Get total droplet count without fetching all droplets
-    const totalDroplets = (wave.rootPingId || wave.rootDropletId) && db.getDropletsForBreakoutWave
-      ? db.getDropletsForBreakoutWave(wave.id, req.user.userId).length
+    // Get total ping count without fetching all pings
+    const totalPings = (wave.rootPingId || wave.rootDropletId) && db.getPingsForBreakoutWave
+      ? db.getPingsForBreakoutWave(wave.id, req.user.userId).length
       : db.getMessagesForWave(wave.id, req.user.userId).length;
 
     return res.json({
@@ -14974,36 +14980,40 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
       parent_wave: parentWave,
       group_name: group?.name,
       can_edit: wave.createdBy === req.user.userId,
-      total_droplets: totalDroplets,
-      total_messages: totalDroplets, // Legacy
-      // Signal to client that droplets need to be fetched separately
-      droplets: [],
-      all_droplets: [],
-      hasMoreDroplets: totalDroplets > 0,
+      total_pings: totalPings,
+      total_droplets: totalPings, // Legacy
+      total_messages: totalPings, // Legacy
+      // Signal to client that pings need to be fetched separately
+      pings: [],
+      droplets: [], // Legacy
+      all_pings: [],
+      all_droplets: [], // Legacy
+      hasMorePings: totalPings > 0,
+      hasMoreDroplets: totalPings > 0, // Legacy
       messages: [], // Legacy
       all_messages: [], // Legacy
-      hasMoreMessages: totalDroplets > 0, // Legacy
+      hasMoreMessages: totalPings > 0, // Legacy
       minimal: true, // Signal that this is a minimal response
     });
   }
 
-  // Full mode: Include droplets in response
-  // For breakout waves, use special method that fetches from original wave's droplet tree
-  const allMessages = (wave.rootPingId || wave.rootDropletId) && db.getDropletsForBreakoutWave
-    ? db.getDropletsForBreakoutWave(wave.id, req.user.userId)
+  // Full mode: Include pings in response
+  // For breakout waves, use special method that fetches from original wave's ping tree
+  const allMessages = (wave.rootPingId || wave.rootDropletId) && db.getPingsForBreakoutWave
+    ? db.getPingsForBreakoutWave(wave.id, req.user.userId)
     : db.getMessagesForWave(wave.id, req.user.userId);
 
   // Pagination: limit initial messages, return most recent or centered on target
   const limit = Math.min(parseInt(req.query.limit) || 50, 100);
   const around = req.query.around; // Ping ID to center the window around
-  const totalDroplets = allMessages.length;
-  const hasMoreDroplets = totalDroplets > limit;
+  const totalPings = allMessages.length;
+  const hasMorePings = totalPings > limit;
 
-  let limitedDroplets;
+  let limitedPings;
   let hasOlderMessages = false;
   let hasNewerMessages = false;
 
-  if (around && hasMoreDroplets) {
+  if (around && hasMorePings) {
     // Center the message window around the target ping
     const targetIndex = allMessages.findIndex(m => m.id === around);
     if (targetIndex !== -1) {
@@ -15014,34 +15024,34 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
         end = allMessages.length;
         start = Math.max(0, end - limit);
       }
-      limitedDroplets = allMessages.slice(start, end);
+      limitedPings = allMessages.slice(start, end);
       hasOlderMessages = start > 0;
       hasNewerMessages = end < allMessages.length;
     } else {
       // Target not found, fall back to most recent
-      limitedDroplets = allMessages.slice(-limit);
-      hasOlderMessages = hasMoreDroplets;
+      limitedPings = allMessages.slice(-limit);
+      hasOlderMessages = hasMorePings;
     }
   } else {
     // Default: most recent messages
-    limitedDroplets = hasMoreDroplets
+    limitedPings = hasMorePings
       ? allMessages.slice(-limit)
       : allMessages;
-    hasOlderMessages = hasMoreDroplets;
+    hasOlderMessages = hasMorePings;
   }
 
-  // Build droplet tree - treat droplets whose parent isn't in the set as root droplets
-  function buildDropletTree(droplets, parentId = null) {
-    const dropletIds = new Set(droplets.map(d => d.id));
-    return droplets
+  // Build ping tree - treat pings whose parent isn't in the set as root pings
+  function buildPingTree(pings, parentId = null) {
+    const pingIds = new Set(pings.map(d => d.id));
+    return pings
       .filter(d => {
         if (parentId === null) {
-          // Root level: include droplets with no parent OR whose parent isn't in current set
-          return d.parent_id === null || !dropletIds.has(d.parent_id);
+          // Root level: include pings with no parent OR whose parent isn't in current set
+          return d.parent_id === null || !pingIds.has(d.parent_id);
         }
         return d.parent_id === parentId;
       })
-      .map(d => ({ ...d, children: buildDropletTree(droplets, d.id) }));
+      .map(d => ({ ...d, children: buildPingTree(pings, d.id) }));
   }
 
   res.json({
@@ -15051,25 +15061,29 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     participants,
     is_archived: isArchived,
     parent_wave: parentWave, // Breadcrumb navigation for burst waves (v2.1.0)
-    // New droplet terminology
-    droplets: buildDropletTree(limitedDroplets),
-    all_droplets: limitedDroplets,
-    total_droplets: totalDroplets,
-    hasMoreDroplets: hasOlderMessages,
+    // Ping fields
+    pings: buildPingTree(limitedPings),
+    all_pings: limitedPings,
+    total_pings: totalPings,
+    hasMorePings: hasOlderMessages,
     hasNewerMessages,
     // Legacy backward compatibility
-    messages: buildDropletTree(limitedDroplets),
-    all_messages: limitedDroplets,
-    total_messages: totalDroplets,
+    droplets: buildPingTree(limitedPings),
+    all_droplets: limitedPings,
+    total_droplets: totalPings,
+    hasMoreDroplets: hasOlderMessages,
+    messages: buildPingTree(limitedPings),
+    all_messages: limitedPings,
+    total_messages: totalPings,
     hasMoreMessages: hasOlderMessages,
     group_name: group?.name,
     can_edit: wave.createdBy === req.user.userId,
   });
 });
 
-// Paginated droplets endpoint for loading droplets in batches (v1.10.0)
+// Paginated pings endpoint for loading pings in batches (v1.10.0)
 // v2.10.0: Added fields=minimal support for low-bandwidth mode
-app.get('/api/waves/:id/droplets', authenticateToken, (req, res) => {
+app.get('/api/waves/:id/pings', authenticateToken, (req, res) => {
   const waveId = sanitizeInput(req.params.id);
   const minimal = req.query.fields === 'minimal'; // Low-bandwidth mode (v2.10.0)
   const wave = db.getWave(waveId);
@@ -15079,51 +15093,52 @@ app.get('/api/waves/:id/droplets', authenticateToken, (req, res) => {
   }
 
   const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100 per request
-  const before = req.query.before; // Droplet ID to load droplets before
+  const before = req.query.before; // Ping ID to load pings before
 
-  // Get droplets using minimal or full method based on fields parameter
+  // Get pings using minimal or full method based on fields parameter
   // Minimal mode omits reactions, readBy, is_unread (saves 30-50% bandwidth)
-  const isBreakoutWave = (wave.rootPingId || wave.rootDropletId) && db.getDropletsForBreakoutWave;
-  let allDroplets;
+  const isBreakoutWave = (wave.rootPingId || wave.rootDropletId) && db.getPingsForBreakoutWave;
+  let allPings;
 
   if (minimal) {
     // Use minimal method (or fall back to full with filtering)
-    allDroplets = isBreakoutWave
-      ? db.getDropletsForBreakoutWave(wave.id, req.user.userId)
-      : db.getDropletsForWaveMinimal(wave.id, req.user.userId);
+    allPings = isBreakoutWave
+      ? db.getPingsForBreakoutWave(wave.id, req.user.userId)
+      : db.getPingsForWaveMinimal(wave.id, req.user.userId);
   } else {
-    allDroplets = isBreakoutWave
-      ? db.getDropletsForBreakoutWave(wave.id, req.user.userId)
+    allPings = isBreakoutWave
+      ? db.getPingsForBreakoutWave(wave.id, req.user.userId)
       : db.getMessagesForWave(wave.id, req.user.userId);
   }
 
   // Sort by created_at descending (newest first) for pagination
-  allDroplets.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  allPings.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-  // If 'before' is specified, filter to only droplets before that one
+  // If 'before' is specified, filter to only pings before that one
   if (before) {
-    const beforeIndex = allDroplets.findIndex(d => d.id === before);
+    const beforeIndex = allPings.findIndex(d => d.id === before);
     if (beforeIndex !== -1) {
-      allDroplets = allDroplets.slice(beforeIndex + 1);
+      allPings = allPings.slice(beforeIndex + 1);
     }
   }
 
   // Take the requested limit
-  const droplets = allDroplets.slice(0, limit);
-  const hasMore = allDroplets.length > limit;
+  const pings = allPings.slice(0, limit);
+  const hasMore = allPings.length > limit;
 
   // Reverse to return oldest-first within the batch (natural reading order)
-  droplets.reverse();
+  pings.reverse();
 
   // Get total using same method
-  const totalDroplets = isBreakoutWave
-    ? db.getDropletsForBreakoutWave(wave.id, req.user.userId).length
+  const totalPings = isBreakoutWave
+    ? db.getPingsForBreakoutWave(wave.id, req.user.userId).length
     : db.getMessagesForWave(wave.id, req.user.userId).length;
 
   res.json({
-    droplets,
+    pings,
+    droplets: pings, // Legacy
     hasMore,
-    total: totalDroplets,
+    total: totalPings,
     minimal: minimal || undefined, // Signal minimal mode to client
   });
 });
@@ -15141,9 +15156,9 @@ app.get('/api/waves/:id/messages', authenticateToken, (req, res) => {
   const before = req.query.before; // Message ID to load messages before
 
   // Get all messages for this wave (filtered for blocked/muted)
-  // For breakout waves, use special method that fetches from original wave's droplet tree
-  let allMessages = (wave.rootPingId || wave.rootDropletId) && db.getDropletsForBreakoutWave
-    ? db.getDropletsForBreakoutWave(wave.id, req.user.userId)
+  // For breakout waves, use special method that fetches from original wave's ping tree
+  let allMessages = (wave.rootPingId || wave.rootDropletId) && db.getPingsForBreakoutWave
+    ? db.getPingsForBreakoutWave(wave.id, req.user.userId)
     : db.getMessagesForWave(wave.id, req.user.userId);
 
   // Sort by created_at descending (newest first) for pagination
@@ -15165,8 +15180,8 @@ app.get('/api/waves/:id/messages', authenticateToken, (req, res) => {
   messages.reverse();
 
   // Get total using same method
-  const totalMessages = (wave.rootPingId || wave.rootDropletId) && db.getDropletsForBreakoutWave
-    ? db.getDropletsForBreakoutWave(wave.id, req.user.userId).length
+  const totalMessages = (wave.rootPingId || wave.rootDropletId) && db.getPingsForBreakoutWave
+    ? db.getPingsForBreakoutWave(wave.id, req.user.userId).length
     : db.getMessagesForWave(wave.id, req.user.userId).length;
 
   res.json({
@@ -15511,8 +15526,8 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
       // Get current participants for the wave invite
       const localParticipants = db.getWaveParticipants(waveId);
 
-      // Get existing droplets to include in broadcast
-      const existingDroplets = db.getDropletsForWave(waveId);
+      // Get existing pings to include in broadcast
+      const existingPings = db.getPingsForWave(waveId);
       const ourNodeName = db.getServerIdentity()?.nodeName;
 
       // Broadcast wave to all trusted nodes
@@ -15537,8 +15552,8 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
             avatar: p.avatar,
             nodeName: ourNodeName,
           })),
-          // Include existing droplets so federated servers have history
-          droplets: existingDroplets.map(d => {
+          // Include existing pings so federated servers have history
+          pings: existingPings.map(d => {
             // Ensure reactions is an object (may be string from DB)
             let reactions = d.reactions || {};
             if (typeof reactions === 'string') {
@@ -16818,13 +16833,13 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
       db.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, 1);
     }
 
-    // Check if there are existing droplets that need encryption
+    // Check if there are existing pings that need encryption
     const encryptionStatus = db.getWaveEncryptionStatus(waveId);
-    if (encryptionStatus.totalDroplets > 0) {
-      // Has existing droplets - set to partial (2) until they're encrypted
+    if (encryptionStatus.totalPings > 0) {
+      // Has existing pings - set to partial (2) until they're encrypted
       db.setWaveEncryptionState(waveId, 2);
     } else {
-      // No droplets - fully encrypted (1)
+      // No pings - fully encrypted (1)
       db.setWaveEncryptionState(waveId, 1);
     }
 
@@ -16832,15 +16847,16 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
     broadcastToWave(waveId, {
       type: 'wave_encrypted',
       waveId,
-      encryptionState: encryptionStatus.totalDroplets > 0 ? 2 : 1
+      encryptionState: encryptionStatus.totalPings > 0 ? 2 : 1
     });
 
     res.json({
       success: true,
       message: 'Wave encryption enabled',
       keyVersion: 1,
-      encryptionState: encryptionStatus.totalDroplets > 0 ? 2 : 1,
-      dropletsToEncrypt: encryptionStatus.totalDroplets
+      encryptionState: encryptionStatus.totalPings > 0 ? 2 : 1,
+      pingsToEncrypt: encryptionStatus.totalPings,
+      dropletsToEncrypt: encryptionStatus.totalPings // Legacy
     });
   } catch (err) {
     console.error('Wave encryption error:', err);
@@ -16875,8 +16891,10 @@ app.get('/api/waves/:id/encryption-status', authenticateToken, (req, res) => {
     res.json({
       waveId,
       encryptionState: status.state, // 0=legacy, 1=encrypted, 2=partial
-      totalDroplets: status.totalDroplets,
-      encryptedDroplets: status.encryptedDroplets,
+      totalPings: status.totalPings,
+      encryptedPings: status.encryptedPings,
+      totalDroplets: status.totalPings, // Legacy
+      encryptedDroplets: status.encryptedPings, // Legacy
       progress: status.progress,
       participants: participants,
       allParticipantsReady: allHaveE2EE,
@@ -16890,8 +16908,8 @@ app.get('/api/waves/:id/encryption-status', authenticateToken, (req, res) => {
   }
 });
 
-// Get unencrypted droplets for batch encryption (legacy wave migration)
-app.get('/api/waves/:id/unencrypted-droplets', authenticateToken, (req, res) => {
+// Get unencrypted pings for batch encryption (legacy wave migration)
+app.get('/api/waves/:id/unencrypted-pings', authenticateToken, (req, res) => {
   try {
     const waveId = req.params.id;
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
@@ -16906,28 +16924,30 @@ app.get('/api/waves/:id/unencrypted-droplets', authenticateToken, (req, res) => 
       return res.status(403).json({ error: 'Only wave creator can migrate encryption' });
     }
 
-    const droplets = db.getUnencryptedDroplets(waveId, limit);
+    const unencryptedPings = db.getUnencryptedPings(waveId, limit);
     const status = db.getWaveEncryptionStatus(waveId);
 
     res.json({
-      droplets,
-      remaining: status.totalDroplets - status.encryptedDroplets,
+      pings: unencryptedPings,
+      droplets: unencryptedPings, // Legacy
+      remaining: status.totalPings - status.encryptedPings,
       progress: status.progress
     });
   } catch (err) {
-    console.error('Get unencrypted droplets error:', err);
-    res.status(500).json({ error: 'Failed to get unencrypted droplets' });
+    console.error('Get unencrypted pings error:', err);
+    res.status(500).json({ error: 'Failed to get unencrypted pings' });
   }
 });
 
-// Batch encrypt droplets (legacy wave migration)
-app.post('/api/waves/:id/encrypt-droplets', authenticateToken, (req, res) => {
+// Batch encrypt pings (legacy wave migration)
+app.post('/api/waves/:id/encrypt-pings', authenticateToken, (req, res) => {
   try {
     const waveId = req.params.id;
-    const { droplets } = req.body;
+    const { pings, droplets: legacyPings } = req.body;
+    const encryptBatch = pings || legacyPings;
 
-    if (!droplets || !Array.isArray(droplets)) {
-      return res.status(400).json({ error: 'Missing droplets array' });
+    if (!encryptBatch || !Array.isArray(encryptBatch)) {
+      return res.status(400).json({ error: 'Missing pings array' });
     }
 
     const wave = db.getWave(waveId);
@@ -16949,36 +16969,38 @@ app.post('/api/waves/:id/encrypt-droplets', authenticateToken, (req, res) => {
     // Get current key version
     const keyVersion = db.getWaveKeyVersion(waveId);
 
-    // Update each droplet with encrypted content
+    // Update each ping with encrypted content
     let encryptedCount = 0;
-    for (const { id, content, nonce } of droplets) {
+    for (const { id, content, nonce } of encryptBatch) {
       try {
-        db.encryptDropletContent(id, content, nonce, keyVersion);
+        db.encryptPingContent(id, content, nonce, keyVersion);
         encryptedCount++;
       } catch (err) {
-        console.error(`Failed to encrypt droplet ${id}:`, err);
+        console.error(`Failed to encrypt ping ${id}:`, err);
       }
     }
 
-    // Check if all droplets are now encrypted
+    // Check if all pings are now encrypted
     const updatedStatus = db.getWaveEncryptionStatus(waveId);
     let newState = status.state;
-    if (updatedStatus.encryptedDroplets === updatedStatus.totalDroplets) {
+    if (updatedStatus.encryptedPings === updatedStatus.totalPings) {
       // All done - mark as fully encrypted
       db.setWaveEncryptionState(waveId, 1);
       newState = 1;
     } else if (status.state !== 2) {
-      // Still have unencrypted droplets - mark as partial
+      // Still have unencrypted pings - mark as partial
       db.setWaveEncryptionState(waveId, 2);
       newState = 2;
     }
 
-    const remaining = updatedStatus.totalDroplets - updatedStatus.encryptedDroplets;
+    const remaining = updatedStatus.totalPings - updatedStatus.encryptedPings;
     res.json({
       success: true,
       encryptedCount,
-      totalDroplets: updatedStatus.totalDroplets,
-      encryptedDroplets: updatedStatus.encryptedDroplets,
+      totalPings: updatedStatus.totalPings,
+      encryptedPings: updatedStatus.encryptedPings,
+      totalDroplets: updatedStatus.totalPings, // Legacy
+      encryptedDroplets: updatedStatus.encryptedPings, // Legacy
       progress: updatedStatus.progress,
       hasMore: remaining > 0,
       remaining,
@@ -16986,51 +17008,64 @@ app.post('/api/waves/:id/encrypt-droplets', authenticateToken, (req, res) => {
       complete: remaining === 0
     });
   } catch (err) {
-    console.error('Encrypt droplets error:', err);
-    res.status(500).json({ error: 'Failed to encrypt droplets' });
+    console.error('Encrypt pings error:', err);
+    res.status(500).json({ error: 'Failed to encrypt pings' });
   }
 });
 
-// ============ Ping Routes (v2.0.0 aliases) ============
-// These are the preferred v2.0.0 endpoints (pings = droplets)
-// Rewrites /api/pings/* to /api/droplets/* and re-invokes routing
+// ============ Droplet Routes (Legacy aliases) ============
+// Rewrites /api/droplets/* to /api/pings/* for backward compatibility
 
-app.all('/api/pings', (req, res, next) => {
-  req.url = '/api/droplets';
+// Wave sub-route aliases
+app.get('/api/waves/:id/droplets', (req, res, next) => {
+  req.url = `/api/waves/${req.params.id}/pings${req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''}`;
+  req.app._router.handle(req, res, next);
+});
+app.get('/api/waves/:id/unencrypted-droplets', (req, res, next) => {
+  req.url = `/api/waves/${req.params.id}/unencrypted-pings${req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''}`;
+  req.app._router.handle(req, res, next);
+});
+app.post('/api/waves/:id/encrypt-droplets', (req, res, next) => {
+  req.url = `/api/waves/${req.params.id}/encrypt-pings`;
   req.app._router.handle(req, res, next);
 });
 
-app.all('/api/pings/:id', (req, res, next) => {
-  req.url = `/api/droplets/${req.params.id}`;
+app.all('/api/droplets', (req, res, next) => {
+  req.url = '/api/pings';
   req.app._router.handle(req, res, next);
 });
 
-app.all('/api/pings/:id/react', (req, res, next) => {
-  req.url = `/api/droplets/${req.params.id}/react`;
+app.all('/api/droplets/:id', (req, res, next) => {
+  req.url = `/api/pings/${req.params.id}`;
   req.app._router.handle(req, res, next);
 });
 
-app.all('/api/pings/:id/read', (req, res, next) => {
-  req.url = `/api/droplets/${req.params.id}/read`;
+app.all('/api/droplets/:id/react', (req, res, next) => {
+  req.url = `/api/pings/${req.params.id}/react`;
   req.app._router.handle(req, res, next);
 });
 
-// /api/pings/:id/burst alias removed in v2.38.0
-app.all('/api/pings/:id/thread', (req, res, next) => {
-  req.url = `/api/droplets/${req.params.id}/thread`;
-  req.app._router.handle(req, res, next);
-});
-app.all('/api/pings/:id/reparent', (req, res, next) => {
-  req.url = `/api/droplets/${req.params.id}/reparent`;
+app.all('/api/droplets/:id/read', (req, res, next) => {
+  req.url = `/api/pings/${req.params.id}/read`;
   req.app._router.handle(req, res, next);
 });
 
-// ============ Droplet Routes (v1.10.0) ============
+app.all('/api/droplets/:id/thread', (req, res, next) => {
+  req.url = `/api/pings/${req.params.id}/thread`;
+  req.app._router.handle(req, res, next);
+});
+
+app.all('/api/droplets/:id/reparent', (req, res, next) => {
+  req.url = `/api/pings/${req.params.id}/reparent`;
+  req.app._router.handle(req, res, next);
+});
+
+// ============ Ping Routes (v1.10.0, renamed from droplets in v2.42.0) ============
 // Note: /api/messages endpoints below are backward-compatible aliases
-// Note: /api/pings/* aliases above rewrite to these routes
+// Note: /api/droplets/* aliases above rewrite to these routes
 
-// Create droplet
-app.post('/api/droplets', authenticateToken, (req, res) => {
+// Create ping
+app.post('/api/pings', authenticateToken, (req, res) => {
   const waveId = sanitizeInput(req.body.wave_id || req.body.thread_id);
   const content = req.body.content || '';
   const mediaUrl = req.body.mediaUrl;
@@ -17056,7 +17091,7 @@ app.post('/api/droplets', authenticateToken, (req, res) => {
 
   // E2EE: encrypted content is base64 and may be longer than plaintext
   const maxLength = req.body.encrypted ? 20000 : 10000;
-  if (content && content.length > maxLength) return res.status(400).json({ error: 'Droplet too long' });
+  if (content && content.length > maxLength) return res.status(400).json({ error: 'Message too long' });
 
   // For burst waves, default parent to root ping if no parent specified
   let parentId = req.body.parent_id ? sanitizeInput(req.body.parent_id) : null;
@@ -17065,7 +17100,7 @@ app.post('/api/droplets', authenticateToken, (req, res) => {
     parentId = rootId;
   }
 
-  const droplet = db.createMessage({
+  const ping = db.createMessage({
     waveId,
     parentId,
     authorId: req.user.userId,
@@ -17085,30 +17120,29 @@ app.post('/api/droplets', authenticateToken, (req, res) => {
   // Create in-app notifications for mentions, replies, and wave activity
   const author = db.findUserById(req.user.userId);
   if (author) {
-    createPingNotifications(droplet, wave, author);
+    createPingNotifications(ping, wave, author);
   }
 
   // Broadcast to connected users via WebSocket only
   // Push notifications are now handled by createPingNotifications() for mentions/replies
-  broadcastToWave(waveId, { type: 'new_droplet', data: droplet });
-
-  // Also broadcast legacy event for backward compatibility
-  broadcastToWave(waveId, { type: 'new_message', data: droplet });
+  broadcastToWave(waveId, { type: 'new_ping', data: ping });
+  broadcastToWave(waveId, { type: 'new_droplet', data: ping }); // Legacy
+  broadcastToWave(waveId, { type: 'new_message', data: ping }); // Legacy
 
   // Trigger outgoing webhooks (async, non-blocking)
-  triggerWaveWebhooks(waveId, droplet, wave);
+  triggerWaveWebhooks(waveId, ping, wave);
 
-  // Federation: Send droplet to federated nodes
+  // Federation: Send ping to federated nodes
   if (FEDERATION_ENABLED && (wave.federationState === 'origin' || wave.federationState === 'participant')) {
     const ourIdentity = db.getServerIdentity();
-    const dropletPayload = {
-      droplet: {
-        id: droplet.id,
-        parentId: droplet.parentId,
-        content: droplet.content,
-        createdAt: droplet.createdAt,
-        editedAt: droplet.editedAt,
-        reactions: droplet.reactions,
+    const pingPayload = {
+      ping: {
+        id: ping.id,
+        parentId: ping.parentId,
+        content: ping.content,
+        createdAt: ping.createdAt,
+        editedAt: ping.editedAt,
+        reactions: ping.reactions,
       },
       originWaveId: wave.federationState === 'origin' ? waveId : wave.originWaveId,
       author: author ? {
@@ -17124,149 +17158,161 @@ app.post('/api/droplets', authenticateToken, (req, res) => {
 
     if (wave.federationState === 'origin') {
       // Origin server: send to all participant nodes
-      sendDropletToFederatedNodes(waveId, 'new_droplet', dropletPayload).catch(err => {
-        console.error('Federation droplet delivery error:', err.message);
+      sendPingToFederatedNodes(waveId, 'new_ping', pingPayload).catch(err => {
+        console.error('Federation ping delivery error:', err.message);
       });
     } else if (wave.federationState === 'participant' && wave.originNode) {
       // Participant server: send back to origin node
       const originNode = db.getFederationNodeByName(wave.originNode);
       if (originNode && originNode.status === 'active') {
-        const messageId = `new_droplet-${droplet.id}-${Date.now()}`;
-        const fullPayload = createFederationEnvelope(messageId, 'new_droplet', dropletPayload);
+        const messageId = `new_ping-${ping.id}-${Date.now()}`;
+        const fullPayload = createFederationEnvelope(messageId, 'new_ping', pingPayload);
         sendSignedFederationRequest(originNode, 'POST', '/api/federation/inbox', fullPayload)
           .then(response => {
             if (response.ok) {
-              console.log(`✅ new_droplet sent to origin ${originNode.nodeName}`);
+              console.log(`✅ new_ping sent to origin ${originNode.nodeName}`);
             } else {
-              console.error(`❌ new_droplet to origin failed: ${response.status}`);
-              db.queueFederationMessage({ targetNode: originNode.nodeName, messageType: 'new_droplet', payload: fullPayload });
+              console.error(`❌ new_ping to origin failed: ${response.status}`);
+              db.queueFederationMessage({ targetNode: originNode.nodeName, messageType: 'new_ping', payload: fullPayload });
             }
           })
           .catch(err => {
-            console.error(`❌ new_droplet to origin error:`, err.message);
-            db.queueFederationMessage({ targetNode: originNode.nodeName, messageType: 'new_droplet', payload: fullPayload });
+            console.error(`❌ new_ping to origin error:`, err.message);
+            db.queueFederationMessage({ targetNode: originNode.nodeName, messageType: 'new_ping', payload: fullPayload });
           });
       }
     }
   }
 
   // Log activity
-  if (db.logActivity) db.logActivity(req.user.userId, 'create_droplet', 'droplet', droplet.id, { ...getRequestMeta(req), waveId });
+  if (db.logActivity) db.logActivity(req.user.userId, 'create_ping', 'ping', ping.id, { ...getRequestMeta(req), waveId });
 
-  res.status(201).json(droplet);
+  res.status(201).json(ping);
 });
 
-// Edit droplet
-app.put('/api/droplets/:id', authenticateToken, (req, res) => {
-  const dropletId = sanitizeInput(req.params.id);
-  const droplet = db.getMessage(dropletId);
-  if (!droplet) return res.status(404).json({ error: 'Droplet not found' });
-  if (droplet.authorId !== req.user.userId) return res.status(403).json({ error: 'Not authorized' });
+// Edit ping
+app.put('/api/pings/:id', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.id);
+  const ping = db.getMessage(pingId);
+  if (!ping) return res.status(404).json({ error: 'Message not found' });
+  if (ping.authorId !== req.user.userId) return res.status(403).json({ error: 'Not authorized' });
 
   const content = req.body.content;
-  if (content.length > 10000) return res.status(400).json({ error: 'Droplet too long' });
+  if (content.length > 10000) return res.status(400).json({ error: 'Message too long' });
 
-  const updated = db.updateMessage(dropletId, content);
-  broadcastToWave(droplet.waveId, { type: 'droplet_edited', data: updated });
-  broadcastToWave(droplet.waveId, { type: 'message_edited', data: updated }); // Legacy
+  const updated = db.updateMessage(pingId, content);
+  broadcastToWave(ping.waveId, { type: 'ping_edited', data: updated });
+  broadcastToWave(ping.waveId, { type: 'droplet_edited', data: updated }); // Legacy
+  broadcastToWave(ping.waveId, { type: 'message_edited', data: updated }); // Legacy
 
   // Federation: If this is an origin wave, send edit to federated nodes
-  const wave = db.getWave(droplet.waveId);
+  const wave = db.getWave(ping.waveId);
   if (FEDERATION_ENABLED && wave?.federationState === 'origin') {
-    sendDropletToFederatedNodes(droplet.waveId, 'droplet_edited', {
-      dropletId: dropletId,
-      originWaveId: droplet.waveId,
+    sendPingToFederatedNodes(ping.waveId, 'ping_edited', {
+      pingId: pingId,
+      originWaveId: ping.waveId,
       content: updated.content,
       editedAt: updated.editedAt,
       version: updated.version,
     }).catch(err => {
-      console.error('Federation droplet edit delivery error:', err.message);
+      console.error('Federation ping edit delivery error:', err.message);
     });
   }
 
   // Log activity
-  if (db.logActivity) db.logActivity(req.user.userId, 'edit_droplet', 'droplet', dropletId, { ...getRequestMeta(req), waveId: droplet.waveId });
+  if (db.logActivity) db.logActivity(req.user.userId, 'edit_ping', 'ping', pingId, { ...getRequestMeta(req), waveId: ping.waveId });
 
   res.json(updated);
 });
 
-// Delete droplet
-app.delete('/api/droplets/:id', authenticateToken, (req, res) => {
-  const dropletId = sanitizeInput(req.params.id);
-  const droplet = db.getMessage(dropletId);
+// Delete ping
+app.delete('/api/pings/:id', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.id);
+  const ping = db.getMessage(pingId);
 
-  if (!droplet) return res.status(404).json({ error: 'Droplet not found' });
-  if (droplet.authorId !== req.user.userId) {
-    return res.status(403).json({ error: 'Only droplet author can delete' });
+  if (!ping) return res.status(404).json({ error: 'Message not found' });
+  if (ping.authorId !== req.user.userId) {
+    return res.status(403).json({ error: 'Only the author can delete' });
   }
 
   // Save wave ID before deletion for federation
-  const waveId = droplet.waveId;
+  const waveId = ping.waveId;
   const wave = db.getWave(waveId);
 
-  const result = db.deleteMessage(dropletId, req.user.userId);
+  const result = db.deleteMessage(pingId, req.user.userId);
   if (!result.success) return res.status(400).json({ error: result.error });
 
   // Broadcast deletion to all participants
   broadcastToWave(result.waveId, {
-    type: 'droplet_deleted',
-    dropletId: result.dropletId || result.messageId,
+    type: 'ping_deleted',
+    pingId: result.pingId || result.messageId,
     waveId: result.waveId
   });
-  // Legacy event
+  // Legacy events
+  broadcastToWave(result.waveId, {
+    type: 'droplet_deleted',
+    dropletId: result.pingId || result.messageId,
+    waveId: result.waveId
+  });
   broadcastToWave(result.waveId, {
     type: 'message_deleted',
-    messageId: result.dropletId || result.messageId,
+    messageId: result.pingId || result.messageId,
     waveId: result.waveId
   });
 
   // Federation: If this is an origin wave, send deletion to federated nodes
   if (FEDERATION_ENABLED && wave?.federationState === 'origin') {
-    sendDropletToFederatedNodes(waveId, 'droplet_deleted', {
-      dropletId: dropletId,
+    sendPingToFederatedNodes(waveId, 'ping_deleted', {
+      pingId: pingId,
       originWaveId: waveId,
     }).catch(err => {
-      console.error('Federation droplet delete delivery error:', err.message);
+      console.error('Federation ping delete delivery error:', err.message);
     });
   }
 
   // Log activity
-  if (db.logActivity) db.logActivity(req.user.userId, 'delete_droplet', 'droplet', dropletId, { ...getRequestMeta(req), waveId });
+  if (db.logActivity) db.logActivity(req.user.userId, 'delete_ping', 'ping', pingId, { ...getRequestMeta(req), waveId });
 
   res.json({ success: true });
 });
 
-// Toggle emoji reaction on droplet
-app.post('/api/droplets/:id/react', authenticateToken, (req, res) => {
-  const dropletId = sanitizeInput(req.params.id);
+// Toggle emoji reaction on ping
+app.post('/api/pings/:id/react', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.id);
   const emoji = req.body.emoji;
 
   if (!emoji || typeof emoji !== 'string' || emoji.length > 10) {
     return res.status(400).json({ error: 'Invalid emoji' });
   }
 
-  const result = db.toggleMessageReaction(dropletId, req.user.userId, emoji);
+  const result = db.toggleMessageReaction(pingId, req.user.userId, emoji);
   if (!result.success) return res.status(400).json({ error: result.error });
 
-  // Mark droplet as read since user has seen it (prevents unread indicator after reaction)
-  db.markMessageAsRead(dropletId, req.user.userId);
+  // Mark ping as read since user has seen it (prevents unread indicator after reaction)
+  db.markMessageAsRead(pingId, req.user.userId);
 
   // Broadcast reaction update to all participants
   broadcastToWave(result.waveId, {
-    type: 'droplet_reaction',
-    dropletId: result.dropletId || result.messageId,
+    type: 'ping_reaction',
+    pingId: result.pingId || result.messageId,
     reactions: result.reactions,
     waveId: result.waveId,
   });
-  // Legacy event
+  // Legacy events
+  broadcastToWave(result.waveId, {
+    type: 'droplet_reaction',
+    dropletId: result.pingId || result.messageId,
+    reactions: result.reactions,
+    waveId: result.waveId,
+  });
   broadcastToWave(result.waveId, {
     type: 'message_reaction',
-    messageId: result.dropletId || result.messageId,
+    messageId: result.pingId || result.messageId,
     reactions: result.reactions,
     waveId: result.waveId,
   });
 
-  // Notify the droplet author when someone reacts (not when removing, not self-reactions)
+  // Notify the ping author when someone reacts (not when removing, not self-reactions)
   if (result.added && result.authorId && result.authorId !== req.user.userId) {
     if (shouldCreateNotification(result.authorId, 'reaction')) {
       const reactor = db.findUserById(req.user.userId);
@@ -17278,11 +17324,11 @@ app.post('/api/droplets/:id/react', authenticateToken, (req, res) => {
         userId: result.authorId,
         type: 'reaction',
         waveId: result.waveId,
-        pingId: dropletId,
+        pingId: pingId,
         actorId: req.user.userId,
         title: `${reactorName} reacted ${emoji}`,
         body: `reacted ${emoji} to your message`,
-        groupKey: `reaction:${result.waveId}:${dropletId}`
+        groupKey: `reaction:${result.waveId}:${pingId}`
       });
 
       // Send push notification
@@ -17293,7 +17339,7 @@ app.post('/api/droplets/:id/react', authenticateToken, (req, res) => {
         body: `reacted ${emoji} to your message in ${waveTitle}`,
         url: `/?wave=${result.waveId}`,
         waveId: result.waveId,
-        messageId: dropletId,
+        messageId: pingId,
         senderId: req.user.userId,
         senderHandle: reactor?.handle,
       });
@@ -17306,93 +17352,93 @@ app.post('/api/droplets/:id/react', authenticateToken, (req, res) => {
   res.json({ success: true, reactions: result.reactions });
 });
 
-// Mark individual droplet as read
-app.post('/api/droplets/:id/read', authenticateToken, (req, res) => {
-  const dropletId = sanitizeInput(req.params.id);
+// Mark individual ping as read
+app.post('/api/pings/:id/read', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.id);
   const userId = req.user.userId;
 
-  console.log(`📖 Marking droplet ${dropletId} as read for user ${userId}`);
+  console.log(`📖 Marking ping ${pingId} as read for user ${userId}`);
 
-  // Get the droplet first to find the waveId
-  const droplet = db.getDroplet ? db.getDroplet(dropletId) : db.getMessage?.(dropletId);
-  const waveId = droplet?.wave_id || droplet?.waveId;
+  // Get the ping first to find the waveId
+  const ping = db.getPing(pingId);
+  const waveId = ping?.wave_id || ping?.waveId;
 
-  if (!db.markMessageAsRead(dropletId, userId)) {
-    console.log(`❌ Failed to mark droplet ${dropletId} as read`);
-    return res.status(404).json({ error: 'Droplet not found' });
+  if (!db.markMessageAsRead(pingId, userId)) {
+    console.log(`❌ Failed to mark ping ${pingId} as read`);
+    return res.status(404).json({ error: 'Message not found' });
   }
 
-  // Also mark any notifications for this droplet as read
-  const notificationsMarked = db.markNotificationsReadByPing(dropletId, userId);
+  // Also mark any notifications for this ping as read
+  const notificationsMarked = db.markNotificationsReadByPing(pingId, userId);
   if (notificationsMarked > 0) {
-    console.log(`🔔 Marked ${notificationsMarked} notification(s) as read for droplet ${dropletId}`);
+    console.log(`🔔 Marked ${notificationsMarked} notification(s) as read for ping ${pingId}`);
   }
 
   // Always broadcast unread count update to ensure notification bell and wave list stay in sync
   // This must happen even if there are no notifications, as the ping unread count still changed
   broadcast({ type: 'unread_count_update', userId }, [userId]);
 
-  // Broadcast droplet read event so all clients (including this user) can update wave list
-  broadcast({ type: 'droplet_read', dropletId, waveId, userId }, [userId]);
+  // Broadcast ping read event so all clients (including this user) can update wave list
+  broadcast({ type: 'ping_read', pingId, waveId, userId }, [userId]);
 
-  console.log(`✅ Droplet ${dropletId} marked as read`);
+  console.log(`✅ Ping ${pingId} marked as read`);
   res.json({ success: true });
 });
 
 // ============ Thread Toggle (v2.38.0) ============
 
-app.post('/api/droplets/:id/thread', authenticateToken, (req, res) => {
-  const dropletId = sanitizeInput(req.params.id);
+app.post('/api/pings/:id/thread', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.id);
   const userId = req.user.userId;
 
-  const droplet = db.getDroplet ? db.getDroplet(dropletId) : db.getMessage?.(dropletId);
-  if (!droplet) return res.status(404).json({ error: 'Message not found' });
+  const ping = db.getPing(pingId);
+  if (!ping) return res.status(404).json({ error: 'Message not found' });
 
-  const waveId = droplet.wave_id || droplet.waveId;
+  const waveId = ping.wave_id || ping.waveId;
 
   // Check wave access
   const canAccess = canAccessWaveFromCache(waveId, userId);
   if (!canAccess) return res.status(403).json({ error: 'Access denied' });
 
   // Toggle: if already threaded, unthread; otherwise thread
-  const newState = !droplet.threaded;
-  const success = db.threadPing(dropletId, newState);
+  const newState = !ping.threaded;
+  const success = db.threadPing(pingId, newState);
   if (!success) return res.status(500).json({ error: 'Failed to update thread state' });
 
   // Broadcast to wave participants
-  broadcastToWave(waveId, { type: 'droplet_threaded', dropletId, waveId, threaded: newState, userId });
+  broadcastToWave(waveId, { type: 'ping_threaded', pingId, waveId, threaded: newState, userId });
 
   res.json({ success: true, threaded: newState });
 });
 
 // ============ Message Reparent / Move (v2.39.0) ============
 
-app.post('/api/droplets/:id/reparent', authenticateToken, (req, res) => {
-  const dropletId = sanitizeInput(req.params.id);
+app.post('/api/pings/:id/reparent', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.id);
   const userId = req.user.userId;
   const { newParentId } = req.body || {};
 
-  const droplet = db.getDroplet ? db.getDroplet(dropletId) : db.getMessage?.(dropletId);
-  if (!droplet) return res.status(404).json({ error: 'Message not found' });
+  const ping = db.getPing(pingId);
+  if (!ping) return res.status(404).json({ error: 'Message not found' });
 
-  const waveId = droplet.wave_id || droplet.waveId;
+  const waveId = ping.wave_id || ping.waveId;
 
   // Check wave access
   const canAccess = canAccessWaveFromCache(waveId, userId);
   if (!canAccess) return res.status(403).json({ error: 'Access denied' });
 
   // Permission: author or moderator+
-  const authorId = droplet.author_id || droplet.authorId;
+  const authorId = ping.author_id || ping.authorId;
   const requestingUser = db.findUserById(userId);
   if (authorId !== userId && !hasRole(requestingUser, ROLES.MODERATOR)) {
     return res.status(403).json({ error: 'Only the author or a moderator can move messages' });
   }
 
-  const result = db.reparentPing(dropletId, newParentId ? sanitizeInput(newParentId) : null);
+  const result = db.reparentPing(pingId, newParentId ? sanitizeInput(newParentId) : null);
   if (!result.success) return res.status(400).json({ error: result.error });
 
   // Broadcast to wave participants
-  broadcastToWave(waveId, { type: 'droplet_reparented', dropletId, waveId, newParentId: newParentId || null, userId });
+  broadcastToWave(waveId, { type: 'ping_reparented', pingId, waveId, newParentId: newParentId || null, userId });
 
   res.json({ success: true, ping: result.ping });
 });
@@ -17400,13 +17446,13 @@ app.post('/api/droplets/:id/reparent', authenticateToken, (req, res) => {
 // Ripple/burst endpoints removed in v2.38.0 — replaced by threaded conversations
 
 // ============ Message Routes (Legacy - v1.9.0 backward compatibility) ============
-// DEPRECATED: These endpoints are deprecated as of v1.10.0. Use /api/droplets/* instead.
+// DEPRECATED: These endpoints are deprecated as of v1.10.0. Use /api/pings/* instead.
 // They will be removed in a future version.
 
 // Middleware to add deprecation headers and log usage
 const deprecatedEndpoint = (req, res, next) => {
   res.set('X-Deprecated', 'true');
-  res.set('X-Deprecated-Message', 'This endpoint is deprecated. Use /api/droplets/* instead.');
+  res.set('X-Deprecated-Message', 'This endpoint is deprecated. Use /api/pings/* instead.');
   res.set('Sunset', 'Sat, 01 Mar 2026 00:00:00 GMT');
   console.warn(`⚠️ DEPRECATED: ${req.method} ${req.originalUrl} called by user ${req.user?.userId || 'unknown'}`);
   next();
@@ -17526,7 +17572,7 @@ app.post('/api/messages/:id/read', authenticateToken, deprecatedEndpoint, (req, 
   console.log(`📖 Marking message ${messageId} as read for user ${userId}`);
 
   // Get the message first to find the waveId
-  const message = db.getDroplet ? db.getDroplet(messageId) : db.getMessage?.(messageId);
+  const message = db.getPing ? db.getPing(messageId) : db.getMessage?.(messageId);
   const waveId = message?.wave_id || message?.waveId;
 
   if (!db.markMessageAsRead(messageId, userId)) {
@@ -17534,7 +17580,7 @@ app.post('/api/messages/:id/read', authenticateToken, deprecatedEndpoint, (req, 
     return res.status(404).json({ error: 'Message not found' });
   }
 
-  // Also mark any notifications for this droplet as read
+  // Also mark any notifications for this message as read
   const notificationsMarked = db.markNotificationsReadByPing(messageId, userId);
   if (notificationsMarked > 0) {
     console.log(`🔔 Marked ${notificationsMarked} notification(s) as read for message ${messageId}`);
@@ -17707,18 +17753,7 @@ app.post('/api/server/federation-request', publicFederationRequestLimiter, async
 
 // ============ Cortex v2.0.0 API Aliases ============
 // These aliases allow clients to use the new Cortex terminology while maintaining backward compatibility
-
-// /api/pings/* -> /api/droplets/* (pings = new name for droplets)
-app.use('/api/pings', (req, res, next) => {
-  req.url = req.originalUrl.replace('/api/pings', '/api/droplets');
-  next('route');
-});
-app.all('/api/pings', (req, res, next) => { req.url = '/api/droplets'; next('route'); });
-app.all('/api/pings/:id', (req, res, next) => { req.url = `/api/droplets/${req.params.id}`; next('route'); });
-app.all('/api/pings/:id/react', (req, res, next) => { req.url = `/api/droplets/${req.params.id}/react`; next('route'); });
-app.all('/api/pings/:id/read', (req, res, next) => { req.url = `/api/droplets/${req.params.id}/read`; next('route'); });
-app.all('/api/pings/:id/burst', (req, res, next) => { req.url = `/api/droplets/${req.params.id}/ripple`; next('route'); }); // burst = new name for ripple
-app.all('/api/pings/:id/ripple', (req, res, next) => { req.url = `/api/droplets/${req.params.id}/ripple`; next('route'); });
+// Note: /api/pings/* is now primary; /api/droplets/* aliases are above the route definitions
 
 // /api/crews/* -> /api/groups/* (crews = new name for groups)
 app.all('/api/crews', (req, res, next) => { req.url = '/api/groups'; next('route'); });
@@ -18059,7 +18094,7 @@ function queueFederationDelivery(targetNodeName, messageType, payload) {
   if (!FEDERATION_ENABLED) return null;
 
   // Create a full message payload with ID
-  const messageId = `${messageType}-${payload.droplet?.id || payload.dropletId || payload.wave?.id || uuidv4()}-${Date.now()}`;
+  const messageId = `${messageType}-${payload.ping?.id || payload.pingId || payload.wave?.id || uuidv4()}-${Date.now()}`;
   const fullPayload = createFederationEnvelope(messageId, messageType, payload);
 
   return db.queueFederationMessage({
@@ -18196,7 +18231,7 @@ function shouldCreateNotification(userId, notificationType) {
     reply: 'replies',
     reaction: 'reactions',
     wave_activity: 'waveActivity',
-    ripple: 'burstEvents',
+    burst: 'burstEvents',
   };
 
   const prefKey = prefKeyMap[notificationType];
@@ -18225,16 +18260,16 @@ function extractMentions(content) {
 }
 
 // Create notifications for a new ping
-function createPingNotifications(droplet, wave, author) {
+function createPingNotifications(ping, wave, author) {
   const notificationsToSend = [];
-  const contentPreview = droplet.content.replace(/<[^>]*>/g, '').substring(0, 100);
+  const contentPreview = ping.content.replace(/<[^>]*>/g, '').substring(0, 100);
 
   // Get wave participants
   const participants = db.getWaveParticipants(wave.id);
   const participantIds = new Set(participants.map(p => p.id));
 
   // 1. Check for @mentions
-  const mentionedHandles = extractMentions(droplet.content);
+  const mentionedHandles = extractMentions(ping.content);
   const mentionedUsers = new Set();
 
   for (const handle of mentionedHandles) {
@@ -18250,26 +18285,26 @@ function createPingNotifications(droplet, wave, author) {
         userId: mentionedUser.id,
         type: 'direct_mention',
         waveId: wave.id,
-        pingId: droplet.id,
+        pingId: ping.id,
         actorId: author.id,
         title: `${author.displayName} mentioned you`,
         body: `in ${wave.title}`,
         preview: contentPreview,
-        groupKey: `mention:${wave.id}:${droplet.id}`
+        groupKey: `mention:${wave.id}:${ping.id}`
       });
 
       // Always send push for direct mentions — the service worker suppresses
       // the popup when the app is visible, so double-delivery is safe.
       // WS-connected doesn't mean the user is looking at the app (Android backgrounding).
       db.markNotificationPushSent(notification.id);
-      const isEncrypted = droplet.encrypted || droplet.nonce;
+      const isEncrypted = ping.encrypted || ping.nonce;
       sendPushNotification(mentionedUser.id, {
         type: 'direct_mention',
         title: notification.title,
         body: `in ${wave.title}`,
         url: `/?wave=${wave.id}`,
         waveId: wave.id,
-        messageId: droplet.id,
+        messageId: ping.id,
         senderId: author.id,
         senderHandle: author.handle,
         encrypted: !!isEncrypted,
@@ -18280,41 +18315,41 @@ function createPingNotifications(droplet, wave, author) {
   }
 
   // 2. Check if this is a reply - notify the parent author
-  if (droplet.parentId) {
-    const parentDroplet = db.getMessage(droplet.parentId);
-    if (parentDroplet && parentDroplet.authorId !== author.id && !mentionedUsers.has(parentDroplet.authorId)) {
+  if (ping.parentId) {
+    const parentPing = db.getMessage(ping.parentId);
+    if (parentPing && parentPing.authorId !== author.id && !mentionedUsers.has(parentPing.authorId)) {
       // Check user's notification preferences
-      if (shouldCreateNotification(parentDroplet.authorId, 'reply')) {
+      if (shouldCreateNotification(parentPing.authorId, 'reply')) {
         const notification = db.createNotification({
-          userId: parentDroplet.authorId,
+          userId: parentPing.authorId,
           type: 'reply',
           waveId: wave.id,
-          pingId: droplet.id,
+          pingId: ping.id,
           actorId: author.id,
           title: `${author.displayName} replied to you`,
           body: `in ${wave.title}`,
           preview: contentPreview,
-          groupKey: `reply:${wave.id}:${parentDroplet.id}`
+          groupKey: `reply:${wave.id}:${parentPing.id}`
         });
 
         // Always send push for replies (same reasoning as direct_mention above)
         db.markNotificationPushSent(notification.id);
-        const isEncrypted = droplet.encrypted || droplet.nonce;
-        sendPushNotification(parentDroplet.authorId, {
+        const isEncrypted = ping.encrypted || ping.nonce;
+        sendPushNotification(parentPing.authorId, {
           type: 'reply',
           title: notification.title,
           body: `in ${wave.title}`,
           url: `/?wave=${wave.id}`,
           waveId: wave.id,
-          messageId: droplet.id,
+          messageId: ping.id,
           senderId: author.id,
           senderHandle: author.handle,
           encrypted: !!isEncrypted,
         });
 
-        notificationsToSend.push({ userId: parentDroplet.authorId, notification });
+        notificationsToSend.push({ userId: parentPing.authorId, notification });
       }
-      mentionedUsers.add(parentDroplet.authorId); // Don't send wave_activity to them
+      mentionedUsers.add(parentPing.authorId); // Don't send wave_activity to them
     }
   }
 
@@ -18344,7 +18379,7 @@ function createPingNotifications(droplet, wave, author) {
       userId: participant.id,
       type: 'wave_activity',
       waveId: wave.id,
-      pingId: droplet.id,
+      pingId: ping.id,
       actorId: author.id,
       title: `New message in ${wave.title}`,
       body: `from ${author.displayName}`,
@@ -18367,7 +18402,7 @@ function createPingNotifications(droplet, wave, author) {
         db.markNotificationPushSent(notification.id);
         // Suppress details for hidden waves (privacy)
         const meta = participation.getMetadata(wave.id, participant.id);
-        const isEncrypted = droplet.encrypted || droplet.nonce;
+        const isEncrypted = ping.encrypted || ping.nonce;
         const pushTitle = meta.hidden === 1 ? 'Cortex' : notification.title;
         const pushBody = meta.hidden === 1 ? 'New activity on the cortex' : `from ${author.displayName}`;
         sendPushNotification(participant.id, {
@@ -18376,7 +18411,7 @@ function createPingNotifications(droplet, wave, author) {
           body: pushBody,
           url: `/?wave=${wave.id}`,
           waveId: wave.id,
-          messageId: droplet.id,
+          messageId: ping.id,
           senderId: author.id,
           senderHandle: author.handle,
           encrypted: !!isEncrypted,
@@ -18401,12 +18436,15 @@ function createPingNotifications(droplet, wave, author) {
 // createRippleNotifications removed in v2.38.0 — burst/ripple replaced by threads
 
 // Cortex v2.0.0 event name mappings (old -> new)
+// Note: now that pings are primary, these mappings mainly serve backward compat broadcasting
 const EVENT_ALIASES = {
   'new_droplet': 'new_ping',
   'droplet_edited': 'ping_edited',
   'droplet_deleted': 'ping_deleted',
   'droplet_read': 'ping_read',
-  'droplet_rippled': 'ping_burst',
+  'droplet_reaction': 'ping_reaction',
+  'droplet_threaded': 'ping_threaded',
+  'droplet_reparented': 'ping_reparented',
   'group_invitation_received': 'crew_invitation_received',
   'group_invitation_accepted': 'crew_invitation_accepted',
   'group_invitation_declined': 'crew_invitation_declined',

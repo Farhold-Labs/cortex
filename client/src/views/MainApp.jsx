@@ -521,7 +521,7 @@ function MainApp({ sharePingId }) {
     }
 
     // Handle both legacy (new_message) and new (new_ping) event names
-    if (data.type === 'new_message' || data.type === 'new_ping' || data.type === 'message_edited' || data.type === 'ping_edited' || data.type === 'message_deleted' || data.type === 'ping_deleted' || data.type === 'wave_created' || data.type === 'wave_updated' || data.type === 'message_reaction' || data.type === 'ping_reaction' || data.type === 'wave_invite_received' || data.type === 'wave_broadcast_received' || data.type === 'droplet_threaded' || data.type === 'droplet_reparented') {
+    if (data.type === 'new_message' || data.type === 'new_ping' || data.type === 'message_edited' || data.type === 'ping_edited' || data.type === 'message_deleted' || data.type === 'ping_deleted' || data.type === 'wave_created' || data.type === 'wave_updated' || data.type === 'message_reaction' || data.type === 'ping_reaction' || data.type === 'wave_invite_received' || data.type === 'wave_broadcast_received' || data.type === 'ping_threaded' || data.type === 'ping_reparented') {
       loadWaves();
       // If the event is for the currently viewed wave, trigger a reload
       // Extract waveId from different event structures
@@ -696,7 +696,7 @@ function MainApp({ sharePingId }) {
             console.log('🔕 Suppressed browser notification (viewing wave)');
           } else {
             // Check app_closed level: skip popup if tab is visible
-            const typeToKey = { direct_mention: 'directMentions', reply: 'replies', wave_activity: 'waveActivity', ripple: 'burstEvents', burst: 'burstEvents' };
+            const typeToKey = { direct_mention: 'directMentions', reply: 'replies', wave_activity: 'waveActivity', burst: 'burstEvents' };
             const prefKey = typeToKey[notif.type];
             const level = prefKey ? (prefs[prefKey] || 'always') : 'always';
             const tabVisible = document.visibilityState === 'visible';
@@ -1020,7 +1020,7 @@ function MainApp({ sharePingId }) {
   const handleCompleteMove = useCallback(async (targetMessageId) => {
     if (!moveSource) return;
     try {
-      const result = await fetchAPI(`/droplets/${moveSource.messageId}/reparent`, {
+      const result = await fetchAPI(`/pings/${moveSource.messageId}/reparent`, {
         method: 'POST',
         body: { newParentId: targetMessageId || null }
       });
@@ -1938,5 +1938,5 @@ function MainApp({ sharePingId }) {
   );
 }
 
-// ============ PUBLIC DROPLET VIEW (for shared links) ============
+// ============ PUBLIC PING VIEW (for shared links) ============
 export default MainApp;

@@ -5,105 +5,46 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.39.0] - 2026-03-12
+## [2.41.0] - 2026-03-16
 
 ### Added
 
-#### Message Reparenting (Move)
-- New "Move" action in message 3-dot menu for rearranging message hierarchy
-- Click-to-pick mode: selecting "Move" shows an amber banner with message preview, "Move to Root", and "Cancel" buttons
-- Click any other message to reparent the source (and its entire sub-tree) under the target
-- "Move to Root" promotes a nested message to the top level of the wave
-- Cycle detection prevents moving a message under its own descendant (server-side ancestor chain walk)
-- Permissions: message author and moderators/admins can move messages
-- Server: `reparentPing()` method in database-sqlite.js with validation and cycle detection
-- Server: `POST /api/droplets/:id/reparent` endpoint with `/api/pings/:id/reparent` alias
-- Client: `moveSource` state in MainApp with handlers, move banner UI, and `onClickCapture` for reliable target selection through nested click handlers
-- WebSocket: `droplet_reparented` event triggers wave reload on all connected clients
-- No schema changes — children follow automatically via existing `parent_id` tree structure
+#### Reaction Notifications
+- In-app and push notifications when someone reacts to your message
+- Shows who reacted, which emoji, and in which wave
+- New `reaction` notification type in notification bell (♡ icon, pink accent)
+- Configurable in profile notification settings (always / app closed / never)
+- Self-reactions and reaction removals do not trigger notifications
+- Added `reactions: 'always'` to default notification preferences
+- Added `reaction` to `shouldCreateNotification` preference key map
 
----
-
-## [2.38.2] - 2026-03-11
+#### Scroll-to-Ping Navigation
+- Added `?around=` query parameter to `GET /api/waves/:id`
+- Loads 50 messages centered on a target ping instead of the most recent 50
+- Notification clicks now correctly navigate to older messages behind the "load more" blocker
+- Search result clicks now correctly navigate to older messages behind the "load more" blocker
+- Infinite loop protection via `scrollToAroundAttemptedRef` (gives up if ping not found after one reload)
 
 ### Fixed
 
-#### Wave Topic Persistence
-- Fixed topic not persisting when set via inline editing
+#### Notification Click Navigation
+- Fixed notification clicks not scrolling to the target message
+- Root cause: API returned `dropletId` field but client expected `pingId`
+- Fixed service worker `navigate-to-wave` postMessage sending wrong field name (`dropletId` → `pingId`)
 
-#### Mention Lookup by Display Name
-- `findUserByMention` now matches both handle and display name
-- Client autocomplete searches both fields; server resolves @mentions by handle first, then display name
+### Changed
 
-#### Auto-Scroll on New Messages
-- WaveView and ThreadPanel auto-scroll to latest message when new messages arrive
+#### Notification Nomenclature Cleanup
+- `createNotification()` parameter and return field: `dropletId` → `pingId`
+- `getNotifications()` return field: `dropletId` → `pingId`
+- `getPendingNotifications()` return field: `dropletId` → `pingId`
+- `markNotificationsReadByDroplet()` → `markNotificationsReadByPing()`
+- `createDropletNotifications()` → `createPingNotifications()`
+- Wave activity notification title: "New droplet in" → "New message in"
 
-### Added
-
-#### Elderxeke Day Aurora Effect
-- Bifrost rainbow aurora effect with ember motes for Elderxeke Day (March 11-13)
-- Holiday effects overlay in `HolidayEffectsOverlay.jsx`
-
----
-
-## [2.38.1] - 2026-03-10
-
-### Fixed
-
-#### ThreadPanel Mobile Layout
-- Fixed ThreadPanel layout on mobile devices
-- Fixed thread toggle API path
-
----
-
-## [2.38.0] - 2026-03-09
-
-### Added
-
-#### Threaded Conversations
-- Messages can be threaded via "Thread" / "Unthread" toggle in the 3-dot menu
-- ThreadPanel: side panel on desktop, full overlay on mobile for viewing and replying within threads
-- Threaded messages show "N replies — view thread" indicator in wave view; children hidden from main view
-- Replies made in ThreadPanel flagged with `is_thread_reply = 1`
-- Schema: `threaded` and `is_thread_reply` columns on pings table (auto-migrated on startup)
-- Server: `threadPing()` method, `POST /api/droplets/:id/thread` endpoint with `/api/pings/` alias
-- Server: `createDroplet()` accepts `isThreadReply` flag; `getDropletsForWave()` returns threading fields
-- WebSocket: `droplet_threaded` event triggers wave reload
-- Focus view merged into Thread — at depth limit, users open thread panel instead of focus view
-- `THREAD_DEPTH_LIMIT = 2` in constants.js
-- Old burst/ripple feature fully removed: endpoints, DB methods, BurstModal, BurstLinkCard deleted
-- Burst wave migration runs on startup to convert existing burst waves
-
-#### Invitation Expiry
-- Wave and crew invitations now expire after a configurable period
-- Expired invitations are automatically cleaned up
-
-#### Dismissible Temp Password Toast
-- Temporary password toast notification is now dismissible with a longer display duration
-
----
-
-## [2.37.0] - 2026-03-07
-
-### Added
-
-#### User Moderation System
-- Full moderation lifecycle: disable, ban, reinstate, kick, and delete user accounts
-- Database: `account_status`, `moderation_reason`, `moderated_at`, `moderated_by` columns on users table
-- `moderation_appeals` table for user appeal submissions
-- Server enforcement: login block, `authenticateToken` check, WebSocket auth check, `/auth/me` includes `accountStatus`
-- 9 admin endpoints for account management and appeal handling
-- Client enforcement: `useAPI.js` 403 handling, MainApp WS `account_moderated` handler, LoginScreen moderation notice with appeal form
-- Admin UI: moderation buttons/dialogs in UserManagementPanel, new ModerationAppealsPanel in ProfileSettings
-- Bug fix: `deleteUserAccount()` FK constraint failure — disabled FK checks around transaction, added missing FK cleanups
-
-#### Admin E2EE Key Reset
-- Server endpoint: `POST /api/admin/users/:id/reset-encryption` (admin only, role hierarchy check)
-- Deletes user encryption keys, recovery keys, and wave encryption keys
-- Logs moderation action and activity, broadcasts `encryption_reset` WS event to affected user
-- Client: RESET E2EE button with confirmation dialog and reason textarea in UserManagementPanel
-
----
+#### Holiday Date Adjustments
+- Valentine's Day: trimmed from 4 days to 3 (Feb 13–15)
+- St Patrick's Day: trimmed from 4 days to 3 (Mar 16–18)
 
 ## [2.36.0] - 2026-03-05
 

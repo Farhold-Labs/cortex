@@ -319,15 +319,15 @@ export async function decryptWaveKey(encryptedKeyBase64, nonceBase64, senderPubl
   return importWaveKey(rawWaveKey);
 }
 
-// ============ Droplet Content Encryption ============
+// ============ Ping Content Encryption ============
 
 /**
- * Encrypt droplet content
+ * Encrypt ping content
  * @param {string} plaintext - Message content
  * @param {CryptoKey} waveKey - AES-256-GCM wave key
  * @returns {Promise<{ciphertext: string, nonce: string}>}
  */
-export async function encryptDroplet(plaintext, waveKey) {
+export async function encryptPing(plaintext, waveKey) {
   const encoder = new TextEncoder();
   const nonce = generateNonce();
 
@@ -344,13 +344,13 @@ export async function encryptDroplet(plaintext, waveKey) {
 }
 
 /**
- * Decrypt droplet content
+ * Decrypt ping content
  * @param {string} ciphertextBase64 - Base64-encoded ciphertext
  * @param {string} nonceBase64 - Base64-encoded nonce
  * @param {CryptoKey} waveKey - AES-256-GCM wave key
  * @returns {Promise<string>} - Decrypted plaintext
  */
-export async function decryptDroplet(ciphertextBase64, nonceBase64, waveKey) {
+export async function decryptPing(ciphertextBase64, nonceBase64, waveKey) {
   const decoder = new TextDecoder();
   const ciphertext = base64Decode(ciphertextBase64);
   const nonce = base64Decode(nonceBase64);

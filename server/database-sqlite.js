@@ -380,10 +380,10 @@ export class DatabaseSQLite {
         END;
       `);
 
-      // Populate FTS with existing droplets
-      const dropletCount = this.db.prepare('SELECT COUNT(*) as count FROM pings').get().count;
-      if (dropletCount > 0) {
-        console.log(`📚 Indexing ${dropletCount} existing droplets...`);
+      // Populate FTS with existing pings
+      const pingCount = this.db.prepare('SELECT COUNT(*) as count FROM pings').get().count;
+      if (pingCount > 0) {
+        console.log(`📚 Indexing ${pingCount} existing pings...`);
         this.db.exec(`
           INSERT INTO pings_fts(rowid, id, content)
           SELECT rowid, id, content FROM pings;
@@ -693,7 +693,7 @@ export class DatabaseSQLite {
             PRIMARY KEY (wave_id, node_name)
         );
 
-        -- Cached droplets from federated servers
+        -- Cached pings from federated servers
         CREATE TABLE IF NOT EXISTS remote_pings (
             id TEXT PRIMARY KEY,
             wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -2043,7 +2043,7 @@ export class DatabaseSQLite {
       insertParticipant.run(p.waveId, p.userId, now);
     }
 
-    // Demo droplets
+    // Demo pings
     const pings = [
       { id: 'ping-1', waveId: 'wave-1', authorId: 'user-mal', content: 'Welcome to Farhold! This is a public wave visible to everyone.', privacy: 'public' },
       { id: 'ping-2', waveId: 'wave-2', authorId: 'user-mal', content: 'This is a private wave for testing.', privacy: 'private' },
@@ -2944,7 +2944,7 @@ export class DatabaseSQLite {
    * Timestamps are rounded to 15-minute intervals for privacy
    * @param {string|null} userId - User ID (null for anonymous actions)
    * @param {string} actionType - Type of action (login, logout, password_change, etc.)
-   * @param {string|null} resourceType - Type of resource (user, wave, droplet, etc.)
+   * @param {string|null} resourceType - Type of resource (user, wave, ping, etc.)
    * @param {string|null} resourceId - ID of the affected resource
    * @param {Object} metadata - Additional context (ip, userAgent, etc.) - should be anonymized
    * @returns {string} Activity log entry ID
@@ -4001,18 +4001,17 @@ export class DatabaseSQLite {
     const reporter = this.findUserById(r.reporter_id);
     let context = {};
 
-    if (r.type === 'droplet' || r.type === 'message') {
-      // Support both 'droplet' (new) and 'message' (legacy) report types
-      const droplet = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(r.target_id);
-      if (droplet) {
-        const author = this.findUserById(droplet.author_id);
-        const wave = this.getWave(droplet.wave_id);
+    if (r.type === 'ping' || r.type === 'droplet' || r.type === 'message') {
+      const reportedPing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(r.target_id);
+      if (reportedPing) {
+        const author = this.findUserById(reportedPing.author_id);
+        const wave = this.getWave(reportedPing.wave_id);
         context = {
-          content: droplet.content,
+          content: reportedPing.content,
           authorHandle: author?.handle,
           authorName: author?.displayName,
-          createdAt: droplet.created_at,
-          waveId: droplet.wave_id,
+          createdAt: reportedPing.created_at,
+          waveId: reportedPing.wave_id,
           waveName: wave?.title
         };
       }
@@ -5001,7 +5000,7 @@ export class DatabaseSQLite {
     };
   }
 
-  // breakoutDroplet/rippleDroplet/getDropletsForBreakoutWave removed in v2.38.0 — replaced by threads
+  // breakoutPing/ripplePing/getPingsForBreakoutWave removed in v2.38.0 — replaced by threads
 
   /**
    * Migrate burst waves back to threads (v2.38.0)
@@ -5688,8 +5687,8 @@ export class DatabaseSQLite {
     };
   }
 
-  // === Droplet Methods (formerly Message Methods) ===
-  getDropletsForWave(waveId, userId = null) {
+  // === Ping Methods ===
+  getPingsForWave(waveId, userId = null) {
     // Get blocked/muted users
     let blockedIds = [];
     let mutedIds = [];
@@ -5725,7 +5724,7 @@ export class DatabaseSQLite {
 
     const rows = this.db.prepare(sql).all(...params);
 
-    const localDroplets = rows.map(d => {
+    const localPings = rows.map(d => {
       // Check if user has read this ping
       const hasRead = userId ? !!this.db.prepare('SELECT 1 FROM ping_read_by WHERE ping_id = ? AND user_id = ?').get(d.id, userId) : false;
       const isUnread = d.deleted ? false : (userId ? !hasRead && d.author_id !== userId : false);
@@ -5785,8 +5784,8 @@ export class DatabaseSQLite {
       };
     });
 
-    // Also get remote droplets for federated waves
-    const remoteDroplets = this.getRemoteDropletsForWave(waveId).map(rd => ({
+    // Also get remote pings for federated waves
+    const remotePings = this.getRemotePingsForWave(waveId).map(rd => ({
       id: rd.id,
       waveId: rd.waveId,
       parentId: rd.parentId,
@@ -5810,7 +5809,7 @@ export class DatabaseSQLite {
       created_at: rd.createdAt,
       edited_at: rd.editedAt,
       deleted_at: null,
-      is_unread: false, // Remote droplets don't track read status locally
+      is_unread: false, // Remote pings don't track read status locally
       brokenOutTo: null,
       brokenOutToTitle: null,
       isRemote: true,
@@ -5819,23 +5818,26 @@ export class DatabaseSQLite {
     }));
 
     // Merge and deduplicate by ID (prefer local over remote)
-    const seenIds = new Set(localDroplets.map(d => d.id));
-    const uniqueRemoteDroplets = remoteDroplets.filter(rd => !seenIds.has(rd.id));
+    const seenIds = new Set(localPings.map(d => d.id));
+    const uniqueRemotePings = remotePings.filter(rd => !seenIds.has(rd.id));
 
-    const allDroplets = [...localDroplets, ...uniqueRemoteDroplets];
-    allDroplets.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const allPings = [...localPings, ...uniqueRemotePings];
+    allPings.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-    return allDroplets;
+    return allPings;
   }
 
-  // Backward compatibility alias
+  // Backward compatibility aliases
   getMessagesForWave(waveId, userId = null) {
-    return this.getDropletsForWave(waveId, userId);
+    return this.getPingsForWave(waveId, userId);
+  }
+  getDropletsForWave(waveId, userId = null) {
+    return this.getPingsForWave(waveId, userId);
   }
 
-  // Low-Bandwidth Mode: Minimal droplet fetching (v2.10.0)
+  // Low-Bandwidth Mode: Minimal ping fetching (v2.10.0)
   // Omits reactions, readBy, and is_unread to reduce payload by 30-50%
-  getDropletsForWaveMinimal(waveId, userId = null) {
+  getPingsForWaveMinimal(waveId, userId = null) {
     // Get blocked/muted users
     let blockedIds = [];
     let mutedIds = [];
@@ -5874,7 +5876,7 @@ export class DatabaseSQLite {
 
     const rows = this.db.prepare(sql).all(...params);
 
-    const localDroplets = rows.map(d => {
+    const localPings = rows.map(d => {
       // Use bot information if this is a bot ping
       const isBot = !!d.bot_id;
       const senderName = isBot ? `[Bot] ${d.bot_name}` : d.user_display_name;
@@ -5922,8 +5924,8 @@ export class DatabaseSQLite {
       };
     });
 
-    // Also get remote droplets for federated waves (minimal)
-    const remoteDroplets = this.getRemoteDropletsForWave(waveId).map(rd => ({
+    // Also get remote pings for federated waves (minimal)
+    const remotePings = this.getRemotePingsForWave(waveId).map(rd => ({
       id: rd.id,
       waveId: rd.waveId,
       parentId: rd.parentId,
@@ -5950,16 +5952,20 @@ export class DatabaseSQLite {
     }));
 
     // Merge and deduplicate by ID (prefer local over remote)
-    const seenIds = new Set(localDroplets.map(d => d.id));
-    const uniqueRemoteDroplets = remoteDroplets.filter(rd => !seenIds.has(rd.id));
+    const seenIds = new Set(localPings.map(d => d.id));
+    const uniqueRemotePings = remotePings.filter(rd => !seenIds.has(rd.id));
 
-    const allDroplets = [...localDroplets, ...uniqueRemoteDroplets];
-    allDroplets.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const allPings = [...localPings, ...uniqueRemotePings];
+    allPings.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-    return allDroplets;
+    return allPings;
   }
 
-  createDroplet(data) {
+  getDropletsForWaveMinimal(waveId, userId = null) {
+    return this.getPingsForWaveMinimal(waveId, userId);
+  }
+
+  createPing(data) {
     const now = new Date().toISOString();
 
     // For encrypted content, skip sanitization (it's base64 ciphertext)
@@ -5972,8 +5978,8 @@ export class DatabaseSQLite {
       content = detectAndEmbedMedia(content);
     }
 
-    const droplet = {
-      id: `droplet-${uuidv4()}`,
+    const ping = {
+      id: `ping-${uuidv4()}`,
       waveId: data.waveId,
       parentId: data.parentId || null,
       authorId: data.authorId,
@@ -5995,25 +6001,25 @@ export class DatabaseSQLite {
       is_thread_reply: data.isThreadReply ? 1 : 0,
     };
 
-    // Check if parent is a remote droplet (exists in remote_pings but not in droplets)
-    // If so, we need to temporarily disable FK checks since remote droplets aren't in the droplets table
+    // Check if parent is a remote ping (exists in remote_pings but not in pings table)
+    // If so, we need to temporarily disable FK checks since remote pings aren't in the pings table
     let isRemoteParent = false;
-    if (droplet.parentId) {
-      const localParent = this.db.prepare('SELECT id FROM pings WHERE id = ?').get(droplet.parentId);
+    if (ping.parentId) {
+      const localParent = this.db.prepare('SELECT id FROM pings WHERE id = ?').get(ping.parentId);
       if (!localParent) {
-        const remoteParent = this.db.prepare('SELECT id FROM remote_pings WHERE id = ?').get(droplet.parentId);
+        const remoteParent = this.db.prepare('SELECT id FROM remote_pings WHERE id = ?').get(ping.parentId);
         isRemoteParent = !!remoteParent;
       }
     }
 
     if (isRemoteParent) {
-      // Temporarily disable FK checks for inserting a reply to a remote droplet
+      // Temporarily disable FK checks for inserting a reply to a remote ping
       this.db.exec('PRAGMA foreign_keys = OFF');
       try {
         this.db.prepare(`
           INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(droplet.id, droplet.waveId, droplet.parentId, droplet.authorId, droplet.content, droplet.privacy, droplet.version, droplet.createdAt, droplet.encrypted, droplet.nonce, droplet.keyVersion, data.botId || null, droplet.mediaType, droplet.mediaUrl, droplet.mediaDuration, droplet.mediaEncrypted, droplet.is_thread_reply);
+        `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply);
       } finally {
         this.db.exec('PRAGMA foreign_keys = ON');
       }
@@ -6021,12 +6027,12 @@ export class DatabaseSQLite {
       this.db.prepare(`
         INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(droplet.id, droplet.waveId, droplet.parentId, droplet.authorId, droplet.content, droplet.privacy, droplet.version, droplet.createdAt, droplet.encrypted, droplet.nonce, droplet.keyVersion, data.botId || null, droplet.mediaType, droplet.mediaUrl, droplet.mediaDuration, droplet.mediaEncrypted, droplet.is_thread_reply);
+      `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply);
     }
 
     // Author has read their own ping (skip for bot pings)
     if (!data.botId) {
-      this.db.prepare('INSERT INTO ping_read_by (ping_id, user_id, read_at) VALUES (?, ?, ?)').run(droplet.id, data.authorId, now);
+      this.db.prepare('INSERT INTO ping_read_by (ping_id, user_id, read_at) VALUES (?, ?, ?)').run(ping.id, data.authorId, now);
     }
 
     // Update wave timestamp
@@ -6036,59 +6042,58 @@ export class DatabaseSQLite {
     if (data.botId) {
       const bot = this.getBot(data.botId);
       return {
-        ...droplet,
+        ...ping,
         bot_id: data.botId,
         sender_name: bot ? `[Bot] ${bot.name}` : '[Bot] Unknown',
         sender_avatar: '🤖',
         sender_avatar_url: null,
         sender_handle: bot ? bot.name.toLowerCase().replace(/\s+/g, '-') : 'unknown-bot',
-        author_id: droplet.authorId,
-        parent_id: droplet.parentId,
-        wave_id: droplet.waveId,
-        created_at: droplet.createdAt,
-        edited_at: droplet.editedAt,
+        author_id: ping.authorId,
+        parent_id: ping.parentId,
+        wave_id: ping.waveId,
+        created_at: ping.createdAt,
+        edited_at: ping.editedAt,
         isBot: true,
         botId: data.botId,
         // Media fields (v2.7.0)
-        media_type: droplet.mediaType,
-        media_url: droplet.mediaUrl,
-        media_duration: droplet.mediaDuration,
-        media_encrypted: droplet.mediaEncrypted,
+        media_type: ping.mediaType,
+        media_url: ping.mediaUrl,
+        media_duration: ping.mediaDuration,
+        media_encrypted: ping.mediaEncrypted,
       };
     }
 
     const author = this.findUserById(data.authorId);
     return {
-      ...droplet,
+      ...ping,
       sender_name: author?.displayName || 'Unknown',
       sender_avatar: author?.avatar || '?',
       sender_avatar_url: author?.avatarUrl || null,
       sender_handle: author?.handle || 'unknown',
-      author_id: droplet.authorId,
-      parent_id: droplet.parentId,
-      wave_id: droplet.waveId,
-      created_at: droplet.createdAt,
-      edited_at: droplet.editedAt,
+      author_id: ping.authorId,
+      parent_id: ping.parentId,
+      wave_id: ping.waveId,
+      created_at: ping.createdAt,
+      edited_at: ping.editedAt,
       // Media fields (v2.7.0)
-      media_type: droplet.mediaType,
-      media_url: droplet.mediaUrl,
-      media_duration: droplet.mediaDuration,
-      media_encrypted: droplet.mediaEncrypted,
+      media_type: ping.mediaType,
+      media_url: ping.mediaUrl,
+      media_duration: ping.mediaDuration,
+      media_encrypted: ping.mediaEncrypted,
     };
   }
 
-  // Backward compatibility alias
-  createMessage(data) {
-    return this.createDroplet(data);
-  }
+  // Backward compatibility aliases
+  createMessage(data) { return this.createPing(data); }
+  createDroplet(data) { return this.createPing(data); }
 
-  getDroplet(dropletId) {
+  getPing(pingId) {
     const d = this.db.prepare(`
       SELECT d.*, u.display_name as sender_name, u.avatar as sender_avatar, u.avatar_url as sender_avatar_url, u.handle as sender_handle
       FROM pings d
       JOIN users u ON d.author_id = u.id
       WHERE d.id = ?
-    `).get(dropletId);
+    `).get(pingId);
 
     if (!d) return null;
 
@@ -6130,10 +6135,9 @@ export class DatabaseSQLite {
     };
   }
 
-  // Backward compatibility alias
-  getMessage(dropletId) {
-    return this.getDroplet(dropletId);
-  }
+  // Backward compatibility aliases
+  getMessage(id) { return this.getPing(id); }
+  getDroplet(id) { return this.getPing(id); }
 
   // v2.38.0: Toggle threaded flag on a ping
   threadPing(pingId, threaded = true) {
@@ -6165,31 +6169,31 @@ export class DatabaseSQLite {
     return { success: true, ping: updated };
   }
 
-  updateDroplet(dropletId, content) {
-    const droplet = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(dropletId);
-    if (!droplet || droplet.deleted) return null;
+  updatePing(pingId, content) {
+    const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
+    if (!existing || existing.deleted) return null;
 
     // Save history
     this.db.prepare(`
       INSERT INTO ping_history (id, ping_id, content, version, edited_at)
       VALUES (?, ?, ?, ?, ?)
-    `).run(`hist-${uuidv4()}`, dropletId, droplet.content, droplet.version, new Date().toISOString());
+    `).run(`hist-${uuidv4()}`, pingId, existing.content, existing.version, new Date().toISOString());
 
-    // Sanitize and auto-embed media URLs (same as createDroplet)
+    // Sanitize and auto-embed media URLs (same as createPing)
     let processedContent = sanitizeMessage(content);
     processedContent = detectAndEmbedMedia(processedContent);
 
-    // Update droplet
+    // Update ping
     const now = new Date().toISOString();
-    this.db.prepare('UPDATE pings SET content = ?, version = ?, edited_at = ? WHERE id = ?').run(processedContent, droplet.version + 1, now, dropletId);
+    this.db.prepare('UPDATE pings SET content = ?, version = ?, edited_at = ? WHERE id = ?').run(processedContent, existing.version + 1, now, pingId);
 
-    // Return updated droplet
+    // Return updated ping
     const updated = this.db.prepare(`
       SELECT d.*, u.display_name as sender_name, u.avatar as sender_avatar, u.avatar_url as sender_avatar_url, u.handle as sender_handle
       FROM pings d
       JOIN users u ON d.author_id = u.id
       WHERE d.id = ?
-    `).get(dropletId);
+    `).get(pingId);
 
     return {
       id: updated.id,
@@ -6213,45 +6217,43 @@ export class DatabaseSQLite {
     };
   }
 
-  // Backward compatibility alias
-  updateMessage(dropletId, content) {
-    return this.updateDroplet(dropletId, content);
-  }
+  // Backward compatibility aliases
+  updateMessage(id, content) { return this.updatePing(id, content); }
+  updateDroplet(id, content) { return this.updatePing(id, content); }
 
-  deleteDroplet(dropletId, userId) {
-    const droplet = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(dropletId);
-    if (!droplet) return { success: false, error: 'Droplet not found' };
-    if (droplet.deleted) return { success: false, error: 'Droplet already deleted' };
-    if (droplet.author_id !== userId) return { success: false, error: 'Only droplet author can delete' };
+  deletePing(pingId, userId) {
+    const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
+    if (!existing) return { success: false, error: 'Message not found' };
+    if (existing.deleted) return { success: false, error: 'Message already deleted' };
+    if (existing.author_id !== userId) return { success: false, error: 'Only the author can delete' };
 
     const now = new Date().toISOString();
 
     // Soft delete
     this.db.prepare(`
-      UPDATE pings SET content = '[Droplet deleted]', deleted = 1, deleted_at = ?, reactions = '{}'
+      UPDATE pings SET content = '[deleted]', deleted = 1, deleted_at = ?, reactions = '{}'
       WHERE id = ?
-    `).run(now, dropletId);
+    `).run(now, pingId);
 
     // Clear read status
-    this.db.prepare('DELETE FROM ping_read_by WHERE ping_id = ?').run(dropletId);
+    this.db.prepare('DELETE FROM ping_read_by WHERE ping_id = ?').run(pingId);
 
     // Clear history
-    this.db.prepare('DELETE FROM ping_history WHERE ping_id = ?').run(dropletId);
+    this.db.prepare('DELETE FROM ping_history WHERE ping_id = ?').run(pingId);
 
-    return { success: true, dropletId, waveId: droplet.wave_id, deleted: true };
+    return { success: true, pingId, waveId: existing.wave_id, deleted: true };
   }
 
-  // Backward compatibility alias
-  deleteMessage(dropletId, userId) {
-    return this.deleteDroplet(dropletId, userId);
-  }
+  // Backward compatibility aliases
+  deleteMessage(id, userId) { return this.deletePing(id, userId); }
+  deleteDroplet(id, userId) { return this.deletePing(id, userId); }
 
-  toggleDropletReaction(dropletId, userId, emoji) {
-    const droplet = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(dropletId);
-    if (!droplet) return { success: false, error: 'Droplet not found' };
-    if (droplet.deleted) return { success: false, error: 'Cannot react to deleted droplet' };
+  togglePingReaction(pingId, userId, emoji) {
+    const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
+    if (!existing) return { success: false, error: 'Message not found' };
+    if (existing.deleted) return { success: false, error: 'Cannot react to deleted message' };
 
-    let reactions = droplet.reactions ? JSON.parse(droplet.reactions) : {};
+    let reactions = existing.reactions ? JSON.parse(existing.reactions) : {};
     if (!reactions[emoji]) reactions[emoji] = [];
 
     const userIndex = reactions[emoji].indexOf(userId);
@@ -6264,23 +6266,22 @@ export class DatabaseSQLite {
       added = true;
     }
 
-    this.db.prepare('UPDATE pings SET reactions = ? WHERE id = ?').run(JSON.stringify(reactions), dropletId);
+    this.db.prepare('UPDATE pings SET reactions = ? WHERE id = ?').run(JSON.stringify(reactions), pingId);
 
-    return { success: true, dropletId, reactions, waveId: droplet.wave_id, authorId: droplet.author_id, added };
+    return { success: true, pingId, reactions, waveId: existing.wave_id, authorId: existing.author_id, added };
   }
 
-  // Backward compatibility alias
-  toggleMessageReaction(dropletId, userId, emoji) {
-    return this.toggleDropletReaction(dropletId, userId, emoji);
-  }
+  // Backward compatibility aliases
+  toggleMessageReaction(id, userId, emoji) { return this.togglePingReaction(id, userId, emoji); }
+  toggleDropletReaction(id, userId, emoji) { return this.togglePingReaction(id, userId, emoji); }
 
-  markDropletAsRead(dropletId, userId) {
-    const droplet = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(dropletId);
-    if (!droplet) return false;
-    if (droplet.deleted) return true;
+  markPingAsRead(pingId, userId) {
+    const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
+    if (!existing) return false;
+    if (existing.deleted) return true;
 
     try {
-      this.db.prepare('INSERT INTO ping_read_by (ping_id, user_id, read_at) VALUES (?, ?, ?)').run(dropletId, userId, new Date().toISOString());
+      this.db.prepare('INSERT INTO ping_read_by (ping_id, user_id, read_at) VALUES (?, ?, ?)').run(pingId, userId, new Date().toISOString());
       return true;
     } catch {
       // Already read
@@ -6288,12 +6289,11 @@ export class DatabaseSQLite {
     }
   }
 
-  // Backward compatibility alias
-  markMessageAsRead(dropletId, userId) {
-    return this.markDropletAsRead(dropletId, userId);
-  }
+  // Backward compatibility aliases
+  markMessageAsRead(id, userId) { return this.markPingAsRead(id, userId); }
+  markDropletAsRead(id, userId) { return this.markPingAsRead(id, userId); }
 
-  searchDroplets(query, filters = {}) {
+  searchPings(query, filters = {}) {
     const { waveId, authorId, fromDate, toDate } = filters;
     const searchTerm = query.trim();
     if (!searchTerm) return [];
@@ -6370,17 +6370,16 @@ export class DatabaseSQLite {
     } catch (err) {
       // Fallback to LIKE search if FTS fails (e.g., invalid query)
       console.warn('FTS search failed, falling back to LIKE:', err.message);
-      return this.searchDropletsLike(query, filters);
+      return this.searchPingsLike(query, filters);
     }
   }
 
-  // Backward compatibility alias
-  searchMessages(query, filters = {}) {
-    return this.searchDroplets(query, filters);
-  }
+  // Backward compatibility aliases
+  searchMessages(query, filters = {}) { return this.searchPings(query, filters); }
+  searchDroplets(query, filters = {}) { return this.searchPings(query, filters); }
 
   // Fallback LIKE-based search for when FTS fails
-  searchDropletsLike(query, filters = {}) {
+  searchPingsLike(query, filters = {}) {
     const { waveId, authorId, fromDate, toDate } = filters;
     const searchTerm = query.toLowerCase().trim();
     if (!searchTerm) return [];
@@ -6430,10 +6429,9 @@ export class DatabaseSQLite {
     }));
   }
 
-  // Backward compatibility alias
-  searchMessagesLike(query, filters = {}) {
-    return this.searchDropletsLike(query, filters);
-  }
+  // Backward compatibility aliases
+  searchMessagesLike(query, filters = {}) { return this.searchPingsLike(query, filters); }
+  searchDropletsLike(query, filters = {}) { return this.searchPingsLike(query, filters); }
 
   // ============ Push Subscription Methods ============
 
@@ -6600,8 +6598,8 @@ export class DatabaseSQLite {
     `).all(userId);
 
     const byWave = {};
-    // Priority: direct_mention > reply > ripple > wave_activity
-    const typePriority = { direct_mention: 4, reply: 3, ripple: 2, wave_activity: 1 };
+    // Priority: direct_mention > reply > burst > wave_activity
+    const typePriority = { direct_mention: 4, reply: 3, burst: 2, wave_activity: 1 };
 
     for (const r of rows) {
       if (!byWave[r.wave_id]) {
@@ -7210,9 +7208,9 @@ export class DatabaseSQLite {
     return row ? this.rowToWave(row) : null;
   }
 
-  // ============ Federation - Remote Droplets Methods ============
+  // ============ Federation - Remote Pings Methods ============
 
-  getRemoteDroplet(id) {
+  getRemotePing(id) {
     const row = this.db.prepare('SELECT * FROM remote_pings WHERE id = ?').get(id);
     if (!row) return null;
     return {
@@ -7234,7 +7232,7 @@ export class DatabaseSQLite {
     };
   }
 
-  getRemoteDropletsForWave(waveId) {
+  getRemotePingsForWave(waveId) {
     const rows = this.db.prepare(`
       SELECT rd.*, ru.display_name as author_display_name, ru.avatar as author_avatar, ru.avatar_url as author_avatar_url
       FROM remote_pings rd
@@ -7265,7 +7263,7 @@ export class DatabaseSQLite {
     }));
   }
 
-  cacheRemoteDroplet({ id, waveId, originWaveId, originNode, authorId, authorNode, parentId, content, createdAt, editedAt, reactions }) {
+  cacheRemotePing({ id, waveId, originWaveId, originNode, authorId, authorNode, parentId, content, createdAt, editedAt, reactions }) {
     const now = new Date().toISOString();
 
     this.db.prepare(`
@@ -7278,16 +7276,22 @@ export class DatabaseSQLite {
         updated_at = excluded.updated_at
     `).run(id, waveId, originWaveId, originNode, authorId, authorNode, parentId || null, content, createdAt, editedAt || null, JSON.stringify(reactions || {}), now, now);
 
-    return this.getRemoteDroplet(id);
+    return this.getRemotePing(id);
   }
 
-  markRemoteDropletDeleted(id) {
+  // Backward compatibility aliases
+  getRemoteDroplet(id) { return this.getRemotePing(id); }
+  getRemoteDropletsForWave(waveId) { return this.getRemotePingsForWave(waveId); }
+  cacheRemoteDroplet(data) { return this.cacheRemotePing(data); }
+
+  markRemotePingDeleted(id) {
     const now = new Date().toISOString();
     const result = this.db.prepare(`
       UPDATE remote_pings SET deleted = 1, updated_at = ? WHERE id = ?
     `).run(now, id);
     return result.changes > 0;
   }
+  markRemoteDropletDeleted(id) { return this.markRemotePingDeleted(id); }
 
   // ============ Federation - Message Queue Methods ============
 
@@ -8021,7 +8025,7 @@ export class DatabaseSQLite {
         LEFT JOIN users u ON c.contact_id = u.id
         WHERE c.user_id = ?
       `).all(userId),
-      droplets: this.db.prepare(`
+      pings: this.db.prepare(`
         SELECT d.*, w.title as wave_name
         FROM pings d
         LEFT JOIN waves w ON d.wave_id = w.id
@@ -8214,7 +8218,7 @@ export class DatabaseSQLite {
         `).get(wave.id, userId);
 
         if (!otherParticipant) {
-          // Delete wave and all its droplets (sole participant)
+          // Delete wave and all its pings (sole participant)
           this.db.prepare('DELETE FROM pings WHERE wave_id = ?').run(wave.id);
           this.db.prepare('DELETE FROM wave_participants WHERE wave_id = ?').run(wave.id);
           this.db.prepare('DELETE FROM waves WHERE id = ?').run(wave.id);
@@ -8227,7 +8231,7 @@ export class DatabaseSQLite {
       // 8. Remove user from wave participants
       this.db.prepare('DELETE FROM wave_participants WHERE user_id = ?').run(userId);
 
-      // 9. Orphan droplets (transfer to deleted user, keep content)
+      // 9. Orphan pings (transfer to deleted user, keep content)
       this.db.prepare('UPDATE pings SET author_id = ? WHERE author_id = ?').run(deletedUserId, userId);
 
       // 10. Handle groups - delete empty ones, orphan others
@@ -8660,8 +8664,8 @@ export class DatabaseSQLite {
 
     return {
       state: wave.encrypted, // 0=legacy, 1=encrypted, 2=partial
-      totalDroplets: stats.total || 0,
-      encryptedDroplets: stats.encrypted_count || 0,
+      totalPings: stats.total || 0,
+      encryptedPings: stats.encrypted_count || 0,
       progress: stats.total > 0 ? Math.round((stats.encrypted_count / stats.total) * 100) : 100
     };
   }
@@ -8688,8 +8692,8 @@ export class DatabaseSQLite {
     }));
   }
 
-  // Get unencrypted droplets for a wave (for batch encryption)
-  getUnencryptedDroplets(waveId, limit = 50) {
+  // Get unencrypted pings for a wave (for batch encryption)
+  getUnencryptedPings(waveId, limit = 50) {
     return this.db.prepare(`
       SELECT id, content, author_id, created_at
       FROM pings
@@ -8703,15 +8707,17 @@ export class DatabaseSQLite {
       createdAt: d.created_at
     }));
   }
+  getUnencryptedDroplets(waveId, limit = 50) { return this.getUnencryptedPings(waveId, limit); }
 
-  // Update a droplet with encrypted content
-  encryptDropletContent(dropletId, encryptedContent, nonce, keyVersion) {
+  // Update a ping with encrypted content
+  encryptPingContent(pingId, encryptedContent, nonce, keyVersion) {
     this.db.prepare(`
       UPDATE pings
       SET content = ?, nonce = ?, key_version = ?, encrypted = 1
       WHERE id = ?
-    `).run(encryptedContent, nonce, keyVersion, dropletId);
+    `).run(encryptedContent, nonce, keyVersion, pingId);
   }
+  encryptDropletContent(id, enc, nonce, kv) { return this.encryptPingContent(id, enc, nonce, kv); }
 
   // ============ Bot Management (v2.1.0) ============
 
@@ -9970,8 +9976,9 @@ export class DatabaseSQLite {
   // Placeholder for JSON compatibility - not needed with SQLite
   saveUsers() {}
   saveWaves() {}
-  saveDroplets() {}
-  saveMessages() {} // Backward compatibility alias
+  savePings() {}
+  saveDroplets() {} // Legacy alias
+  saveMessages() {} // Legacy alias
   saveGroups() {}
   saveHandleRequests() {}
   saveReports() {}

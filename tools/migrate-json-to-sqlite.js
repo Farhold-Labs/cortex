@@ -14,8 +14,8 @@
  *
  * v1.10.0 Changes:
  *   - Migrates messages.json OR droplets.json to droplets table
- *   - Includes ripple fields: broken_out_to, original_wave_id
- *   - Includes wave ripple fields: root_droplet_id, broken_out_from, breakout_chain
+ *   - Includes burst fields: broken_out_to, original_wave_id
+ *   - Includes wave burst fields: root_droplet_id, broken_out_from, breakout_chain
  */
 
 import Database from 'better-sqlite3';
@@ -253,7 +253,7 @@ async function migrate() {
     }
     console.log(`    Migrated ${data.groups.members?.length || 0} group members`);
 
-    // 5.5 Migrate waves (v1.10.0: includes ripple/breakout fields)
+    // 5.5 Migrate waves (v1.10.0: includes burst/breakout fields)
     // Note: Insert waves without root_droplet_id first due to circular FK dependency
     // We'll update root_droplet_id after droplets are inserted
     console.log('  Migrating waves...');
@@ -291,7 +291,7 @@ async function migrate() {
     }
     console.log(`    Migrated ${data.waves.participants?.length || 0} wave participants`);
 
-    // 5.7 Migrate droplets (v1.10.0: renamed from messages, includes ripple fields)
+    // 5.7 Migrate droplets (v1.10.0: renamed from messages, includes burst fields)
     console.log('  Migrating droplets...');
     const insertDroplet = db.prepare(`
       INSERT INTO droplets (id, wave_id, parent_id, author_id, content, privacy, version, created_at, edited_at, deleted, deleted_at, reactions, broken_out_to, original_wave_id)
@@ -503,7 +503,7 @@ async function migrate() {
   console.log('\nNext steps:');
   console.log('1. Set USE_SQLITE=true in server/.env');
   console.log('2. Restart the server');
-  console.log('3. Test all functionality (waves, droplets, ripple, focus view)');
+  console.log('3. Test all functionality (waves, pings, burst, focus view)');
   console.log('4. Once verified, you can delete the JSON files');
 }
 
