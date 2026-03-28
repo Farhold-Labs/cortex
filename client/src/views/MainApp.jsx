@@ -64,7 +64,7 @@ function MainApp({ sharePingId }) {
 
   // Derived for backward compatibility
   const activeTab = openTabs.find(t => t.id === activeTabId) || null;
-  const selectedWave = activeTab ? { id: activeTab.waveId, title: activeTab.title } : null;
+  const selectedWave = activeTab ? { id: activeTab.waveId, title: activeTab.title, privacy: activeTab.privacy } : null;
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [scrollToMessageId, setScrollToMessageId] = useState(null); // Ping to scroll to after wave loads
@@ -292,7 +292,7 @@ function MainApp({ sharePingId }) {
 
       // Create new tab
       tabIdCounter.current += 1;
-      const newTab = { id: `tab-${tabIdCounter.current}`, waveId: wave.id, title: wave.title || '' };
+      const newTab = { id: `tab-${tabIdCounter.current}`, waveId: wave.id, title: wave.title || '', privacy: wave.privacy || 'private' };
       if (!background) {
         setActiveTabId(newTab.id);
         setFocusStack([]);
@@ -1041,8 +1041,8 @@ function MainApp({ sharePingId }) {
     if (waves.length === 0 || openTabs.length === 0) return;
     setOpenTabs(prev => prev.map(tab => {
       const wave = waves.find(w => w.id === tab.waveId);
-      if (wave && wave.title !== tab.title) {
-        return { ...tab, title: wave.title };
+      if (wave && (wave.title !== tab.title || wave.privacy !== tab.privacy)) {
+        return { ...tab, title: wave.title, privacy: wave.privacy };
       }
       return tab;
     }));

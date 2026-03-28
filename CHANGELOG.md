@@ -5,6 +5,68 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.43.0] - 2026-03-26
+
+### Added
+
+#### Wave Posting Tokens
+Self-service per-wave posting tokens allow wave creators to generate API keys scoped to a single wave, enabling bots and scripts to post messages without a user account or server admin involvement.
+
+- New `wave_tokens` DB table: `id, wave_id, created_by, name, token_hash, bot_id, created_at, last_used_at`
+- Each token gets a backing bot entry (`bot-token-{uuid}`) so posts render under the token's custom name with existing bot message styling (`[Bot] Name`)
+- Backing bot is automatically deleted when the token is revoked
+- **Endpoints:**
+  - `GET /api/waves/:id/tokens` — list tokens with metadata (wave creator only)
+  - `POST /api/waves/:id/tokens` — create token (max 10 per wave), returns plaintext once
+  - `DELETE /api/waves/:id/tokens/:tokenId` — revoke token and its backing bot
+  - `POST /api/post/:token` — post `{ content }` authenticated by token alone (no user session), rate-limited by `botLimiter`
+- **UI** — "Posting Tokens" section in Wave Settings (creator only): token list with name/created/last-used, amber one-time reveal banner with Copy button, inline creation form, Revoke button per token
+
+#### Wave Members Visible to All Participants
+All wave participants can now see who else is in a wave — previously the participants panel was only reachable via Wave Settings (creator-gated).
+
+- Added "Members (N)" entry to the three-dot wave menu in `WaveView.jsx`
+- Visible to all participants, not gated by `waveData.can_edit`
+- Clicking opens the existing participants panel (`setShowParticipants(true)`)
+
+### Fixed
+
+#### Push Notification Content Preview
+Push notifications previously showed "New ping from @user" with no message content or wave context.
+
+- `direct_mention` push: body is now `WaveName: preview text` (encrypted falls back to `in WaveName`)
+- `reply` push: body is now `WaveName: preview text` (encrypted falls back to `in WaveName`)
+- `wave_activity` push: body is now `DisplayName: preview text` (hidden waves stay generic; encrypted falls back to `from DisplayName`)
+
+#### Privacy Badge Always Showing "Private"
+The wave header privacy badge always displayed "Private" regardless of the wave's actual privacy level.
+
+- **Root cause:** The tab system (v2.35.0) stored only `{ id, waveId, title }` — no `privacy` field. `selectedWave` was reconstructed missing `privacy`, so `PrivacyBadge` fell back to `PRIVACY_LEVELS.private`
+- **Fix:** `MainApp.jsx` now stores `privacy` in the tab object at creation, includes it in `selectedWave` derivation, and syncs it on wave list updates
+
+---
+
+## [2.42.0] - 2026-03-18
+
+### Added
+
+#### Auto-Focus Message Composer
+The message composer now automatically focuses when a wave opens, a thread opens, or a reply is initiated — desktop only (skipped on mobile/touch to avoid unwanted keyboard pop-up).
+
+### Changed
+
+#### Nomenclature Cleanup (droplet → ping, ripple → burst)
+Completed a full rename across all layers of the codebase to align with the v2.0 terminology guide.
+
+- **Phase 1** — Database layer: column/method renames, migration script
+- **Phase 2** — Server core: `createDroplet`, `getDroplet`, etc. → `createMessage`, `getMessage`, etc.
+- **Phase 3** — Client: all `droplet`/`ripple` references updated
+- **Phase 4** — `ripple` → `burst` across server and client
+- **Phase 5** — Migration tool updated
+- Zero breaking changes to the public API; WebSocket event names kept for compatibility
+
+---
+
 ## [2.41.0] - 2026-03-16
 
 ### Added

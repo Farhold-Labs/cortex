@@ -1938,6 +1938,30 @@ export class DatabaseSQLite {
     } catch (err) {
       // Table may already exist
     }
+
+    // v2.43.0: Wave posting tokens
+    const waveTokensExists = this.db.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='wave_tokens'
+    `).get();
+    if (!waveTokensExists) {
+      console.log('📝 Creating wave_tokens table...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS wave_tokens (
+          id TEXT PRIMARY KEY,
+          wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          token_hash TEXT UNIQUE NOT NULL,
+          bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          last_used_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_wave_tokens_wave ON wave_tokens(wave_id);
+        CREATE INDEX IF NOT EXISTS idx_wave_tokens_created_by ON wave_tokens(created_by);
+        CREATE INDEX IF NOT EXISTS idx_wave_tokens_hash ON wave_tokens(token_hash);
+      `);
+      console.log('✅ Wave tokens table created');
+    }
   }
 
   prepareStatements() {
@@ -9089,6 +9113,54 @@ export class DatabaseSQLite {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  // ============ Wave Posting Tokens (v2.43.0) ============
+
+  createWaveToken(waveId, createdBy, name, tokenHash) {
+    const id = `token-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+
+    // Create a backing bot entry so pings show the token name as sender_name
+    const botId = `bot-token-${crypto.randomUUID()}`;
+    const dummyKeyHash = crypto.createHash('sha256').update(`${botId}-${now}`).digest('hex');
+    this.db.prepare(`
+      INSERT INTO bots (id, name, owner_user_id, api_key_hash, status, created_at)
+      VALUES (?, ?, ?, ?, 'active', ?)
+    `).run(botId, name, createdBy, dummyKeyHash, now);
+
+    this.db.prepare(`
+      INSERT INTO wave_tokens (id, wave_id, created_by, name, token_hash, bot_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, waveId, createdBy, name, tokenHash, botId, now);
+    return this.db.prepare(`SELECT * FROM wave_tokens WHERE id = ?`).get(id);
+  }
+
+  getWaveTokens(waveId) {
+    return this.db.prepare(`
+      SELECT id, wave_id, created_by, name, created_at, last_used_at
+      FROM wave_tokens WHERE wave_id = ? ORDER BY created_at ASC
+    `).all(waveId);
+  }
+
+  getWaveTokenByHash(tokenHash) {
+    return this.db.prepare(`
+      SELECT * FROM wave_tokens WHERE token_hash = ?
+    `).get(tokenHash);
+  }
+
+  deleteWaveToken(tokenId, waveId) {
+    const token = this.db.prepare(`SELECT bot_id FROM wave_tokens WHERE id = ? AND wave_id = ?`).get(tokenId, waveId);
+    this.db.prepare(`DELETE FROM wave_tokens WHERE id = ? AND wave_id = ?`).run(tokenId, waveId);
+    // Clean up the backing bot entry (bot_id prefix distinguishes token bots from real bots)
+    if (token?.bot_id) {
+      this.db.prepare(`DELETE FROM bots WHERE id = ? AND id LIKE 'bot-token-%'`).run(token.bot_id);
+    }
+  }
+
+  touchWaveToken(tokenId) {
+    this.db.prepare(`UPDATE wave_tokens SET last_used_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), tokenId);
   }
 
   // ============ Jellyfin Integration Methods (v2.14.0) ============

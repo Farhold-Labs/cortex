@@ -10792,6 +10792,125 @@ app.post('/api/webhooks/:botId/:webhookSecret', express.json({ limit: '50kb' }),
   }
 });
 
+// ============ Wave Posting Tokens (v2.43.0) ============
+
+/**
+ * List tokens for a wave (creator only)
+ */
+app.get('/api/waves/:id/tokens', authenticateToken, (req, res) => {
+  try {
+    const wave = db.getWave(req.params.id);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+    if (wave.created_by !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
+
+    const tokens = db.getWaveTokens(wave.id);
+    res.json({ tokens });
+  } catch (err) {
+    console.error('Get wave tokens error:', err);
+    res.status(500).json({ error: 'Failed to get tokens' });
+  }
+});
+
+/**
+ * Create a posting token for a wave (creator only, max 10 per wave)
+ */
+app.post('/api/waves/:id/tokens', authenticateToken, (req, res) => {
+  try {
+    const wave = db.getWave(req.params.id);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+    if (wave.created_by !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
+
+    const name = sanitizeInput(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Token name is required' });
+    if (name.length > 64) return res.status(400).json({ error: 'Token name too long (max 64 chars)' });
+
+    const existing = db.getWaveTokens(wave.id);
+    if (existing.length >= 10) return res.status(400).json({ error: 'Maximum 10 tokens per wave' });
+
+    const plaintext = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(plaintext).digest('hex');
+
+    const token = db.createWaveToken(wave.id, req.user.userId, name, tokenHash);
+    db.logActivity(req.user.userId, 'wave_token_created', 'wave', wave.id, { tokenId: token.id, name });
+
+    // Return plaintext token once — never stored in DB
+    res.status(201).json({
+      token: { id: token.id, name: token.name, createdAt: token.created_at },
+      plaintext,
+    });
+  } catch (err) {
+    console.error('Create wave token error:', err);
+    res.status(500).json({ error: 'Failed to create token' });
+  }
+});
+
+/**
+ * Revoke a posting token (creator only)
+ */
+app.delete('/api/waves/:id/tokens/:tokenId', authenticateToken, (req, res) => {
+  try {
+    const wave = db.getWave(req.params.id);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+    if (wave.created_by !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
+
+    db.deleteWaveToken(req.params.tokenId, wave.id);
+    db.logActivity(req.user.userId, 'wave_token_revoked', 'wave', wave.id, { tokenId: req.params.tokenId });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete wave token error:', err);
+    res.status(500).json({ error: 'Failed to revoke token' });
+  }
+});
+
+/**
+ * Post a message to a wave using a posting token (no user session required)
+ * POST /api/post/:token  { content }
+ */
+app.post('/api/post/:token', express.json({ limit: '50kb' }), botLimiter, (req, res) => {
+  try {
+    const tokenHash = crypto.createHash('sha256').update(req.params.token).digest('hex');
+    const tokenRow = db.getWaveTokenByHash(tokenHash);
+    if (!tokenRow) return res.status(403).json({ error: 'Invalid token' });
+
+    const wave = db.getWave(tokenRow.wave_id);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+
+    // Confirm creator still has access (they may have left the wave)
+    const creator = db.findUserById(tokenRow.created_by);
+    if (!creator) return res.status(403).json({ error: 'Token owner not found' });
+
+    const content = req.body.content;
+    if (!content || typeof content !== 'string') return res.status(400).json({ error: 'content is required' });
+
+    const sanitized = sanitizeContent(content);
+    if (!sanitized.trim()) return res.status(400).json({ error: 'Message content is empty after sanitization' });
+
+    // Post as a bot ping — backing bot entry carries the token name as sender_name
+    const ping = db.createMessage({
+      waveId: wave.id,
+      authorId: tokenRow.created_by,
+      content: sanitized,
+      privacy: wave.privacy,
+      botId: tokenRow.bot_id,
+    });
+
+    db.touchWaveToken(tokenRow.id);
+    db.logActivity(tokenRow.created_by, 'wave_token_post', 'ping', ping.id, { waveId: wave.id, tokenId: tokenRow.id });
+
+    // Broadcast to wave participants via WebSocket
+    broadcastToWave(wave.id, { type: 'new_droplet', data: ping });
+    broadcastToWave(wave.id, { type: 'new_message', data: ping });
+
+    // Trigger notifications for participants
+    createPingNotifications(ping, wave, { ...creator, displayName: tokenRow.name });
+
+    res.status(201).json({ ping: { id: ping.id, waveId: wave.id } });
+  } catch (err) {
+    console.error('Token post error:', err);
+    res.status(500).json({ error: 'Failed to post message' });
+  }
+});
+
 // ============ Outgoing Webhooks (v2.15.5) ============
 
 /**
@@ -18301,7 +18420,7 @@ function createPingNotifications(ping, wave, author) {
       sendPushNotification(mentionedUser.id, {
         type: 'direct_mention',
         title: notification.title,
-        body: `in ${wave.title}`,
+        body: isEncrypted ? `in ${wave.title}` : `${wave.title}: ${contentPreview}`,
         url: `/?wave=${wave.id}`,
         waveId: wave.id,
         messageId: ping.id,
@@ -18338,7 +18457,7 @@ function createPingNotifications(ping, wave, author) {
         sendPushNotification(parentPing.authorId, {
           type: 'reply',
           title: notification.title,
-          body: `in ${wave.title}`,
+          body: isEncrypted ? `in ${wave.title}` : `${wave.title}: ${contentPreview}`,
           url: `/?wave=${wave.id}`,
           waveId: wave.id,
           messageId: ping.id,
@@ -18404,7 +18523,11 @@ function createPingNotifications(ping, wave, author) {
         const meta = participation.getMetadata(wave.id, participant.id);
         const isEncrypted = ping.encrypted || ping.nonce;
         const pushTitle = meta.hidden === 1 ? 'Cortex' : notification.title;
-        const pushBody = meta.hidden === 1 ? 'New activity on the cortex' : `from ${author.displayName}`;
+        const pushBody = meta.hidden === 1
+          ? 'New activity on the cortex'
+          : isEncrypted
+            ? `from ${author.displayName}`
+            : `${author.displayName}: ${contentPreview}`;
         sendPushNotification(participant.id, {
           type: 'wave_activity',
           title: pushTitle,

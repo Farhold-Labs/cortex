@@ -958,6 +958,26 @@ CREATE TABLE IF NOT EXISTS wave_webhooks (
 CREATE INDEX IF NOT EXISTS idx_wave_webhooks_wave ON wave_webhooks(wave_id);
 CREATE INDEX IF NOT EXISTS idx_wave_webhooks_enabled ON wave_webhooks(enabled);
 
+-- ============ Wave Posting Tokens (v2.43.0) ============
+
+-- User-created tokens for posting to a specific wave without a session.
+-- Token cannot exceed the permissions of the user who created it.
+-- Messages post under the token's display name (bot-style rendering).
+CREATE TABLE IF NOT EXISTS wave_tokens (
+    id TEXT PRIMARY KEY,                      -- token-{uuid}
+    wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+    created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,                       -- Display name shown on posted messages
+    token_hash TEXT UNIQUE NOT NULL,          -- SHA-256 hash of plaintext token (never stored plain)
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, -- Backing bot entry for message attribution
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_wave_tokens_wave ON wave_tokens(wave_id);
+CREATE INDEX IF NOT EXISTS idx_wave_tokens_created_by ON wave_tokens(created_by);
+CREATE INDEX IF NOT EXISTS idx_wave_tokens_hash ON wave_tokens(token_hash);
+
 -- ============ Full-Text Search ============
 
 -- FTS5 virtual table for ping content search (formerly droplets_fts)

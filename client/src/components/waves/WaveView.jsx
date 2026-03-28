@@ -1916,6 +1916,30 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     <span>Expand All Messages</span>
                   </div>
 
+                  {/* Members (all participants) */}
+                  <div
+                    onClick={() => {
+                      setShowParticipants(true);
+                      setShowWaveMenu(false);
+                    }}
+                    style={{
+                      padding: '10px 14px',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      color: 'var(--text-primary)',
+                      background: 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      borderTop: '1px solid var(--border-subtle)',
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span>👥</span>
+                    <span>Members ({participants.length})</span>
+                  </div>
+
                   {/* Settings (creator only) */}
                   {waveData.can_edit && (
                     <>

@@ -24,6 +24,13 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
   const [webhookPlatform, setWebhookPlatform] = useState('discord');
   const [webhookIncludeBots, setWebhookIncludeBots] = useState(true);
 
+  // Posting tokens state
+  const [tokens, setTokens] = useState([]);
+  const [loadingTokens, setLoadingTokens] = useState(false);
+  const [showAddToken, setShowAddToken] = useState(false);
+  const [newTokenName, setNewTokenName] = useState('');
+  const [revealedToken, setRevealedToken] = useState(null); // { id, plaintext }
+
   const isWaveCreator = wave?.createdBy === currentUserId || wave?.creatorId === currentUserId;
 
   useEffect(() => {
@@ -44,6 +51,48 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         .finally(() => setLoadingWebhooks(false));
     }
   }, [isOpen, wave?.id, isWaveCreator]);
+
+  // Fetch posting tokens when modal opens (only for wave creator)
+  useEffect(() => {
+    if (isOpen && wave && isWaveCreator) {
+      setLoadingTokens(true);
+      fetchAPI(`/waves/${wave.id}/tokens`)
+        .then(data => setTokens(data.tokens || []))
+        .catch(err => console.error('Failed to load posting tokens:', err))
+        .finally(() => setLoadingTokens(false));
+    }
+  }, [isOpen, wave?.id, isWaveCreator]);
+
+  const handleCreateToken = async () => {
+    if (!newTokenName.trim()) {
+      showToast('Token name is required', 'error');
+      return;
+    }
+    try {
+      const data = await fetchAPI(`/waves/${wave.id}/tokens`, {
+        method: 'POST',
+        body: { name: newTokenName.trim() },
+      });
+      setTokens([...tokens, data.token]);
+      setRevealedToken({ id: data.token.id, plaintext: data.plaintext });
+      setNewTokenName('');
+      setShowAddToken(false);
+    } catch (err) {
+      showToast(err.message || formatError('Failed to create token'), 'error');
+    }
+  };
+
+  const handleRevokeToken = async (tokenId) => {
+    if (!window.confirm('Revoke this posting token? Any scripts using it will stop working.')) return;
+    try {
+      await fetchAPI(`/waves/${wave.id}/tokens/${tokenId}`, { method: 'DELETE' });
+      setTokens(tokens.filter(t => t.id !== tokenId));
+      if (revealedToken?.id === tokenId) setRevealedToken(null);
+      showToast('Token revoked', 'success');
+    } catch (err) {
+      showToast(err.message || formatError('Failed to revoke token'), 'error');
+    }
+  };
 
   const resetWebhookForm = () => {
     setWebhookName('');
@@ -499,6 +548,150 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
                 {webhooks.length === 0 && !showAddWebhook && (
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                     Auto-forward messages to Discord, Slack, or other services
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Posting Tokens - Only show for wave creator */}
+        {isWaveCreator && (
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+              POSTING TOKENS
+              <span style={{ color: 'var(--text-muted)', marginLeft: '8px', fontWeight: 'normal' }}>
+                ({tokens.length}/10)
+              </span>
+            </div>
+
+            {/* Revealed token — shown once after creation */}
+            {revealedToken && (
+              <div style={{
+                padding: '10px 12px', marginBottom: '8px',
+                background: 'var(--accent-amber)10', border: '1px solid var(--accent-amber)',
+              }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--accent-amber)', marginBottom: '6px' }}>
+                  Token created — copy it now, it won't be shown again:
+                </div>
+                <div style={{
+                  fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--text-primary)',
+                  wordBreak: 'break-all', background: 'var(--bg-surface)', padding: '6px 8px',
+                  border: '1px solid var(--border-subtle)', marginBottom: '6px',
+                }}>
+                  {revealedToken.plaintext}
+                </div>
+                <button
+                  onClick={() => { navigator.clipboard?.writeText(revealedToken.plaintext); showToast('Token copied', 'success'); }}
+                  style={{
+                    padding: '4px 10px', background: 'var(--accent-amber)20',
+                    border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)',
+                    cursor: 'pointer', fontSize: '0.75rem', marginRight: '8px',
+                  }}
+                >
+                  Copy
+                </button>
+                <button
+                  onClick={() => setRevealedToken(null)}
+                  style={{
+                    padding: '4px 10px', background: 'transparent',
+                    border: '1px solid var(--border-subtle)', color: 'var(--text-dim)',
+                    cursor: 'pointer', fontSize: '0.75rem',
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {loadingTokens ? (
+              <div style={{ color: 'var(--text-muted)', padding: '10px', background: 'var(--bg-elevated)' }}>
+                Loading tokens...
+              </div>
+            ) : (
+              <>
+                {/* Token List */}
+                {tokens.map(token => (
+                  <div key={token.id} style={{
+                    padding: '10px 12px', marginBottom: '8px',
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{token.name}</span>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          Created {new Date(token.createdAt).toLocaleDateString()}
+                          {token.lastUsedAt && ` • Last used ${new Date(token.lastUsedAt).toLocaleDateString()}`}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleRevokeToken(token.id)}
+                        style={{
+                          padding: '4px 8px', background: 'var(--bg-surface)',
+                          border: '1px solid var(--accent-red)', color: 'var(--accent-red)',
+                          cursor: 'pointer', fontSize: '0.75rem',
+                        }}
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Create Token Form */}
+                {showAddToken ? (
+                  <div style={{ padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--accent-amber)', marginBottom: '8px' }}>
+                    <input
+                      type="text"
+                      placeholder="Token name (e.g., Status Bot)"
+                      value={newTokenName}
+                      onChange={(e) => setNewTokenName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleCreateToken()}
+                      style={{
+                        width: '100%', padding: '8px', boxSizing: 'border-box',
+                        background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+                        color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.85rem',
+                        marginBottom: '8px',
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => { setShowAddToken(false); setNewTokenName(''); }}
+                        style={{
+                          flex: 1, padding: '8px', background: 'transparent',
+                          border: '1px solid var(--border-subtle)', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.85rem',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleCreateToken}
+                        style={{
+                          flex: 1, padding: '8px', background: 'var(--accent-amber)20',
+                          border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)', cursor: 'pointer', fontSize: '0.85rem',
+                        }}
+                      >
+                        Create Token
+                      </button>
+                    </div>
+                  </div>
+                ) : tokens.length < 10 && (
+                  <button
+                    onClick={() => setShowAddToken(true)}
+                    style={{
+                      width: '100%', padding: '10px', textAlign: 'left',
+                      background: 'var(--bg-elevated)', border: '1px dashed var(--border-subtle)',
+                      color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.8rem',
+                      display: 'flex', alignItems: 'center', gap: '8px',
+                    }}
+                  >
+                    <span>+</span> Create posting token
+                  </button>
+                )}
+
+                {tokens.length === 0 && !showAddToken && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Post to this wave via API without a user account
                   </div>
                 )}
               </>
