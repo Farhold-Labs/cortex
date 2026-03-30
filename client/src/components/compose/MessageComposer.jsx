@@ -91,7 +91,7 @@ const MessageComposer = forwardRef(({
       .filter((u, i, arr) => arr.findIndex(x => x.id === u.id) === i)
       .filter(u => u.id !== currentUser?.id)
       .filter(u => {
-        const name = (u.displayName || u.display_name || u.handle || '').toLowerCase();
+        const name = (u.displayName || u.display_name || u.name || u.handle || '').toLowerCase();
         const handle = (u.handle || '').toLowerCase();
         return name.includes(mentionSearch) || handle.includes(mentionSearch);
       })

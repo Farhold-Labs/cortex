@@ -115,6 +115,17 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   // Note: Call status polling is handled by useVoiceCall hook when waveId is provided
 
+  // Close any open dropdown when clicking outside
+  useEffect(() => {
+    if (!showWaveMenu && !showModMenu) return;
+    const handleOutsideClick = () => {
+      setShowWaveMenu(false);
+      setShowModMenu(null);
+    };
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [showWaveMenu, showModMenu]);
+
   // Load Plex connections (v2.15.0)
   useEffect(() => {
     const loadPlexConnections = async () => {
@@ -2135,10 +2146,21 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           gap: '8px',
           flexShrink: 0
         }}>
-          {/* Header with Invite button */}
+          {/* Header with Invite button and close */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', fontFamily: 'monospace' }}>
-              PARTICIPANTS ({participants.length})
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', fontFamily: 'monospace' }}>
+                PARTICIPANTS ({participants.length})
+              </div>
+              <button
+                onClick={() => setShowParticipants(false)}
+                title="Close"
+                style={{
+                  background: 'transparent', border: 'none',
+                  color: 'var(--text-muted)', cursor: 'pointer',
+                  fontSize: '0.8rem', padding: '0 2px', lineHeight: 1,
+                }}
+              >✕</button>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               {/* Invite button - only for private waves by creator, or any wave by participants */}
@@ -2322,16 +2344,18 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
                     {/* Moderation Dropdown Menu */}
                     {showModMenu === p.id && (
-                      <div style={{
-                        position: 'absolute',
-                        top: '100%',
-                        right: 0,
-                        marginTop: '4px',
-                        background: 'var(--bg-surface)',
-                        border: '1px solid var(--border-primary)',
-                        zIndex: 100,
-                        minWidth: '120px',
-                      }}>
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          position: 'absolute',
+                          top: '100%',
+                          right: 0,
+                          marginTop: '4px',
+                          background: 'var(--bg-surface)',
+                          border: '1px solid var(--border-primary)',
+                          zIndex: 100,
+                          minWidth: '120px',
+                        }}>
                         <button
                           onClick={() => handleToggleMute(p)}
                           style={{
