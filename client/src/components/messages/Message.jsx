@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT, canAccess } from '../../config/constants.js';
 import { Avatar, PrivacyBadge } from '../ui/SimpleComponents.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
@@ -35,6 +35,17 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showMessageMenu, setShowMessageMenu] = useState(false);
   const [lightboxImage, setLightboxImage] = useState(null);
+
+  // Close menus on outside click
+  useEffect(() => {
+    if (!showMessageMenu && !showReactionPicker) return;
+    const handleOutsideClick = () => {
+      setShowMessageMenu(false);
+      setShowReactionPicker(false);
+    };
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [showMessageMenu, showReactionPicker]);
   const isUnread = !isDeleted && message.is_unread && message.author_id !== currentUserId;
   const isReply = depth > 0 && message.parentId;
   const isAtDepthLimit = depth >= THREAD_DEPTH_LIMIT;
@@ -97,6 +108,12 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
 
   const handleMessageClick = (e) => {
     e.stopPropagation(); // Prevent click from bubbling to parent messages
+    // Close any open menus when clicking elsewhere in the message
+    if (showMessageMenu || showReactionPicker) {
+      setShowMessageMenu(false);
+      setShowReactionPicker(false);
+      return;
+    }
     // Move mode: clicking a message selects it as the move target (v2.39.0)
     if (isMoveTarget && onCompleteMove) {
       onCompleteMove(message.id);
@@ -394,11 +411,13 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
               }}>{showReactionPicker ? '✕' : '😀'}</button>
               {/* Reaction picker dropdown */}
               {showReactionPicker && (
-                <div style={{
-                  position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 10,
-                  background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '4px',
-                  display: 'flex', gap: '2px',
-                }}>
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 10,
+                    background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '4px',
+                    display: 'flex', gap: '2px',
+                  }}>
                   {quickReactions.map(emoji => (
                     <button key={emoji} onClick={() => { onReact(message.id, emoji); setShowReactionPicker(false); }}
                       style={{ padding: '4px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1rem' }}
