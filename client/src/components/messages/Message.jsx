@@ -108,6 +108,12 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
 
   const handleMessageClick = (e) => {
     e.stopPropagation(); // Prevent click from bubbling to parent messages
+    // Close any open menus when clicking elsewhere in the message
+    if (showMessageMenu || showReactionPicker) {
+      setShowMessageMenu(false);
+      setShowReactionPicker(false);
+      return;
+    }
     // Move mode: clicking a message selects it as the move target (v2.39.0)
     if (isMoveTarget && onCompleteMove) {
       onCompleteMove(message.id);

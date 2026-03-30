@@ -28,12 +28,14 @@ const MessageComposer = forwardRef(({
   plexConnections = [],
   onPlexClick,
   compact = false,
+  fetchAPI,
 }, ref) => {
   const [newMessage, setNewMessage] = useState('');
   const [showMentionPicker, setShowMentionPicker] = useState(false);
   const [mentionSearch, setMentionSearch] = useState('');
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionStartPos, setMentionStartPos] = useState(null);
+  const [serverMentionResults, setServerMentionResults] = useState([]);
   const [showPhotoOptions, setShowPhotoOptions] = useState(false);
   const [showActionMenu, setShowActionMenu] = useState(false);
   const textareaRef = useRef(null);
@@ -86,16 +88,32 @@ const MessageComposer = forwardRef(({
     textareaRef.current?.focus();
   };
 
+  // Server search fallback for mentions — catches stale/missing local participant data
+  useEffect(() => {
+    if (!mentionSearch || !fetchAPI || !showMentionPicker) {
+      setServerMentionResults([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      fetchAPI(`/users/search?q=${encodeURIComponent(mentionSearch)}`)
+        .then(data => setServerMentionResults(data.users || []))
+        .catch(() => setServerMentionResults([]));
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [mentionSearch, showMentionPicker]);
+
   const getMentionableUsers = () => {
-    return [...(contacts || []), ...(participants || [])]
-      .filter((u, i, arr) => arr.findIndex(x => x.id === u.id) === i)
+    const local = [...(contacts || []), ...(participants || [])]
       .filter(u => u.id !== currentUser?.id)
       .filter(u => {
         const name = (u.displayName || u.display_name || u.name || u.handle || '').toLowerCase();
         const handle = (u.handle || '').toLowerCase();
-        return name.includes(mentionSearch) || handle.includes(mentionSearch);
-      })
-      .slice(0, 8);
+        return !mentionSearch || name.includes(mentionSearch) || handle.includes(mentionSearch);
+      });
+    // Merge server results, deduplicating by id
+    const merged = [...local, ...serverMentionResults.filter(u => u.id !== currentUser?.id)]
+      .filter((u, i, arr) => arr.findIndex(x => x.id === u.id) === i);
+    return merged.slice(0, 8);
   };
 
   return (

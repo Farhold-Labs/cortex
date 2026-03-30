@@ -198,6 +198,17 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   // State for showing moderation menu
   const [showModMenu, setShowModMenu] = useState(null); // participant.id or null
 
+  // Close any open dropdown when clicking outside
+  useEffect(() => {
+    if (!showWaveMenu && !showModMenu) return;
+    const handleOutsideClick = () => {
+      setShowWaveMenu(false);
+      setShowModMenu(null);
+    };
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [showWaveMenu, showModMenu]);
+
   const handleToggleBlock = async (participant) => {
     const wasBlocked = isBlocked(participant.id);
     const success = wasBlocked
@@ -1750,7 +1761,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           {/* Three-dot menu */}
           <div style={{ position: 'relative' }}>
             <button
-              onClick={() => setShowWaveMenu(!showWaveMenu)}
+              onClick={(e) => { e.stopPropagation(); setShowWaveMenu(!showWaveMenu); }}
               title="Wave actions"
               style={{
                 background: 'transparent',
@@ -2351,7 +2362,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                 {!isCurrentUser && (
                   <div style={{ position: 'relative' }}>
                     <button
-                      onClick={() => setShowModMenu(showModMenu === p.id ? null : p.id)}
+                      onClick={(e) => { e.stopPropagation(); setShowModMenu(showModMenu === p.id ? null : p.id); }}
                       style={{
                         padding: isMobile ? '6px 8px' : '4px 6px',
                         minHeight: isMobile ? '36px' : 'auto',
@@ -2692,6 +2703,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           onVideoRecord={() => setShowMediaRecorder(showMediaRecorder === 'video' ? null : 'video')}
           plexConnections={plexConnections}
           onPlexClick={() => setShowPlexBrowser(true)}
+          fetchAPI={fetchAPI}
         />
       </div>
 
