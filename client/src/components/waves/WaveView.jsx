@@ -115,17 +115,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   // Note: Call status polling is handled by useVoiceCall hook when waveId is provided
 
-  // Close any open dropdown when clicking outside
-  useEffect(() => {
-    if (!showWaveMenu && !showModMenu) return;
-    const handleOutsideClick = () => {
-      setShowWaveMenu(false);
-      setShowModMenu(null);
-    };
-    document.addEventListener('click', handleOutsideClick);
-    return () => document.removeEventListener('click', handleOutsideClick);
-  }, [showWaveMenu, showModMenu]);
-
   // Load Plex connections (v2.15.0)
   useEffect(() => {
     const loadPlexConnections = async () => {
