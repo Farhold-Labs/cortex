@@ -36,7 +36,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
   const [showMessageMenu, setShowMessageMenu] = useState(false);
   const [lightboxImage, setLightboxImage] = useState(null);
 
-  // Close menus on outside click
+  // Close menus when clicking outside all messages (document listener, blocked by stopPropagation inside messages)
   useEffect(() => {
     if (!showMessageMenu && !showReactionPicker) return;
     const handleOutsideClick = () => {
@@ -46,6 +46,18 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
     document.addEventListener('click', handleOutsideClick);
     return () => document.removeEventListener('click', handleOutsideClick);
   }, [showMessageMenu, showReactionPicker]);
+
+  // Close menus when a different message's menu opens (stopPropagation blocks the document listener across messages)
+  useEffect(() => {
+    const handleOtherMenuOpen = (e) => {
+      if (e.detail !== message.id) {
+        setShowMessageMenu(false);
+        setShowReactionPicker(false);
+      }
+    };
+    document.addEventListener('cortex:message-menu-open', handleOtherMenuOpen);
+    return () => document.removeEventListener('cortex:message-menu-open', handleOtherMenuOpen);
+  }, [message.id]);
   const isUnread = !isDeleted && message.is_unread && message.author_id !== currentUserId;
   const isReply = depth > 0 && message.parentId;
   const isAtDepthLimit = depth >= THREAD_DEPTH_LIMIT;
@@ -233,6 +245,9 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (!showMessageMenu) {
+                        document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id }));
+                      }
                       setShowMessageMenu(!showMessageMenu);
                     }}
                     title="More actions"
@@ -405,7 +420,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
               )}
 
               {/* Reaction */}
-              <button onClick={() => setShowReactionPicker(!showReactionPicker)} title="React" style={{
+              <button onClick={(e) => { e.stopPropagation(); if (!showReactionPicker) { document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id })); } setShowReactionPicker(!showReactionPicker); }} title="React" style={{
                 padding: isMobile ? '8px 10px' : '2px 4px', background: showReactionPicker ? 'var(--bg-hover)' : 'transparent', border: 'none',
                 color: 'var(--text-dim)', cursor: 'pointer', fontSize: isMobile ? '0.85rem' : '0.7rem',
               }}>{showReactionPicker ? '✕' : '😀'}</button>
