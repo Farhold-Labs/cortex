@@ -431,7 +431,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                   style={{
                     position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 10,
                     background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '4px',
-                    display: 'flex', flexWrap: 'wrap', gap: '2px', maxWidth: '220px',
+                    display: 'flex', flexWrap: 'wrap', gap: '2px', width: 'max-content',
                   }}>
                   {quickReactions.map(emoji => (
                     <button key={emoji} onClick={() => { onReact(message.id, emoji); setShowReactionPicker(false); }}
