@@ -5,6 +5,36 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.44.0] - 2026-03-30
+
+### Fixed
+
+#### Random Logout Despite "Keep Me Logged In"
+Users were being logged out after 7 days regardless of selecting a 30-day session at login.
+
+- **Root cause:** `JWT_EXPIRES_IN=7d` in `.env` was unconditionally overriding all user-selected durations in `getSessionDuration()` — a developer override that was never intended to affect production sessions
+- **Fix:** `getSessionDuration()` now honours the user's requested duration first; `JWT_EXPIRES_IN` env var is now only the fallback default when no duration is specified
+
+#### Dropdown Menus Not Dismissing on Outside Click
+Three-dot menus (wave header, per-message actions, moderation) and the reaction picker stayed open indefinitely after clicking — multiple could be open simultaneously, only dismissed by navigating away or refreshing.
+
+- Added `useEffect` click-outside handler in `WaveView.jsx` for wave header menu and participant moderation menu
+- Added `useEffect` click-outside handler in `Message.jsx` for per-message action menu and reaction picker
+- Added `stopPropagation` on moderation dropdown and reaction picker so clicks inside don't immediately close them via the handler
+
+#### Members Panel Has No Close Control
+The participants panel opened from the three-dot "Members" menu had no way to collapse it short of navigating away or refreshing.
+
+- Added a ✕ close button in the participants panel header in `WaveView.jsx`
+
+#### Mention Autocomplete Ignores Display Name
+Typing `@` in the composer only matched users by handle; display name search silently failed.
+
+- **Root cause:** `getWaveParticipants()` returns `name` (not `displayName` or `display_name`), but `getMentionableUsers()` in `MessageComposer.jsx` only checked `u.displayName || u.display_name` — `u.name` was never in the chain, so all participant display names fell through to handle-only matching
+- **Fix:** Added `u.name` to the display name fallback chain in `getMentionableUsers()`
+
+---
+
 ## [2.43.0] - 2026-03-26
 
 ### Added

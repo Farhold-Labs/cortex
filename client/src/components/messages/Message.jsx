@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT, canAccess } from '../../config/constants.js';
 import { Avatar, PrivacyBadge } from '../ui/SimpleComponents.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
@@ -35,6 +35,29 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showMessageMenu, setShowMessageMenu] = useState(false);
   const [lightboxImage, setLightboxImage] = useState(null);
+
+  // Close menus when clicking outside all messages (document listener, blocked by stopPropagation inside messages)
+  useEffect(() => {
+    if (!showMessageMenu && !showReactionPicker) return;
+    const handleOutsideClick = () => {
+      setShowMessageMenu(false);
+      setShowReactionPicker(false);
+    };
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [showMessageMenu, showReactionPicker]);
+
+  // Close menus when a different message's menu opens (stopPropagation blocks the document listener across messages)
+  useEffect(() => {
+    const handleOtherMenuOpen = (e) => {
+      if (e.detail !== message.id) {
+        setShowMessageMenu(false);
+        setShowReactionPicker(false);
+      }
+    };
+    document.addEventListener('cortex:message-menu-open', handleOtherMenuOpen);
+    return () => document.removeEventListener('cortex:message-menu-open', handleOtherMenuOpen);
+  }, [message.id]);
   const isUnread = !isDeleted && message.is_unread && message.author_id !== currentUserId;
   const isReply = depth > 0 && message.parentId;
   const isAtDepthLimit = depth >= THREAD_DEPTH_LIMIT;
@@ -97,6 +120,12 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
 
   const handleMessageClick = (e) => {
     e.stopPropagation(); // Prevent click from bubbling to parent messages
+    // Close any open menus when clicking elsewhere in the message
+    if (showMessageMenu || showReactionPicker) {
+      setShowMessageMenu(false);
+      setShowReactionPicker(false);
+      return;
+    }
     // Move mode: clicking a message selects it as the move target (v2.39.0)
     if (isMoveTarget && onCompleteMove) {
       onCompleteMove(message.id);
@@ -145,7 +174,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
       >
         {/* Header row with author info (left) and actions (right) */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px', position: 'relative' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, overflow: 'hidden' }}>
             <div
               style={{ cursor: onShowProfile ? 'pointer' : 'default', flexShrink: 0 }}
               onClick={onShowProfile && message.author_id ? (e) => { e.stopPropagation(); onShowProfile(message.author_id); } : undefined}
@@ -153,7 +182,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
               <Avatar letter={message.sender_avatar || '?'} color={config.color} size={avatarSize} imageUrl={message.sender_avatar_url} />
             </div>
             <span
-              style={{ color: config.color, fontSize: isMobile ? '0.85rem' : '0.8rem', fontWeight: 600, cursor: onShowProfile ? 'pointer' : 'default' }}
+              style={{ color: config.color, fontSize: isMobile ? '0.85rem' : '0.8rem', fontWeight: 600, cursor: onShowProfile ? 'pointer' : 'default', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               onClick={onShowProfile && message.author_id ? (e) => { e.stopPropagation(); onShowProfile(message.author_id); } : undefined}
             >
               {message.sender_name}
@@ -166,7 +195,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
 
           {/* Compact inline actions */}
           {!isDeleted && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', opacity: 0.6, transition: 'opacity 0.15s', position: 'relative' }}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', opacity: 0.6, transition: 'opacity 0.15s', position: 'relative', flexShrink: 0 }}
               onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
               onMouseLeave={(e) => e.currentTarget.style.opacity = '0.6'}
             >
@@ -216,6 +245,9 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (!showMessageMenu) {
+                        document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id }));
+                      }
                       setShowMessageMenu(!showMessageMenu);
                     }}
                     title="More actions"
@@ -388,17 +420,19 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
               )}
 
               {/* Reaction */}
-              <button onClick={() => setShowReactionPicker(!showReactionPicker)} title="React" style={{
+              <button onClick={(e) => { e.stopPropagation(); if (!showReactionPicker) { document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id })); } setShowReactionPicker(!showReactionPicker); }} title="React" style={{
                 padding: isMobile ? '8px 10px' : '2px 4px', background: showReactionPicker ? 'var(--bg-hover)' : 'transparent', border: 'none',
                 color: 'var(--text-dim)', cursor: 'pointer', fontSize: isMobile ? '0.85rem' : '0.7rem',
               }}>{showReactionPicker ? '✕' : '😀'}</button>
               {/* Reaction picker dropdown */}
               {showReactionPicker && (
-                <div style={{
-                  position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 10,
-                  background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '4px',
-                  display: 'flex', gap: '2px',
-                }}>
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 10,
+                    background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '4px',
+                    display: 'flex', flexWrap: 'wrap', gap: '2px', width: 'max-content',
+                  }}>
                   {quickReactions.map(emoji => (
                     <button key={emoji} onClick={() => { onReact(message.id, emoji); setShowReactionPicker(false); }}
                       style={{ padding: '4px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1rem' }}
