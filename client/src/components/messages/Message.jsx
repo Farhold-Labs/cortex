@@ -162,7 +162,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
       >
         {/* Header row with author info (left) and actions (right) */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px', position: 'relative' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, overflow: 'hidden' }}>
             <div
               style={{ cursor: onShowProfile ? 'pointer' : 'default', flexShrink: 0 }}
               onClick={onShowProfile && message.author_id ? (e) => { e.stopPropagation(); onShowProfile(message.author_id); } : undefined}
@@ -170,7 +170,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
               <Avatar letter={message.sender_avatar || '?'} color={config.color} size={avatarSize} imageUrl={message.sender_avatar_url} />
             </div>
             <span
-              style={{ color: config.color, fontSize: isMobile ? '0.85rem' : '0.8rem', fontWeight: 600, cursor: onShowProfile ? 'pointer' : 'default' }}
+              style={{ color: config.color, fontSize: isMobile ? '0.85rem' : '0.8rem', fontWeight: 600, cursor: onShowProfile ? 'pointer' : 'default', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               onClick={onShowProfile && message.author_id ? (e) => { e.stopPropagation(); onShowProfile(message.author_id); } : undefined}
             >
               {message.sender_name}
@@ -183,7 +183,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
 
           {/* Compact inline actions */}
           {!isDeleted && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', opacity: 0.6, transition: 'opacity 0.15s', position: 'relative' }}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', opacity: 0.6, transition: 'opacity 0.15s', position: 'relative', flexShrink: 0 }}
               onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
               onMouseLeave={(e) => e.currentTarget.style.opacity = '0.6'}
             >
@@ -416,7 +416,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
                   style={{
                     position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 10,
                     background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '4px',
-                    display: 'flex', gap: '2px',
+                    display: 'flex', flexWrap: 'wrap', gap: '2px', maxWidth: '220px',
                   }}>
                   {quickReactions.map(emoji => (
                     <button key={emoji} onClick={() => { onReact(message.id, emoji); setShowReactionPicker(false); }}
