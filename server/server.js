@@ -18645,6 +18645,16 @@ async function sendPushNotification(userId, payload) {
   const subscriptions = pushSubs.getSubscriptions(userId);
   if (subscriptions.length === 0) return;
 
+  // Include suppressWhileFocused in push payload so the service worker can
+  // respect the user's preference when the app is visible. Default true
+  // (suppress) to preserve existing behaviour for users who haven't changed it.
+  const pushUser = db.findUserById(userId);
+  const pushPrefs = pushUser?.notificationPreferences || DEFAULT_NOTIF_PREFS;
+  const enrichedPayload = {
+    ...payload,
+    suppressWhileFocused: pushPrefs.suppressWhileFocused ?? true,
+  };
+
   // Classify subscriptions by type
   const fcmTokens = [];
   const webPushSubs = [];
@@ -18670,7 +18680,7 @@ async function sendPushNotification(userId, payload) {
 
   // Send to web push subscriptions
   if (webPushSubs.length > 0) {
-    const payloadString = JSON.stringify(payload);
+    const payloadString = JSON.stringify(enrichedPayload);
 
     for (const sub of webPushSubs) {
       try {
