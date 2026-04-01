@@ -5,6 +5,31 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.44.1] - 2026-04-01
+
+### Fixed
+
+#### Suppress While Viewing Preference Not Respected
+When a user set **Suppress While Viewing = Disabled**, push notification popups were still suppressed while the app was open and visible.
+
+- **Root cause:** The service worker (`sw.js`) unconditionally skipped showing the push popup whenever any client window was visible (`visibilityState === 'visible'`), with no knowledge of the user's preference.
+- **Fix:** `sendPushNotification` in `server.js` now looks up the recipient's `suppressWhileFocused` preference and includes it in the push payload. The service worker reads `data.suppressWhileFocused` and only suppresses the popup when suppression is enabled (default `true`) **and** the app is visible. Users with suppression disabled always receive the popup regardless of app visibility.
+- SW cache version bumped to `v2.12.1` to force browser update.
+
+#### Reaction Notification Preference Buttons Had No Effect
+Clicking Always / App Closed / Never for reaction notifications in notification settings appeared to save but had no effect on subsequent notifications.
+
+- **Root cause:** Two separate default preference objects existed in `server.js` (`DEFAULT_NOTIFICATION_PREFS` for the GET/PUT endpoints, `DEFAULT_NOTIF_PREFS` for `shouldCreateNotification`). The first was missing the `reactions` key entirely, and the PUT handler had no validation block for it, so reaction preference updates were silently discarded.
+- **Fix:** Added `reactions: 'always'` to `DEFAULT_NOTIFICATION_PREFS` and added the `reactions` field to the PUT `/api/notifications/preferences` validation block.
+
+#### Suppress While Viewing Not Clearing When App Is Minimized
+Users who had Suppress While Viewing enabled were missing notifications when the app was minimized or backgrounded but still had a wave open.
+
+- **Root cause:** `WaveView` sent a `viewing_wave` WebSocket message on mount/unmount but had no listener for the browser's `visibilitychange` event — so the server's viewing state was never cleared when the window was minimized.
+- **Fix:** Added a `visibilitychange` event listener in `WaveView.jsx` that sends `viewing_wave: { waveId: null }` when `document.hidden` is true and restores the correct wave ID when the app becomes visible again.
+
+---
+
 ## [2.44.0] - 2026-03-31
 
 ### Fixed
