@@ -210,9 +210,9 @@ const LoginScreen = ({ onAbout }) => {
       await Preferences.set({ key: 'cortex_server_url', value: url });
       window.location.replace(url);
     } else if (window.electronAPI?.setServerUrl) {
-      // Electron: persist in userData and navigate to new server
+      // Electron: persist in userData then reload local assets with new server param
       window.electronAPI.setServerUrl(url);
-      window.location.replace(url);
+      window.electronAPI.clearCacheAndReload();
     } else {
       // Web: use localStorage and reload
       storage.setServerUrl(url);

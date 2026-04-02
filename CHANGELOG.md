@@ -5,6 +5,24 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.45.0] - 2026-04-02
+
+### Changed
+
+#### Electron — Bundled Full App (no longer a remote wrapper)
+The Electron desktop app previously loaded the entire UI from the remote server URL, making it functionally a Chromium window pointed at `https://cortex.farhold.com`. The built React bundle is now bundled with the installer and served locally via the `app://` protocol.
+
+- `electron-builder.yml`: `dist/**/*` added to packaged files so the built client is included in every installer
+- `electron/main.js`: Registers `app://` protocol via `electron-serve`; production now loads `app://-/?server=<url>` instead of `mainWindow.loadURL(serverUrl)`. The configured API server URL is passed as a query parameter so `constants.js` can read it synchronously.
+- `client/src/config/constants.js`: Reads `?server=` query param first (Electron), then falls back to `localStorage` (web/Capacitor). No async IPC required.
+- `clear-cache-and-reload` IPC handler updated to reload the local `app://` URL with the current server param rather than calling `reloadIgnoringCache()`.
+- Migration path preserved: on first run after upgrade, `farhold_server_url` from `localStorage` is still picked up and saved to the Electron config file, then a local reload is triggered with the corrected server param.
+
+#### Capacitor — Tightened Navigation Whitelist
+`allowNavigation` changed from `['*']` to `['cortex.farhold.com']`. The Capacitor apps have always served assets locally from `dist/`; the wildcard was a leftover from an earlier architecture.
+
+---
+
 ## [2.44.1] - 2026-04-01
 
 ### Fixed

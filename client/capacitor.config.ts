@@ -5,9 +5,9 @@ const config: CapacitorConfig = {
   appName: 'Cortex',
   webDir: 'dist',
 
-  // Loads bundled dist/ on launch; launcher script redirects to saved server
+  // Loads bundled dist/ on launch; API calls go to the configured server
   server: {
-    allowNavigation: ['*'],
+    allowNavigation: ['cortex.farhold.com'],
   },
 
   plugins: {
