@@ -207,6 +207,21 @@ async function createWindow() {
     mainWindow.show();
   });
 
+  // CORS: the app is served from app://-  but makes API calls to the remote
+  // server. Inject Access-Control-Allow-Origin into API responses so the
+  // browser's CORS check passes. Only applies to HTTPS responses (not local
+  // app:// assets which go through electron-serve directly).
+  if (!isDev) {
+    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Access-Control-Allow-Origin': ['app://-'],
+        },
+      });
+    });
+  }
+
   // Save window state on move/resize
   mainWindow.on('resize', () => saveWindowState(mainWindow));
   mainWindow.on('move', () => saveWindowState(mainWindow));
