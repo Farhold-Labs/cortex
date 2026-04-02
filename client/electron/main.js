@@ -207,17 +207,34 @@ async function createWindow() {
     mainWindow.show();
   });
 
-  // CORS: the app is served from app://- but makes API calls to the remote
-  // server. Inject Access-Control-Allow-Origin into API responses that don't
-  // already have the header — avoids producing the duplicate-value error that
-  // browsers reject when the server also sends its own ACAO header.
+  // CORS bridging for local asset serving (app://-):
+  //
+  // Problem: the server doesn't recognise app://-  as an allowed origin, so it
+  // returns a non-200 for OPTIONS preflight requests, blocking all POST/PUT/DELETE.
+  //
+  // Solution (two hooks working together):
+  //   1. onBeforeSendHeaders — replace outgoing Origin: app://- with the real
+  //      server URL so the server passes its own CORS check and returns 200 for
+  //      preflight and proper ACAO headers for actual requests.
+  //   2. onHeadersReceived   — replace the server's ACAO value back to app://-
+  //      so the browser's check (against the true origin) also passes.
   if (!isDev) {
+    mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+      const requestHeaders = { ...details.requestHeaders };
+      if (requestHeaders['Origin'] === 'app://-') {
+        requestHeaders['Origin'] = getSavedServerUrl();
+      }
+      callback({ requestHeaders });
+    });
+
     mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
       const headers = { ...details.responseHeaders };
-      const hasCors = Object.keys(headers).some(
+      const corsKey = Object.keys(headers).find(
         k => k.toLowerCase() === 'access-control-allow-origin'
       );
-      if (!hasCors) {
+      if (corsKey) {
+        headers[corsKey] = ['app://-'];
+      } else {
         headers['Access-Control-Allow-Origin'] = ['app://-'];
       }
       callback({ responseHeaders: headers });
