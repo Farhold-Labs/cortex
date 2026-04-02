@@ -5,11 +5,18 @@ import { fileURLToPath } from 'node:url';
 import electronUpdater from 'electron-updater';
 const { autoUpdater } = electronUpdater;
 import contextMenu from 'electron-context-menu';
+import serve from 'electron-serve';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const isDev = !app.isPackaged;
+
+// Must be called at module level (before app is ready) so electron-serve can
+// call protocol.registerSchemesAsPrivileged in time. No-op in dev mode.
+if (!isDev) {
+  serve({ directory: path.join(__dirname, '../dist') });
+}
 
 contextMenu({
   showSaveImageAs: true,
@@ -136,7 +143,12 @@ ipcMain.on('clear-cache-and-reload', async () => {
   const win = BrowserWindow.getAllWindows()[0];
   if (win) {
     await win.webContents.session.clearCache();
-    win.webContents.reloadIgnoringCache();
+    if (isDev) {
+      win.webContents.reloadIgnoringCache();
+    } else {
+      // Reload local assets with the (possibly updated) server URL in query param
+      win.loadURL(`app://-/?server=${encodeURIComponent(getSavedServerUrl())}`);
+    }
   }
 });
 
@@ -195,6 +207,40 @@ async function createWindow() {
     mainWindow.show();
   });
 
+  // CORS bridging for local asset serving (app://-):
+  //
+  // Problem: the server doesn't recognise app://-  as an allowed origin, so it
+  // returns a non-200 for OPTIONS preflight requests, blocking all POST/PUT/DELETE.
+  //
+  // Solution (two hooks working together):
+  //   1. onBeforeSendHeaders — replace outgoing Origin: app://- with the real
+  //      server URL so the server passes its own CORS check and returns 200 for
+  //      preflight and proper ACAO headers for actual requests.
+  //   2. onHeadersReceived   — replace the server's ACAO value back to app://-
+  //      so the browser's check (against the true origin) also passes.
+  if (!isDev) {
+    mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+      const requestHeaders = { ...details.requestHeaders };
+      if (requestHeaders['Origin'] === 'app://-') {
+        requestHeaders['Origin'] = getSavedServerUrl();
+      }
+      callback({ requestHeaders });
+    });
+
+    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+      const headers = { ...details.responseHeaders };
+      const corsKey = Object.keys(headers).find(
+        k => k.toLowerCase() === 'access-control-allow-origin'
+      );
+      if (corsKey) {
+        headers[corsKey] = ['app://-'];
+      } else {
+        headers['Access-Control-Allow-Origin'] = ['app://-'];
+      }
+      callback({ responseHeaders: headers });
+    });
+  }
+
   // Save window state on move/resize
   mainWindow.on('resize', () => saveWindowState(mainWindow));
   mainWindow.on('move', () => saveWindowState(mainWindow));
@@ -206,20 +252,20 @@ async function createWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     const serverUrl = getSavedServerUrl();
-    await mainWindow.loadURL(serverUrl);
+    // Serve bundled React assets locally; pass API server URL as query param
+    // so constants.js can read it synchronously without async IPC.
+    await mainWindow.loadURL(`app://-/?server=${encodeURIComponent(serverUrl)}`);
 
     // Migration: if the web UI previously saved a server URL to localStorage
-    // (before Electron IPC persistence existed), pick it up and redirect.
-    // This runs once — after redirect the origins match and the check becomes a no-op.
+    // (before Electron IPC persistence existed), pick it up and save to file.
     mainWindow.webContents.once('did-finish-load', async () => {
       try {
         const storedUrl = await mainWindow.webContents.executeJavaScript(
           `localStorage.getItem('farhold_server_url')`
         );
-        if (storedUrl && storedUrl !== serverUrl) {
+        if (storedUrl && storedUrl !== getSavedServerUrl()) {
           saveServerUrl(storedUrl);
-          await mainWindow.webContents.session.clearCache();
-          mainWindow.loadURL(storedUrl);
+          mainWindow.loadURL(`app://-/?server=${encodeURIComponent(storedUrl)}`);
         }
       } catch {}
     });

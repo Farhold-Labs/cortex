@@ -5,6 +5,7 @@ directories:
   buildResources: electron
 files:
   - electron/**/*
+  - dist/**/*
   - package.json
 
 win:
