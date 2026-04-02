@@ -1,8 +1,8 @@
-// Cortex Service Worker v2.12.0
+// Cortex Service Worker v2.12.1
 // Includes: Push notifications, offline caching, low-bandwidth API caching
 // v2.10.0: Added stale-while-revalidate for wave list API
-const CACHE_NAME = 'cortex-v2.12.0';
-const API_CACHE_NAME = 'cortex-api-v2.12.0';
+const CACHE_NAME = 'cortex-v2.12.1';
+const API_CACHE_NAME = 'cortex-api-v2.12.1';
 const API_CACHE_MAX_AGE = 30000; // 30 seconds for API cache
 const STATIC_ASSETS = [
   '/',
@@ -254,6 +254,7 @@ self.addEventListener('push', (event) => {
 
   // Check if app is in foreground - if so, skip notification
   // (WebSocket will deliver the message directly to the app)
+  // Unless the user has disabled suppress-while-viewing, in which case always show.
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then((clientList) => {
@@ -262,11 +263,15 @@ self.addEventListener('push', (event) => {
           client.visibilityState === 'visible'
         );
 
-        // Only show notification if app is not visible (backgrounded or closed)
-        if (!hasVisibleClient) {
+        // Respect user's suppressWhileFocused preference.
+        // Default true (suppress) when not specified (existing behaviour).
+        const shouldSuppress = data.suppressWhileFocused !== false;
+
+        // Only show notification if app is not visible, or user disabled suppression
+        if (!hasVisibleClient || !shouldSuppress) {
           return self.registration.showNotification(data.title || 'Cortex', options);
         }
-        // If app is visible, WebSocket message will show the message directly
+        // App is visible and suppression is enabled — WebSocket delivers the message directly
         return Promise.resolve();
       })
   );

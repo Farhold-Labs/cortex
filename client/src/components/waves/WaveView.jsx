@@ -427,8 +427,21 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       sendWSMessage({ type: 'viewing_wave', waveId: wave.id });
     }
 
+    // Clear viewing state when app is backgrounded/minimized so notifications
+    // are not suppressed while the wave is open but the app is not visible
+    const handleVisibility = () => {
+      if (sendWSMessage) {
+        sendWSMessage({
+          type: 'viewing_wave',
+          waveId: document.hidden ? null : wave.id,
+        });
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
     // Cleanup: notify server when leaving wave
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
       if (sendWSMessage) {
         sendWSMessage({ type: 'viewing_wave', waveId: null });
       }

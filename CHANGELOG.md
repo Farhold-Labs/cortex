@@ -5,9 +5,65 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.44.0] - 2026-03-30
+## [2.44.1] - 2026-04-01
 
 ### Fixed
+
+#### Suppress While Viewing Preference Not Respected
+When a user set **Suppress While Viewing = Disabled**, push notification popups were still suppressed while the app was open and visible.
+
+- **Root cause:** The service worker (`sw.js`) unconditionally skipped showing the push popup whenever any client window was visible (`visibilityState === 'visible'`), with no knowledge of the user's preference.
+- **Fix:** `sendPushNotification` in `server.js` now looks up the recipient's `suppressWhileFocused` preference and includes it in the push payload. The service worker reads `data.suppressWhileFocused` and only suppresses the popup when suppression is enabled (default `true`) **and** the app is visible. Users with suppression disabled always receive the popup regardless of app visibility.
+- SW cache version bumped to `v2.12.1` to force browser update.
+
+#### Reaction Notification Preference Buttons Had No Effect
+Clicking Always / App Closed / Never for reaction notifications in notification settings appeared to save but had no effect on subsequent notifications.
+
+- **Root cause:** Two separate default preference objects existed in `server.js` (`DEFAULT_NOTIFICATION_PREFS` for the GET/PUT endpoints, `DEFAULT_NOTIF_PREFS` for `shouldCreateNotification`). The first was missing the `reactions` key entirely, and the PUT handler had no validation block for it, so reaction preference updates were silently discarded.
+- **Fix:** Added `reactions: 'always'` to `DEFAULT_NOTIFICATION_PREFS` and added the `reactions` field to the PUT `/api/notifications/preferences` validation block.
+
+#### Suppress While Viewing Not Clearing When App Is Minimized
+Users who had Suppress While Viewing enabled were missing notifications when the app was minimized or backgrounded but still had a wave open.
+
+- **Root cause:** `WaveView` sent a `viewing_wave` WebSocket message on mount/unmount but had no listener for the browser's `visibilitychange` event — so the server's viewing state was never cleared when the window was minimized.
+- **Fix:** Added a `visibilitychange` event listener in `WaveView.jsx` that sends `viewing_wave: { waveId: null }` when `document.hidden` is true and restores the correct wave ID when the app becomes visible again.
+
+---
+
+## [2.44.0] - 2026-03-31
+
+### Fixed
+
+#### TDZ Crash on Every Wave (merge artifact)
+Every wave load crashed with `ReferenceError: can't access lexical declaration before initialization` after merging v2.44.0 to develop/qa.
+
+- **Root cause:** The GitHub 3-way merge of `feat/v2.44.0 → develop` (PR #365) produced a duplicate click-outside `useEffect` in `WaveView.jsx`. The original bad copy (placed before the `showModMenu` useState declaration) survived alongside the correctly-relocated one, leaving `showModMenu` in the temporal dead zone when its dependency array was evaluated by the minified production bundle.
+- **Fix:** Removed the duplicate; only the `useEffect` placed after the `showModMenu` declaration remains (`WaveView.jsx`)
+
+#### Message Menu Stays Open When Opening Another Message's Menu
+Opening one message's ⋮ menu and then clicking another message's ⋮ button left both menus open simultaneously.
+
+- **Root cause:** Each `Message` component has independent local state. `stopPropagation` on the second message's button blocked the first message's document-level click listener, so the first menu never knew to close.
+- **Fix:** Dispatch a `cortex:message-menu-open` custom DOM event (detail = message ID) when any message menu or reaction picker opens. Every `Message` instance listens and closes its own menus when the signal comes from a different ID.
+
+#### Message Menu Items Not Clickable
+Clicking ⋮ opened the menu but menu items could not be clicked.
+
+- **Root cause:** A `position: fixed; inset: 0; z-index: 99` overlay used for outside-click detection was creating a CSS stacking context (via ancestor `transform`/`will-change`) that painted above the menu items despite their higher z-index.
+- **Fix:** Removed the overlay; `handleMessageClick` now closes any open menu when the user clicks the message container (outside the menu, which stops its own propagation).
+
+#### Long Display Names Push Action Buttons Off Screen
+A user with a long display name caused the inline reply/react/⋮ buttons to be pushed entirely off screen.
+
+- Added `minWidth: 0` and `overflow: hidden` to the author info container in `Message.jsx`
+- Added `overflow: hidden; text-overflow: ellipsis; white-space: nowrap` to the sender name span
+- Added `flex-shrink: 0` to the actions container so it never gets compressed
+
+#### Reaction Picker Vertical Column in Thread Panel / Narrow Views
+The reaction picker rendered as a vertical column (one emoji per row) instead of a horizontal row.
+
+- **Root cause:** `maxWidth: 220px` was narrower than the natural width of 11 emoji buttons (~330px), forcing each onto its own row via `flex-wrap`.
+- **Fix:** Changed to `width: max-content` so the picker sizes to exactly one row; `flex-wrap` retained as a safety net for very narrow viewports.
 
 #### Random Logout Despite "Keep Me Logged In"
 Users were being logged out after 7 days regardless of selecting a 30-day session at login.

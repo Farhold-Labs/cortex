@@ -6525,6 +6525,7 @@ const DEFAULT_NOTIFICATION_PREFS = {
   enabled: true,
   directMentions: 'always',      // always | app_closed | never
   replies: 'always',
+  reactions: 'always',
   waveActivity: 'app_closed',
   burstEvents: 'app_closed',
   soundEnabled: false,
@@ -6558,6 +6559,9 @@ app.put('/api/notifications/preferences', authenticateToken, (req, res) => {
   }
   if (req.body.replies && validLevels.includes(req.body.replies)) {
     updates.replies = req.body.replies;
+  }
+  if (req.body.reactions && validLevels.includes(req.body.reactions)) {
+    updates.reactions = req.body.reactions;
   }
   if (req.body.waveActivity && validLevels.includes(req.body.waveActivity)) {
     updates.waveActivity = req.body.waveActivity;
@@ -18641,6 +18645,16 @@ async function sendPushNotification(userId, payload) {
   const subscriptions = pushSubs.getSubscriptions(userId);
   if (subscriptions.length === 0) return;
 
+  // Include suppressWhileFocused in push payload so the service worker can
+  // respect the user's preference when the app is visible. Default true
+  // (suppress) to preserve existing behaviour for users who haven't changed it.
+  const pushUser = db.findUserById(userId);
+  const pushPrefs = pushUser?.notificationPreferences || DEFAULT_NOTIF_PREFS;
+  const enrichedPayload = {
+    ...payload,
+    suppressWhileFocused: pushPrefs.suppressWhileFocused ?? true,
+  };
+
   // Classify subscriptions by type
   const fcmTokens = [];
   const webPushSubs = [];
@@ -18666,7 +18680,7 @@ async function sendPushNotification(userId, payload) {
 
   // Send to web push subscriptions
   if (webPushSubs.length > 0) {
-    const payloadString = JSON.stringify(payload);
+    const payloadString = JSON.stringify(enrichedPayload);
 
     for (const sub of webPushSubs) {
       try {
