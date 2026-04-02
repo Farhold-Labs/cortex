@@ -12,6 +12,12 @@ const __dirname = path.dirname(__filename);
 
 const isDev = !app.isPackaged;
 
+// Must be called at module level (before app is ready) so electron-serve can
+// call protocol.registerSchemesAsPrivileged in time. No-op in dev mode.
+if (!isDev) {
+  serve({ directory: path.join(__dirname, '../dist') });
+}
+
 contextMenu({
   showSaveImageAs: true,
   showCopyImage: true,
@@ -235,11 +241,6 @@ async function createWindow() {
 // ============ APP LIFECYCLE ============
 
 app.whenReady().then(async () => {
-  // Register app:// protocol to serve bundled React assets from dist/
-  if (!isDev) {
-    serve({ directory: path.join(__dirname, '../dist') });
-  }
-
   await createWindow();
 
   // macOS: re-create window when dock icon clicked
