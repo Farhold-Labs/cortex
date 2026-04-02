@@ -1,14 +1,17 @@
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.44.1';
+export const VERSION = '2.45.0';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
 const isElectron = typeof window !== 'undefined' && window.navigator?.userAgent?.includes('Electron');
 export const isNativeApp = isCapacitor || isElectron;
 
-// Resolve server URL: localStorage override > native remote origin > native default > auto-detect
-const storedServerUrl = localStorage.getItem('farhold_server_url');
+// Resolve server URL: Electron query param > localStorage override > native remote origin > native default > auto-detect
+// Electron (production) passes the configured API server as ?server= so we can read it synchronously
+// without async IPC, while still serving the React bundle from local assets via app://-/
+const _electronServerParam = new URLSearchParams(window.location.search).get('server');
+const storedServerUrl = _electronServerParam || localStorage.getItem('farhold_server_url');
 const isLocalOrigin = ['localhost', ''].includes(window.location.hostname) ||
   window.location.protocol === 'capacitor:' || window.location.protocol === 'ionic:';
 const resolvedUrl = (() => {

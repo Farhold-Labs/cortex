@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import electronUpdater from 'electron-updater';
 const { autoUpdater } = electronUpdater;
 import contextMenu from 'electron-context-menu';
+import serve from 'electron-serve';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,7 +137,12 @@ ipcMain.on('clear-cache-and-reload', async () => {
   const win = BrowserWindow.getAllWindows()[0];
   if (win) {
     await win.webContents.session.clearCache();
-    win.webContents.reloadIgnoringCache();
+    if (isDev) {
+      win.webContents.reloadIgnoringCache();
+    } else {
+      // Reload local assets with the (possibly updated) server URL in query param
+      win.loadURL(`app://-/?server=${encodeURIComponent(getSavedServerUrl())}`);
+    }
   }
 });
 
@@ -206,20 +212,20 @@ async function createWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     const serverUrl = getSavedServerUrl();
-    await mainWindow.loadURL(serverUrl);
+    // Serve bundled React assets locally; pass API server URL as query param
+    // so constants.js can read it synchronously without async IPC.
+    await mainWindow.loadURL(`app://-/?server=${encodeURIComponent(serverUrl)}`);
 
     // Migration: if the web UI previously saved a server URL to localStorage
-    // (before Electron IPC persistence existed), pick it up and redirect.
-    // This runs once — after redirect the origins match and the check becomes a no-op.
+    // (before Electron IPC persistence existed), pick it up and save to file.
     mainWindow.webContents.once('did-finish-load', async () => {
       try {
         const storedUrl = await mainWindow.webContents.executeJavaScript(
           `localStorage.getItem('farhold_server_url')`
         );
-        if (storedUrl && storedUrl !== serverUrl) {
+        if (storedUrl && storedUrl !== getSavedServerUrl()) {
           saveServerUrl(storedUrl);
-          await mainWindow.webContents.session.clearCache();
-          mainWindow.loadURL(storedUrl);
+          mainWindow.loadURL(`app://-/?server=${encodeURIComponent(storedUrl)}`);
         }
       } catch {}
     });
@@ -229,6 +235,11 @@ async function createWindow() {
 // ============ APP LIFECYCLE ============
 
 app.whenReady().then(async () => {
+  // Register app:// protocol to serve bundled React assets from dist/
+  if (!isDev) {
+    serve({ directory: path.join(__dirname, '../dist') });
+  }
+
   await createWindow();
 
   // macOS: re-create window when dock icon clicked
