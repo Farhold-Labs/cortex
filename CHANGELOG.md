@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-#### Easter Overlay Emoji Rendering on Linux
-The Easter holiday overlay (`PastelOverlay.jsx`) used three Unicode codepoints that rendered as Japanese symbols instead of the intended glyphs on Linux:
+#### Easter Overlay Rendering on Linux
+The Easter holiday overlay (`PastelOverlay.jsx`) used color emoji codepoints that are unavailable system-wide on Linux — rendered as Japanese symbol fallback glyphs in all browsers (Firefox, Chrome) and in the Electron app.
 
-- `0x1F95A` (egg) → `0x1F423` 🐣 hatching chick
-- `0x1F98B` (butterfly) → `0x1F407` 🐇 rabbit
-- `0x2740` (white flower) → `0x1F338` 🌸 cherry blossom
+- **Root cause:** Color emoji require a dedicated emoji font (e.g. Noto Color Emoji) which is not present on all Linux systems. The overlay was using `0x1F95A` (egg), `0x1F98B` (butterfly), and `0x1F338` (cherry blossom) — all color emoji.
+- **Fix:** Replaced all three with monochrome Unicode dingbats from the Zapf Dingbats block, which are covered by standard system fonts:
+  - `egg` → ❀ `0x2740` white florette
+  - `flower` → ✿ `0x273F` black florette
+  - `butterfly` → ❋ `0x274B` heavy eight teardrop-spoked asterisk
 
 ---
 
