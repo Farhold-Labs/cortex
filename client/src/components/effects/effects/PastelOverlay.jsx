@@ -51,9 +51,9 @@ const PastelOverlay = ({ colors = ['#FFB6C1', '#87CEEB', '#DDA0DD', '#98FB98'] }
 
   const getSymbol = (type) => {
     switch (type) {
-      case 'egg': return String.fromCharCode(0x1F95A); // egg emoji
-      case 'flower': return String.fromCharCode(0x2740); // flower
-      case 'butterfly': return String.fromCharCode(0x1F98B); // butterfly emoji
+      case 'egg': return String.fromCharCode(0x2740); // ❀ white florette
+      case 'flower': return String.fromCharCode(0x273F); // ✿ black florette
+      case 'butterfly': return String.fromCharCode(0x274B); // ❋ heavy eight teardrop-spoked asterisk
       default: return '*';
     }
   };

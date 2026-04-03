@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.45.1] - 2026-04-03
+
+### Fixed
+
+#### Easter Overlay Emoji Rendering on Linux
+The Easter holiday overlay (`PastelOverlay.jsx`) used three Unicode codepoints that rendered as Japanese symbols instead of the intended glyphs on Linux:
+
+- `0x1F95A` (egg) → `0x1F423` 🐣 hatching chick
+- `0x1F98B` (butterfly) → `0x1F407` 🐇 rabbit
+- `0x2740` (white flower) → `0x1F338` 🌸 cherry blossom
+
+---
+
 ## [2.45.0] - 2026-04-02
 
 ### Changed
@@ -13,13 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The Electron desktop app previously loaded the entire UI from the remote server URL, making it functionally a Chromium window pointed at `https://cortex.farhold.com`. The built React bundle is now bundled with the installer and served locally via the `app://` protocol.
 
 - `electron-builder.yml`: `dist/**/*` added to packaged files so the built client is included in every installer
-- `electron/main.js`: Registers `app://` protocol via `electron-serve`; production now loads `app://-/?server=<url>` instead of `mainWindow.loadURL(serverUrl)`. The configured API server URL is passed as a query parameter so `constants.js` can read it synchronously.
-- `client/src/config/constants.js`: Reads `?server=` query param first (Electron), then falls back to `localStorage` (web/Capacitor). No async IPC required.
-- `clear-cache-and-reload` IPC handler updated to reload the local `app://` URL with the current server param rather than calling `reloadIgnoringCache()`.
-- Migration path preserved: on first run after upgrade, `farhold_server_url` from `localStorage` is still picked up and saved to the Electron config file, then a local reload is triggered with the corrected server param.
+- `electron/main.js`: Registers `app://` protocol via `electron-serve` at module level (before `app.whenReady()` — required by Electron's `protocol.registerSchemesAsPrivileged` timing); production now loads `app://-/?server=<url>` instead of `mainWindow.loadURL(serverUrl)`. The configured API server URL is passed as a query parameter so `constants.js` can read it synchronously.
+- `electron/main.js`: Paired `onBeforeSendHeaders` + `onHeadersReceived` session hooks bridge CORS between `app://-` and the remote API server — outgoing `Origin: app://-` is swapped to the real server URL so OPTIONS preflight requests pass, then `Access-Control-Allow-Origin` in the response is swapped back to `app://-` so the browser's check passes.
+- `electron/main.js`: `clear-cache-and-reload` IPC handler reloads `app://-/?server=<url>` (with fresh server param) instead of `reloadIgnoringCache()`.
+- `LoginScreen.jsx`: Electron server-change now calls `electronAPI.clearCacheAndReload()` via IPC instead of `window.location.replace(url)`, keeping the window on `app://-`.
+- `constants.js`: Reads `?server=` query param first (Electron), falls back to `localStorage` (web/Capacitor). No async IPC required.
+- Migration path preserved: on first run after upgrade, `farhold_server_url` from `localStorage` is picked up and saved to the Electron config file, then a local reload is triggered with the corrected server param.
 
 #### Capacitor — Tightened Navigation Whitelist
 `allowNavigation` changed from `['*']` to `['cortex.farhold.com']`. The Capacitor apps have always served assets locally from `dist/`; the wildcard was a leftover from an earlier architecture.
+
+### Infrastructure
+
+#### Android Release Signing
+`android/app/build.gradle` now reads signing credentials from `android/key.properties` (gitignored). Release builds are automatically signed with the production keystore, producing installable APKs without a manual `jarsigner` step. `key.properties` added to `android/.gitignore`.
 
 ---
 

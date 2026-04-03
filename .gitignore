@@ -38,6 +38,10 @@ client/ios/App/App/GoogleService-Info.plist
 # Firebase credentials
 server/firebase-service-account.json
 
+# Android release keystore (never commit — losing it means losing Play Store access)
+*.keystore
+*.jks
+
 # Logs
 *.log
 npm-debug.log*
