@@ -7,7 +7,7 @@ import SessionExpiryModal from '../components/session/SessionExpiryModal.jsx';
 import MainApp from './MainApp.jsx';
 
 function E2EEAuthenticatedApp({ sharePingId, logout }) {
-  const { getPendingPassword, clearPendingPassword, sessionExpiring } = useAuth();
+  const { getPendingPassword, clearPendingPassword, sessionExpiring, sessionExpired } = useAuth();
   const {
     e2eeStatus,
     isUnlocked,
@@ -156,7 +156,7 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
   return (
     <>
       <MainApp sharePingId={sharePingId} />
-      {sessionExpiring && <SessionExpiryModal />}
+      {(sessionExpiring || sessionExpired) && <SessionExpiryModal />}
     </>
   );
 }
