@@ -75,6 +75,34 @@ function AuthProvider({ children }) {
     }
   }, [token]);
 
+  // Silently renew session — no password required, active users only (v2.46.0)
+  // Must be declared before the expiry useEffect that references it.
+  const autoRenewSession = useCallback(async () => {
+    if (isAutoRenewing) return;
+    if (Date.now() - lastAutoRenewalRef.current < AUTO_RENEW_COOLDOWN_MS) return;
+    setIsAutoRenewing(true);
+    try {
+      const res = await fetch(`${API_URL}/auth/renew`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      storage.setToken(data.token);
+      storage.setUser(data.user);
+      storage.setSessionStart(storage.getSessionDuration());
+      setSessionExpiresAt(getTokenExpiry(data.token));
+      setSessionExpiring(false);
+      setToken(data.token);
+      setUser(data.user);
+      lastAutoRenewalRef.current = Date.now();
+    } catch {
+      // Silent failure — warning modal will surface on next check cycle
+    } finally {
+      setIsAutoRenewing(false);
+    }
+  }, [token, isAutoRenewing]);
+
   // Session expiry monitoring timer (v2.29.0)
   useEffect(() => {
     if (!token) return;
@@ -142,33 +170,6 @@ function AuthProvider({ children }) {
       window.removeEventListener('focus', handleFocus);
     };
   }, [token, autoRenewSession, isAutoRenewing]);
-
-  // Silently renew session — no password required, active users only (v2.45.3)
-  const autoRenewSession = useCallback(async () => {
-    if (isAutoRenewing) return;
-    if (Date.now() - lastAutoRenewalRef.current < AUTO_RENEW_COOLDOWN_MS) return;
-    setIsAutoRenewing(true);
-    try {
-      const res = await fetch(`${API_URL}/auth/renew`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      storage.setToken(data.token);
-      storage.setUser(data.user);
-      storage.setSessionStart(storage.getSessionDuration());
-      setSessionExpiresAt(getTokenExpiry(data.token));
-      setSessionExpiring(false);
-      setToken(data.token);
-      setUser(data.user);
-      lastAutoRenewalRef.current = Date.now();
-    } catch {
-      // Silent failure — warning modal will surface on next check cycle
-    } finally {
-      setIsAutoRenewing(false);
-    }
-  }, [token, isAutoRenewing]);
 
   // Get pending password for E2EE unlock (one-time read, clears after access)
   const getPendingPassword = () => {
