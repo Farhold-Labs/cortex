@@ -5,16 +5,54 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.0] - 2026-04-07
+
+### Changed
+
+#### Session UX — Auto-Renewal, Grace Period, and Proportional Warning Window
+Three improvements that eliminate unexpected logouts for active users while preserving security for inactive sessions.
+
+**Proportional warning window** (was hardcoded 5 minutes)
+The session expiry modal now appears at 10% of the remaining session duration, capped between 5 minutes and 24 hours. A 24-hour session warns at ~2.4h; a 7-day session warns at ~16.8h; a 30-day session warns at 24h (cap). Implemented via `getWarningMs(token)` in `AuthProvider.jsx` using the JWT `iat`/`exp` claims; `getTokenIssuedAt()` added to `storage.js`.
+
+**Silent auto-renewal for active users**
+When a user is visible in the warning window, `AuthProvider` silently calls `POST /api/auth/renew` (new endpoint — no password required). If it succeeds, the token is swapped out in the background and no modal is shown. The warning modal appears only if the auto-renewal is not in progress. Renewal is rate-limited to one attempt per 5 minutes per client; the server preserves the original session duration (`exp - iat`).
+
+**Grace period re-authentication** (was immediate logout)
+When a session expires — whether detected locally or by a server `TOKEN_EXPIRED` response — the app now shows a "Session Expired" overlay instead of logging the user out. The user can enter their password and pick a new duration to continue exactly where they were. Powered by `POST /api/auth/reauth` (new endpoint), which accepts tokens expired within the last hour. If the grace window has also passed, a hard logout occurs with a clear message.
+
+**`SessionExpiryModal` unified**
+The single modal now handles both states: *expiring* (amber, countdown, extend) and *expired* (orange, no countdown, continue). Duration dropdown pre-fills from the user's last-used preference in both cases.
+
+**Files changed:** `server/server.js` (+2 endpoints), `AuthProvider.jsx`, `SessionExpiryModal.jsx`, `E2EEAuthenticatedApp.jsx`, `storage.js`, `messages.js`
+
+---
+
+## [2.45.2] - 2026-04-07
+
+### Fixed
+
+#### Session Duration Preference Not Persisted After Logout
+Users who selected a 7-day or 30-day session at login found the dropdown reset to "24 hours" on every subsequent login, causing unexpected daily logouts.
+
+- **Root cause (v2.44.0 regression):** Before v2.44.0, `JWT_EXPIRES_IN=7d` in the server config overrode all session requests — everyone accidentally received 7-day tokens regardless of what the dropdown said. v2.44.0 correctly honoured the user's selection, but the login form always initialised with `'24h'` and `removeSessionStart()` cleared the stored duration on logout. Users who never changed the dropdown kept requesting 24-hour tokens.
+- **Fix (`storage.js`):** `removeSessionStart()` no longer deletes `farhold_session_duration`. The value now persists across logouts as a user preference.
+- **Fix (`LoginScreen.jsx`):** `sessionDuration` state initialises from `storage.getSessionDuration()` instead of the hardcoded `'24h'`. Returning users see their last-used duration pre-selected; first-time users still default to 24 hours.
+
+---
+
 ## [2.45.1] - 2026-04-03
 
 ### Fixed
 
-#### Easter Overlay Emoji Rendering on Linux
-The Easter holiday overlay (`PastelOverlay.jsx`) used three Unicode codepoints that rendered as Japanese symbols instead of the intended glyphs on Linux:
+#### Easter Overlay Rendering on Linux
+The Easter holiday overlay (`PastelOverlay.jsx`) used color emoji codepoints that are unavailable system-wide on Linux — rendered as Japanese symbol fallback glyphs in all browsers (Firefox, Chrome) and in the Electron app.
 
-- `0x1F95A` (egg) → `0x1F423` 🐣 hatching chick
-- `0x1F98B` (butterfly) → `0x1F407` 🐇 rabbit
-- `0x2740` (white flower) → `0x1F338` 🌸 cherry blossom
+- **Root cause:** Color emoji require a dedicated emoji font (e.g. Noto Color Emoji) which is not present on all Linux systems. The overlay was using `0x1F95A` (egg), `0x1F98B` (butterfly), and `0x1F338` (cherry blossom) — all color emoji.
+- **Fix:** Replaced all three with monochrome Unicode dingbats from the Zapf Dingbats block, which are covered by standard system fonts:
+  - `egg` → ❀ `0x2740` white florette
+  - `flower` → ✿ `0x273F` black florette
+  - `butterfly` → ❋ `0x274B` heavy eight teardrop-spoked asterisk
 
 ---
 

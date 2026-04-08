@@ -4663,6 +4663,93 @@ app.post('/api/auth/refresh', loginLimiter, authenticateToken, async (req, res) 
   }
 });
 
+// Silent session renewal — no password, active users only (v2.45.3)
+// Preserves original token duration so a 7d session stays 7d on renewal.
+app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) => {
+  try {
+    const decoded = jwt.decode(req.token);
+    if (!decoded?.iat || !decoded?.exp) {
+      return res.status(400).json({ error: 'Token missing timing claims' });
+    }
+    const originalDurationSecs = decoded.exp - decoded.iat;
+
+    revokeSessionByToken(req.token);
+
+    const newToken = jwt.sign(
+      { userId: req.user.userId, handle: req.user.handle },
+      JWT_SECRET,
+      { expiresIn: originalDurationSecs }
+    );
+    createSession(req.user.userId, newToken, req);
+    const user = db.findUserById(req.user.userId);
+
+    if (db.logActivity) db.logActivity(req.user.userId, 'session_auto_renew', 'user', req.user.userId, getRequestMeta(req));
+    console.log(`🔄 Session silently renewed for: ${req.user.handle}`);
+
+    res.json({
+      token: newToken,
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } }
+    });
+  } catch (err) {
+    console.error('Auto-renew error:', err);
+    res.status(500).json({ error: 'Renewal failed' });
+  }
+});
+
+// Grace-period re-authentication — accepts tokens expired within 1 hour (v2.45.3)
+const REAUTH_GRACE_MS = 60 * 60 * 1000;
+
+app.post('/api/auth/reauth', loginLimiter, async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const expiredToken = authHeader && authHeader.split(' ')[1];
+    const { password, sessionDuration: requestedDuration } = req.body;
+
+    if (!expiredToken || !password) {
+      return res.status(400).json({ error: 'Token and password are required' });
+    }
+
+    const decoded = jwt.decode(expiredToken);
+    if (!decoded?.userId) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const expiredAgo = Date.now() - decoded.exp * 1000;
+    if (expiredAgo > REAUTH_GRACE_MS) {
+      return res.status(401).json({ error: 'Grace period has elapsed. Please log in again.', code: 'GRACE_EXPIRED' });
+    }
+
+    const user = db.findUserById(decoded.userId);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+
+    const validPassword = await bcrypt.compare(password, user.passwordHash);
+    if (!validPassword) return res.status(401).json({ error: 'Invalid password' });
+
+    revokeSessionByToken(expiredToken);
+
+    const sessionDuration = getSessionDuration(requestedDuration);
+    const newToken = jwt.sign(
+      { userId: user.id, handle: user.handle },
+      JWT_SECRET,
+      { expiresIn: sessionDuration }
+    );
+    createSession(user.id, newToken, req);
+    db.updateUserStatus(user.id, 'online');
+
+    if (db.logActivity) db.logActivity(user.id, 'session_reauth', 'user', user.id, getRequestMeta(req));
+    console.log(`🔑 Grace-period re-auth for: ${user.handle} with ${sessionDuration} session`);
+
+    res.json({
+      token: newToken,
+      sessionDuration,
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } }
+    });
+  } catch (err) {
+    console.error('Re-auth error:', err);
+    res.status(500).json({ error: 'Re-authentication failed' });
+  }
+});
+
 // ============ Session Management Routes (v1.18.0) ============
 
 // Get user's active sessions

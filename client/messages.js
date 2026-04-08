@@ -288,6 +288,10 @@ export const SESSION = {
   extending: "EXTENDING...",
   extended: "Session extended",
   selectDuration: "SESSION DURATION",
+  expired: "Session Expired",
+  expiredMessage: "Your session has expired. Enter your password to continue.",
+  continueSession: "CONTINUE SESSION",
+  continuing: "CONTINUING...",
 };
 
 // ============ SERVER CONNECTION (v2.30.0) ============
