@@ -28,7 +28,7 @@ const LoginScreen = ({ onAbout }) => {
   const [mfaLoading, setMfaLoading] = useState(false);
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [emailCodeSending, setEmailCodeSending] = useState(false);
-  const [sessionDuration, setSessionDuration] = useState('24h');
+  const [sessionDuration, setSessionDuration] = useState(() => storage.getSessionDuration());
   // Account moderation state (v2.37.0)
   const [moderationInfo, setModerationInfo] = useState(null);
   const [showAppealForm, setShowAppealForm] = useState(false);
