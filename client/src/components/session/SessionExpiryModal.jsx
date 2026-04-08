@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../hooks/useAPI.js';
 import { SESSION } from '../../../messages.js';
+import { storage } from '../../utils/storage.js';
 
 function SessionExpiryModal() {
-  const { sessionExpiresAt, refreshSession, dismissSessionWarning, logout } = useAuth();
+  const { sessionExpiresAt, sessionExpired, refreshSession, reauth, dismissSessionWarning, logout } = useAuth();
   const [password, setPassword] = useState('');
-  const [sessionDuration, setSessionDuration] = useState('24h');
+  const [sessionDuration, setSessionDuration] = useState(() => storage.getSessionDuration());
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState('');
@@ -16,15 +17,14 @@ function SessionExpiryModal() {
     if (inputRef.current) inputRef.current.focus();
   }, []);
 
-  // Countdown timer — auto-logout when it hits zero
+  // Countdown timer — stops gracefully at zero (grace period takes over via AuthProvider)
   useEffect(() => {
-    if (!sessionExpiresAt) return;
+    if (sessionExpired || !sessionExpiresAt) return;
 
     const updateCountdown = () => {
       const remaining = sessionExpiresAt - Date.now();
       if (remaining <= 0) {
-        // Token has fully expired — can't refresh, auto-logout
-        logout();
+        setTimeRemaining('');
         return;
       }
       const mins = Math.floor(remaining / 60000);
@@ -35,28 +35,39 @@ function SessionExpiryModal() {
     updateCountdown();
     const interval = setInterval(updateCountdown, 1000);
     return () => clearInterval(interval);
-  }, [sessionExpiresAt, logout]);
+  }, [sessionExpiresAt, sessionExpired]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
     setIsLoading(true);
     try {
-      await refreshSession(password, sessionDuration);
+      if (sessionExpired) {
+        await reauth(password, sessionDuration);
+      } else {
+        await refreshSession(password, sessionDuration);
+      }
       setPassword('');
     } catch (err) {
-      setError(err.message || 'Failed to extend session');
+      setError(err.message || 'Failed to continue session');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const accentColor = sessionExpired
+    ? 'var(--accent-orange)'
+    : 'var(--accent-amber, var(--accent-orange))';
+
+  const title = sessionExpired ? SESSION.expired : SESSION.expiring;
+  const message = sessionExpired ? SESSION.expiredMessage : SESSION.expiringMessage;
+  const submitLabel = isLoading
+    ? (sessionExpired ? SESSION.continuing : SESSION.extending)
+    : (sessionExpired ? SESSION.continueSession : SESSION.extendSession);
+
   const modalStyle = {
     position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0, 0, 0, 0.75)',
     display: 'flex',
     alignItems: 'center',
@@ -67,12 +78,14 @@ function SessionExpiryModal() {
 
   const contentStyle = {
     backgroundColor: 'var(--bg-elevated)',
-    border: '1px solid var(--accent-amber, var(--accent-orange))',
+    border: `1px solid ${accentColor}`,
     borderRadius: '8px',
     padding: '24px',
     maxWidth: '400px',
     width: '100%',
-    boxShadow: '0 0 30px rgba(255, 210, 63, 0.15)'
+    boxShadow: sessionExpired
+      ? '0 0 30px rgba(255, 120, 0, 0.2)'
+      : '0 0 30px rgba(255, 210, 63, 0.15)'
   };
 
   const inputStyle = {
@@ -91,7 +104,7 @@ function SessionExpiryModal() {
   const buttonStyle = {
     width: '100%',
     padding: '12px',
-    backgroundColor: 'var(--accent-amber, var(--accent-orange))',
+    backgroundColor: accentColor,
     border: 'none',
     borderRadius: '4px',
     color: 'var(--bg-base)',
@@ -114,15 +127,15 @@ function SessionExpiryModal() {
   };
 
   return (
-    <div style={modalStyle} onClick={dismissSessionWarning}>
+    <div style={modalStyle} onClick={sessionExpired ? undefined : dismissSessionWarning}>
       <div style={contentStyle} onClick={e => e.stopPropagation()}>
-        <h2 style={{ color: 'var(--accent-amber, var(--accent-orange))', marginBottom: '4px', fontSize: '20px', marginTop: 0 }}>
-          {SESSION.expiring}
+        <h2 style={{ color: accentColor, marginBottom: '4px', fontSize: '20px', marginTop: 0 }}>
+          {title}
         </h2>
 
-        {timeRemaining && (
+        {!sessionExpired && timeRemaining && (
           <div style={{
-            color: 'var(--accent-amber, var(--accent-orange))',
+            color: accentColor,
             fontSize: '24px',
             fontWeight: 'bold',
             fontFamily: 'monospace',
@@ -134,7 +147,7 @@ function SessionExpiryModal() {
         )}
 
         <p style={{ color: 'var(--text-secondary)', marginBottom: '20px', fontSize: '14px' }}>
-          {SESSION.expiringMessage}
+          {message}
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -178,7 +191,7 @@ function SessionExpiryModal() {
           )}
 
           <button type="submit" style={buttonStyle} disabled={isLoading || !password}>
-            {isLoading ? SESSION.extending : SESSION.extendSession}
+            {submitLabel}
           </button>
         </form>
 

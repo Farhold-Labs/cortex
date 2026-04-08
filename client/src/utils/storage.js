@@ -22,6 +22,20 @@ export function getTokenExpiry(token) {
   }
 }
 
+// Decode JWT issued-at timestamp (ms) from token payload without signature verification
+export function getTokenIssuedAt(token) {
+  if (!token) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const decoded = JSON.parse(atob(payload));
+    return decoded.iat ? decoded.iat * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 export const storage = {
   getToken: () => localStorage.getItem('farhold_token'),
   setToken: (token) => localStorage.setItem('farhold_token', token),
@@ -50,7 +64,8 @@ export const storage = {
   },
   removeSessionStart: () => {
     localStorage.removeItem('farhold_session_start');
-    localStorage.removeItem('farhold_session_duration');
+    // Intentionally keep 'farhold_session_duration' — it doubles as a preference
+    // so the login form can pre-fill the user's last-used duration next time.
   },
   getSessionDuration: () => localStorage.getItem('farhold_session_duration') || '24h',
   // Server URL override (v2.30.0)
