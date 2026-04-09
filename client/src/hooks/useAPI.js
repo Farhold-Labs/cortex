@@ -1,5 +1,6 @@
 import { useCallback, useContext, createContext, useMemo } from 'react';
 import { API_URL } from '../config/constants.js';
+import { storage } from '../utils/storage.js';
 import { useNetworkStatus } from './useNetworkStatus.js';
 
 // Temporary: Import AuthContext (will remain in FarholdApp until Phase 5)
@@ -15,6 +16,7 @@ export function useAPI() {
 
   // Memoized fetch function with bandwidth-aware mode
   const fetchAPI = useCallback(async (endpoint, options = {}) => {
+    const requestToken = token; // capture at call time to detect rotation during flight
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -54,6 +56,11 @@ export function useAPI() {
     const data = await res.json();
     if (!res.ok) {
       if (res.status === 401) {
+        // If the token was rotated during this request's flight (renewal), the 401 is stale —
+        // the client already has a fresh token. Drop silently rather than logging out.
+        if (requestToken !== storage.getToken()) {
+          throw new Error(data.error || `API error: ${res.status}`);
+        }
         // Token expired — show renewal modal instead of immediate logout (v2.29.0)
         if (data.code === 'TOKEN_EXPIRED') {
           triggerSessionExpiry?.();

@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.5] - 2026-04-09
+
+### Fixed
+
+#### Hard Logout on Stale 401 After Token Renewal
+After a successful silent renewal, in-flight API requests that were sent with the old token (wave polling, WebSocket reconnects, etc.) could arrive at the server after the old token was revoked. These returned a 401 with `"Session revoked"` — not `TOKEN_EXPIRED` — so `useAPI.js` called `logout()` immediately, hard-logging the user out despite the client already holding a valid new token. This was the primary cause of users being logged out right after a successful silent renewal.
+
+**Fix (`useAPI.js`):** At the start of each `fetchAPI` call the current token is captured as `requestToken`. On any 401 response, if `requestToken !== storage.getToken()`, the token was rotated during the request's flight — the 401 is stale and is dropped silently (the component receives the error but no logout is triggered). If the tokens match, the 401 is genuine and the existing handling applies (`TOKEN_EXPIRED` → grace period overlay, anything else → logout).
+
+---
+
 ## [2.46.4] - 2026-04-09
 
 ### Fixed
