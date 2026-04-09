@@ -35,6 +35,7 @@ function AuthProvider({ children }) {
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isAutoRenewing, setIsAutoRenewing] = useState(false);
   const isAutoRenewingRef = useRef(false); // Synchronous guard — state is async and can't prevent concurrent calls
+  const tokenJustRenewedRef = useRef(false); // Skip /auth/me re-check after renewal (user data already fresh)
   const [sessionExpiresAt, setSessionExpiresAt] = useState(() => getTokenExpiry(storage.getToken()));
   const dismissedUntilRef = useRef(0);
   const lastAutoRenewalRef = useRef(0);
@@ -49,6 +50,15 @@ function AuthProvider({ children }) {
       console.log('⏰ Browser session expired. Logging out...');
       storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
       setToken(null); setUser(null);
+      setLoading(false);
+      return () => controller.abort();
+    }
+
+    // Skip /auth/me after silent renewal — user data was already refreshed from the renewal response.
+    // Avoids a redundant context update that would cause all fetchAPI consumers to re-fetch.
+    if (tokenJustRenewedRef.current) {
+      tokenJustRenewedRef.current = false;
+      clearTimeout(timeoutId);
       setLoading(false);
       return () => controller.abort();
     }
@@ -113,6 +123,7 @@ function AuthProvider({ children }) {
       storage.setSessionStart(storage.getSessionDuration());
       setSessionExpiresAt(getTokenExpiry(data.token));
       setSessionExpiring(false);
+      tokenJustRenewedRef.current = true; // suppress /auth/me re-check on token change
       setToken(data.token);
       setUser(data.user);
       lastAutoRenewalRef.current = Date.now();

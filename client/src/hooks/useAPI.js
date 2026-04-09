@@ -1,4 +1,4 @@
-import { useCallback, useContext, createContext, useMemo } from 'react';
+import { useCallback, useContext, createContext, useMemo, useRef, useEffect } from 'react';
 import { API_URL } from '../config/constants.js';
 import { storage } from '../utils/storage.js';
 import { useNetworkStatus } from './useNetworkStatus.js';
@@ -14,11 +14,17 @@ export function useAPI() {
   const { token, logout, triggerSessionExpiry } = useAuth();
   const { isSlowConnection } = useNetworkStatus();
 
+  // Keep a ref to the latest token so fetchAPI doesn't need token in its dep array.
+  // This prevents fetchAPI from being recreated on every silent renewal, which would
+  // otherwise cause every component with fetchAPI in its useEffect deps to re-fetch.
+  const tokenRef = useRef(token);
+  useEffect(() => { tokenRef.current = token; }, [token]);
+
   // Memoized fetch function with bandwidth-aware mode
   const fetchAPI = useCallback(async (endpoint, options = {}) => {
-    const requestToken = token; // capture at call time to detect rotation during flight
+    const requestToken = tokenRef.current; // capture at call time to detect rotation during flight
     const headers = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (requestToken) headers['Authorization'] = `Bearer ${requestToken}`;
 
     // Low-bandwidth mode (v2.10.0):
     // Auto-add minimal flag on slow connections unless skipMinimal is set
@@ -74,7 +80,7 @@ export function useAPI() {
       throw new Error(data.error || `API error: ${res.status}`);
     }
     return data;
-  }, [token, logout, triggerSessionExpiry, isSlowConnection]);
+  }, [logout, triggerSessionExpiry, isSlowConnection]);
 
   // Return both fetchAPI and connection status for components that need it
   return useMemo(() => ({

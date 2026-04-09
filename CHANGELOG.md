@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.6] - 2026-04-09
+
+### Fixed
+
+#### UI Reset on Silent Token Renewal
+After a successful silent renewal, the app briefly reset — the wave list re-fetched, the active wave reloaded, and any scroll position was lost. Two separate causes:
+
+1. **`fetchAPI` instability** — `token` was in `fetchAPI`'s `useCallback` dep array. Every renewal created a new `fetchAPI` reference, which caused every component with `fetchAPI` in its `useEffect` deps to re-run its data-fetch effect, reloading all content.
+
+2. **Redundant `/auth/me` call** — `setToken(newToken)` triggered `useEffect([token])` in `AuthProvider`, which called `/auth/me` and then `setUser()`. This was a wasted round-trip: the renewal response already contains fresh user data, which `autoRenewSession` had already applied via `setUser(data.user)`. The extra `setUser()` caused another context update, triggering a second wave of re-renders.
+
+**Fix (`useAPI.js`):** `token` moved out of `fetchAPI`'s dep array. Instead a `tokenRef` (`useEffect` + `useRef`) tracks the latest token. `fetchAPI`'s reference is now stable across renewals. The stale-401 detection (v2.46.5) continues to work because `requestToken` is still captured from the ref at call time and compared against `storage.getToken()`.
+
+**Fix (`AuthProvider.jsx`):** Added `tokenJustRenewedRef`. `autoRenewSession` sets the flag before calling `setToken`; `useEffect([token])` checks it on entry and exits early (skipping `/auth/me` and `setUser`) when the token change came from a renewal.
+
+---
+
 ## [2.46.5] - 2026-04-09
 
 ### Fixed
