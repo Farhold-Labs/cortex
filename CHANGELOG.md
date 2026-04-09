@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.3] - 2026-04-09
+
+### Fixed
+
+#### Concurrent Auto-Renewal Requests Causing Duplicate Session Records
+Under certain conditions (30-second expiry check interval, visibility change, and focus events firing close together), `autoRenewSession` could be invoked concurrently. Because the in-flight guard used React state (`isAutoRenewing`), which is updated asynchronously, multiple calls could pass the `if (isAutoRenewing) return` check before the state update propagated. Two concurrent renewal requests issued within the same second produce identical JWTs (same `userId`, `handle`, `iat`, `exp` payload → same hash), causing a UNIQUE constraint failure on `user_sessions.token_hash`. The error was already caught server-side so no session was corrupted, but the log noise indicated the underlying race.
+
+**Fix (`AuthProvider.jsx`):**
+- Added `isAutoRenewingRef` (`useRef`) as a synchronous in-flight guard — checked and set before any async work, preventing concurrent calls regardless of React's render cycle.
+- `isAutoRenewing` state is retained for the UI (suppressing the expiry warning modal) but removed from `autoRenewSession`'s `useCallback` deps and from the expiry effect's dependency array, preventing the interval and event listeners from being torn down and re-registered on every renewal cycle.
+
+---
+
 ## [2.46.2] - 2026-04-09
 
 ### Fixed
