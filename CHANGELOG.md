@@ -5,6 +5,22 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.1] - 2026-04-09
+
+### Fixed
+
+#### Electron Blank Screen with Spinner on Startup (Auth Check Timeout)
+After extended use — particularly when the Electron app had been running for ~24 hours and a silent session renewal had occurred — the app could become stuck on a blank screen showing only a partial loading spinner with nothing in the console. Force-reloading the renderer did not resolve it; clearing app data was the only recovery.
+
+**Root cause:** The `/auth/me` fetch in `AuthProvider.jsx` had no timeout and no `AbortController`. If the fetch hung indefinitely (no response, no rejection) — which can happen in Electron after sleep/wake cycles or a transient network stall — `loading` remained `true` permanently, rendering only `<LoadingSpinner />`. A hanging fetch never rejects, so no console warnings were produced, making the issue difficult to diagnose.
+
+**Fix (`AuthProvider.jsx`):**
+- Added a 10-second `AbortController` timeout to the startup `/auth/me` fetch.
+- On timeout: logs a warning, retains cached session data (avoids a spurious logout on a slow/stale network), and sets `loading = false` so the app renders normally.
+- Added a `useEffect` cleanup function that cancels the in-flight request if the token changes (e.g. mid-flight during auto-renew) or the component unmounts, preventing stale-closure races between concurrent auth checks.
+
+---
+
 ## [2.46.0] - 2026-04-08
 
 ### Changed

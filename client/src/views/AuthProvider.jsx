@@ -39,18 +39,26 @@ function AuthProvider({ children }) {
   const lastAutoRenewalRef = useRef(0);
 
   useEffect(() => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
     // Check for browser session timeout (24 hours for non-PWA browser tabs)
     if (token && storage.isSessionExpired()) {
+      clearTimeout(timeoutId);
       console.log('⏰ Browser session expired. Logging out...');
       storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
       setToken(null); setUser(null);
       setLoading(false);
-      return;
+      return () => controller.abort();
     }
 
     if (token) {
-      fetch(`${API_URL}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`${API_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
+      })
         .then(res => {
+          clearTimeout(timeoutId);
           if (res.ok) return res.json();
           // Clear session on 401 (invalid/expired token/session)
           if (res.status === 401) {
@@ -65,14 +73,24 @@ function AuthProvider({ children }) {
           storage.setUser(userData); // Save to localStorage
         })
         .catch(err => {
-          // Network errors - don't clear session, user may still have valid token
-          // They can retry or the periodic check will handle it
-          console.warn('Auth check failed, keeping cached session:', err.message);
+          if (err.name === 'AbortError') {
+            // Fetch timed out — keep cached session so user isn't logged out on slow/stale network
+            console.warn('Auth check timed out, keeping cached session');
+          } else {
+            // Network errors - don't clear session, user may still have valid token
+            console.warn('Auth check failed, keeping cached session:', err.message);
+          }
         })
         .finally(() => setLoading(false));
     } else {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [token]);
 
   // Silently renew session — no password required, active users only (v2.46.0)
