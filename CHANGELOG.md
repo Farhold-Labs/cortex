@@ -18,6 +18,8 @@ The same collision can occur between any two operations (two concurrent auto-ren
 
 **Fix (`server.js`):** Added a `jti: crypto.randomUUID()` claim to every `jwt.sign` call (registration, login, refresh, silent renewal, grace-period reauth, MFA completion). A random UUID in the payload guarantees a unique token string regardless of when within a second the token is issued, eliminating the collision entirely.
 
+**Fix (`server.js` — renewal order):** The silent renewal endpoint previously revoked the old token before sending the response. If the network dropped after the server logged "silently renewed" but before the client received the new token, the client was left holding a revoked token — causing a hard logout on the next request or on startup. The revocation now happens after `res.json()` is called, so if the response is lost in transit the old token remains valid and the client can retry or enter the grace-period re-auth overlay instead of being hard-logged-out.
+
 **Fix (`AuthProvider.jsx`):** Added `isAutoRenewingRef` (`useRef`) as a synchronous in-flight guard alongside the existing `isAutoRenewing` state. The state guard was async — multiple callers (expiry interval, `visibilitychange`, `focus`) could all pass before a state update propagated. The ref is checked and set synchronously before any async work, preventing concurrent renewal calls. `isAutoRenewing` state is retained for the UI (suppressing the expiry warning modal) but removed from `autoRenewSession`'s `useCallback` deps and the expiry effect's dependency array, preventing the interval and listeners from tearing down on every renewal cycle.
 
 ---

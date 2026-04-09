@@ -4674,8 +4674,9 @@ app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) =>
     }
     const originalDurationSecs = decoded.exp - decoded.iat;
 
-    revokeSessionByToken(req.token);
-
+    // Issue new token BEFORE revoking old one. If the response is lost in transit,
+    // the client still holds a valid old token and can retry or enter grace period
+    // rather than being hard-logged-out with a revoked token.
     const newToken = jwt.sign(
       { userId: req.user.userId, handle: req.user.handle, jti: crypto.randomUUID() },
       JWT_SECRET,
@@ -4691,6 +4692,9 @@ app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) =>
       token: newToken,
       user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } }
     });
+
+    // Revoke old token after response is sent — client already has the new one
+    revokeSessionByToken(req.token);
   } catch (err) {
     console.error('Auto-renew error:', err);
     res.status(500).json({ error: 'Renewal failed' });
