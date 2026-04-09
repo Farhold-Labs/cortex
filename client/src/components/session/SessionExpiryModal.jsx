@@ -171,6 +171,7 @@ function SessionExpiryModal() {
             style={selectStyle}
             disabled={isLoading}
           >
+            <option value="10m">10 minutes (TEST)</option>
             <option value="24h">24 hours</option>
             <option value="7d">7 days</option>
             <option value="30d">30 days</option>

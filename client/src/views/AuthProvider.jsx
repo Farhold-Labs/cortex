@@ -34,6 +34,7 @@ function AuthProvider({ children }) {
   const [sessionExpiring, setSessionExpiring] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isAutoRenewing, setIsAutoRenewing] = useState(false);
+  const isAutoRenewingRef = useRef(false); // Synchronous guard — state is async and can't prevent concurrent calls
   const [sessionExpiresAt, setSessionExpiresAt] = useState(() => getTokenExpiry(storage.getToken()));
   const dismissedUntilRef = useRef(0);
   const lastAutoRenewalRef = useRef(0);
@@ -96,8 +97,9 @@ function AuthProvider({ children }) {
   // Silently renew session — no password required, active users only (v2.46.0)
   // Must be declared before the expiry useEffect that references it.
   const autoRenewSession = useCallback(async () => {
-    if (isAutoRenewing) return;
+    if (isAutoRenewingRef.current) return; // Synchronous check — prevents concurrent calls
     if (Date.now() - lastAutoRenewalRef.current < AUTO_RENEW_COOLDOWN_MS) return;
+    isAutoRenewingRef.current = true;
     setIsAutoRenewing(true);
     try {
       const res = await fetch(`${API_URL}/auth/renew`, {
@@ -117,9 +119,10 @@ function AuthProvider({ children }) {
     } catch {
       // Silent failure — warning modal will surface on next check cycle
     } finally {
+      isAutoRenewingRef.current = false;
       setIsAutoRenewing(false);
     }
-  }, [token, isAutoRenewing]);
+  }, [token]);
 
   // Session expiry monitoring timer (v2.29.0)
   useEffect(() => {
@@ -133,7 +136,10 @@ function AuthProvider({ children }) {
 
         if (remaining <= 0) {
           const expiredAgo = -remaining;
-          if (expiredAgo < GRACE_PERIOD_MS) {
+          const issued = getTokenIssuedAt(token);
+          const originalDurationMs = issued ? (expiry - issued) : GRACE_PERIOD_MS;
+          const graceMs = Math.min(GRACE_PERIOD_MS, originalDurationMs);
+          if (expiredAgo < graceMs) {
             // Within grace period — show re-auth overlay instead of logging out
             console.log('⏰ Session expired, grace period active.');
             setSessionExpired(true);
@@ -158,7 +164,7 @@ function AuthProvider({ children }) {
             autoRenewSession();
           }
           // Show warning modal only when not actively renewing
-          if (!isAutoRenewing && Date.now() > dismissedUntilRef.current) {
+          if (!isAutoRenewingRef.current && Date.now() > dismissedUntilRef.current) {
             setSessionExpiring(true);
           }
         } else {
@@ -187,7 +193,7 @@ function AuthProvider({ children }) {
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [token, autoRenewSession, isAutoRenewing]);
+  }, [token, autoRenewSession]);
 
   // Get pending password for E2EE unlock (one-time read, clears after access)
   const getPendingPassword = () => {

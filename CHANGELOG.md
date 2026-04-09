@@ -5,6 +5,36 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.4] - 2026-04-09
+
+### Fixed
+
+#### Grace Period Disproportionate for Short Session Durations
+The re-authentication grace period was hardcoded at 1 hour on both client and server. For short sessions (e.g. a 10-minute test token) this produced a grace period six times longer than the session itself, making the grace period meaningless as a security boundary. Conversely, in any scenario where the grace window was never triggered correctly (e.g. due to the jti collision bug), users were hard-logged-out with no overlay.
+
+**Fix:** Grace period is now `min(1 hour, original session duration)`, derived from the token's `iat` and `exp` claims — available on both sides without any additional data. A 10-minute session gets a 10-minute grace period; 24h and longer sessions retain the 1-hour cap. Client (`AuthProvider.jsx`) and server (`reauth` endpoint) use the same formula, keeping them in sync.
+
+---
+
+## [2.46.3] - 2026-04-09
+
+### Fixed
+
+#### Instant Logout After Login When Session Duration Is Within the Warning Window
+Logging in with a short session duration (such as the `2m` test duration) caused an immediate logout. The root cause was a collision between the new login token and the token produced by an auto-renewal that fired before the first second elapsed.
+
+**Root cause:** The proportional warning window is capped at a minimum of 5 minutes. A 2-minute session is therefore immediately inside the warning window the moment it is issued, so `autoRenewSession` fires within milliseconds of login. `jwt.sign` timestamps at second precision — if the renewal request arrives within the same second as the login, the signed payload (`userId`, `handle`, `iat`, `exp`) is byte-for-byte identical, producing the same JWT string. The renewal endpoint revokes the old token and then issues the "new" token — which is the same string. The client's token is now revoked. Every subsequent API request returns 401, logging the user out immediately.
+
+The same collision can occur between any two operations (two concurrent auto-renewals, login + renewal, etc.) that produce tokens within the same second.
+
+**Fix (`server.js`):** Added a `jti: crypto.randomUUID()` claim to every `jwt.sign` call (registration, login, refresh, silent renewal, grace-period reauth, MFA completion). A random UUID in the payload guarantees a unique token string regardless of when within a second the token is issued, eliminating the collision entirely.
+
+**Fix (`server.js` — renewal order):** The silent renewal endpoint previously revoked the old token before sending the response. If the network dropped after the server logged "silently renewed" but before the client received the new token, the client was left holding a revoked token — causing a hard logout on the next request or on startup. The revocation now happens after `res.json()` is called, so if the response is lost in transit the old token remains valid and the client can retry or enter the grace-period re-auth overlay instead of being hard-logged-out.
+
+**Fix (`AuthProvider.jsx`):** Added `isAutoRenewingRef` (`useRef`) as a synchronous in-flight guard alongside the existing `isAutoRenewing` state. The state guard was async — multiple callers (expiry interval, `visibilitychange`, `focus`) could all pass before a state update propagated. The ref is checked and set synchronously before any async work, preventing concurrent renewal calls. `isAutoRenewing` state is retained for the UI (suppressing the expiry warning modal) but removed from `autoRenewSession`'s `useCallback` deps and the expiry effect's dependency array, preventing the interval and listeners from tearing down on every renewal cycle.
+
+---
+
 ## [2.46.2] - 2026-04-09
 
 ### Fixed
