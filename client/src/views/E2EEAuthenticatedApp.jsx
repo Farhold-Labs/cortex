@@ -7,7 +7,7 @@ import SessionExpiryModal from '../components/session/SessionExpiryModal.jsx';
 import MainApp from './MainApp.jsx';
 
 function E2EEAuthenticatedApp({ sharePingId, logout }) {
-  const { getPendingPassword, clearPendingPassword, sessionExpiring, sessionExpired } = useAuth();
+  const { getPendingPassword, clearPendingPassword, sessionExpiring, sessionExpired, reauth } = useAuth();
   const {
     e2eeStatus,
     isUnlocked,
@@ -131,8 +131,13 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
       <PassphraseUnlockModal
         onUnlock={async (passphrase, rememberDuration) => {
           const result = await unlockE2EE(passphrase, rememberDuration);
-          // After successful unlock, clear the mismatch state
           setPasswordMismatch(false);
+          // If session is in grace period, use the same password to reauth simultaneously
+          // so the user isn't prompted twice for the same credential.
+          // Silent failure — SessionExpiryModal remains as fallback if passphrases differ.
+          if (sessionExpired) {
+            reauth(passphrase).catch(() => {});
+          }
           return result;
         }}
         onRecover={recoverWithPassphrase}

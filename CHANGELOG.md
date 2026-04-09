@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.2] - 2026-04-09
+
+### Fixed
+
+#### Double Password Entry When E2EE Unlock Coincides with Grace-Period Session Expiry
+If a user's session expired while they were away and their E2EE passphrase also needed re-entry (e.g. after a page reload or PWA reopen), they were prompted for their password twice in succession — once in the E2EE `PassphraseUnlockModal` and again immediately after in the `SessionExpiryModal`. The two passwords are almost always identical (the E2EE passphrase defaults to the login password), making the double prompt purely redundant friction.
+
+**Fix (`E2EEAuthenticatedApp.jsx`):** When the `PassphraseUnlockModal` `onUnlock` callback completes successfully and `sessionExpired` is true, `reauth` is called concurrently with the same passphrase. If it succeeds, the grace-period re-auth is handled silently and `sessionExpired` is cleared before `SessionExpiryModal` ever renders. If it fails (passphrase differs from login password — an edge case), the `SessionExpiryModal` remains as the fallback with no change in behaviour.
+
+---
+
 ## [2.46.1] - 2026-04-09
 
 ### Fixed
