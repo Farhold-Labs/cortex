@@ -10895,7 +10895,7 @@ app.get('/api/waves/:id/tokens', authenticateToken, (req, res) => {
   try {
     const wave = db.getWave(req.params.id);
     if (!wave) return res.status(404).json({ error: 'Wave not found' });
-    if (wave.created_by !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
+    if (wave.createdBy !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
 
     const tokens = db.getWaveTokens(wave.id);
     res.json({ tokens });
@@ -10912,7 +10912,7 @@ app.post('/api/waves/:id/tokens', authenticateToken, (req, res) => {
   try {
     const wave = db.getWave(req.params.id);
     if (!wave) return res.status(404).json({ error: 'Wave not found' });
-    if (wave.created_by !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
+    if (wave.createdBy !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
 
     const name = sanitizeInput(req.body.name || '').trim();
     if (!name) return res.status(400).json({ error: 'Token name is required' });
@@ -10945,7 +10945,7 @@ app.delete('/api/waves/:id/tokens/:tokenId', authenticateToken, (req, res) => {
   try {
     const wave = db.getWave(req.params.id);
     if (!wave) return res.status(404).json({ error: 'Wave not found' });
-    if (wave.created_by !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
+    if (wave.createdBy !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage tokens' });
 
     db.deleteWaveToken(req.params.tokenId, wave.id);
     db.logActivity(req.user.userId, 'wave_token_revoked', 'wave', wave.id, { tokenId: req.params.tokenId });
@@ -17029,7 +17029,7 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
     }
 
     // Only wave creator can enable encryption
-    if (wave.created_by !== req.user.userId) {
+    if (wave.createdBy !== req.user.userId) {
       return res.status(403).json({ error: 'Only wave creator can enable encryption' });
     }
 
@@ -17113,7 +17113,7 @@ app.get('/api/waves/:id/encryption-status', authenticateToken, (req, res) => {
       allParticipantsReady: allHaveE2EE,
       readyCount,
       totalParticipants: participants.length,
-      canEnableEncryption: wave.created_by === req.user.userId && allHaveE2EE
+      canEnableEncryption: wave.createdBy === req.user.userId && allHaveE2EE
     });
   } catch (err) {
     console.error('Wave encryption status error:', err);
@@ -17133,7 +17133,7 @@ app.get('/api/waves/:id/unencrypted-pings', authenticateToken, (req, res) => {
     }
 
     // Only wave creator can migrate encryption
-    if (wave.created_by !== req.user.userId) {
+    if (wave.createdBy !== req.user.userId) {
       return res.status(403).json({ error: 'Only wave creator can migrate encryption' });
     }
 
@@ -17169,7 +17169,7 @@ app.post('/api/waves/:id/encrypt-pings', authenticateToken, (req, res) => {
     }
 
     // Only wave creator can migrate encryption
-    if (wave.created_by !== req.user.userId) {
+    if (wave.createdBy !== req.user.userId) {
       return res.status(403).json({ error: 'Only wave creator can migrate encryption' });
     }
 
