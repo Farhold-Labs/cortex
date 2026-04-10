@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.9] - 2026-04-09
+
+### Added
+
+#### Wave ID Visible in Posting Tokens Section
+Wave creators can now see and copy their wave's ID directly from the Wave Settings → Posting Tokens section. The wave ID is required when making bot API calls (`POST /api/bot/ping` body: `{ waveId, content }`), but was previously only discoverable by inspecting network requests or the database. A compact row showing the full wave ID with a one-click Copy button now appears at the top of the Posting Tokens section, visible only to the wave creator.
+
+---
+
 ## [2.46.8] - 2026-04-09
 
 ### Fixed
