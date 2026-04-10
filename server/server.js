@@ -10976,7 +10976,7 @@ app.post('/api/post/:token', express.json({ limit: '50kb' }), botLimiter, (req, 
     const content = req.body.content;
     if (!content || typeof content !== 'string') return res.status(400).json({ error: 'content is required' });
 
-    const sanitized = sanitizeContent(content);
+    const sanitized = sanitizeMessage(content);
     if (!sanitized.trim()) return res.status(400).json({ error: 'Message content is empty after sanitization' });
 
     // Post as a bot ping — backing bot entry carries the token name as sender_name
