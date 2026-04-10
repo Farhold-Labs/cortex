@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.8] - 2026-04-09
+
+### Fixed
+
+#### Wave Creator Token Permission Error
+Wave creators were blocked from creating bot tokens on their own waves with the error "Only the wave creator can manage tokens". The server was checking `wave.created_by` (snake_case) but `db.getWave()` → `rowToWave()` returns camelCase properties — so the field was `wave.createdBy`. The comparison always evaluated to `undefined !== userId` → `true`, blocking all token creation regardless of who the creator was. Fixed by updating all server-side `wave.created_by` checks to `wave.createdBy` (7 occurrences: bot token GET/POST/DELETE, and E2EE enable/migrate endpoints).
+
+#### Admin Panel Bots Black Screen
+Clicking "Create Bot" in the Bots & Webhooks admin panel caused a black screen. `BotsAdminPanel.jsx` referenced `<GlowText>` in the create modal and the API key modal but did not import it from `SimpleComponents.jsx`, causing a React render error. Fixed by adding `GlowText` to the import.
+
+---
+
 ## [2.46.7] - 2026-04-09
 
 ### Changed

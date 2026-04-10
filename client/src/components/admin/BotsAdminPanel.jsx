@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
+import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
 
 const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
