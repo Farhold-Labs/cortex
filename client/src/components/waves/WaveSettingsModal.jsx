@@ -565,6 +565,30 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
               </span>
             </div>
 
+            {/* Wave ID — needed for bot API calls */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px',
+              padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>WAVE ID</span>
+              <span style={{
+                flex: 1, fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--text-secondary)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {wave.id}
+              </span>
+              <button
+                onClick={() => { navigator.clipboard?.writeText(wave.id); showToast('Wave ID copied', 'success'); }}
+                style={{
+                  padding: '3px 8px', background: 'transparent',
+                  border: '1px solid var(--border-subtle)', color: 'var(--text-dim)',
+                  cursor: 'pointer', fontSize: '0.7rem', whiteSpace: 'nowrap',
+                }}
+              >
+                Copy
+              </button>
+            </div>
+
             {/* Revealed token — shown once after creation */}
             {revealedToken && (
               <div style={{
