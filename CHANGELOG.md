@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.46.10] - 2026-04-10
+
+### Fixed
+
+#### Posting Token POST Always Returns 500
+`POST /api/post/:token` always returned `{"error": "Failed to post message"}` regardless of token or content validity. The endpoint called `sanitizeContent(content)` which does not exist — only `sanitizeInput` and `sanitizeMessage` are defined in server.js. This threw a `ReferenceError` that was caught by the endpoint's try/catch and returned as a 500. Fixed by changing the call to `sanitizeMessage(content)`.
+
+---
+
 ## [2.46.9] - 2026-04-09
 
 ### Added
