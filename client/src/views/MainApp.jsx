@@ -1412,15 +1412,15 @@ function MainApp({ sharePingId }) {
                       position: 'absolute',
                       top: '-6px',
                       right: '-6px',
-                      background: pendingRequests > 0 ? 'var(--accent-teal)' : pendingInvitations > 0 ? 'var(--accent-amber)' : 'var(--accent-orange)',
-                      color: pendingInvitations > 0 && !pendingRequests ? '#000' : '#fff',
+                      background: totalUnread > 0 ? 'var(--accent-orange)' : 'var(--accent-teal)',
+                      color: '#fff',
                       fontSize: '0.55rem',
                       fontWeight: 700,
                       padding: '2px 4px',
                       borderRadius: '10px',
                       minWidth: '16px',
                       textAlign: 'center',
-                      boxShadow: pendingRequests > 0 ? '0 0 8px rgba(59, 206, 172, 0.8)' : pendingInvitations > 0 ? '0 0 8px rgba(255, 210, 63, 0.8)' : '0 0 8px rgba(255, 107, 53, 0.8)',
+                      boxShadow: totalUnread > 0 ? '0 0 8px rgba(255, 107, 53, 0.8)' : '0 0 8px rgba(59, 206, 172, 0.8)',
                     }}>{badgeCount}</span>
                   )}
                 </button>
