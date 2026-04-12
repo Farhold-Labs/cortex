@@ -4,12 +4,13 @@ import { isNativeApp } from '../../config/constants.js';
 
 // ============ BOTTOM NAVIGATION ============
 const BottomNav = ({ activeView, onNavigate, unreadCount, pendingContacts, pendingGroups }) => {
+  const pendingPeople = (pendingContacts || 0) + (pendingGroups || 0);
   const items = [
-    { id: 'waves', icon: '◈', label: 'Waves', badge: unreadCount },
-    { id: 'feed', icon: '▶', label: 'Feed' },
-    { id: 'contacts', icon: '●', label: 'Contacts', badge: pendingContacts },
-    { id: 'groups', icon: '◆', label: 'Crews', badge: pendingGroups },
-    { id: 'profile', icon: '⚙', label: 'Profile' },
+    { id: 'waves',    icon: '◈', label: 'Waves',    badge: unreadCount },
+    { id: 'feed',     icon: '▶', label: 'Feed' },
+    { id: 'people',   icon: '●', label: 'People',   badge: pendingPeople },
+    { id: 'calendar', icon: '▦', label: 'Calendar' },
+    { id: 'profile',  icon: '⚙', label: 'Profile' },
   ];
 
   const handleNavigate = (view) => {
@@ -40,8 +41,7 @@ const BottomNav = ({ activeView, onNavigate, unreadCount, pendingContacts, pendi
       {items.map(item => {
         const isActive = activeView === item.id;
         const badgeColor = item.badgeColor ? item.badgeColor :
-                          item.id === 'contacts' && item.badge > 0 ? 'var(--accent-teal)' :
-                          item.id === 'groups' && item.badge > 0 ? 'var(--accent-amber)' : 'var(--accent-orange)';
+                          item.id === 'people' && item.badge > 0 ? 'var(--accent-teal)' : 'var(--accent-orange)';
 
         return (
           <button

@@ -5,6 +5,47 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.0] - 2026-04-09
+
+### Added
+
+#### Calendar (v2.47.0)
+Full calendar feature with event scheduling, reminders, and external calendar integration.
+
+**Events**
+- Personal, wave-scoped, and server-wide events (server scope requires moderator+)
+- Categories: General, Birthday, Holiday, Community — each with a distinct color
+- Optional start/end times, location, description
+- Recurring (yearly) events stored as MM-DD and expanded dynamically across years
+- RSVP support: Going / Maybe / Decline with attendee list
+
+**Calendar Views**
+- Month grid (CSS grid, 7 columns) with colored dot indicators per event
+- Day panel slides up when selecting a date in month view
+- Agenda view: chronological list grouped by month with time, location, RSVP counts
+
+**External Calendar Integration**
+- `.ics` download (RFC 5545 iCal) per event — compatible with Apple Calendar and Outlook
+- Google Calendar "Add to Calendar" URL per event
+- Personal iCal webcal feed (`webcal://…/api/calendar/feed/<token>.ics`) — subscribable by any calendar app
+
+**Reminders**
+- Server-side reminder job checks every 5 minutes with ±2.5 min tolerance
+- Windows: 1 day before, 1 hour before, 30 minutes before, 15 minutes before
+- Sends push notifications and in-app WebSocket `calendar_reminder` events
+- Idempotent: `event_reminder_sent` table with unique `(event_id, user_id, window)` prevents duplicates across restarts
+
+**Navigation**
+- Contacts and Crews tabs merged into a single "People" nav item (tabbed)
+- Calendar added as 5th nav item in both desktop toolbar and mobile bottom nav
+- Bottom nav badge for People = pending contact requests + pending crew invitations
+
+**Database** (v2.47.0 migration)
+- Extended `events` table with: `event_time`, `event_end_time`, `location`, `category`, `scope`, `wave_id`, `recurring`, `rsvp_enabled`
+- New tables: `event_rsvp`, `event_reminder_sent`, `calendar_feed_tokens`
+
+---
+
 ## [2.46.10] - 2026-04-10
 
 ### Fixed
