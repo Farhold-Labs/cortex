@@ -19462,6 +19462,15 @@ server.listen(PORT, () => {
               ? `at ${event.eventTime}`
               : 'all day';
             const body = `${event.title} — ${timeLabel}${event.location ? ` · ${event.location}` : ''}`;
+            // In-app WebSocket notification
+            broadcastToUser(participant.id, {
+              type: 'calendar_reminder',
+              message: `${event.title} ${window.label}${event.location ? ` · ${event.location}` : ''}`,
+              eventId: event.id,
+              eventTitle: event.title,
+              window: window.key,
+            });
+            // Push notification (for backgrounded/native)
             try {
               await sendPushNotification(participant.id, {
                 title: `📅 Event ${window.label}`,

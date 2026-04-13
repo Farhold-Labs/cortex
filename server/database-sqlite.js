@@ -10289,10 +10289,11 @@ export class DatabaseSQLite {
   }
 
   getEventsForReminderWindow(afterMs, beforeMs) {
-    // Return server and wave events whose datetime falls within the window
+    // Return all non-recurring events whose datetime falls within [now+afterMs, now+beforeMs]
+    // Includes personal, wave, and server events (creator/participants notified per scope)
     const now = Date.now();
     const rows = this.db.prepare(`
-      SELECT * FROM events WHERE scope IN ('server','wave') AND recurring = 0
+      SELECT * FROM events WHERE recurrence IS NULL AND event_time IS NOT NULL
     `).all();
     const result = [];
     for (const row of rows) {
@@ -10306,13 +10307,17 @@ export class DatabaseSQLite {
   }
 
   eventToMs(ev) {
-    if (!ev.eventDate) return null;
-    const dateStr = ev.eventTime ? `${ev.eventDate}T${ev.eventTime}:00` : `${ev.eventDate}T00:00:00`;
-    const ms = new Date(dateStr).getTime();
+    if (!ev.eventDate || !ev.eventTime) return null;
+    const ms = new Date(`${ev.eventDate}T${ev.eventTime}:00`).getTime();
     return isNaN(ms) ? null : ms;
   }
 
   getEventParticipants(event) {
+    if (event.scope === 'personal') {
+      // Only the creator
+      const user = this.db.prepare(`SELECT id, handle FROM users WHERE id = ?`).get(event.createdBy);
+      return user ? [user] : [];
+    }
     if (event.scope === 'wave' && event.waveId) {
       return this.db.prepare(`
         SELECT u.id, u.handle FROM wave_participants wp JOIN users u ON wp.user_id = u.id WHERE wp.wave_id = ?
