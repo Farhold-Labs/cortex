@@ -10214,37 +10214,25 @@ app.post('/api/admin/events', authenticateToken, (req, res) => {
   const admin = db.findUserById(req.user.userId);
   if (!requireRole(admin, ROLES.ADMIN, res)) return;
 
-  const { title, description, eventDate, recurring, category } = req.body;
-
-  if (!title || title.length > 100) {
-    return res.status(400).json({ error: 'Title is required (max 100 characters)' });
-  }
-  if (description && description.length > 500) {
-    return res.status(400).json({ error: 'Description max 500 characters' });
-  }
-  if (!eventDate) {
-    return res.status(400).json({ error: 'Event date is required' });
-  }
-
-  // Validate date format: MM-DD for recurring, YYYY-MM-DD for one-time
-  const mmddRegex = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+  const { title, description, eventDate, recurrence, recurrenceEndDate, category } = req.body;
+  const VALID_RECURRENCE = ['weekly', 'biweekly', 'monthly', 'yearly'];
   const fullDateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
-  if (recurring) {
-    if (!mmddRegex.test(eventDate)) {
-      return res.status(400).json({ error: 'Recurring events must use MM-DD format' });
-    }
-  } else {
-    if (!fullDateRegex.test(eventDate)) {
-      return res.status(400).json({ error: 'One-time events must use YYYY-MM-DD format' });
-    }
+  if (!title || title.length > 100) return res.status(400).json({ error: 'Title is required (max 100 characters)' });
+  if (description && description.length > 500) return res.status(400).json({ error: 'Description max 500 characters' });
+  if (!eventDate) return res.status(400).json({ error: 'Event date is required' });
+  if (!fullDateRegex.test(eventDate)) return res.status(400).json({ error: 'Use YYYY-MM-DD format' });
+  if (recurrence && !VALID_RECURRENCE.includes(recurrence)) return res.status(400).json({ error: 'Invalid recurrence value' });
+  if (recurrence && recurrence !== 'yearly' && !recurrenceEndDate) {
+    return res.status(400).json({ error: 'recurrenceEndDate required for weekly, bi-weekly, and monthly events' });
   }
 
   const event = db.createEvent({
     title: sanitizeInput(title.trim()),
     description: description ? sanitizeInput(description.trim()) : null,
     eventDate,
-    recurring: !!recurring,
+    recurrence: recurrence || null,
+    recurrenceEndDate: recurrenceEndDate || null,
     category: category || 'general',
     createdBy: admin.id,
   });
@@ -10260,41 +10248,23 @@ app.put('/api/admin/events/:id', authenticateToken, (req, res) => {
 
   const eventId = req.params.id;
   const existing = db.getEvent(eventId);
-  if (!existing) {
-    return res.status(404).json({ error: 'Event not found' });
-  }
+  if (!existing) return res.status(404).json({ error: 'Event not found' });
 
-  const { title, description, eventDate, recurring, category } = req.body;
+  const { title, description, eventDate, recurrence, recurrenceEndDate, category } = req.body;
   const updates = {};
 
   if (title !== undefined) {
-    if (title.length > 100) {
-      return res.status(400).json({ error: 'Title max 100 characters' });
-    }
+    if (title.length > 100) return res.status(400).json({ error: 'Title max 100 characters' });
     updates.title = sanitizeInput(title.trim());
   }
-  if (description !== undefined) {
-    if (description && description.length > 500) {
-      return res.status(400).json({ error: 'Description max 500 characters' });
-    }
-    updates.description = description ? sanitizeInput(description.trim()) : null;
-  }
+  if (description !== undefined) updates.description = description ? sanitizeInput(description.trim()) : null;
   if (eventDate !== undefined) {
-    const mmddRegex = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
     const fullDateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-    const isRecurring = recurring !== undefined ? recurring : existing.recurring;
-    if (isRecurring) {
-      if (!mmddRegex.test(eventDate)) {
-        return res.status(400).json({ error: 'Recurring events must use MM-DD format' });
-      }
-    } else {
-      if (!fullDateRegex.test(eventDate)) {
-        return res.status(400).json({ error: 'One-time events must use YYYY-MM-DD format' });
-      }
-    }
+    if (!fullDateRegex.test(eventDate)) return res.status(400).json({ error: 'Use YYYY-MM-DD format' });
     updates.eventDate = eventDate;
   }
-  if (recurring !== undefined) updates.recurring = !!recurring;
+  if (recurrence !== undefined) updates.recurrence = recurrence || null;
+  if (recurrenceEndDate !== undefined) updates.recurrenceEndDate = recurrenceEndDate || null;
   if (category !== undefined) updates.category = category;
 
   const event = db.updateEvent(eventId, updates);
@@ -10361,7 +10331,15 @@ function buildICS(events, calName = 'Cortex Calendar') {
     ];
     if (ev.description) lines.push(foldLine(`DESCRIPTION:${escape(ev.description)}`));
     if (ev.location) lines.push(foldLine(`LOCATION:${escape(ev.location)}`));
-    if (ev.recurring) lines.push('RRULE:FREQ=YEARLY');
+    if (ev.recurrence) {
+      const freqMap = { weekly: 'WEEKLY', biweekly: 'WEEKLY;INTERVAL=2', monthly: 'MONTHLY', yearly: 'YEARLY' };
+      const freq = freqMap[ev.recurrence];
+      if (freq) {
+        let rrule = `RRULE:FREQ=${freq}`;
+        if (ev.recurrenceEndDate) rrule += `;UNTIL=${ev.recurrenceEndDate.replace(/-/g, '')}`;
+        lines.push(rrule);
+      }
+    }
     lines.push(`CATEGORIES:${escape(ev.category || 'general').toUpperCase()}`);
     lines.push('END:VEVENT');
     return lines.join('\r\n');
@@ -10508,7 +10486,7 @@ app.post('/api/events', authenticateToken, (req, res) => {
   try {
     const user = db.findUserById(req.user.userId);
     const { title, description, eventDate, eventTime, eventEndTime, timezone, location,
-            recurring, category, scope, waveId, rsvpEnabled } = req.body;
+            recurrence, recurrenceEndDate, category, scope, waveId, rsvpEnabled } = req.body;
 
     const resolvedScope = scope || 'personal';
 
@@ -10521,12 +10499,19 @@ app.post('/api/events', authenticateToken, (req, res) => {
       if (!db.isWaveParticipant(waveId, user.id)) return res.status(403).json({ error: 'Not a participant in this wave' });
     }
 
+    const VALID_RECURRENCE = ['weekly', 'biweekly', 'monthly', 'yearly'];
     if (!title || title.length > 100) return res.status(400).json({ error: 'Title required (max 100 chars)' });
     if (!eventDate) return res.status(400).json({ error: 'eventDate required' });
-    const mmddRegex = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+    if (recurrence && !VALID_RECURRENCE.includes(recurrence)) {
+      return res.status(400).json({ error: 'recurrence must be weekly, biweekly, monthly, or yearly' });
+    }
     const fullDateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-    if (recurring ? !mmddRegex.test(eventDate) : !fullDateRegex.test(eventDate)) {
-      return res.status(400).json({ error: recurring ? 'Recurring events use MM-DD format' : 'Use YYYY-MM-DD format' });
+    if (!fullDateRegex.test(eventDate)) return res.status(400).json({ error: 'Use YYYY-MM-DD format for eventDate' });
+    if (recurrence && recurrence !== 'yearly' && !recurrenceEndDate) {
+      return res.status(400).json({ error: 'recurrenceEndDate is required for weekly, bi-weekly, and monthly events' });
+    }
+    if (recurrenceEndDate && !fullDateRegex.test(recurrenceEndDate)) {
+      return res.status(400).json({ error: 'Use YYYY-MM-DD format for recurrenceEndDate' });
     }
     if (eventTime && !/^\d{2}:\d{2}$/.test(eventTime)) return res.status(400).json({ error: 'eventTime must be HH:MM' });
     if (eventEndTime && !/^\d{2}:\d{2}$/.test(eventEndTime)) return res.status(400).json({ error: 'eventEndTime must be HH:MM' });
@@ -10536,7 +10521,8 @@ app.post('/api/events', authenticateToken, (req, res) => {
       description: description ? sanitizeInput(description.trim()) : null,
       eventDate, eventTime: eventTime || null, eventEndTime: eventEndTime || null,
       timezone: timezone || null, location: location ? sanitizeInput(location.trim()) : null,
-      recurring: !!recurring, category: category || 'general',
+      recurrence: recurrence || null, recurrenceEndDate: recurrenceEndDate || null,
+      category: category || 'general',
       scope: resolvedScope, waveId: waveId || null, rsvpEnabled: !!rsvpEnabled,
       createdBy: user.id,
     });
@@ -10562,7 +10548,7 @@ app.put('/api/events/:id', authenticateToken, (req, res) => {
       return res.status(403).json({ error: 'Cannot edit this event' });
     }
     const updates = {};
-    const fields = ['title','description','eventDate','eventTime','eventEndTime','timezone','location','recurring','category','rsvpEnabled'];
+    const fields = ['title','description','eventDate','eventTime','eventEndTime','timezone','location','recurrence','recurrenceEndDate','category','rsvpEnabled'];
     for (const f of fields) { if (req.body[f] !== undefined) updates[f] = req.body[f]; }
     if (updates.title) updates.title = sanitizeInput(updates.title.trim());
     if (updates.description) updates.description = sanitizeInput(updates.description.trim());
