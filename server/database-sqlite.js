@@ -1973,6 +1973,8 @@ export class DatabaseSQLite {
       ['scope', "ALTER TABLE events ADD COLUMN scope TEXT NOT NULL DEFAULT 'server'"],
       ['wave_id', 'ALTER TABLE events ADD COLUMN wave_id TEXT REFERENCES waves(id) ON DELETE CASCADE'],
       ['rsvp_enabled', 'ALTER TABLE events ADD COLUMN rsvp_enabled INTEGER DEFAULT 0'],
+      ['recurrence', 'ALTER TABLE events ADD COLUMN recurrence TEXT'],
+      ['recurrence_end_date', 'ALTER TABLE events ADD COLUMN recurrence_end_date TEXT'],
     ];
     let calendarMigrated = false;
     for (const [col, sql] of calendarColumns) {
@@ -10044,14 +10046,15 @@ export class DatabaseSQLite {
 
   // ============ Events CRUD (v2.40.0) ============
 
-  createEvent({ title, description, eventDate, recurring, category, createdBy, eventTime, eventEndTime, timezone, location, scope, waveId, rsvpEnabled }) {
+  createEvent({ title, description, eventDate, recurrence, recurrenceEndDate, category, createdBy, eventTime, eventEndTime, timezone, location, scope, waveId, rsvpEnabled }) {
     const id = `event-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const now = new Date().toISOString();
     this.db.prepare(
-      `INSERT INTO events (id, title, description, event_date, recurring, category, created_by, created_at,
+      `INSERT INTO events (id, title, description, event_date, recurrence, recurrence_end_date, category, created_by, created_at,
         event_time, event_end_time, timezone, location, scope, wave_id, rsvp_enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, title, description || null, eventDate, recurring ? 1 : 0, category || 'general', createdBy, now,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, title, description || null, eventDate, recurrence || null, recurrenceEndDate || null,
+      category || 'general', createdBy, now,
       eventTime || null, eventEndTime || null, timezone || null, location || null,
       scope || 'server', waveId || null, rsvpEnabled ? 1 : 0);
     return this.getEvent(id);
@@ -10068,7 +10071,8 @@ export class DatabaseSQLite {
       eventEndTime: row.event_end_time || null,
       timezone: row.timezone || null,
       location: row.location || null,
-      recurring: !!row.recurring,
+      recurrence: row.recurrence || null,
+      recurrenceEndDate: row.recurrence_end_date || null,
       category: row.category || 'general',
       scope: row.scope || 'server',
       waveId: row.wave_id || null,
@@ -10094,25 +10098,26 @@ export class DatabaseSQLite {
     if (!existing) return null;
     const now = new Date().toISOString();
     const fields = {
-      title:          updates.title          !== undefined ? updates.title          : existing.title,
-      description:    updates.description    !== undefined ? updates.description    : existing.description,
-      event_date:     updates.eventDate      !== undefined ? updates.eventDate      : existing.eventDate,
-      recurring:      updates.recurring      !== undefined ? (updates.recurring ? 1 : 0) : (existing.recurring ? 1 : 0),
-      category:       updates.category       !== undefined ? updates.category       : existing.category,
-      event_time:     updates.eventTime      !== undefined ? updates.eventTime      : existing.eventTime,
-      event_end_time: updates.eventEndTime   !== undefined ? updates.eventEndTime   : existing.eventEndTime,
-      timezone:       updates.timezone       !== undefined ? updates.timezone       : existing.timezone,
-      location:       updates.location       !== undefined ? updates.location       : existing.location,
-      scope:          updates.scope          !== undefined ? updates.scope          : existing.scope,
-      wave_id:        updates.waveId         !== undefined ? updates.waveId         : existing.waveId,
-      rsvp_enabled:   updates.rsvpEnabled    !== undefined ? (updates.rsvpEnabled ? 1 : 0) : (existing.rsvpEnabled ? 1 : 0),
+      title:                updates.title                !== undefined ? updates.title                : existing.title,
+      description:          updates.description          !== undefined ? updates.description          : existing.description,
+      event_date:           updates.eventDate            !== undefined ? updates.eventDate            : existing.eventDate,
+      recurrence:           updates.recurrence           !== undefined ? updates.recurrence           : existing.recurrence,
+      recurrence_end_date:  updates.recurrenceEndDate    !== undefined ? updates.recurrenceEndDate    : existing.recurrenceEndDate,
+      category:             updates.category             !== undefined ? updates.category             : existing.category,
+      event_time:           updates.eventTime            !== undefined ? updates.eventTime            : existing.eventTime,
+      event_end_time:       updates.eventEndTime         !== undefined ? updates.eventEndTime         : existing.eventEndTime,
+      timezone:             updates.timezone             !== undefined ? updates.timezone             : existing.timezone,
+      location:             updates.location             !== undefined ? updates.location             : existing.location,
+      scope:                updates.scope                !== undefined ? updates.scope                : existing.scope,
+      wave_id:              updates.waveId               !== undefined ? updates.waveId               : existing.waveId,
+      rsvp_enabled:         updates.rsvpEnabled          !== undefined ? (updates.rsvpEnabled ? 1 : 0) : (existing.rsvpEnabled ? 1 : 0),
     };
     this.db.prepare(
-      `UPDATE events SET title=?, description=?, event_date=?, recurring=?, category=?,
+      `UPDATE events SET title=?, description=?, event_date=?, recurrence=?, recurrence_end_date=?, category=?,
         event_time=?, event_end_time=?, timezone=?, location=?, scope=?, wave_id=?, rsvp_enabled=?, updated_at=?
        WHERE id=?`
-    ).run(fields.title, fields.description, fields.event_date, fields.recurring, fields.category,
-      fields.event_time, fields.event_end_time, fields.timezone, fields.location,
+    ).run(fields.title, fields.description, fields.event_date, fields.recurrence, fields.recurrence_end_date,
+      fields.category, fields.event_time, fields.event_end_time, fields.timezone, fields.location,
       fields.scope, fields.wave_id, fields.rsvp_enabled, now, eventId);
     return this.getEvent(eventId);
   }
@@ -10159,19 +10164,55 @@ export class DatabaseSQLite {
     const toYear   = toDate.getFullYear();
     const result   = [];
 
+    const CAP_YEARS = 2;
+    const hardCap = new Date();
+    hardCap.setFullYear(hardCap.getFullYear() + CAP_YEARS);
+
     for (const row of rows) {
       const ev = this.rowToEvent(row);
-      if (ev.recurring) {
-        // Expand MM-DD recurring event across all years in range
-        for (let y = fromYear; y <= toYear; y++) {
-          const dateStr = `${y}-${ev.eventDate}`;
-          const d = new Date(dateStr);
-          if (!isNaN(d) && d >= fromDate && d <= toDate) {
-            result.push({ ...ev, eventDate: dateStr, recurringInstance: true });
+      if (ev.recurrence) {
+        const anchor = new Date(ev.eventDate + 'T12:00:00');
+        if (isNaN(anchor)) continue;
+        const endBound = ev.recurrenceEndDate
+          ? new Date(ev.recurrenceEndDate + 'T23:59:59')
+          : hardCap;
+
+        if (ev.recurrence === 'yearly') {
+          // Expand across years in range
+          for (let y = fromYear; y <= toYear; y++) {
+            const mm = String(anchor.getMonth() + 1).padStart(2, '0');
+            const dd = String(anchor.getDate()).padStart(2, '0');
+            const dateStr = `${y}-${mm}-${dd}`;
+            const d = new Date(dateStr + 'T12:00:00');
+            if (!isNaN(d) && d >= fromDate && d <= toDate && d <= endBound) {
+              result.push({ ...ev, eventDate: dateStr, recurringInstance: true });
+            }
+          }
+        } else {
+          // Step through occurrences from anchor until end of range
+          let cur = new Date(anchor);
+          // Fast-forward to on/after fromDate
+          while (cur < fromDate) {
+            if (ev.recurrence === 'weekly')   cur.setDate(cur.getDate() + 7);
+            else if (ev.recurrence === 'biweekly') cur.setDate(cur.getDate() + 14);
+            else if (ev.recurrence === 'monthly')  cur.setMonth(cur.getMonth() + 1);
+            else break;
+          }
+          // Collect occurrences within [fromDate, toDate] ∩ [anchor, endBound]
+          while (cur <= toDate) {
+            if (cur >= fromDate && cur <= endBound) {
+              const dateStr = cur.toISOString().slice(0, 10);
+              result.push({ ...ev, eventDate: dateStr, recurringInstance: true });
+            }
+            if (cur > endBound) break;
+            if (ev.recurrence === 'weekly')   cur.setDate(cur.getDate() + 7);
+            else if (ev.recurrence === 'biweekly') cur.setDate(cur.getDate() + 14);
+            else if (ev.recurrence === 'monthly')  cur.setMonth(cur.getMonth() + 1);
+            else break;
           }
         }
       } else {
-        const d = new Date(ev.eventDate);
+        const d = new Date(ev.eventDate + 'T12:00:00');
         if (!isNaN(d) && d >= fromDate && d <= toDate) {
           result.push(ev);
         }
@@ -10247,31 +10288,38 @@ export class DatabaseSQLite {
     `).get(eventId, userId, window);
   }
 
-  getEventsForReminderWindow(afterMs, beforeMs) {
-    // Return server and wave events whose datetime falls within the window
+  getUpcomingTimedEvents(withinMs) {
+    // Return all non-recurring timed events that start within [now, now+withinMs]
+    // Using date range on SQL to avoid scanning old events, then precise ms check in JS
     const now = Date.now();
+    const ceilDate = new Date(now + withinMs + 86400000).toISOString().slice(0, 10); // +1 day buffer
+    const todayDate = new Date(now).toISOString().slice(0, 10);
     const rows = this.db.prepare(`
-      SELECT * FROM events WHERE scope IN ('server','wave') AND recurring = 0
-    `).all();
+      SELECT * FROM events
+      WHERE recurrence IS NULL AND event_time IS NOT NULL
+        AND event_date >= ? AND event_date <= ?
+    `).all(todayDate, ceilDate);
     const result = [];
     for (const row of rows) {
       const ev = this.rowToEvent(row);
-      const eventMs = this.eventToMs(ev);
-      if (eventMs !== null && eventMs >= now + afterMs && eventMs <= now + beforeMs) {
-        result.push(ev);
-      }
+      const ms = this.eventToMs(ev);
+      if (ms !== null && ms > now && ms <= now + withinMs) result.push(ev);
     }
     return result;
   }
 
   eventToMs(ev) {
-    if (!ev.eventDate) return null;
-    const dateStr = ev.eventTime ? `${ev.eventDate}T${ev.eventTime}:00` : `${ev.eventDate}T00:00:00`;
-    const ms = new Date(dateStr).getTime();
+    if (!ev.eventDate || !ev.eventTime) return null;
+    const ms = new Date(`${ev.eventDate}T${ev.eventTime}:00`).getTime();
     return isNaN(ms) ? null : ms;
   }
 
   getEventParticipants(event) {
+    if (event.scope === 'personal') {
+      // Only the creator
+      const user = this.db.prepare(`SELECT id, handle FROM users WHERE id = ?`).get(event.createdBy);
+      return user ? [user] : [];
+    }
     if (event.scope === 'wave' && event.waveId) {
       return this.db.prepare(`
         SELECT u.id, u.handle FROM wave_participants wp JOIN users u ON wp.user_id = u.id WHERE wp.wave_id = ?

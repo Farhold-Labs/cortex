@@ -5,7 +5,7 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.47.0] - 2026-04-09
+## [2.47.0] - 2026-04-13
 
 ### Added
 
@@ -16,7 +16,9 @@ Full calendar feature with event scheduling, reminders, and external calendar in
 - Personal, wave-scoped, and server-wide events (server scope requires moderator+)
 - Categories: General, Birthday, Holiday, Community — each with a distinct color
 - Optional start/end times, location, description
-- Recurring (yearly) events stored as MM-DD and expanded dynamically across years
+- Recurring events: Weekly, Bi-weekly, Monthly, Yearly — expanded dynamically from anchor date
+- Recurrence end date: required for weekly/bi-weekly/monthly; optional for yearly (indefinite if omitted, capped at 2 years in range queries)
+- iCal RRULE includes `UNTIL=` when end date is set; Google Calendar URL pre-fills correctly
 - RSVP support: Going / Maybe / Decline with attendee list
 
 **Calendar Views**
@@ -41,7 +43,7 @@ Full calendar feature with event scheduling, reminders, and external calendar in
 - Bottom nav badge for People = pending contact requests + pending crew invitations
 
 **Database** (v2.47.0 migration)
-- Extended `events` table with: `event_time`, `event_end_time`, `location`, `category`, `scope`, `wave_id`, `recurring`, `rsvp_enabled`
+- Extended `events` table with: `event_time`, `event_end_time`, `location`, `category`, `scope`, `wave_id`, `recurrence` (text), `recurrence_end_date`, `rsvp_enabled`
 - New tables: `event_rsvp`, `event_reminder_sent`, `calendar_feed_tokens`
 
 ---

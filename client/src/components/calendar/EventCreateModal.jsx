@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 
 const CATEGORIES = ['general','birthday','holiday','community'];
 const SCOPES = [
@@ -6,30 +6,37 @@ const SCOPES = [
   { value: 'wave',     label: 'Wave' },
   { value: 'server',   label: 'Server-Wide (mod+)' },
 ];
+const RECURRENCE_OPTIONS = [
+  { value: '',          label: 'Does not repeat' },
+  { value: 'weekly',    label: 'Weekly' },
+  { value: 'biweekly',  label: 'Bi-weekly' },
+  { value: 'monthly',   label: 'Monthly' },
+  { value: 'yearly',    label: 'Yearly' },
+];
 
 const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [], initialDate = '', editEvent = null, onSaved }) => {
-  const [title,       setTitle]       = useState(editEvent?.title       || '');
-  const [description, setDescription] = useState(editEvent?.description || '');
-  const [eventDate,   setEventDate]   = useState(editEvent?.eventDate   || initialDate);
-  const [eventTime,   setEventTime]   = useState(editEvent?.eventTime   || '');
-  const [eventEndTime,setEventEndTime]= useState(editEvent?.eventEndTime|| '');
-  const [location,    setLocation]    = useState(editEvent?.location    || '');
-  const [category,    setCategory]    = useState(editEvent?.category    || 'general');
-  const [scope,       setScope]       = useState(editEvent?.scope       || 'personal');
-  const [waveId,      setWaveId]      = useState(editEvent?.waveId      || '');
-  const [recurring,   setRecurring]   = useState(editEvent?.recurring   || false);
-  const [rsvpEnabled, setRsvpEnabled] = useState(editEvent?.rsvpEnabled || false);
-  const [saving,      setSaving]      = useState(false);
-
-  // When recurring toggles, reset date
-  useEffect(() => { if (!editEvent) setEventDate(''); }, [recurring, editEvent]);
+  const [title,              setTitle]              = useState(editEvent?.title              || '');
+  const [description,        setDescription]        = useState(editEvent?.description        || '');
+  const [eventDate,          setEventDate]          = useState(editEvent?.eventDate          || initialDate);
+  const [eventTime,          setEventTime]          = useState(editEvent?.eventTime          || '');
+  const [eventEndTime,       setEventEndTime]       = useState(editEvent?.eventEndTime       || '');
+  const [location,           setLocation]           = useState(editEvent?.location           || '');
+  const [category,           setCategory]           = useState(editEvent?.category           || 'general');
+  const [scope,              setScope]              = useState(editEvent?.scope              || 'personal');
+  const [waveId,             setWaveId]             = useState(editEvent?.waveId             || '');
+  const [recurrence,         setRecurrence]         = useState(editEvent?.recurrence         || '');
+  const [recurrenceEndDate,  setRecurrenceEndDate]  = useState(editEvent?.recurrenceEndDate  || '');
+  const [rsvpEnabled,        setRsvpEnabled]        = useState(editEvent?.rsvpEnabled        || false);
+  const [saving,             setSaving]             = useState(false);
 
   const canServerScope = currentUser?.role === 'admin' || currentUser?.role === 'moderator';
+  const needsEndDate = recurrence && recurrence !== 'yearly';
 
   const handleSave = async () => {
     if (!title.trim()) { showToast('Title is required', 'error'); return; }
     if (!eventDate.trim()) { showToast('Date is required', 'error'); return; }
     if (scope === 'wave' && !waveId) { showToast('Select a wave', 'error'); return; }
+    if (needsEndDate && !recurrenceEndDate) { showToast('End date is required for recurring events', 'error'); return; }
     setSaving(true);
     try {
       const body = {
@@ -42,7 +49,8 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
         category,
         scope,
         waveId: scope === 'wave' ? waveId : null,
-        recurring,
+        recurrence: recurrence || null,
+        recurrenceEndDate: (recurrence && recurrenceEndDate) ? recurrenceEndDate : null,
         rsvpEnabled,
       };
       let event;
@@ -116,36 +124,45 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
             </div>
           )}
 
-          {/* Recurring toggle */}
-          <div style={{ marginBottom: '12px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-              <input type="checkbox" checked={recurring} onChange={e => setRecurring(e.target.checked)} />
-              <span style={{ ...labelStyle, margin: 0 }}>RECURRING (yearly)</span>
-            </label>
-          </div>
-
           {/* Date */}
           <div style={{ marginBottom: '12px' }}>
-            <label style={labelStyle}>DATE * <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({recurring ? 'MM-DD' : 'YYYY-MM-DD'})</span></label>
-            {recurring ? (
-              <input type="text" value={eventDate} onChange={e => setEventDate(e.target.value)}
-                maxLength={5} placeholder="03-14" style={{ ...inputStyle, width: '100px' }} />
-            ) : (
-              <input type="date" value={eventDate} onChange={e => setEventDate(e.target.value)} style={inputStyle} />
-            )}
+            <label style={labelStyle}>DATE *</label>
+            <input type="date" value={eventDate} onChange={e => setEventDate(e.target.value)} style={inputStyle} />
           </div>
 
           {/* Time */}
-          {!recurring && (
-            <div style={{ marginBottom: '12px', display: 'flex', gap: '12px' }}>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>START TIME</label>
-                <input type="time" value={eventTime} onChange={e => setEventTime(e.target.value)} style={inputStyle} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>END TIME</label>
-                <input type="time" value={eventEndTime} onChange={e => setEventEndTime(e.target.value)} style={inputStyle} />
-              </div>
+          <div style={{ marginBottom: '12px', display: 'flex', gap: '12px' }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>START TIME</label>
+              <input type="time" value={eventTime} onChange={e => setEventTime(e.target.value)} style={inputStyle} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>END TIME</label>
+              <input type="time" value={eventEndTime} onChange={e => setEventEndTime(e.target.value)} style={inputStyle} />
+            </div>
+          </div>
+
+          {/* Recurrence */}
+          <div style={{ marginBottom: '12px' }}>
+            <label style={labelStyle}>RECURRENCE</label>
+            <select value={recurrence} onChange={e => { setRecurrence(e.target.value); setRecurrenceEndDate(''); }} style={inputStyle}>
+              {RECURRENCE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+
+          {/* End date (required for non-yearly recurrence) */}
+          {recurrence && (
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>
+                REPEAT UNTIL {recurrence !== 'yearly' && <span style={{ color: 'var(--accent-amber)' }}>*</span>}
+              </label>
+              <input type="date" value={recurrenceEndDate} onChange={e => setRecurrenceEndDate(e.target.value)}
+                style={inputStyle} min={eventDate || undefined} />
+              {recurrence === 'yearly' && (
+                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '4px' }}>
+                  Optional — leave blank for indefinite yearly recurrence
+                </div>
+              )}
             </div>
           )}
 
@@ -173,14 +190,12 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
           </div>
 
           {/* RSVP */}
-          {!recurring && (
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                <input type="checkbox" checked={rsvpEnabled} onChange={e => setRsvpEnabled(e.target.checked)} />
-                <span style={{ ...labelStyle, margin: 0 }}>ENABLE RSVP</span>
-              </label>
-            </div>
-          )}
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={rsvpEnabled} onChange={e => setRsvpEnabled(e.target.checked)} />
+              <span style={{ ...labelStyle, margin: 0 }}>ENABLE RSVP</span>
+            </label>
+          </div>
 
           {/* Buttons */}
           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
