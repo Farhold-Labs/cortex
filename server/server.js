@@ -19443,42 +19443,45 @@ server.listen(PORT, () => {
     { key: '30min',  ms: 30 * 60 * 1000,        label: 'in 30 minutes' },
     { key: '15min',  ms: 15 * 60 * 1000,        label: 'in 15 minutes' },
   ];
-  // Check interval: every 5 minutes (fine enough for 15-min window)
+  // Check interval: every 5 minutes
   const REMINDER_CHECK_INTERVAL = 5 * 60 * 1000;
-  // Tolerance: fire if event is within window ± half the check interval
-  const REMINDER_TOLERANCE = REMINDER_CHECK_INTERVAL / 2;
 
   async function processEventReminders() {
     try {
-      for (const window of REMINDER_WINDOWS) {
-        const afterMs  = window.ms - REMINDER_TOLERANCE;
-        const beforeMs = window.ms + REMINDER_TOLERANCE;
-        const events = db.getEventsForReminderWindow(afterMs, beforeMs);
-        for (const event of events) {
-          const participants = db.getEventParticipants(event);
+      const now = Date.now();
+      const maxWindowMs = Math.max(...REMINDER_WINDOWS.map(w => w.ms));
+      // Fetch all upcoming timed events within the largest window (1 day)
+      const events = db.getUpcomingTimedEvents(maxWindowMs);
+
+      for (const event of events) {
+        const eventMs = db.eventToMs(event);
+        if (!eventMs || eventMs <= now) continue;
+        const msUntil = eventMs - now;
+        const participants = db.getEventParticipants(event);
+
+        for (const win of REMINDER_WINDOWS) {
+          // Fire this window's reminder if event is at or within the window
+          if (msUntil > win.ms) continue;
           for (const participant of participants) {
-            if (db.wasReminderSent(event.id, participant.id, window.key)) continue;
-            const timeLabel = event.eventTime
-              ? `at ${event.eventTime}`
-              : 'all day';
-            const body = `${event.title} — ${timeLabel}${event.location ? ` · ${event.location}` : ''}`;
+            if (db.wasReminderSent(event.id, participant.id, win.key)) continue;
+            const body = `${event.title} — at ${event.eventTime}${event.location ? ` · ${event.location}` : ''}`;
             // In-app WebSocket notification
             broadcastToUser(participant.id, {
               type: 'calendar_reminder',
-              message: `${event.title} ${window.label}${event.location ? ` · ${event.location}` : ''}`,
+              message: `${event.title} ${win.label}${event.location ? ` · ${event.location}` : ''}`,
               eventId: event.id,
               eventTitle: event.title,
-              window: window.key,
+              window: win.key,
             });
             // Push notification (for backgrounded/native)
             try {
               await sendPushNotification(participant.id, {
-                title: `📅 Event ${window.label}`,
+                title: `📅 Event ${win.label}`,
                 body,
                 data: { type: 'calendar_reminder', eventId: event.id },
               });
             } catch (_) {}
-            db.markReminderSent(event.id, participant.id, window.key);
+            db.markReminderSent(event.id, participant.id, win.key);
           }
         }
       }

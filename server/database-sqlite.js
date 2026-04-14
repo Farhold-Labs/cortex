@@ -10288,20 +10288,22 @@ export class DatabaseSQLite {
     `).get(eventId, userId, window);
   }
 
-  getEventsForReminderWindow(afterMs, beforeMs) {
-    // Return all non-recurring events whose datetime falls within [now+afterMs, now+beforeMs]
-    // Includes personal, wave, and server events (creator/participants notified per scope)
+  getUpcomingTimedEvents(withinMs) {
+    // Return all non-recurring timed events that start within [now, now+withinMs]
+    // Using date range on SQL to avoid scanning old events, then precise ms check in JS
     const now = Date.now();
+    const ceilDate = new Date(now + withinMs + 86400000).toISOString().slice(0, 10); // +1 day buffer
+    const todayDate = new Date(now).toISOString().slice(0, 10);
     const rows = this.db.prepare(`
-      SELECT * FROM events WHERE recurrence IS NULL AND event_time IS NOT NULL
-    `).all();
+      SELECT * FROM events
+      WHERE recurrence IS NULL AND event_time IS NOT NULL
+        AND event_date >= ? AND event_date <= ?
+    `).all(todayDate, ceilDate);
     const result = [];
     for (const row of rows) {
       const ev = this.rowToEvent(row);
-      const eventMs = this.eventToMs(ev);
-      if (eventMs !== null && eventMs >= now + afterMs && eventMs <= now + beforeMs) {
-        result.push(ev);
-      }
+      const ms = this.eventToMs(ev);
+      if (ms !== null && ms > now && ms <= now + withinMs) result.push(ev);
     }
     return result;
   }
