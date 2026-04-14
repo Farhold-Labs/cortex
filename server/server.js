@@ -19450,20 +19450,23 @@ server.listen(PORT, () => {
     try {
       const now = Date.now();
       const maxWindowMs = Math.max(...REMINDER_WINDOWS.map(w => w.ms));
-      // Fetch all upcoming timed events within the largest window (1 day)
       const events = db.getUpcomingTimedEvents(maxWindowMs);
+      if (events.length > 0) {
+        console.log(`📅 Reminder check: ${events.length} upcoming event(s) within 24h`);
+      }
 
       for (const event of events) {
         const eventMs = db.eventToMs(event);
         if (!eventMs || eventMs <= now) continue;
         const msUntil = eventMs - now;
+        const minUntil = Math.round(msUntil / 60000);
         const participants = db.getEventParticipants(event);
 
         for (const win of REMINDER_WINDOWS) {
-          // Fire this window's reminder if event is at or within the window
           if (msUntil > win.ms) continue;
           for (const participant of participants) {
             if (db.wasReminderSent(event.id, participant.id, win.key)) continue;
+            console.log(`📅 Sending ${win.key} reminder for "${event.title}" (${minUntil}min away) to @${participant.handle}`);
             const body = `${event.title} — at ${event.eventTime}${event.location ? ` · ${event.location}` : ''}`;
             // In-app WebSocket notification
             broadcastToUser(participant.id, {
