@@ -1962,6 +1962,85 @@ export class DatabaseSQLite {
       `);
       console.log('✅ Wave tokens table created');
     }
+
+    // v2.47.0: Full Calendar — extend events table and add calendar support tables
+    const eventsColumns = this.db.prepare('PRAGMA table_info(events)').all().map(c => c.name);
+    const calendarColumns = [
+      ['event_time', 'ALTER TABLE events ADD COLUMN event_time TEXT'],
+      ['event_end_time', 'ALTER TABLE events ADD COLUMN event_end_time TEXT'],
+      ['timezone', 'ALTER TABLE events ADD COLUMN timezone TEXT'],
+      ['location', 'ALTER TABLE events ADD COLUMN location TEXT'],
+      ['scope', "ALTER TABLE events ADD COLUMN scope TEXT NOT NULL DEFAULT 'server'"],
+      ['wave_id', 'ALTER TABLE events ADD COLUMN wave_id TEXT REFERENCES waves(id) ON DELETE CASCADE'],
+      ['rsvp_enabled', 'ALTER TABLE events ADD COLUMN rsvp_enabled INTEGER DEFAULT 0'],
+      ['recurrence', 'ALTER TABLE events ADD COLUMN recurrence TEXT'],
+      ['recurrence_end_date', 'ALTER TABLE events ADD COLUMN recurrence_end_date TEXT'],
+    ];
+    let calendarMigrated = false;
+    for (const [col, sql] of calendarColumns) {
+      if (!eventsColumns.includes(col)) {
+        this.db.exec(sql);
+        calendarMigrated = true;
+      }
+    }
+    if (calendarMigrated) {
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_events_scope ON events(scope);
+        CREATE INDEX IF NOT EXISTS idx_events_wave_id ON events(wave_id);
+        CREATE INDEX IF NOT EXISTS idx_events_created_by ON events(created_by);
+      `);
+      console.log('✅ Events table extended for calendar (v2.47.0)');
+    }
+
+    const eventRsvpExists = this.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='event_rsvp'`).get();
+    if (!eventRsvpExists) {
+      this.db.exec(`
+        CREATE TABLE event_rsvp (
+          id         TEXT PRIMARY KEY,
+          event_id   TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          status     TEXT NOT NULL CHECK(status IN ('going','maybe','not_going')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT,
+          UNIQUE(event_id, user_id)
+        );
+        CREATE INDEX idx_event_rsvp_event ON event_rsvp(event_id);
+        CREATE INDEX idx_event_rsvp_user  ON event_rsvp(user_id);
+      `);
+      console.log('✅ event_rsvp table created (v2.47.0)');
+    }
+
+    const reminderSentExists = this.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='event_reminder_sent'`).get();
+    if (!reminderSentExists) {
+      this.db.exec(`
+        CREATE TABLE event_reminder_sent (
+          id       TEXT PRIMARY KEY,
+          event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          window   TEXT NOT NULL,
+          sent_at  TEXT NOT NULL,
+          UNIQUE(event_id, user_id, window)
+        );
+        CREATE INDEX idx_reminder_sent_event ON event_reminder_sent(event_id);
+        CREATE INDEX idx_reminder_sent_user  ON event_reminder_sent(user_id);
+      `);
+      console.log('✅ event_reminder_sent table created (v2.47.0)');
+    }
+
+    const calFeedExists = this.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_feed_tokens'`).get();
+    if (!calFeedExists) {
+      this.db.exec(`
+        CREATE TABLE calendar_feed_tokens (
+          id         TEXT PRIMARY KEY,
+          user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash TEXT UNIQUE NOT NULL,
+          created_at TEXT NOT NULL,
+          last_used_at TEXT
+        );
+        CREATE INDEX idx_cal_feed_user ON calendar_feed_tokens(user_id);
+      `);
+      console.log('✅ calendar_feed_tokens table created (v2.47.0)');
+    }
   }
 
   prepareStatements() {
@@ -9967,66 +10046,315 @@ export class DatabaseSQLite {
 
   // ============ Events CRUD (v2.40.0) ============
 
-  createEvent({ title, description, eventDate, recurring, category, createdBy }) {
+  createEvent({ title, description, eventDate, recurrence, recurrenceEndDate, category, createdBy, eventTime, eventEndTime, timezone, location, scope, waveId, rsvpEnabled }) {
     const id = `event-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const now = new Date().toISOString();
     this.db.prepare(
-      'INSERT INTO events (id, title, description, event_date, recurring, category, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, title, description || null, eventDate, recurring ? 1 : 0, category || 'general', createdBy, now);
+      `INSERT INTO events (id, title, description, event_date, recurrence, recurrence_end_date, category, created_by, created_at,
+        event_time, event_end_time, timezone, location, scope, wave_id, rsvp_enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, title, description || null, eventDate, recurrence || null, recurrenceEndDate || null,
+      category || 'general', createdBy, now,
+      eventTime || null, eventEndTime || null, timezone || null, location || null,
+      scope || 'server', waveId || null, rsvpEnabled ? 1 : 0);
     return this.getEvent(id);
   }
 
-  getEvent(eventId) {
-    const row = this.db.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
+  rowToEvent(row) {
     if (!row) return null;
     return {
       id: row.id,
       title: row.title,
       description: row.description,
       eventDate: row.event_date,
-      recurring: !!row.recurring,
-      category: row.category,
+      eventTime: row.event_time || null,
+      eventEndTime: row.event_end_time || null,
+      timezone: row.timezone || null,
+      location: row.location || null,
+      recurrence: row.recurrence || null,
+      recurrenceEndDate: row.recurrence_end_date || null,
+      category: row.category || 'general',
+      scope: row.scope || 'server',
+      waveId: row.wave_id || null,
+      rsvpEnabled: !!row.rsvp_enabled,
       createdBy: row.created_by,
       createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      updatedAt: row.updated_at || null,
     };
+  }
+
+  getEvent(eventId) {
+    const row = this.db.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
+    return this.rowToEvent(row);
   }
 
   getAllEvents({ limit = 50, offset = 0 } = {}) {
     const rows = this.db.prepare('SELECT * FROM events ORDER BY event_date ASC LIMIT ? OFFSET ?').all(limit, offset);
-    return rows.map(row => ({
-      id: row.id,
-      title: row.title,
-      description: row.description,
-      eventDate: row.event_date,
-      recurring: !!row.recurring,
-      category: row.category,
-      createdBy: row.created_by,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return rows.map(row => this.rowToEvent(row));
   }
 
   updateEvent(eventId, updates) {
     const existing = this.getEvent(eventId);
     if (!existing) return null;
-
     const now = new Date().toISOString();
-    const title = updates.title !== undefined ? updates.title : existing.title;
-    const description = updates.description !== undefined ? updates.description : existing.description;
-    const eventDate = updates.eventDate !== undefined ? updates.eventDate : existing.eventDate;
-    const recurring = updates.recurring !== undefined ? (updates.recurring ? 1 : 0) : (existing.recurring ? 1 : 0);
-    const category = updates.category !== undefined ? updates.category : existing.category;
-
+    const fields = {
+      title:                updates.title                !== undefined ? updates.title                : existing.title,
+      description:          updates.description          !== undefined ? updates.description          : existing.description,
+      event_date:           updates.eventDate            !== undefined ? updates.eventDate            : existing.eventDate,
+      recurrence:           updates.recurrence           !== undefined ? updates.recurrence           : existing.recurrence,
+      recurrence_end_date:  updates.recurrenceEndDate    !== undefined ? updates.recurrenceEndDate    : existing.recurrenceEndDate,
+      category:             updates.category             !== undefined ? updates.category             : existing.category,
+      event_time:           updates.eventTime            !== undefined ? updates.eventTime            : existing.eventTime,
+      event_end_time:       updates.eventEndTime         !== undefined ? updates.eventEndTime         : existing.eventEndTime,
+      timezone:             updates.timezone             !== undefined ? updates.timezone             : existing.timezone,
+      location:             updates.location             !== undefined ? updates.location             : existing.location,
+      scope:                updates.scope                !== undefined ? updates.scope                : existing.scope,
+      wave_id:              updates.waveId               !== undefined ? updates.waveId               : existing.waveId,
+      rsvp_enabled:         updates.rsvpEnabled          !== undefined ? (updates.rsvpEnabled ? 1 : 0) : (existing.rsvpEnabled ? 1 : 0),
+    };
     this.db.prepare(
-      'UPDATE events SET title = ?, description = ?, event_date = ?, recurring = ?, category = ?, updated_at = ? WHERE id = ?'
-    ).run(title, description, eventDate, recurring, category, now, eventId);
-
+      `UPDATE events SET title=?, description=?, event_date=?, recurrence=?, recurrence_end_date=?, category=?,
+        event_time=?, event_end_time=?, timezone=?, location=?, scope=?, wave_id=?, rsvp_enabled=?, updated_at=?
+       WHERE id=?`
+    ).run(fields.title, fields.description, fields.event_date, fields.recurrence, fields.recurrence_end_date,
+      fields.category, fields.event_time, fields.event_end_time, fields.timezone, fields.location,
+      fields.scope, fields.wave_id, fields.rsvp_enabled, now, eventId);
     return this.getEvent(eventId);
   }
 
   deleteEvent(eventId) {
     this.db.prepare('DELETE FROM events WHERE id = ?').run(eventId);
+  }
+
+  // ============ Events Calendar v2 (v2.47.0) ============
+
+  getEventsForRange(userId, { from, to, scopes = ['server', 'personal'], category = null, waveIds = [] }) {
+    // Build scope filter
+    const scopeList = scopes.map(() => '?').join(',');
+    const params = [...scopes];
+    let scopeSql = `e.scope IN (${scopeList})`;
+
+    // Personal events: only creator's own
+    // Wave events: only for waves the user participates in
+    // Server events: visible to all
+    let whereExtra = `AND (
+      (e.scope = 'server')
+      OR (e.scope = 'personal' AND e.created_by = ?)
+      OR (e.scope = 'wave' AND e.wave_id IN (
+           SELECT wave_id FROM wave_participants WHERE user_id = ?
+         ))
+    )`;
+    params.push(userId, userId);
+
+    if (category) {
+      whereExtra += ' AND e.category = ?';
+      params.push(category);
+    }
+
+    // Fetch all events in or near range (including recurring ones we need to expand)
+    const rows = this.db.prepare(`
+      SELECT e.* FROM events e
+      WHERE (${scopeSql}) ${whereExtra}
+      ORDER BY e.event_date ASC
+    `).all(...params);
+
+    const fromDate = new Date(from);
+    const toDate   = new Date(to);
+    const fromYear = fromDate.getFullYear();
+    const toYear   = toDate.getFullYear();
+    const result   = [];
+
+    const CAP_YEARS = 2;
+    const hardCap = new Date();
+    hardCap.setFullYear(hardCap.getFullYear() + CAP_YEARS);
+
+    for (const row of rows) {
+      const ev = this.rowToEvent(row);
+      if (ev.recurrence) {
+        const anchor = new Date(ev.eventDate + 'T12:00:00');
+        if (isNaN(anchor)) continue;
+        const endBound = ev.recurrenceEndDate
+          ? new Date(ev.recurrenceEndDate + 'T23:59:59')
+          : hardCap;
+
+        if (ev.recurrence === 'yearly') {
+          // Expand across years in range
+          for (let y = fromYear; y <= toYear; y++) {
+            const mm = String(anchor.getMonth() + 1).padStart(2, '0');
+            const dd = String(anchor.getDate()).padStart(2, '0');
+            const dateStr = `${y}-${mm}-${dd}`;
+            const d = new Date(dateStr + 'T12:00:00');
+            if (!isNaN(d) && d >= fromDate && d <= toDate && d <= endBound) {
+              result.push({ ...ev, eventDate: dateStr, recurringInstance: true });
+            }
+          }
+        } else {
+          // Step through occurrences from anchor until end of range
+          let cur = new Date(anchor);
+          // Fast-forward to on/after fromDate
+          while (cur < fromDate) {
+            if (ev.recurrence === 'weekly')   cur.setDate(cur.getDate() + 7);
+            else if (ev.recurrence === 'biweekly') cur.setDate(cur.getDate() + 14);
+            else if (ev.recurrence === 'monthly')  cur.setMonth(cur.getMonth() + 1);
+            else break;
+          }
+          // Collect occurrences within [fromDate, toDate] ∩ [anchor, endBound]
+          while (cur <= toDate) {
+            if (cur >= fromDate && cur <= endBound) {
+              const dateStr = cur.toISOString().slice(0, 10);
+              result.push({ ...ev, eventDate: dateStr, recurringInstance: true });
+            }
+            if (cur > endBound) break;
+            if (ev.recurrence === 'weekly')   cur.setDate(cur.getDate() + 7);
+            else if (ev.recurrence === 'biweekly') cur.setDate(cur.getDate() + 14);
+            else if (ev.recurrence === 'monthly')  cur.setMonth(cur.getMonth() + 1);
+            else break;
+          }
+        }
+      } else {
+        const d = new Date(ev.eventDate + 'T12:00:00');
+        if (!isNaN(d) && d >= fromDate && d <= toDate) {
+          result.push(ev);
+        }
+      }
+    }
+
+    result.sort((a, b) => {
+      const dateCompare = a.eventDate.localeCompare(b.eventDate);
+      if (dateCompare !== 0) return dateCompare;
+      if (a.eventTime && b.eventTime) return a.eventTime.localeCompare(b.eventTime);
+      if (a.eventTime) return -1;
+      if (b.eventTime) return 1;
+      return 0;
+    });
+
+    return result;
+  }
+
+  getWaveEvents(waveId) {
+    const rows = this.db.prepare(`SELECT * FROM events WHERE wave_id = ? ORDER BY event_date ASC`).all(waveId);
+    return rows.map(row => this.rowToEvent(row));
+  }
+
+  getEventWithRsvpCounts(eventId) {
+    const event = this.getEvent(eventId);
+    if (!event) return null;
+    const counts = this.db.prepare(`
+      SELECT status, COUNT(*) as count FROM event_rsvp WHERE event_id = ? GROUP BY status
+    `).all(eventId);
+    const rsvpCounts = { going: 0, maybe: 0, not_going: 0 };
+    for (const r of counts) rsvpCounts[r.status] = r.count;
+    return { ...event, rsvpCounts };
+  }
+
+  upsertRsvp({ eventId, userId, status }) {
+    const id = `rsvp-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO event_rsvp (id, event_id, user_id, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id, user_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at
+    `).run(id, eventId, userId, status, now, now);
+  }
+
+  getRsvps(eventId) {
+    return this.db.prepare(`
+      SELECT r.status, r.user_id, u.handle, u.display_name, u.avatar
+      FROM event_rsvp r JOIN users u ON r.user_id = u.id
+      WHERE r.event_id = ? ORDER BY r.created_at ASC
+    `).all(eventId);
+  }
+
+  getUserRsvp(eventId, userId) {
+    return this.db.prepare(`SELECT status FROM event_rsvp WHERE event_id = ? AND user_id = ?`).get(eventId, userId);
+  }
+
+  deleteRsvp(eventId, userId) {
+    this.db.prepare(`DELETE FROM event_rsvp WHERE event_id = ? AND user_id = ?`).run(eventId, userId);
+  }
+
+  markReminderSent(eventId, userId, window) {
+    try {
+      this.db.prepare(`
+        INSERT OR IGNORE INTO event_reminder_sent (id, event_id, user_id, window, sent_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(`rem-${crypto.randomUUID()}`, eventId, userId, window, new Date().toISOString());
+    } catch (_) {}
+  }
+
+  wasReminderSent(eventId, userId, window) {
+    return !!this.db.prepare(`
+      SELECT 1 FROM event_reminder_sent WHERE event_id=? AND user_id=? AND window=?
+    `).get(eventId, userId, window);
+  }
+
+  getUpcomingTimedEvents(withinMs) {
+    // Return all non-recurring timed events that start within [now, now+withinMs]
+    // Using date range on SQL to avoid scanning old events, then precise ms check in JS
+    const now = Date.now();
+    const ceilDate = new Date(now + withinMs + 86400000).toISOString().slice(0, 10); // +1 day buffer
+    const todayDate = new Date(now).toISOString().slice(0, 10);
+    const rows = this.db.prepare(`
+      SELECT * FROM events
+      WHERE recurrence IS NULL AND event_time IS NOT NULL
+        AND event_date >= ? AND event_date <= ?
+    `).all(todayDate, ceilDate);
+    const result = [];
+    for (const row of rows) {
+      const ev = this.rowToEvent(row);
+      const ms = this.eventToMs(ev);
+      if (ms !== null && ms > now && ms <= now + withinMs) result.push(ev);
+    }
+    return result;
+  }
+
+  eventToMs(ev) {
+    if (!ev.eventDate || !ev.eventTime) return null;
+    const ms = new Date(`${ev.eventDate}T${ev.eventTime}:00`).getTime();
+    return isNaN(ms) ? null : ms;
+  }
+
+  getEventParticipants(event) {
+    if (event.scope === 'personal') {
+      // Only the creator
+      const user = this.db.prepare(`SELECT id, handle FROM users WHERE id = ?`).get(event.createdBy);
+      return user ? [user] : [];
+    }
+    if (event.scope === 'wave' && event.waveId) {
+      return this.db.prepare(`
+        SELECT u.id, u.handle FROM wave_participants wp JOIN users u ON wp.user_id = u.id WHERE wp.wave_id = ?
+      `).all(event.waveId);
+    }
+    // Server-wide: all active users
+    return this.db.prepare(`SELECT id, handle FROM users WHERE status NOT IN ('disabled','banned')`).all();
+  }
+
+  // Calendar feed tokens
+  getOrCreateCalendarFeedToken(userId) {
+    const existing = this.db.prepare(`SELECT * FROM calendar_feed_tokens WHERE user_id = ?`).get(userId);
+    if (existing) return existing;
+    const plaintext = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(plaintext).digest('hex');
+    const id = `cft-${crypto.randomUUID()}`;
+    this.db.prepare(`
+      INSERT INTO calendar_feed_tokens (id, user_id, token_hash, created_at) VALUES (?, ?, ?, ?)
+    `).run(id, userId, tokenHash, new Date().toISOString());
+    return { plaintext };
+  }
+
+  regenerateCalendarFeedToken(userId) {
+    this.db.prepare(`DELETE FROM calendar_feed_tokens WHERE user_id = ?`).run(userId);
+    return this.getOrCreateCalendarFeedToken(userId);
+  }
+
+  getUserByCalendarFeedToken(plaintext) {
+    const tokenHash = crypto.createHash('sha256').update(plaintext).digest('hex');
+    const row = this.db.prepare(`
+      SELECT cft.*, u.id as uid FROM calendar_feed_tokens cft JOIN users u ON cft.user_id = u.id WHERE cft.token_hash = ?
+    `).get(tokenHash);
+    if (!row) return null;
+    this.db.prepare(`UPDATE calendar_feed_tokens SET last_used_at = ? WHERE user_id = ?`).run(new Date().toISOString(), row.user_id);
+    return this.findUserById(row.uid);
   }
 
   getTodaysEvents(todayISO, todayMMDD) {

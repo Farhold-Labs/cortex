@@ -29,6 +29,9 @@ import WaveView from '../components/waves/WaveView.jsx';
 import FocusView from '../components/focus/FocusView.jsx';
 import ThreadPanel from '../components/focus/ThreadPanel.jsx';
 import GroupsView from '../components/groups/GroupsView.jsx';
+import PeopleView from './PeopleView.jsx';
+import CalendarView from './CalendarView.jsx';
+import CalendarReminderAlert from '../components/calendar/CalendarReminderAlert.jsx';
 import ProfileSettings from '../components/profile/ProfileSettings.jsx';
 import VideoFeedView from '../components/feed/VideoFeedView.jsx';
 import { useVoiceCall } from '../hooks/useVoiceCall.js';
@@ -98,6 +101,7 @@ function MainApp({ sharePingId }) {
   const [ghostHasPin, setGhostHasPin] = useState(false); // Whether user has set a ghost PIN (v2.27.0)
   const [notifPrefs, setNotifPrefs] = useState(null); // Notification preferences (v2.32.0)
   const notifPrefsRef = useRef(null); // Ref for WebSocket handler to avoid stale closure
+  const [calendarReminders, setCalendarReminders] = useState([]); // Persistent calendar reminder alerts (v2.47.0)
   const typingTimeoutsRef = useRef({});
   const notifSyncRef = useRef(null);
   const selectedWaveRef = useRef(null);
@@ -782,6 +786,25 @@ function MainApp({ sharePingId }) {
         ...prev,
         [waveId]: prev[waveId] ? { ...prev[waveId], participants } : prev[waveId]
       }));
+    } else if (data.type === 'wave_event_created' || data.type === 'wave_event_updated' || data.type === 'wave_event_deleted') {
+      // Calendar events updated — CalendarView will reload on next render via its own loadEvents
+      // No-op here: CalendarView manages its own state
+    } else if (data.type === 'calendar_reminder') {
+      console.log('📅 calendar_reminder received:', data);
+      setCalendarReminders(prev => {
+        // Avoid duplicate alerts for same event+window
+        const key = `${data.eventId}-${data.window}`;
+        if (prev.some(r => r.id === key)) return prev;
+        return [...prev, {
+          id: key,
+          eventId: data.eventId,
+          eventTitle: data.eventTitle || data.message || 'Upcoming event',
+          eventTime: data.eventTime || null,
+          eventDate: data.eventDate || null,
+          location: data.location || null,
+          window: data.window || 'login',
+        }];
+      });
     }
   }, [loadWaves, selectedWave, showToastMsg, user, waves, openWaveTab, closeTab, openTabs, activeTabId, setActiveView, fetchAPI, watchPartyPlayer, logout]);
 
@@ -1245,8 +1268,8 @@ function MainApp({ sharePingId }) {
     }
   };
 
-  const navItems = ['waves', 'feed', 'contacts', 'groups', 'profile'];
-  const navLabels = { waves: 'WAVES', feed: 'FEED', groups: 'CREWS', contacts: 'CONTACTS', profile: 'PROFILE' };
+  const navItems = ['waves', 'feed', 'people', 'calendar', 'profile'];
+  const navLabels = { waves: 'WAVES', feed: 'FEED', people: 'PEOPLE', calendar: 'CALENDAR', profile: 'PROFILE' };
 
   const scanLinesEnabled = user?.preferences?.scanLines !== false; // Default to true
 
@@ -1283,6 +1306,11 @@ function MainApp({ sharePingId }) {
           font-weight: bold;
           padding: 0 2px;
           border-radius: 2px;
+        }
+        /* Calendar reminder slide-in */
+        @keyframes slideInRight {
+          from { opacity: 0; transform: translateX(40px); }
+          to   { opacity: 1; transform: translateX(0); }
         }
         /* Thread navigation highlight animation */
         @keyframes highlight-pulse {
@@ -1387,9 +1415,8 @@ function MainApp({ sharePingId }) {
           <div style={{ display: 'flex', gap: '4px', flex: 1, justifyContent: 'center' }}>
             {navItems.map(view => {
               const totalUnread = view === 'waves' ? waves.reduce((sum, w) => sum + (w.unread_count || 0), 0) : 0;
-              const pendingRequests = view === 'contacts' ? contactRequests.length : 0;
-              const pendingInvitations = view === 'groups' ? groupInvitations.length : 0;
-              const badgeCount = totalUnread || pendingRequests || pendingInvitations;
+              const pendingRequests = view === 'people' ? (contactRequests.length + groupInvitations.length) : 0;
+              const badgeCount = totalUnread || pendingRequests;
               return (
                 <button key={view} onClick={() => { setActiveView(view); loadWaves(); loadWaveNotifications(); }} style={{
                   padding: '8px 16px',
@@ -1405,15 +1432,15 @@ function MainApp({ sharePingId }) {
                       position: 'absolute',
                       top: '-6px',
                       right: '-6px',
-                      background: pendingRequests > 0 ? 'var(--accent-teal)' : pendingInvitations > 0 ? 'var(--accent-amber)' : 'var(--accent-orange)',
-                      color: pendingInvitations > 0 && !pendingRequests ? '#000' : '#fff',
+                      background: totalUnread > 0 ? 'var(--accent-orange)' : 'var(--accent-teal)',
+                      color: '#fff',
                       fontSize: '0.55rem',
                       fontWeight: 700,
                       padding: '2px 4px',
                       borderRadius: '10px',
                       minWidth: '16px',
                       textAlign: 'center',
-                      boxShadow: pendingRequests > 0 ? '0 0 8px rgba(59, 206, 172, 0.8)' : pendingInvitations > 0 ? '0 0 8px rgba(255, 210, 63, 0.8)' : '0 0 8px rgba(255, 107, 53, 0.8)',
+                      boxShadow: totalUnread > 0 ? '0 0 8px rgba(255, 107, 53, 0.8)' : '0 0 8px rgba(59, 206, 172, 0.8)',
                     }}>{badgeCount}</span>
                   )}
                 </button>
@@ -1729,21 +1756,10 @@ function MainApp({ sharePingId }) {
           />
         )}
 
-        {activeView === 'groups' && (
-          <GroupsView
+        {activeView === 'people' && (
+          <PeopleView
+            contacts={contacts}
             groups={groups}
-            fetchAPI={fetchAPI}
-            showToast={showToastMsg}
-            onGroupsChange={loadGroups}
-            groupInvitations={groupInvitations}
-            onInvitationsChange={loadGroupInvitations}
-            contacts={contacts}
-          />
-        )}
-
-        {activeView === 'contacts' && (
-          <ContactsView
-            contacts={contacts}
             fetchAPI={fetchAPI}
             showToast={showToastMsg}
             onContactsChange={loadContacts}
@@ -1751,6 +1767,19 @@ function MainApp({ sharePingId }) {
             sentContactRequests={sentContactRequests}
             onRequestsChange={loadContactRequests}
             onShowProfile={setProfileUserId}
+            onGroupsChange={loadGroups}
+            groupInvitations={groupInvitations}
+            onInvitationsChange={loadGroupInvitations}
+          />
+        )}
+
+        {activeView === 'calendar' && (
+          <CalendarView
+            fetchAPI={fetchAPI}
+            showToast={showToastMsg}
+            currentUser={user}
+            isMobile={isMobile}
+            waves={waves}
           />
         )}
 
@@ -1906,6 +1935,12 @@ function MainApp({ sharePingId }) {
           hasPin={ghostHasPin}
         />
       )}
+
+      {/* Calendar reminder persistent alerts (v2.47.0) */}
+      <CalendarReminderAlert
+        reminders={calendarReminders}
+        onDismiss={id => setCalendarReminders(prev => prev.filter(r => r.id !== id))}
+      />
 
       {/* PWA Components */}
       <OfflineIndicator />

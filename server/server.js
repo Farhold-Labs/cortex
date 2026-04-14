@@ -10214,37 +10214,25 @@ app.post('/api/admin/events', authenticateToken, (req, res) => {
   const admin = db.findUserById(req.user.userId);
   if (!requireRole(admin, ROLES.ADMIN, res)) return;
 
-  const { title, description, eventDate, recurring, category } = req.body;
-
-  if (!title || title.length > 100) {
-    return res.status(400).json({ error: 'Title is required (max 100 characters)' });
-  }
-  if (description && description.length > 500) {
-    return res.status(400).json({ error: 'Description max 500 characters' });
-  }
-  if (!eventDate) {
-    return res.status(400).json({ error: 'Event date is required' });
-  }
-
-  // Validate date format: MM-DD for recurring, YYYY-MM-DD for one-time
-  const mmddRegex = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+  const { title, description, eventDate, recurrence, recurrenceEndDate, category } = req.body;
+  const VALID_RECURRENCE = ['weekly', 'biweekly', 'monthly', 'yearly'];
   const fullDateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
-  if (recurring) {
-    if (!mmddRegex.test(eventDate)) {
-      return res.status(400).json({ error: 'Recurring events must use MM-DD format' });
-    }
-  } else {
-    if (!fullDateRegex.test(eventDate)) {
-      return res.status(400).json({ error: 'One-time events must use YYYY-MM-DD format' });
-    }
+  if (!title || title.length > 100) return res.status(400).json({ error: 'Title is required (max 100 characters)' });
+  if (description && description.length > 500) return res.status(400).json({ error: 'Description max 500 characters' });
+  if (!eventDate) return res.status(400).json({ error: 'Event date is required' });
+  if (!fullDateRegex.test(eventDate)) return res.status(400).json({ error: 'Use YYYY-MM-DD format' });
+  if (recurrence && !VALID_RECURRENCE.includes(recurrence)) return res.status(400).json({ error: 'Invalid recurrence value' });
+  if (recurrence && recurrence !== 'yearly' && !recurrenceEndDate) {
+    return res.status(400).json({ error: 'recurrenceEndDate required for weekly, bi-weekly, and monthly events' });
   }
 
   const event = db.createEvent({
     title: sanitizeInput(title.trim()),
     description: description ? sanitizeInput(description.trim()) : null,
     eventDate,
-    recurring: !!recurring,
+    recurrence: recurrence || null,
+    recurrenceEndDate: recurrenceEndDate || null,
     category: category || 'general',
     createdBy: admin.id,
   });
@@ -10260,41 +10248,23 @@ app.put('/api/admin/events/:id', authenticateToken, (req, res) => {
 
   const eventId = req.params.id;
   const existing = db.getEvent(eventId);
-  if (!existing) {
-    return res.status(404).json({ error: 'Event not found' });
-  }
+  if (!existing) return res.status(404).json({ error: 'Event not found' });
 
-  const { title, description, eventDate, recurring, category } = req.body;
+  const { title, description, eventDate, recurrence, recurrenceEndDate, category } = req.body;
   const updates = {};
 
   if (title !== undefined) {
-    if (title.length > 100) {
-      return res.status(400).json({ error: 'Title max 100 characters' });
-    }
+    if (title.length > 100) return res.status(400).json({ error: 'Title max 100 characters' });
     updates.title = sanitizeInput(title.trim());
   }
-  if (description !== undefined) {
-    if (description && description.length > 500) {
-      return res.status(400).json({ error: 'Description max 500 characters' });
-    }
-    updates.description = description ? sanitizeInput(description.trim()) : null;
-  }
+  if (description !== undefined) updates.description = description ? sanitizeInput(description.trim()) : null;
   if (eventDate !== undefined) {
-    const mmddRegex = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
     const fullDateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-    const isRecurring = recurring !== undefined ? recurring : existing.recurring;
-    if (isRecurring) {
-      if (!mmddRegex.test(eventDate)) {
-        return res.status(400).json({ error: 'Recurring events must use MM-DD format' });
-      }
-    } else {
-      if (!fullDateRegex.test(eventDate)) {
-        return res.status(400).json({ error: 'One-time events must use YYYY-MM-DD format' });
-      }
-    }
+    if (!fullDateRegex.test(eventDate)) return res.status(400).json({ error: 'Use YYYY-MM-DD format' });
     updates.eventDate = eventDate;
   }
-  if (recurring !== undefined) updates.recurring = !!recurring;
+  if (recurrence !== undefined) updates.recurrence = recurrence || null;
+  if (recurrenceEndDate !== undefined) updates.recurrenceEndDate = recurrenceEndDate || null;
   if (category !== undefined) updates.category = category;
 
   const event = db.updateEvent(eventId, updates);
@@ -10316,6 +10286,370 @@ app.delete('/api/admin/events/:id', authenticateToken, (req, res) => {
   db.deleteEvent(eventId);
   console.log(`🗑️ Event deleted: "${event.title}" by ${admin.handle}`);
   res.json({ success: true });
+});
+
+// ============ Events Calendar Endpoints v2 (v2.47.0) ============
+
+// Helper: build iCal VCALENDAR string from events array
+function buildICS(events, calName = 'Cortex Calendar') {
+  const escape = (s) => (s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+  const foldLine = (line) => {
+    const bytes = Buffer.from(line, 'utf8');
+    if (bytes.length <= 75) return line;
+    const parts = [];
+    let start = 0;
+    while (start < bytes.length) {
+      parts.push(bytes.slice(start, start + 75).toString('utf8'));
+      start += 75;
+    }
+    return parts.join('\r\n ');
+  };
+  const formatDT = (dateStr, timeStr, allDay) => {
+    if (allDay || !timeStr) return `DTSTART;VALUE=DATE:${dateStr.replace(/-/g, '')}`;
+    const dt = `${dateStr.replace(/-/g, '')}T${timeStr.replace(':', '')}00`;
+    return `DTSTART:${dt}`;
+  };
+  const formatDTEnd = (dateStr, timeStr, endTimeStr, allDay) => {
+    if (allDay || !timeStr) {
+      // All-day: DTEND is next day
+      const d = new Date(dateStr);
+      d.setDate(d.getDate() + 1);
+      return `DTEND;VALUE=DATE:${d.toISOString().slice(0, 10).replace(/-/g, '')}`;
+    }
+    const end = endTimeStr || timeStr;
+    return `DTEND:${dateStr.replace(/-/g, '')}T${end.replace(':', '')}00`;
+  };
+
+  const vevents = events.map(ev => {
+    const allDay = !ev.eventTime;
+    const lines = [
+      'BEGIN:VEVENT',
+      foldLine(`UID:${ev.id}@cortex`),
+      foldLine(`SUMMARY:${escape(ev.title)}`),
+      foldLine(formatDT(ev.eventDate, ev.eventTime, allDay)),
+      foldLine(formatDTEnd(ev.eventDate, ev.eventTime, ev.eventEndTime, allDay)),
+    ];
+    if (ev.description) lines.push(foldLine(`DESCRIPTION:${escape(ev.description)}`));
+    if (ev.location) lines.push(foldLine(`LOCATION:${escape(ev.location)}`));
+    if (ev.recurrence) {
+      const freqMap = { weekly: 'WEEKLY', biweekly: 'WEEKLY;INTERVAL=2', monthly: 'MONTHLY', yearly: 'YEARLY' };
+      const freq = freqMap[ev.recurrence];
+      if (freq) {
+        let rrule = `RRULE:FREQ=${freq}`;
+        if (ev.recurrenceEndDate) rrule += `;UNTIL=${ev.recurrenceEndDate.replace(/-/g, '')}`;
+        lines.push(rrule);
+      }
+    }
+    lines.push(`CATEGORIES:${escape(ev.category || 'general').toUpperCase()}`);
+    lines.push('END:VEVENT');
+    return lines.join('\r\n');
+  });
+
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Cortex//Calendar//EN',
+    `X-WR-CALNAME:${escape(calName)}`,
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    ...vevents,
+    'END:VCALENDAR',
+  ].join('\r\n');
+}
+
+// Helper: build Google Calendar "Add to Calendar" URL
+function buildGoogleCalendarUrl(ev) {
+  const fmt = (dateStr, timeStr) => {
+    if (!timeStr) return dateStr.replace(/-/g, '');
+    return `${dateStr.replace(/-/g, '')}T${timeStr.replace(':', '')}00`;
+  };
+  const start = fmt(ev.eventDate, ev.eventTime);
+  const end = fmt(ev.eventDate, ev.eventEndTime || ev.eventTime);
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: ev.title,
+    dates: `${start}/${end}`,
+    ...(ev.description && { details: ev.description }),
+    ...(ev.location && { location: ev.location }),
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+// GET /api/events — list events for a date range (authenticated)
+app.get('/api/events', authenticateToken, (req, res) => {
+  try {
+    const { from, to, scope, category } = req.query;
+    if (!from || !to) return res.status(400).json({ error: 'from and to date params required (YYYY-MM-DD)' });
+
+    const fromDate = new Date(from);
+    const toDate   = new Date(to);
+    if (isNaN(fromDate) || isNaN(toDate)) return res.status(400).json({ error: 'Invalid date format' });
+    const diffDays = (toDate - fromDate) / 86400000;
+    if (diffDays < 0 || diffDays > 93) return res.status(400).json({ error: 'Date range must be between 0 and 93 days' });
+
+    const scopes = scope
+      ? scope.split(',').filter(s => ['server','personal','wave'].includes(s))
+      : ['server', 'personal', 'wave'];
+
+    const events = db.getEventsForRange(req.user.userId, { from, to, scopes, category: category || null });
+    res.json({ events });
+  } catch (err) {
+    console.error('Get events error:', err);
+    res.status(500).json({ error: 'Failed to get events' });
+  }
+});
+
+// GET /api/events/wave/:waveId — wave-scoped events (participant only)
+app.get('/api/events/wave/:waveId', authenticateToken, (req, res) => {
+  try {
+    if (!db.isWaveParticipant(req.params.waveId, req.user.userId)) {
+      return res.status(403).json({ error: 'Not a participant in this wave' });
+    }
+    const events = db.getWaveEvents(req.params.waveId);
+    res.json({ events });
+  } catch (err) {
+    console.error('Get wave events error:', err);
+    res.status(500).json({ error: 'Failed to get wave events' });
+  }
+});
+
+// GET /api/events/:id — single event with RSVP counts
+app.get('/api/events/:id', authenticateToken, (req, res) => {
+  try {
+    const event = db.getEventWithRsvpCounts(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    // Scope access check
+    if (event.scope === 'personal' && event.createdBy !== req.user.userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (event.scope === 'wave' && event.waveId && !db.isWaveParticipant(event.waveId, req.user.userId)) {
+      return res.status(403).json({ error: 'Not a participant in this wave' });
+    }
+    const userRsvp = db.getUserRsvp(req.params.id, req.user.userId);
+    event.googleCalendarUrl = buildGoogleCalendarUrl(event);
+    res.json({ event, userRsvp: userRsvp?.status || null });
+  } catch (err) {
+    console.error('Get event error:', err);
+    res.status(500).json({ error: 'Failed to get event' });
+  }
+});
+
+// GET /api/events/:id/ics — download event as .ics file
+app.get('/api/events/:id/ics', authenticateToken, (req, res) => {
+  try {
+    const event = db.getEvent(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (event.scope === 'personal' && event.createdBy !== req.user.userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (event.scope === 'wave' && event.waveId && !db.isWaveParticipant(event.waveId, req.user.userId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const ics = buildICS([event], event.title);
+    const filename = `${event.title.replace(/[^a-zA-Z0-9]/g, '-')}.ics`;
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(ics);
+  } catch (err) {
+    console.error('ICS download error:', err);
+    res.status(500).json({ error: 'Failed to generate ICS' });
+  }
+});
+
+// GET /api/events/feed.ics?token=FEED_TOKEN — subscribable iCal feed (no JWT)
+app.get('/api/events/feed.ics', (req, res) => {
+  try {
+    const token = req.query.token;
+    if (!token) return res.status(401).send('Token required');
+    const user = db.getUserByCalendarFeedToken(token);
+    if (!user) return res.status(401).send('Invalid token');
+
+    const from = new Date(); from.setMonth(from.getMonth() - 1);
+    const to   = new Date(); to.setMonth(to.getMonth() + 12);
+    const events = db.getEventsForRange(user.id, {
+      from: from.toISOString().slice(0, 10),
+      to:   to.toISOString().slice(0, 10),
+      scopes: ['server', 'personal', 'wave'],
+    });
+    const ics = buildICS(events, 'Cortex Calendar');
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(ics);
+  } catch (err) {
+    console.error('Calendar feed error:', err);
+    res.status(500).send('Failed to generate feed');
+  }
+});
+
+// POST /api/events — create event
+app.post('/api/events', authenticateToken, (req, res) => {
+  try {
+    const user = db.findUserById(req.user.userId);
+    const { title, description, eventDate, eventTime, eventEndTime, timezone, location,
+            recurrence, recurrenceEndDate, category, scope, waveId, rsvpEnabled } = req.body;
+
+    const resolvedScope = scope || 'personal';
+
+    // Permission check by scope
+    if (resolvedScope === 'server' && !hasRole(user, ROLES.MODERATOR)) {
+      return res.status(403).json({ error: 'Moderator or admin required to create server-wide events' });
+    }
+    if (resolvedScope === 'wave') {
+      if (!waveId) return res.status(400).json({ error: 'waveId required for wave events' });
+      if (!db.isWaveParticipant(waveId, user.id)) return res.status(403).json({ error: 'Not a participant in this wave' });
+    }
+
+    const VALID_RECURRENCE = ['weekly', 'biweekly', 'monthly', 'yearly'];
+    if (!title || title.length > 100) return res.status(400).json({ error: 'Title required (max 100 chars)' });
+    if (!eventDate) return res.status(400).json({ error: 'eventDate required' });
+    if (recurrence && !VALID_RECURRENCE.includes(recurrence)) {
+      return res.status(400).json({ error: 'recurrence must be weekly, biweekly, monthly, or yearly' });
+    }
+    const fullDateRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+    if (!fullDateRegex.test(eventDate)) return res.status(400).json({ error: 'Use YYYY-MM-DD format for eventDate' });
+    if (recurrence && recurrence !== 'yearly' && !recurrenceEndDate) {
+      return res.status(400).json({ error: 'recurrenceEndDate is required for weekly, bi-weekly, and monthly events' });
+    }
+    if (recurrenceEndDate && !fullDateRegex.test(recurrenceEndDate)) {
+      return res.status(400).json({ error: 'Use YYYY-MM-DD format for recurrenceEndDate' });
+    }
+    if (eventTime && !/^\d{2}:\d{2}$/.test(eventTime)) return res.status(400).json({ error: 'eventTime must be HH:MM' });
+    if (eventEndTime && !/^\d{2}:\d{2}$/.test(eventEndTime)) return res.status(400).json({ error: 'eventEndTime must be HH:MM' });
+
+    const event = db.createEvent({
+      title: sanitizeInput(title.trim()),
+      description: description ? sanitizeInput(description.trim()) : null,
+      eventDate, eventTime: eventTime || null, eventEndTime: eventEndTime || null,
+      timezone: timezone || null, location: location ? sanitizeInput(location.trim()) : null,
+      recurrence: recurrence || null, recurrenceEndDate: recurrenceEndDate || null,
+      category: category || 'general',
+      scope: resolvedScope, waveId: waveId || null, rsvpEnabled: !!rsvpEnabled,
+      createdBy: user.id,
+    });
+
+    if (resolvedScope === 'wave' && waveId) {
+      broadcastToWave(waveId, { type: 'wave_event_created', event });
+    }
+
+    res.status(201).json({ event });
+  } catch (err) {
+    console.error('Create event error:', err);
+    res.status(500).json({ error: 'Failed to create event' });
+  }
+});
+
+// PUT /api/events/:id — update event (creator or mod+)
+app.put('/api/events/:id', authenticateToken, (req, res) => {
+  try {
+    const user = db.findUserById(req.user.userId);
+    const event = db.getEvent(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (event.createdBy !== user.id && !hasRole(user, ROLES.MODERATOR)) {
+      return res.status(403).json({ error: 'Cannot edit this event' });
+    }
+    const updates = {};
+    const fields = ['title','description','eventDate','eventTime','eventEndTime','timezone','location','recurrence','recurrenceEndDate','category','rsvpEnabled'];
+    for (const f of fields) { if (req.body[f] !== undefined) updates[f] = req.body[f]; }
+    if (updates.title) updates.title = sanitizeInput(updates.title.trim());
+    if (updates.description) updates.description = sanitizeInput(updates.description.trim());
+    if (updates.location) updates.location = sanitizeInput(updates.location.trim());
+    const updated = db.updateEvent(req.params.id, updates);
+    if (event.scope === 'wave' && event.waveId) {
+      broadcastToWave(event.waveId, { type: 'wave_event_updated', event: updated });
+    }
+    res.json({ event: updated });
+  } catch (err) {
+    console.error('Update event error:', err);
+    res.status(500).json({ error: 'Failed to update event' });
+  }
+});
+
+// DELETE /api/events/:id — delete event (creator or mod+)
+app.delete('/api/events/:id', authenticateToken, (req, res) => {
+  try {
+    const user = db.findUserById(req.user.userId);
+    const event = db.getEvent(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (event.createdBy !== user.id && !hasRole(user, ROLES.MODERATOR)) {
+      return res.status(403).json({ error: 'Cannot delete this event' });
+    }
+    db.deleteEvent(req.params.id);
+    if (event.scope === 'wave' && event.waveId) {
+      broadcastToWave(event.waveId, { type: 'wave_event_deleted', eventId: req.params.id });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete event error:', err);
+    res.status(500).json({ error: 'Failed to delete event' });
+  }
+});
+
+// POST /api/events/:id/rsvp — set RSVP status
+app.post('/api/events/:id/rsvp', authenticateToken, (req, res) => {
+  try {
+    const event = db.getEvent(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!event.rsvpEnabled) return res.status(400).json({ error: 'RSVP not enabled for this event' });
+    const { status } = req.body;
+    if (!['going','maybe','not_going'].includes(status)) {
+      return res.status(400).json({ error: 'status must be going, maybe, or not_going' });
+    }
+    db.upsertRsvp({ eventId: req.params.id, userId: req.user.userId, status });
+    res.json({ success: true, status });
+  } catch (err) {
+    console.error('RSVP error:', err);
+    res.status(500).json({ error: 'Failed to set RSVP' });
+  }
+});
+
+// GET /api/events/:id/rsvp — get RSVP list
+app.get('/api/events/:id/rsvp', authenticateToken, (req, res) => {
+  try {
+    const event = db.getEvent(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    const rsvps = db.getRsvps(req.params.id);
+    const userRsvp = db.getUserRsvp(req.params.id, req.user.userId);
+    res.json({ rsvps, userRsvp: userRsvp?.status || null });
+  } catch (err) {
+    console.error('Get RSVP error:', err);
+    res.status(500).json({ error: 'Failed to get RSVPs' });
+  }
+});
+
+// DELETE /api/events/:id/rsvp — remove own RSVP
+app.delete('/api/events/:id/rsvp', authenticateToken, (req, res) => {
+  try {
+    db.deleteRsvp(req.params.id, req.user.userId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete RSVP error:', err);
+    res.status(500).json({ error: 'Failed to remove RSVP' });
+  }
+});
+
+// GET /api/user/calendar-feed — get or create calendar feed token
+app.get('/api/user/calendar-feed', authenticateToken, (req, res) => {
+  try {
+    const result = db.getOrCreateCalendarFeedToken(req.user.userId);
+    // If plaintext is returned, it's newly created — return it once
+    if (result.plaintext) return res.json({ token: result.plaintext, isNew: true });
+    // Existing token — don't return the plaintext, just confirm it exists
+    res.json({ exists: true });
+  } catch (err) {
+    console.error('Calendar feed token error:', err);
+    res.status(500).json({ error: 'Failed to get calendar feed token' });
+  }
+});
+
+// POST /api/user/calendar-feed/regenerate — regenerate calendar feed token
+app.post('/api/user/calendar-feed/regenerate', authenticateToken, (req, res) => {
+  try {
+    const result = db.regenerateCalendarFeedToken(req.user.userId);
+    res.json({ token: result.plaintext });
+  } catch (err) {
+    console.error('Regenerate calendar feed token error:', err);
+    res.status(500).json({ error: 'Failed to regenerate token' });
+  }
 });
 
 // ============ Bot Management Endpoints (v2.1.0) ============
@@ -18071,6 +18405,27 @@ wss.on('connection', (ws, req) => {
           // Clear push debounce so user gets fresh notification on next offline period
           lastPushSent.delete(userId);
           ws.send(JSON.stringify({ type: 'auth_success', userId, serverVersion: VERSION }));
+
+          // On-login catch-up: notify of any events starting within 15 min (v2.47.0)
+          try {
+            const loginWindowMs = 15 * 60 * 1000;
+            const upcoming = db.getUpcomingTimedEvents(loginWindowMs);
+            for (const ev of upcoming) {
+              const participants = db.getEventParticipants(ev);
+              if (participants.some(p => p.id === userId)) {
+                ws.send(JSON.stringify({
+                  type: 'calendar_reminder',
+                  message: `${ev.title} starts soon`,
+                  eventId: ev.id,
+                  eventTitle: ev.title,
+                  eventDate: ev.eventDate,
+                  eventTime: ev.eventTime,
+                  location: ev.location || null,
+                  window: 'login',
+                }));
+              }
+            }
+          } catch (_) {}
         } catch (err) {
           ws.send(JSON.stringify({ type: 'auth_error', error: 'Invalid token' }));
         }
@@ -19100,4 +19455,69 @@ server.listen(PORT, () => {
   generateDailyAlerts();
   setInterval(generateDailyAlerts, 24 * 60 * 60 * 1000);
   console.log('📆 Daily alert generation enabled');
+
+  // ============ Calendar Reminder Job (v2.47.0) ============
+  // Reminder windows: 1 day, 1 hour, 30 min, 15 min before event
+  const REMINDER_WINDOWS = [
+    { key: '1day',   ms: 24 * 60 * 60 * 1000, label: 'tomorrow' },
+    { key: '1hour',  ms: 60 * 60 * 1000,       label: 'in 1 hour' },
+    { key: '30min',  ms: 30 * 60 * 1000,        label: 'in 30 minutes' },
+    { key: '15min',  ms: 15 * 60 * 1000,        label: 'in 15 minutes' },
+  ];
+  // Check interval: every 5 minutes
+  const REMINDER_CHECK_INTERVAL = 5 * 60 * 1000;
+
+  async function processEventReminders() {
+    try {
+      const now = Date.now();
+      const maxWindowMs = Math.max(...REMINDER_WINDOWS.map(w => w.ms));
+      const events = db.getUpcomingTimedEvents(maxWindowMs);
+      if (events.length > 0) {
+        console.log(`📅 Reminder check: ${events.length} upcoming event(s) within 24h`);
+      }
+
+      for (const event of events) {
+        const eventMs = db.eventToMs(event);
+        if (!eventMs || eventMs <= now) continue;
+        const msUntil = eventMs - now;
+        const minUntil = Math.round(msUntil / 60000);
+        const participants = db.getEventParticipants(event);
+
+        for (const win of REMINDER_WINDOWS) {
+          if (msUntil > win.ms) continue;
+          for (const participant of participants) {
+            if (db.wasReminderSent(event.id, participant.id, win.key)) continue;
+            const connected = clients.has(participant.id);
+            console.log(`📅 Sending ${win.key} reminder for "${event.title}" (${minUntil}min away) to @${participant.handle} [ws:${connected ? 'connected' : 'NOT connected'}]`);
+            const body = `${event.title} — at ${event.eventTime}${event.location ? ` · ${event.location}` : ''}`;
+            // In-app WebSocket notification
+            broadcastToUser(participant.id, {
+              type: 'calendar_reminder',
+              message: `${event.title} ${win.label}${event.location ? ` · ${event.location}` : ''}`,
+              eventId: event.id,
+              eventTitle: event.title,
+              eventDate: event.eventDate,
+              eventTime: event.eventTime,
+              location: event.location || null,
+              window: win.key,
+            });
+            // Push notification (for backgrounded/native)
+            try {
+              await sendPushNotification(participant.id, {
+                title: `📅 Event ${win.label}`,
+                body,
+                data: { type: 'calendar_reminder', eventId: event.id },
+              });
+            } catch (_) {}
+            db.markReminderSent(event.id, participant.id, win.key);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Calendar reminder job error:', err.message);
+    }
+  }
+
+  setInterval(processEventReminders, REMINDER_CHECK_INTERVAL);
+  console.log('📅 Calendar reminder job enabled (checking every 5 min)');
 });
