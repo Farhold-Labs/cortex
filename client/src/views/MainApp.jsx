@@ -788,7 +788,7 @@ function MainApp({ sharePingId }) {
       // Calendar events updated — CalendarView will reload on next render via its own loadEvents
       // No-op here: CalendarView manages its own state
     } else if (data.type === 'calendar_reminder') {
-      // Reminder for an upcoming event
+      console.log('📅 calendar_reminder received:', data);
       showToastMsg(`⏰ ${data.message || 'Upcoming event'}`, 'info');
     }
   }, [loadWaves, selectedWave, showToastMsg, user, waves, openWaveTab, closeTab, openTabs, activeTabId, setActiveView, fetchAPI, watchPartyPlayer, logout]);

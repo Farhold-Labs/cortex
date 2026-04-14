@@ -19466,7 +19466,8 @@ server.listen(PORT, () => {
           if (msUntil > win.ms) continue;
           for (const participant of participants) {
             if (db.wasReminderSent(event.id, participant.id, win.key)) continue;
-            console.log(`📅 Sending ${win.key} reminder for "${event.title}" (${minUntil}min away) to @${participant.handle}`);
+            const connected = clients.has(participant.id);
+            console.log(`📅 Sending ${win.key} reminder for "${event.title}" (${minUntil}min away) to @${participant.handle} [ws:${connected ? 'connected' : 'NOT connected'}]`);
             const body = `${event.title} — at ${event.eventTime}${event.location ? ` · ${event.location}` : ''}`;
             // In-app WebSocket notification
             broadcastToUser(participant.id, {
