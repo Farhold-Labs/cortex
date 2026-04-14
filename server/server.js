@@ -18405,6 +18405,27 @@ wss.on('connection', (ws, req) => {
           // Clear push debounce so user gets fresh notification on next offline period
           lastPushSent.delete(userId);
           ws.send(JSON.stringify({ type: 'auth_success', userId, serverVersion: VERSION }));
+
+          // On-login catch-up: notify of any events starting within 15 min (v2.47.0)
+          try {
+            const loginWindowMs = 15 * 60 * 1000;
+            const upcoming = db.getUpcomingTimedEvents(loginWindowMs);
+            for (const ev of upcoming) {
+              const participants = db.getEventParticipants(ev);
+              if (participants.some(p => p.id === userId)) {
+                ws.send(JSON.stringify({
+                  type: 'calendar_reminder',
+                  message: `${ev.title} starts soon`,
+                  eventId: ev.id,
+                  eventTitle: ev.title,
+                  eventDate: ev.eventDate,
+                  eventTime: ev.eventTime,
+                  location: ev.location || null,
+                  window: 'login',
+                }));
+              }
+            }
+          } catch (_) {}
         } catch (err) {
           ws.send(JSON.stringify({ type: 'auth_error', error: 'Invalid token' }));
         }
@@ -19475,6 +19496,9 @@ server.listen(PORT, () => {
               message: `${event.title} ${win.label}${event.location ? ` · ${event.location}` : ''}`,
               eventId: event.id,
               eventTitle: event.title,
+              eventDate: event.eventDate,
+              eventTime: event.eventTime,
+              location: event.location || null,
               window: win.key,
             });
             // Push notification (for backgrounded/native)

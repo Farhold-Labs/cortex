@@ -31,6 +31,7 @@ import ThreadPanel from '../components/focus/ThreadPanel.jsx';
 import GroupsView from '../components/groups/GroupsView.jsx';
 import PeopleView from './PeopleView.jsx';
 import CalendarView from './CalendarView.jsx';
+import CalendarReminderAlert from '../components/calendar/CalendarReminderAlert.jsx';
 import ProfileSettings from '../components/profile/ProfileSettings.jsx';
 import VideoFeedView from '../components/feed/VideoFeedView.jsx';
 import { useVoiceCall } from '../hooks/useVoiceCall.js';
@@ -100,6 +101,7 @@ function MainApp({ sharePingId }) {
   const [ghostHasPin, setGhostHasPin] = useState(false); // Whether user has set a ghost PIN (v2.27.0)
   const [notifPrefs, setNotifPrefs] = useState(null); // Notification preferences (v2.32.0)
   const notifPrefsRef = useRef(null); // Ref for WebSocket handler to avoid stale closure
+  const [calendarReminders, setCalendarReminders] = useState([]); // Persistent calendar reminder alerts (v2.47.0)
   const typingTimeoutsRef = useRef({});
   const notifSyncRef = useRef(null);
   const selectedWaveRef = useRef(null);
@@ -789,7 +791,20 @@ function MainApp({ sharePingId }) {
       // No-op here: CalendarView manages its own state
     } else if (data.type === 'calendar_reminder') {
       console.log('📅 calendar_reminder received:', data);
-      showToastMsg(`⏰ ${data.message || 'Upcoming event'}`, 'info');
+      setCalendarReminders(prev => {
+        // Avoid duplicate alerts for same event+window
+        const key = `${data.eventId}-${data.window}`;
+        if (prev.some(r => r.id === key)) return prev;
+        return [...prev, {
+          id: key,
+          eventId: data.eventId,
+          eventTitle: data.eventTitle || data.message || 'Upcoming event',
+          eventTime: data.eventTime || null,
+          eventDate: data.eventDate || null,
+          location: data.location || null,
+          window: data.window || 'login',
+        }];
+      });
     }
   }, [loadWaves, selectedWave, showToastMsg, user, waves, openWaveTab, closeTab, openTabs, activeTabId, setActiveView, fetchAPI, watchPartyPlayer, logout]);
 
@@ -1291,6 +1306,11 @@ function MainApp({ sharePingId }) {
           font-weight: bold;
           padding: 0 2px;
           border-radius: 2px;
+        }
+        /* Calendar reminder slide-in */
+        @keyframes slideInRight {
+          from { opacity: 0; transform: translateX(40px); }
+          to   { opacity: 1; transform: translateX(0); }
         }
         /* Thread navigation highlight animation */
         @keyframes highlight-pulse {
@@ -1915,6 +1935,12 @@ function MainApp({ sharePingId }) {
           hasPin={ghostHasPin}
         />
       )}
+
+      {/* Calendar reminder persistent alerts (v2.47.0) */}
+      <CalendarReminderAlert
+        reminders={calendarReminders}
+        onDismiss={id => setCalendarReminders(prev => prev.filter(r => r.id !== id))}
+      />
 
       {/* PWA Components */}
       <OfflineIndicator />
