@@ -87,12 +87,12 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
             }}>
               {SCOPE_LABELS[event.scope] || event.scope}
             </span>
-            {event.recurring && (
+            {event.recurrence && (
               <span style={{
                 fontSize: '0.65rem', padding: '2px 8px', fontFamily: 'monospace',
                 background: 'var(--accent-purple)15', color: 'var(--accent-purple)', border: '1px solid var(--accent-purple)40',
               }}>
-                YEARLY
+                {event.recurrence === 'biweekly' ? 'BI-WEEKLY' : event.recurrence.toUpperCase()}
               </span>
             )}
           </div>
