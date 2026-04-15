@@ -10750,10 +10750,28 @@ app.get('/api/admin/bots/:id', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'Bot not found' });
     }
 
-    // Include permissions
-    const permissions = db.getBotPermissions(botId);
+    // Token bots (bot-token-*) are linked to a wave via wave_tokens, not bot_permissions
+    let permissions;
+    if (botId.startsWith('bot-token-')) {
+      const tokenRow = db.db.prepare(`
+        SELECT wt.wave_id, w.title as wave_title, w.privacy as wave_privacy
+        FROM wave_tokens wt
+        LEFT JOIN waves w ON wt.wave_id = w.id
+        WHERE wt.bot_id = ?
+      `).get(botId);
+      permissions = tokenRow ? [{
+        wave_id: tokenRow.wave_id,
+        wave_title: tokenRow.wave_title,
+        wave_privacy: tokenRow.wave_privacy,
+        can_post: 1,
+        can_read: 0,
+        isTokenBot: true,
+      }] : [];
+    } else {
+      permissions = db.getBotPermissions(botId);
+    }
 
-    res.json({ bot: { ...bot, permissions } });
+    res.json({ bot: { ...bot, isTokenBot: botId.startsWith('bot-token-'), permissions } });
   } catch (err) {
     console.error('Get bot error:', err);
     res.status(500).json({ error: 'Failed to get bot' });

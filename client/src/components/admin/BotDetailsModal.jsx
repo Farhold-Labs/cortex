@@ -171,22 +171,29 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
             marginBottom: '8px',
           }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-              WAVE PERMISSIONS ({permissions.length})
+              {bot.isTokenBot ? 'POSTING TOKEN WAVE' : `WAVE PERMISSIONS (${permissions.length})`}
             </div>
-            <button
-              onClick={() => setShowAddPermissionModal(true)}
-              style={{
-                padding: '6px 10px',
-                background: 'var(--accent-green)20',
-                border: '1px solid var(--accent-green)',
-                color: 'var(--accent-green)',
-                cursor: 'pointer',
-                fontSize: '0.7rem',
-              }}
-            >
-              + ADD WAVE
-            </button>
+            {!bot.isTokenBot && (
+              <button
+                onClick={() => setShowAddPermissionModal(true)}
+                style={{
+                  padding: '6px 10px',
+                  background: 'var(--accent-green)20',
+                  border: '1px solid var(--accent-green)',
+                  color: 'var(--accent-green)',
+                  cursor: 'pointer',
+                  fontSize: '0.7rem',
+                }}
+              >
+                + ADD WAVE
+              </button>
+            )}
           </div>
+          {bot.isTokenBot && (
+            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+              This bot is managed by a wave posting token and is locked to one wave.
+            </div>
+          )}
 
           {permissions.length === 0 ? (
             <div style={{
@@ -246,22 +253,26 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                       </button>
                     </div>
                     <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>
-                      {perm.can_post ? '✓ Post' : '✗ Post'} • {perm.can_read ? '✓ Read' : '✗ Read'}
+                      {perm.isTokenBot
+                        ? '✓ Post · Managed by posting token'
+                        : `${perm.can_post ? '✓ Post' : '✗ Post'} • ${perm.can_read ? '✓ Read' : '✗ Read'}`}
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleRevokePermission(perm.wave_id, perm.wave_title)}
-                    style={{
-                      padding: '6px 10px',
-                      background: 'transparent',
-                      border: '1px solid var(--status-error)',
-                      color: 'var(--status-error)',
-                      cursor: 'pointer',
-                      fontSize: '0.7rem',
-                    }}
-                  >
-                    REVOKE
-                  </button>
+                  {!perm.isTokenBot && (
+                    <button
+                      onClick={() => handleRevokePermission(perm.wave_id, perm.wave_title)}
+                      style={{
+                        padding: '6px 10px',
+                        background: 'transparent',
+                        border: '1px solid var(--status-error)',
+                        color: 'var(--status-error)',
+                        cursor: 'pointer',
+                        fontSize: '0.7rem',
+                      }}
+                    >
+                      REVOKE
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
