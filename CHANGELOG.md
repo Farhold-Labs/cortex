@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.2] - 2026-04-15
+
+### Fixed
+
+#### Bot Posts Not Notifying Bot Owner
+The bot owner was never receiving wave activity notifications from their own bot's posts. `createPingNotifications` uses `req.bot.owner_user_id` as the author ID (required for the FK constraint in the notifications table), and the author-exclusion check (`participant.id === author.id`) was silently dropping the owner from all notification paths — mentions, replies, and wave activity. Since the bot owner is not truly the author, bot posts now skip the author-exclusion check so all wave participants (including the owner) receive notifications normally.
+
+---
+
 ## [2.47.1] - 2026-04-15
 
 ### Fixed

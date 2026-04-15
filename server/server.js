@@ -18840,6 +18840,8 @@ function extractMentions(content) {
 function createPingNotifications(ping, wave, author) {
   const notificationsToSend = [];
   const contentPreview = ping.content.replace(/<[^>]*>/g, '').substring(0, 100);
+  // For bot posts, owner_user_id is used only as a FK reference — not the real author
+  const isBot = !!(ping.botId || ping.isBot || ping.bot_id);
 
   // Get wave participants
   const participants = db.getWaveParticipants(wave.id);
@@ -18851,7 +18853,7 @@ function createPingNotifications(ping, wave, author) {
 
   for (const handle of mentionedHandles) {
     const mentionedUser = db.findUserByMention ? db.findUserByMention(handle) : db.findUserByHandle(handle);
-    if (mentionedUser && mentionedUser.id !== author.id && participantIds.has(mentionedUser.id)) {
+    if (mentionedUser && (isBot || mentionedUser.id !== author.id) && participantIds.has(mentionedUser.id)) {
       mentionedUsers.add(mentionedUser.id);
 
       // Check user's notification preferences
@@ -18894,7 +18896,7 @@ function createPingNotifications(ping, wave, author) {
   // 2. Check if this is a reply - notify the parent author
   if (ping.parentId) {
     const parentPing = db.getMessage(ping.parentId);
-    if (parentPing && parentPing.authorId !== author.id && !mentionedUsers.has(parentPing.authorId)) {
+    if (parentPing && (isBot || parentPing.authorId !== author.id) && !mentionedUsers.has(parentPing.authorId)) {
       // Check user's notification preferences
       if (shouldCreateNotification(parentPing.authorId, 'reply')) {
         const notification = db.createNotification({
@@ -18932,7 +18934,7 @@ function createPingNotifications(ping, wave, author) {
 
   // 3. Wave activity notifications for other participants (not author, not mentioned, not replied-to)
   for (const participant of participants) {
-    if (participant.id === author.id) continue;
+    if (!isBot && participant.id === author.id) continue;
     if (mentionedUsers.has(participant.id)) continue;
 
     // Check user's notification preferences
