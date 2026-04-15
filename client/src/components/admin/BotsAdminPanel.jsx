@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
+import BotDetailsModal from './BotDetailsModal.jsx';
 
 const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [bots, setBots] = useState([]);
@@ -11,6 +12,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
   const [selectedBot, setSelectedBot] = useState(null);
   const [newApiKey, setNewApiKey] = useState(null);
   const [newWebhookSecret, setNewWebhookSecret] = useState(null);
+  const [postingTokens, setPostingTokens] = useState([]);
 
   // Form state
   const [botName, setBotName] = useState('');
@@ -21,8 +23,12 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
   const loadBots = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await fetchAPI('/admin/bots');
-      setBots(data.bots || []);
+      const [botsData, tokensData] = await Promise.all([
+        fetchAPI('/admin/bots'),
+        fetchAPI('/admin/posting-tokens'),
+      ]);
+      setBots(botsData.bots || []);
+      setPostingTokens(tokensData.tokens || []);
     } catch (err) {
       showToast(err.message || formatError('Failed to load bots'), 'error');
     } finally {
@@ -224,10 +230,14 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                         )}
                         <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem' }}>
                           Owner: {bot.owner_name} (@{bot.owner_handle}) •
-                          Waves: {bot.wave_count} •
                           Pings: {bot.total_pings} •
                           API Calls: {bot.total_api_calls}
                         </div>
+                        {bot.wave_count > 0 && (
+                          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
+                            Waves: {bot.wave_titles || `${bot.wave_count} wave(s)`}
+                          </div>
+                        )}
                       </div>
 
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
@@ -307,6 +317,62 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* Posting Tokens Section */}
+      {isOpen && postingTokens.length > 0 && (
+        <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--border-subtle)' }}>
+          <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', fontWeight: 500, marginBottom: '12px' }}>
+            🔑 WAVE POSTING TOKENS ({postingTokens.length})
+          </div>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
+            Per-wave tokens created by wave owners. Each token is locked to its wave — it cannot post to any other wave.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {postingTokens.map(token => (
+              <div key={token.id} style={{
+                padding: '10px 12px',
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)',
+                display: 'flex', flexDirection: isMobile ? 'column' : 'row',
+                gap: '10px', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center',
+              }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: 'var(--text-primary)', fontSize: '0.8rem', marginBottom: '3px' }}>
+                    {token.name}
+                  </div>
+                  <div style={{ color: 'var(--accent-amber)', fontSize: '0.75rem', marginBottom: '3px' }}>
+                    → {token.wave_title || 'Unknown Wave'}
+                  </div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
+                    Owner: @{token.creator_handle} •{' '}
+                    Created: {new Date(token.created_at).toLocaleDateString()} •{' '}
+                    {token.last_used_at ? `Last used: ${new Date(token.last_used_at).toLocaleDateString()}` : 'Never used'}
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!window.confirm(`Revoke posting token "${token.name}"? Any scripts using it will stop working.`)) return;
+                    try {
+                      await fetchAPI(`/admin/posting-tokens/${token.id}`, { method: 'DELETE' });
+                      showToast('Posting token revoked', 'success');
+                      setPostingTokens(prev => prev.filter(t => t.id !== token.id));
+                    } catch (err) {
+                      showToast(err.message || 'Failed to revoke token', 'error');
+                    }
+                  }}
+                  style={{
+                    padding: '6px 10px', background: 'transparent',
+                    border: '1px solid var(--status-error)', color: 'var(--status-error)',
+                    cursor: 'pointer', fontSize: '0.7rem', whiteSpace: 'nowrap',
+                  }}
+                >
+                  REVOKE
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

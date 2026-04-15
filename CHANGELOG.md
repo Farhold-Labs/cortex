@@ -5,6 +5,30 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.2] - 2026-04-15
+
+### Fixed
+
+#### Bot Posts Not Notifying Bot Owner
+The bot owner was never receiving wave activity notifications from their own bot's posts. `createPingNotifications` uses `req.bot.owner_user_id` as the author ID (required for the FK constraint in the notifications table), and the author-exclusion check (`participant.id === author.id`) was silently dropping the owner from all notification paths — mentions, replies, and wave activity. Since the bot owner is not truly the author, bot posts now skip the author-exclusion check so all wave participants (including the owner) receive notifications normally.
+
+#### Bot/Webhook Details Blank Screen in Admin Panel
+Clicking "Details" on any bot in the Admin Panel rendered a blank screen with `Uncaught ReferenceError: BotDetailsModal is not defined`. `BotDetailsModal` was extracted to its own file (`src/components/admin/BotDetailsModal.jsx`) but `BotsAdminPanel.jsx` was never updated to import it — only a stale unused lazy import remained in `CortexApp.jsx`. Fixed by adding the import directly in `BotsAdminPanel.jsx` and removing the dead import from `CortexApp.jsx`.
+
+#### Electron: Uploaded Images and Media Not Displayed
+Images embedded in messages (`/uploads/messages/…`), file attachment links (`/uploads/files/…`), and audio/video messages (`/api/media/…`) failed to load in the Electron app with `ERR_FILE_NOT_FOUND`. The server stores relative URL paths in the database; web browsers resolve these against the current origin (the server), but Electron serves the React bundle from `app://` so relative paths resolved to the local filesystem. Fixed in `MessageWithEmbeds.jsx` by rewriting `src` and `href` attributes that start with `/uploads/` or `/api/media/` to absolute URLs using `BASE_URL` before injecting HTML. Fixed in `Message.jsx` by passing audio/video `media_url` through a `resolveMediaUrl` helper that prepends `BASE_URL` to any relative path. Avatar images were already handled correctly in `SimpleComponents.jsx`.
+
+#### Wave Posting Tokens Not Visible in Admin Panel
+Admins had no visibility into wave posting tokens — they could only be seen and managed by the wave creator in wave settings. Added a "Wave Posting Tokens" section to the Bots & Webhooks admin panel showing all tokens server-wide with: token name, which wave it posts to, owner handle, creation date, and last-used date. Admins can now revoke any token. Added server endpoints `GET /api/admin/posting-tokens` and `DELETE /api/admin/posting-tokens/:id` (admin-only). Note: tokens are locked to their wave server-side — the posting endpoint uses `tokenRow.wave_id` from the database and ignores any wave override in the request body.
+
+#### Bot List Now Shows Wave Names
+The bot list in the admin panel previously showed only a numeric wave count (`Waves: 2`). The `getAllBots` query now joins the waves table and returns `wave_titles` via `GROUP_CONCAT`, so the bot list shows the actual wave names.
+
+#### GlowText Not Defined in Admin Components
+`BotDetailsModal.jsx` and `AdminReportsPanel.jsx` used `GlowText` without importing it, causing `Uncaught ReferenceError: GlowText is not defined` when those panels rendered. Both files already imported from `SimpleComponents.jsx` — `GlowText` was simply missing from the destructure.
+
+---
+
 ## [2.47.1] - 2026-04-15
 
 ### Fixed

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { API_URL } from '../../config/constants.js';
+import { API_URL, BASE_URL } from '../../config/constants.js';
 import { detectEmbedUrls, EMBED_PLATFORMS } from '../../utils/embed.js';
 import JellyfinEmbed from '../media/JellyfinEmbed.jsx';
 import PlexEmbed from '../media/PlexEmbed.jsx';
@@ -493,6 +493,14 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
         return `<a href="${url}" download="${filename}" class="file-attachment-card" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:6px;text-decoration:none;color:var(--text-primary);margin:6px 0;max-width:320px;cursor:pointer;transition:border-color 0.15s;" onmouseover="this.style.borderColor='var(--accent-teal)'" onmouseout="this.style.borderColor='var(--border-subtle)'"><span style="font-size:1.5rem;flex-shrink:0;">${icon}</span><span style="flex:1;min-width:0;"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;font-family:monospace;color:var(--text-primary);">${filename}</span><span style="display:block;font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${size}</span></span><span style="flex-shrink:0;color:var(--text-dim);font-size:0.9rem;" title="Download">⬇</span></a>`;
       }
     );
+
+    // Absolutize relative server paths so Electron (app:// origin) loads
+    // images and file links from the remote server, not the local filesystem.
+    if (BASE_URL) {
+      result = result
+        .replace(/(<img\b[^>]*\ssrc=")(\/(uploads|api\/media)\/)/g, `$1${BASE_URL}$2`)
+        .replace(/(<a\b[^>]*\shref=")(\/(uploads|api\/media)\/)/g, `$1${BASE_URL}$2`);
+    }
 
     return result;
   }, [content, embedUrls, embeds.length, allUsers]);
