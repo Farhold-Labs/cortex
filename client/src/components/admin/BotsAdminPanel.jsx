@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
+import BotDetailsModal from './BotDetailsModal.jsx';
 
 const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [bots, setBots] = useState([]);

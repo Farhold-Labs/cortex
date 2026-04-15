@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Bot Posts Not Notifying Bot Owner
 The bot owner was never receiving wave activity notifications from their own bot's posts. `createPingNotifications` uses `req.bot.owner_user_id` as the author ID (required for the FK constraint in the notifications table), and the author-exclusion check (`participant.id === author.id`) was silently dropping the owner from all notification paths — mentions, replies, and wave activity. Since the bot owner is not truly the author, bot posts now skip the author-exclusion check so all wave participants (including the owner) receive notifications normally.
 
+#### Bot/Webhook Details Blank Screen in Admin Panel
+Clicking "Details" on any bot in the Admin Panel rendered a blank screen with `Uncaught ReferenceError: BotDetailsModal is not defined`. `BotDetailsModal` was extracted to its own file (`src/components/admin/BotDetailsModal.jsx`) but `BotsAdminPanel.jsx` was never updated to import it — only a stale unused lazy import remained in `CortexApp.jsx`. Fixed by adding the import directly in `BotsAdminPanel.jsx` and removing the dead import from `CortexApp.jsx`.
+
 ---
 
 ## [2.47.1] - 2026-04-15
