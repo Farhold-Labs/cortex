@@ -5,6 +5,20 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.1] - 2026-04-15
+
+### Fixed
+
+#### Bot Posts Not Generating Notifications
+Wave participants received no in-app or push notifications when a bot posted via either posting method:
+
+- **`POST /api/bot/ping`** (system bot API key): `createPingNotifications` was never called. The endpoint broadcast the message via WebSocket so connected clients saw it in real time, but no notification records were created and no push notifications fired for mentions, replies, or wave activity.
+- **`POST /api/post/:token`** (wave posting tokens): `createPingNotifications` was already called correctly, but the `new_ping` WebSocket broadcast was missing — only the legacy `new_droplet` and `new_message` event names were sent.
+
+Both endpoints now behave consistently with regular user messages: full notification pipeline (in-app, push, mentions, replies, wave activity) fires on every bot post.
+
+---
+
 ## [2.47.0] - 2026-04-13
 
 ### Added

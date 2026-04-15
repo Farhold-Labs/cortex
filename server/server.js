@@ -11009,6 +11009,14 @@ app.post('/api/bot/ping', authenticateBotToken, botLimiter, (req, res) => {
     broadcastToWave(waveId, { type: 'new_droplet', data: ping }); // Legacy
     broadcastToWave(waveId, { type: 'new_message', data: ping }); // Legacy
 
+    // Trigger notifications for wave participants (mentions, replies, wave activity)
+    const botAuthor = {
+      id: req.bot.owner_user_id,
+      handle: req.bot.name,
+      displayName: req.bot.name,
+    };
+    createPingNotifications(ping, wave, botAuthor);
+
     // Trigger outgoing webhooks (async, non-blocking)
     triggerWaveWebhooks(waveId, { ...ping, isBot: true }, wave);
 
@@ -11326,8 +11334,9 @@ app.post('/api/post/:token', express.json({ limit: '50kb' }), botLimiter, (req, 
     db.logActivity(tokenRow.created_by, 'wave_token_post', 'ping', ping.id, { waveId: wave.id, tokenId: tokenRow.id });
 
     // Broadcast to wave participants via WebSocket
-    broadcastToWave(wave.id, { type: 'new_droplet', data: ping });
-    broadcastToWave(wave.id, { type: 'new_message', data: ping });
+    broadcastToWave(wave.id, { type: 'new_ping', data: ping });
+    broadcastToWave(wave.id, { type: 'new_droplet', data: ping }); // Legacy
+    broadcastToWave(wave.id, { type: 'new_message', data: ping }); // Legacy
 
     // Trigger notifications for participants
     createPingNotifications(ping, wave, { ...creator, displayName: tokenRow.name });
