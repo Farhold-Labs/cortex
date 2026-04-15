@@ -11231,6 +11231,40 @@ app.post('/api/webhooks/:botId/:webhookSecret', express.json({ limit: '50kb' }),
 // ============ Wave Posting Tokens (v2.43.0) ============
 
 /**
+ * Admin: List all posting tokens across all waves
+ */
+app.get('/api/admin/posting-tokens', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+    const tokens = db.getAllWaveTokens();
+    res.json({ tokens });
+  } catch (err) {
+    console.error('Admin get posting tokens error:', err);
+    res.status(500).json({ error: 'Failed to get posting tokens' });
+  }
+});
+
+/**
+ * Admin: Revoke any posting token
+ */
+app.delete('/api/admin/posting-tokens/:id', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+    const tokenId = sanitizeInput(req.params.id);
+    db.revokeWaveToken(tokenId);
+    if (db.logActivity) {
+      db.logActivity(req.user.userId, 'admin_revoke_posting_token', 'wave_token', tokenId, getRequestMeta(req));
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Admin revoke posting token error:', err);
+    res.status(500).json({ error: 'Failed to revoke token' });
+  }
+});
+
+/**
  * List tokens for a wave (creator only)
  */
 app.get('/api/waves/:id/tokens', authenticateToken, (req, res) => {

@@ -9224,6 +9224,26 @@ export class DatabaseSQLite {
     `).all(waveId);
   }
 
+  getAllWaveTokens() {
+    return this.db.prepare(`
+      SELECT wt.id, wt.wave_id, wt.name, wt.created_at, wt.last_used_at,
+             w.title as wave_title, w.privacy as wave_privacy,
+             u.handle as creator_handle, u.display_name as creator_name
+      FROM wave_tokens wt
+      LEFT JOIN waves w ON wt.wave_id = w.id
+      LEFT JOIN users u ON wt.created_by = u.id
+      ORDER BY wt.created_at DESC
+    `).all();
+  }
+
+  revokeWaveToken(tokenId) {
+    const token = this.db.prepare(`SELECT bot_id FROM wave_tokens WHERE id = ?`).get(tokenId);
+    this.db.prepare(`DELETE FROM wave_tokens WHERE id = ?`).run(tokenId);
+    if (token?.bot_id) {
+      this.db.prepare(`DELETE FROM bots WHERE id = ? AND id LIKE 'bot-token-%'`).run(token.bot_id);
+    }
+  }
+
   getWaveTokenByHash(tokenHash) {
     return this.db.prepare(`
       SELECT * FROM wave_tokens WHERE token_hash = ?

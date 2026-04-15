@@ -15,6 +15,12 @@ The bot owner was never receiving wave activity notifications from their own bot
 #### Bot/Webhook Details Blank Screen in Admin Panel
 Clicking "Details" on any bot in the Admin Panel rendered a blank screen with `Uncaught ReferenceError: BotDetailsModal is not defined`. `BotDetailsModal` was extracted to its own file (`src/components/admin/BotDetailsModal.jsx`) but `BotsAdminPanel.jsx` was never updated to import it — only a stale unused lazy import remained in `CortexApp.jsx`. Fixed by adding the import directly in `BotsAdminPanel.jsx` and removing the dead import from `CortexApp.jsx`.
 
+#### Wave Posting Tokens Not Visible in Admin Panel
+Admins had no visibility into wave posting tokens — they could only be seen and managed by the wave creator in wave settings. Added a "Wave Posting Tokens" section to the Bots & Webhooks admin panel showing all tokens server-wide with: token name, which wave it posts to, owner handle, creation date, and last-used date. Admins can now revoke any token. Added server endpoints `GET /api/admin/posting-tokens` and `DELETE /api/admin/posting-tokens/:id` (admin-only). Note: tokens are locked to their wave server-side — the posting endpoint uses `tokenRow.wave_id` from the database and ignores any wave override in the request body.
+
+#### Bot List Now Shows Wave Names
+The bot list in the admin panel previously showed only a numeric wave count (`Waves: 2`). The `getAllBots` query now joins the waves table and returns `wave_titles` via `GROUP_CONCAT`, so the bot list shows the actual wave names.
+
 #### GlowText Not Defined in Admin Components
 `BotDetailsModal.jsx` and `AdminReportsPanel.jsx` used `GlowText` without importing it, causing `Uncaught ReferenceError: GlowText is not defined` when those panels rendered. Both files already imported from `SimpleComponents.jsx` — `GlowText` was simply missing from the destructure.
 
