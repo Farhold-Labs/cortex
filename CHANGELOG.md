@@ -15,6 +15,9 @@ The bot owner was never receiving wave activity notifications from their own bot
 #### Bot/Webhook Details Blank Screen in Admin Panel
 Clicking "Details" on any bot in the Admin Panel rendered a blank screen with `Uncaught ReferenceError: BotDetailsModal is not defined`. `BotDetailsModal` was extracted to its own file (`src/components/admin/BotDetailsModal.jsx`) but `BotsAdminPanel.jsx` was never updated to import it — only a stale unused lazy import remained in `CortexApp.jsx`. Fixed by adding the import directly in `BotsAdminPanel.jsx` and removing the dead import from `CortexApp.jsx`.
 
+#### GlowText Not Defined in Admin Components
+`BotDetailsModal.jsx` and `AdminReportsPanel.jsx` used `GlowText` without importing it, causing `Uncaught ReferenceError: GlowText is not defined` when those panels rendered. Both files already imported from `SimpleComponents.jsx` — `GlowText` was simply missing from the destructure.
+
 ---
 
 ## [2.47.1] - 2026-04-15
