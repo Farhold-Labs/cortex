@@ -3336,10 +3336,14 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                         )}
                         <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem' }}>
                           Owner: {bot.owner_name} (@{bot.owner_handle}) •
-                          Waves: {bot.wave_count} •
                           Pings: {bot.total_pings} •
                           API Calls: {bot.total_api_calls}
                         </div>
+                        {bot.wave_count > 0 && (
+                          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
+                            Waves: {bot.wave_titles || `${bot.wave_count} wave(s)`}
+                          </div>
+                        )}
                       </div>
 
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'flex-start' }}>

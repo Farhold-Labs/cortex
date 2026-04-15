@@ -8870,10 +8870,12 @@ export class DatabaseSQLite {
   getAllBots({ status = null, ownerId = null, limit = 50, offset = 0 } = {}) {
     let query = `
       SELECT b.*, u.display_name as owner_name, u.handle as owner_handle,
-             COUNT(DISTINCT bp.wave_id) as wave_count
+             COUNT(DISTINCT bp.wave_id) as wave_count,
+             GROUP_CONCAT(w.title, ', ') as wave_titles
       FROM bots b
       LEFT JOIN users u ON b.owner_user_id = u.id
       LEFT JOIN bot_permissions bp ON b.id = bp.bot_id
+      LEFT JOIN waves w ON bp.wave_id = w.id
     `;
     const conditions = [];
     const params = [];
