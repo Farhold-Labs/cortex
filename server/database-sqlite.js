@@ -8870,10 +8870,12 @@ export class DatabaseSQLite {
   getAllBots({ status = null, ownerId = null, limit = 50, offset = 0 } = {}) {
     let query = `
       SELECT b.*, u.display_name as owner_name, u.handle as owner_handle,
-             COUNT(DISTINCT bp.wave_id) as wave_count
+             COUNT(DISTINCT bp.wave_id) as wave_count,
+             GROUP_CONCAT(w.title, ', ') as wave_titles
       FROM bots b
       LEFT JOIN users u ON b.owner_user_id = u.id
       LEFT JOIN bot_permissions bp ON b.id = bp.bot_id
+      LEFT JOIN waves w ON bp.wave_id = w.id
     `;
     const conditions = [];
     const params = [];
@@ -9220,6 +9222,26 @@ export class DatabaseSQLite {
       SELECT id, wave_id, created_by, name, created_at, last_used_at
       FROM wave_tokens WHERE wave_id = ? ORDER BY created_at ASC
     `).all(waveId);
+  }
+
+  getAllWaveTokens() {
+    return this.db.prepare(`
+      SELECT wt.id, wt.wave_id, wt.name, wt.created_at, wt.last_used_at,
+             w.title as wave_title, w.privacy as wave_privacy,
+             u.handle as creator_handle, u.display_name as creator_name
+      FROM wave_tokens wt
+      LEFT JOIN waves w ON wt.wave_id = w.id
+      LEFT JOIN users u ON wt.created_by = u.id
+      ORDER BY wt.created_at DESC
+    `).all();
+  }
+
+  revokeWaveToken(tokenId) {
+    const token = this.db.prepare(`SELECT bot_id FROM wave_tokens WHERE id = ?`).get(tokenId);
+    this.db.prepare(`DELETE FROM wave_tokens WHERE id = ?`).run(tokenId);
+    if (token?.bot_id) {
+      this.db.prepare(`DELETE FROM bots WHERE id = ? AND id LIKE 'bot-token-%'`).run(token.bot_id);
+    }
   }
 
   getWaveTokenByHash(tokenHash) {

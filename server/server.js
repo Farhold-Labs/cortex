@@ -10750,10 +10750,28 @@ app.get('/api/admin/bots/:id', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'Bot not found' });
     }
 
-    // Include permissions
-    const permissions = db.getBotPermissions(botId);
+    // Token bots (bot-token-*) are linked to a wave via wave_tokens, not bot_permissions
+    let permissions;
+    if (botId.startsWith('bot-token-')) {
+      const tokenRow = db.db.prepare(`
+        SELECT wt.wave_id, w.title as wave_title, w.privacy as wave_privacy
+        FROM wave_tokens wt
+        LEFT JOIN waves w ON wt.wave_id = w.id
+        WHERE wt.bot_id = ?
+      `).get(botId);
+      permissions = tokenRow ? [{
+        wave_id: tokenRow.wave_id,
+        wave_title: tokenRow.wave_title,
+        wave_privacy: tokenRow.wave_privacy,
+        can_post: 1,
+        can_read: 0,
+        isTokenBot: true,
+      }] : [];
+    } else {
+      permissions = db.getBotPermissions(botId);
+    }
 
-    res.json({ bot: { ...bot, permissions } });
+    res.json({ bot: { ...bot, isTokenBot: botId.startsWith('bot-token-'), permissions } });
   } catch (err) {
     console.error('Get bot error:', err);
     res.status(500).json({ error: 'Failed to get bot' });
@@ -11229,6 +11247,40 @@ app.post('/api/webhooks/:botId/:webhookSecret', express.json({ limit: '50kb' }),
 });
 
 // ============ Wave Posting Tokens (v2.43.0) ============
+
+/**
+ * Admin: List all posting tokens across all waves
+ */
+app.get('/api/admin/posting-tokens', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+    const tokens = db.getAllWaveTokens();
+    res.json({ tokens });
+  } catch (err) {
+    console.error('Admin get posting tokens error:', err);
+    res.status(500).json({ error: 'Failed to get posting tokens' });
+  }
+});
+
+/**
+ * Admin: Revoke any posting token
+ */
+app.delete('/api/admin/posting-tokens/:id', authenticateToken, (req, res) => {
+  try {
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
+    const tokenId = sanitizeInput(req.params.id);
+    db.revokeWaveToken(tokenId);
+    if (db.logActivity) {
+      db.logActivity(req.user.userId, 'admin_revoke_posting_token', 'wave_token', tokenId, getRequestMeta(req));
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Admin revoke posting token error:', err);
+    res.status(500).json({ error: 'Failed to revoke token' });
+  }
+});
 
 /**
  * List tokens for a wave (creator only)
@@ -18840,6 +18892,8 @@ function extractMentions(content) {
 function createPingNotifications(ping, wave, author) {
   const notificationsToSend = [];
   const contentPreview = ping.content.replace(/<[^>]*>/g, '').substring(0, 100);
+  // For bot posts, owner_user_id is used only as a FK reference — not the real author
+  const isBot = !!(ping.botId || ping.isBot || ping.bot_id);
 
   // Get wave participants
   const participants = db.getWaveParticipants(wave.id);
@@ -18851,7 +18905,7 @@ function createPingNotifications(ping, wave, author) {
 
   for (const handle of mentionedHandles) {
     const mentionedUser = db.findUserByMention ? db.findUserByMention(handle) : db.findUserByHandle(handle);
-    if (mentionedUser && mentionedUser.id !== author.id && participantIds.has(mentionedUser.id)) {
+    if (mentionedUser && (isBot || mentionedUser.id !== author.id) && participantIds.has(mentionedUser.id)) {
       mentionedUsers.add(mentionedUser.id);
 
       // Check user's notification preferences
@@ -18894,7 +18948,7 @@ function createPingNotifications(ping, wave, author) {
   // 2. Check if this is a reply - notify the parent author
   if (ping.parentId) {
     const parentPing = db.getMessage(ping.parentId);
-    if (parentPing && parentPing.authorId !== author.id && !mentionedUsers.has(parentPing.authorId)) {
+    if (parentPing && (isBot || parentPing.authorId !== author.id) && !mentionedUsers.has(parentPing.authorId)) {
       // Check user's notification preferences
       if (shouldCreateNotification(parentPing.authorId, 'reply')) {
         const notification = db.createNotification({
@@ -18932,7 +18986,7 @@ function createPingNotifications(ping, wave, author) {
 
   // 3. Wave activity notifications for other participants (not author, not mentioned, not replied-to)
   for (const participant of participants) {
-    if (participant.id === author.id) continue;
+    if (!isBot && participant.id === author.id) continue;
     if (mentionedUsers.has(participant.id)) continue;
 
     // Check user's notification preferences

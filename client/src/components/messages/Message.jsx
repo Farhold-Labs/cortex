@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT, canAccess } from '../../config/constants.js';
+import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT, canAccess, BASE_URL } from '../../config/constants.js';
+
+// Resolve relative server paths to absolute URLs (needed for Electron app:// origin)
+const resolveMediaUrl = (url) => {
+  if (!url || !BASE_URL) return url;
+  if (url.startsWith('/')) return `${BASE_URL}${url}`;
+  return url;
+};
 import { Avatar, PrivacyBadge } from '../ui/SimpleComponents.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
 // BurstLinkCard import removed in v2.38.0 — burst waves migrated to threads
@@ -610,7 +617,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
             {message.media_type === 'audio' && message.media_url && (
               <div style={{ marginTop: message.content ? '8px' : 0 }}>
                 <AudioPlayer
-                  src={message.media_url}
+                  src={resolveMediaUrl(message.media_url)}
                   duration={message.media_duration}
                   isMobile={isMobile}
                 />
@@ -619,7 +626,7 @@ const Message = ({ message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, on
             {message.media_type === 'video' && message.media_url && (
               <div style={{ marginTop: message.content ? '8px' : 0 }}>
                 <VideoPlayer
-                  src={message.media_url}
+                  src={resolveMediaUrl(message.media_url)}
                   duration={message.media_duration}
                   isMobile={isMobile}
                 />

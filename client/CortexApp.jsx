@@ -34,7 +34,6 @@ const AlertSubscriptionsPanel = React.lazy(() => import('./src/components/admin/
 const FederationAdminPanel = React.lazy(() => import('./src/components/admin/FederationAdminPanel.jsx'));
 const HandleRequestsList = React.lazy(() => import('./src/components/admin/HandleRequestsList.jsx'));
 const BotsAdminPanel = React.lazy(() => import('./src/components/admin/BotsAdminPanel.jsx'));
-const BotDetailsModal = React.lazy(() => import('./src/components/admin/BotDetailsModal.jsx'));
 
 // Extracted views
 import AuthProvider from './src/views/AuthProvider.jsx';
