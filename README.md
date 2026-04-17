@@ -10,7 +10,7 @@
 |------|-------------|
 | **Wave** | A conversation container |
 | **Ping** | An individual message |
-| **Burst** | Breaking a thread into a new wave |
+| **Thread** | An isolated reply chain within a wave |
 | **Crew** | A user group |
 
 ## Quick Start
@@ -49,13 +49,13 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 ### Core
 - **Waves** — Conversation containers with threaded pings
 - **Focus View** — View any ping with replies as its own wave-like context
-- **Burst** — Spin off threads into new waves while maintaining links
+- **Threading** — Isolate reply chains within a wave for focused conversations
 - **Crews & Contacts** — Organize connections with request/invitation workflows
 - **Wave Categories** — User-defined categories with drag-and-drop organization
 - **Search** — Full-text search across all pings (SQLite FTS5)
 - **PWA** — Installable app with offline support and push notifications
 - **Notification Sync** — Client-side polling catches missed notifications when push is unreliable; targeted push for mentions/replies only, with visibility-aware local notification display
-- **Notification Preferences** — Per-type controls (mentions, replies, wave activity, bursts) with always/app-closed/never levels, suppress-while-focused, and per-user push throttle
+- **Notification Preferences** — Per-type controls (mentions, replies, wave activity) with always/app-closed/never levels, suppress-while-focused, and per-user push throttle
 - **Collapsible Messages** — Collapse long messages to compact previews
 
 ### End-to-End Encryption
@@ -219,7 +219,7 @@ GNEWS_API_KEY=your-key             # News headlines (backup)
 | POST | `/api/waves/:id/pings` | Send ping |
 | PUT | `/api/pings/:id` | Edit ping |
 | DELETE | `/api/pings/:id` | Delete ping |
-| POST | `/api/pings/:id/burst` | Burst to new wave |
+
 
 ### Crews & Contacts
 | Method | Endpoint | Description |
