@@ -207,7 +207,7 @@ linux:
 
 publish:
   provider: github
-  owner: jempson
+  owner: Farhold-Labs
   repo: cortex
 ```
 
