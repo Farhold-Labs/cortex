@@ -4132,4 +4132,4 @@ For more information, see:
 
 - [Project README](../README.md)
 - [CLAUDE.md](../CLAUDE.md) - Development guide for AI assistants
-- [GitHub Repository](https://github.com/jempson/cortex)
+- [GitHub Repository](https://github.com/Farhold-Labs/cortex)

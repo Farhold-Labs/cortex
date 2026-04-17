@@ -179,7 +179,7 @@ const AboutServerPage = ({ onBack }) => {
             <div style={{ marginBottom: '6px' }}>• No analytics, no ads, no third-party tracking</div>
             <div style={{ marginTop: '10px' }}>
               <a
-                href="https://github.com/jempson/cortex/blob/master/docs/PRIVACY.md"
+                href="https://github.com/Farhold-Labs/cortex/blob/master/docs/PRIVACY.md"
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ color: 'var(--accent-teal)', fontSize: '0.8rem' }}
@@ -198,7 +198,7 @@ const AboutServerPage = ({ onBack }) => {
           fontSize: '0.75rem',
           borderTop: '1px solid var(--border-subtle)',
         }}>
-          Powered by <a href="https://github.com/jempson/cortex" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-teal)' }}>Cortex</a>
+          Powered by <a href="https://github.com/Farhold-Labs/cortex" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-teal)' }}>Cortex</a>
         </div>
       </div>
     </div>
