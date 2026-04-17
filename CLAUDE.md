@@ -12,7 +12,7 @@ Cortex is a privacy-first federated communication platform inspired by Google Wa
 |------|-------------|----------|
 | **Wave** | Conversation container | (unchanged) |
 | **Ping** | Individual message | Droplet |
-| **Burst** | Break-out thread to new wave | Ripple |
+| **Thread** | Isolated reply chain within a wave | Burst/Ripple |
 | **Crew** | User group | Group |
 
 **Tech Stack:**

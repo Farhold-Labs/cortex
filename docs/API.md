@@ -8,7 +8,7 @@ The Cortex API is a RESTful API that powers the Cortex federated communication p
 
 ### Terminology (v2.0.0)
 - **Ping** = message (formerly "droplet")
-- **Burst** = break-out thread (formerly "ripple")
+- **Thread** = isolated reply chain within a wave (formerly "burst"/"ripple")
 - **Crew** = user group (formerly "group")
 
 > **Note:** The API maintains backward compatibility with the old endpoint names (`/api/droplets/*`, `/api/groups/*`) while also supporting new names (`/api/pings/*`, `/api/crews/*`).
@@ -2079,60 +2079,6 @@ Add or remove a reaction (emoji) to a ping.
 
 ---
 
-#### POST /api/pings/:id/burst
-
-Spin off a ping and its replies into a new wave.
-
-**Authentication:** Required
-
-**Request Body:**
-
-```json
-{
-  "title": "New Discussion",
-  "participants": [
-    "user-550e8400-e29b-41d4-a716-446655440000",
-    "user-660e8400-e29b-41d4-a716-446655440001"
-  ]
-}
-```
-
-**Response (201 Created):**
-
-```json
-{
-  "success": true,
-  "newWave": {
-    "id": "wave-770e8400-e29b-41d4-a716-446655440002",
-    "title": "New Discussion",
-    "privacy": "private",
-    "rootPingId": "ping-880e8400-e29b-41d4-a716-446655440005",
-    "brokenOutFrom": "wave-550e8400-e29b-41d4-a716-446655440000",
-    "createdAt": "2025-12-09T12:00:00.000Z"
-  },
-  "originalWaveId": "wave-550e8400-e29b-41d4-a716-446655440000"
-}
-```
-
-**WebSocket Events:**
-
-- `ping_burst` - Sent to original wave participants
-- `wave_created` - Sent to new wave participants
-
-**Notes:**
-
-- Creates a new wave with the ping as the root
-- Original ping displays as a "Burst to wave..." link card
-- Participants default to original wave participants
-- Inherits privacy level from original wave
-- Nested bursts build a `breakout_chain` for lineage tracking
-
-**Errors:**
-
-- `400`: Missing title or invalid participants
-- `403`: User doesn't have access to original wave
-- `404`: Ping not found
-
 ---
 
 ### Search Endpoint
@@ -3127,22 +3073,6 @@ Ping was deleted. Legacy `message_deleted` event also broadcast for backward com
 {
   "type": "ping_deleted",
   "pingId": "ping-880e8400-e29b-41d4-a716-446655440005",
-  "waveId": "wave-550e8400-e29b-41d4-a716-446655440000"
-}
-```
-
----
-
-#### ping_burst (v2.0.0+)
-
-Ping was burst to create a new wave.
-
-```json
-{
-  "type": "ping_burst",
-  "pingId": "ping-880e8400-e29b-41d4-a716-446655440005",
-  "newWaveId": "wave-770e8400-e29b-41d4-a716-446655440002",
-  "newWaveTitle": "New Discussion",
   "waveId": "wave-550e8400-e29b-41d4-a716-446655440000"
 }
 ```

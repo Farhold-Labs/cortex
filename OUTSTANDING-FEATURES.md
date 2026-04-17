@@ -16,7 +16,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Contact Requests, Group Invitations, User Blocking, GIF Search | v1.7.0 |
 | Profile Images, Bio, Image Upload, Rich Media Embeds, SQLite, Push Notifications | v1.8.0 |
 | Threading Improvements, Mobile Gestures, Report System, API Docs | v1.9.0 |
-| Pings Architecture, Focus View, Burst System | v1.10.0 |
+| Pings Architecture, Focus View, Threading | v1.10.0 |
 | Notification System, Wave List Badges | v1.11.0 |
 | CSS Variable Themes | v1.12.0 |
 | Federation (Server-to-Server, HTTP Signatures, Federated Users, Message Queue) | v1.13.0 |
@@ -67,7 +67,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Reaction Notifications (in-app and push when someone reacts to your ping) | v2.41.0 |
 | Scroll-to-Ping Navigation (notification and search clicks navigate to older messages) | v2.41.0 |
 | Auto-Focus Message Composer (desktop auto-focus on wave open/thread open/reply) | v2.42.0 |
-| Nomenclature Cleanup (droplet → ping, ripple → burst across all layers) | v2.42.0 |
+| Nomenclature Cleanup (droplet → ping, ripple/burst → thread across all layers) | v2.42.0 |
 | Wave Posting Tokens (self-service per-wave API keys for bots and scripts) | v2.43.0 |
 | Wave Members Visible to All Participants (not gated by wave creator) | v2.43.0 |
 | Session Duration Preference (persists across logouts, pre-fills on next login) | v2.44.0–v2.45.2 |
