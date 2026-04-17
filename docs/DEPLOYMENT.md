@@ -183,7 +183,7 @@ su - cortex
 cd /opt/cortex
 
 # Clone repository
-git clone https://github.com/jempson/cortex.git app
+git clone https://github.com/Farhold-Labs/cortex.git app
 cd app
 
 # Install server dependencies
