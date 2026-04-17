@@ -1,6 +1,6 @@
 # Cortex Privacy Policy
 
-*Last updated: February 2026 — applies to Cortex v2.28.0+*
+*Last updated: April 2026 — applies to Cortex v2.47.2+*
 
 This policy describes what a Cortex instance actually does with your data. No legalese, no weasel words. If you can't verify a claim yourself, it shouldn't be in here.
 

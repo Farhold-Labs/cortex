@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
-**Last Updated:** February 2026
-**Current Version:** v2.28.1
+**Last Updated:** April 2026
+**Current Version:** v2.47.2
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.28.1)
+## Completed Features (v1.5.0 - v2.47.2)
 
 | Feature | Version |
 |---------|---------|
@@ -53,6 +53,32 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Plausible Deniability — Ghost Protocol | v2.27.0 |
 | Running Dark — Federation Cover Traffic | v2.28.0 |
 | Privacy Policy | v2.28.1 |
+| Session Expiry Monitoring & Renewal (JWT expiry detection, renewal modal, countdown timer) | v2.29.0 |
+| Electron Desktop App (Windows/Linux native wrapper, auto-updater scaffolding) | v2.30.0 |
+| Capacitor Mobile Apps (Android + iOS, FCM/APNs push, haptics) | v2.31.0 |
+| Notification Preference System (per-type levels, per-user push throttle, suppress while focused) | v2.32.0 |
+| General File Attachment Support (PDF, docs, ZIPs; download cards, drag-and-drop) | v2.33.0 |
+| Electron Right-Click Context Menus (copy/paste, spell check, image actions) | v2.33.1 |
+| Tabbed Waves (multi-wave tabs, background open, unread badges on tabs) | v2.35.0 |
+| Collapsible Wave List Sidebar (Ctrl+B toggle, smooth animation) | v2.35.0 |
+| macOS Electron Build Target (DMG/ZIP, hardened runtime, entitlements) | v2.35.0 |
+| Wave Topics (creator-set topic displayed in header and wave list) | v2.36.0 |
+| Pending Sent Crew Invitations (view and cancel outgoing invitations) | v2.36.0 |
+| Reaction Notifications (in-app and push when someone reacts to your ping) | v2.41.0 |
+| Scroll-to-Ping Navigation (notification and search clicks navigate to older messages) | v2.41.0 |
+| Auto-Focus Message Composer (desktop auto-focus on wave open/thread open/reply) | v2.42.0 |
+| Nomenclature Cleanup (droplet → ping, ripple → burst across all layers) | v2.42.0 |
+| Wave Posting Tokens (self-service per-wave API keys for bots and scripts) | v2.43.0 |
+| Wave Members Visible to All Participants (not gated by wave creator) | v2.43.0 |
+| Session Duration Preference (persists across logouts, pre-fills on next login) | v2.44.0–v2.45.2 |
+| Electron Bundled Full App (local React bundle via app:// protocol, CORS bridging) | v2.45.0 |
+| Android Release Signing (key.properties + signingConfig, no manual jarsigner) | v2.45.0 |
+| Session UX: Proportional Warning Window, Silent Auto-Renewal, Grace Period Re-auth | v2.46.0 |
+| New Auth Endpoints: POST /api/auth/renew (silent), POST /api/auth/reauth (grace period) | v2.46.0 |
+| Calendar (events, recurring, RSVP, reminders, iCal/Google Calendar export, webcal feed) | v2.47.0 |
+| People Nav Consolidation (Contacts + Crews merged into single People nav item) | v2.47.0 |
+| Bot Post Notifications (createPingNotifications now called for bot/posting token posts) | v2.47.1 |
+| Bot Owner Notifications, Posting Tokens Admin Panel, Electron Media URL Fix | v2.47.2 |
 
 ---
 
