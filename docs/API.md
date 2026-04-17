@@ -1,6 +1,6 @@
 # Cortex REST API Documentation
 
-Version: 2.24.0
+Version: 2.47.2
 
 ## Overview
 
@@ -419,6 +419,63 @@ Revoke all sessions except the current one.
   "revokedCount": 3
 }
 ```
+
+---
+
+#### POST /api/auth/renew
+
+Silently renew a session token without requiring a password. Used for auto-renewal when a session is approaching expiry. Preserves the original session duration.
+
+**Authentication:** Required (valid, non-expired token)
+
+**Rate Limit:** 1 request per 5 minutes per client
+
+**Request Body:** None required
+
+**Response (200 OK):**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**Error Responses:**
+- `401 TOKEN_EXPIRED` — Token is already expired; use `/api/auth/reauth` instead
+
+---
+
+#### POST /api/auth/reauth
+
+Re-authenticate after session expiry using a password. Accepts tokens expired within the last hour (grace period). Issues a new token with the user's chosen session duration.
+
+**Authentication:** Required (token may be expired within the last hour)
+
+**Request Body:**
+
+```json
+{
+  "password": "your-password",
+  "sessionDuration": "7d"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `password` | string | Yes | User's current password |
+| `sessionDuration` | string | No | `24h`, `7d`, or `30d` (defaults to previous duration) |
+
+**Response (200 OK):**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**Error Responses:**
+- `401` — Password incorrect
+- `403` — Token expired more than 1 hour ago; full login required
 
 ---
 
