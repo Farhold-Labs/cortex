@@ -5,6 +5,27 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.4] - 2026-04-29
+
+### Added
+
+#### Wave Key Redistribution
+Users who reset their E2EE keys (e.g. via the new self-service reset in v2.47.3) previously lost access to all encrypted wave content permanently. Wave key redistribution solves this: when a participant can't decrypt a wave, the app silently requests a copy of the wave key from other participants, who re-encrypt it using the requester's new public key.
+
+**How it works:**
+- When `getWaveKey` returns a 404 (encrypted wave, no key for this user), it automatically fires `POST /api/waves/:id/key-request`. This creates a `wave_key_requests` record and broadcasts a `wave_key_request` WebSocket event to all other wave participants.
+- Any participant who is online and has the wave key cached receives the event and silently calls `POST /api/waves/:id/key-grant` with the re-encrypted wave key — no user interaction required.
+- The server stores the new key for the requester and sends a `wave_key_granted` WebSocket event back to them.
+- On `wave_key_granted`, the client invalidates the wave key cache and reloads the wave, making previously unreadable content visible again.
+
+**New database table:** `wave_key_requests` — tracks pending redistribution requests with requester's public key and grant status.
+
+**New endpoints:**
+- `POST /api/waves/:id/key-request` — create or refresh a key request (requester must be a wave participant with E2EE set up but no wave key)
+- `POST /api/waves/:id/key-grant` — fulfill a pending request (granter must be a different wave participant)
+
+---
+
 ## [2.47.3] - 2026-04-29
 
 ### Fixed
