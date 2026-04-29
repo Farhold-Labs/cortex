@@ -6,6 +6,70 @@ import { LoadingSpinner } from '../components/ui/SimpleComponents.jsx';
 import SessionExpiryModal from '../components/session/SessionExpiryModal.jsx';
 import MainApp from './MainApp.jsx';
 
+// Shown when auto-unlock fails because login password ≠ E2EE passphrase.
+// Gives the user a clear exit: reset their keys (wiped server-side, re-setup on
+// next login) or log out to try the forgot-password flow.
+function E2EEMismatchScreen({ onReset, onLogout }) {
+  const [confirming, setConfirming] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetError, setResetError] = useState(null);
+
+  const handleConfirmReset = async () => {
+    setIsResetting(true);
+    setResetError(null);
+    try {
+      await onReset();
+    } catch (err) {
+      setResetError(err.message || 'Reset failed. Please try again.');
+      setIsResetting(false);
+    }
+  };
+
+  const overlayStyle = { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 10000 };
+  const cardStyle = { backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', borderRadius: '8px', padding: '24px', maxWidth: '400px', width: '100%', boxShadow: '0 0 30px var(--glow-green)' };
+  const primaryBtn = { width: '100%', padding: '12px', backgroundColor: 'var(--accent-orange)', border: 'none', borderRadius: '4px', color: 'var(--bg-base)', fontFamily: 'inherit', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', marginBottom: '10px' };
+  const secondaryBtn = { width: '100%', padding: '12px', backgroundColor: 'transparent', border: '1px solid var(--border-secondary)', borderRadius: '4px', color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: '14px', cursor: 'pointer' };
+
+  return (
+    <div style={overlayStyle}>
+      <div style={cardStyle}>
+        <h2 style={{ color: 'var(--accent-orange)', marginBottom: '8px', fontSize: '20px' }}>Encryption Locked</h2>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '20px', fontSize: '14px' }}>
+          Your encryption keys couldn't be unlocked with your current password. This can happen after a password reset.
+        </p>
+
+        {!confirming ? (
+          <>
+            <button onClick={() => setConfirming(true)} style={primaryBtn}>
+              Reset Encryption Keys
+            </button>
+            <button onClick={onLogout} style={secondaryBtn}>
+              Log Out
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ backgroundColor: 'var(--overlay-amber)', padding: '12px', borderRadius: '4px', marginBottom: '16px', border: '1px solid var(--accent-amber)' }}>
+              <p style={{ color: 'var(--accent-amber)', fontSize: '13px', margin: 0 }}>
+                Some content may be temporarily unreadable.
+              </p>
+            </div>
+            {resetError && (
+              <p style={{ color: 'var(--accent-orange)', fontSize: '12px', marginBottom: '8px' }}>{resetError}</p>
+            )}
+            <button onClick={handleConfirmReset} disabled={isResetting} style={primaryBtn}>
+              {isResetting ? 'Resetting...' : 'Confirm Reset'}
+            </button>
+            <button onClick={() => setConfirming(false)} disabled={isResetting} style={secondaryBtn}>
+              Cancel
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function E2EEAuthenticatedApp({ sharePingId, logout }) {
   const { getPendingPassword, clearPendingPassword, sessionExpiring, sessionExpired, reauth } = useAuth();
   const {
@@ -19,6 +83,7 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
     setupE2EE,
     unlockE2EE,
     recoverWithPassphrase,
+    resetE2EEKeys,
     clearE2EE,
     isCryptoAvailable
   } = useE2EE();
@@ -91,6 +156,12 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
     logout();
   };
 
+  // Reset E2EE keys then log out — user re-logs in and auto-setup runs with new password
+  const handleMismatchReset = async () => {
+    await resetE2EEKeys();
+    handleLogout();
+  };
+
   // Check if Web Crypto is available
   if (!isCryptoAvailable) {
     return (
@@ -125,16 +196,18 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
     return <LoadingSpinner message="Unlocking encryption..." />;
   }
 
-  // Show unlock modal - either password mismatch or PWA reopen
-  if (needsPassphrase && autoUnlockFailed) {
+  // Password mismatch: login password ≠ E2EE passphrase (common after password reset)
+  // Show simple reset/logout screen — no complex "enter old password" dead-end
+  if (needsPassphrase && autoUnlockFailed && passwordMismatch) {
+    return <E2EEMismatchScreen onReset={handleMismatchReset} onLogout={handleLogout} />;
+  }
+
+  // Page refresh / PWA reopen with no pending password — ask for current passphrase
+  if (needsPassphrase && autoUnlockFailed && !passwordMismatch) {
     return (
       <PassphraseUnlockModal
         onUnlock={async (passphrase, rememberDuration) => {
           const result = await unlockE2EE(passphrase, rememberDuration);
-          setPasswordMismatch(false);
-          // If session is in grace period, use the same password to reauth simultaneously
-          // so the user isn't prompted twice for the same credential.
-          // Silent failure — SessionExpiryModal remains as fallback if passphrases differ.
           if (sessionExpired) {
             reauth(passphrase).catch(() => {});
           }
@@ -144,7 +217,6 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
         onLogout={handleLogout}
         isLoading={isUnlocking}
         error={unlockError}
-        showMigrationNotice={passwordMismatch}
       />
     );
   }

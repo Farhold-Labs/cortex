@@ -5941,6 +5941,26 @@ app.get('/api/e2ee/recovery', authenticateToken, (req, res) => {
   }
 });
 
+// Self-service E2EE key reset — allows authenticated user to wipe their own keys
+// Triggers fresh E2EE setup on next login (used after password reset breaks unlock)
+app.post('/api/e2ee/keys/reset', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    db.db.prepare('DELETE FROM user_encryption_keys WHERE user_id = ?').run(userId);
+    db.db.prepare('DELETE FROM user_recovery_keys WHERE user_id = ?').run(userId);
+    db.db.prepare('DELETE FROM wave_encryption_keys WHERE user_id = ?').run(userId);
+
+    if (db.logActivity) db.logActivity(userId, 'e2ee_keys_self_reset', 'user', userId, getRequestMeta(req));
+
+    console.log(`User ${userId} self-reset their E2EE keys`);
+    res.json({ success: true, message: 'Encryption keys reset' });
+  } catch (err) {
+    console.error('Self-service E2EE reset error:', err);
+    res.status(500).json({ error: 'Failed to reset encryption keys' });
+  }
+});
+
 // ============ Profile Routes ============
 app.put('/api/profile', authenticateToken, (req, res) => {
   const updates = {};
