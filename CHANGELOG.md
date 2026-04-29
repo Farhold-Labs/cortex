@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.3] - 2026-04-29
+
+### Fixed
+
+#### E2EE Lockout After Password Reset
+Users who reset their login password via email were permanently stuck at an "Unlock Encryption" screen because their E2EE private key is encrypted with their old password. The previous UX asked them to enter their old (forgotten) password or a recovery key — a dead end for most users.
+
+**New behavior:** When auto-unlock fails because the login password doesn't match the E2EE passphrase, users now see a simple "Encryption Locked" screen with two options:
+- **Reset Encryption Keys** — wipes their E2EE keys server-side, logs them out, and re-establishes fresh E2EE on next login using their current password. Warning shown: "Some content may be temporarily unreadable."
+- **Log Out** — returns to the login screen where they can also use the password reset flow.
+
+The old complex "enter your previous password / recovery key" modal is now only shown for page refreshes and PWA reopens where the user simply needs to re-enter their current passphrase.
+
+**New endpoint:** `POST /api/e2ee/keys/reset` (authenticated, self-service) — deletes the user's own `user_encryption_keys`, `user_recovery_keys`, and `wave_encryption_keys` rows. No admin role required. Complements the existing admin-only `POST /api/admin/users/:id/reset-encryption`.
+
+---
+
 ## [2.47.2] - 2026-04-15
 
 ### Fixed

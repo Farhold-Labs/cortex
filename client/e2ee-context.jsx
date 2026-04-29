@@ -852,6 +852,22 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
   }, [privateKey, publicKeyBase64, fetchAPI]);
 
+  // ============ Self-Service Key Reset ============
+  // Called when the user's E2EE keys can't be unlocked (e.g. after a password reset).
+  // Wipes server-side keys so fresh setup runs on next login.
+  const resetE2EEKeys = useCallback(async () => {
+    if (!token) throw new Error('Not authenticated');
+
+    const res = await fetchAPI('/e2ee/keys/reset', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to reset keys');
+    }
+
+    clearSessionCache();
+    return await res.json();
+  }, [token, fetchAPI, clearSessionCache]);
+
   // ============ Clear on Logout ============
   const clearE2EE = useCallback(() => {
     setPrivateKey(null);
@@ -1066,6 +1082,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     recoverWithPassphrase,
     regenerateRecoveryKey,
     reencryptWithPassword,
+    resetE2EEKeys,
     clearE2EE,
 
     // Wave operations
