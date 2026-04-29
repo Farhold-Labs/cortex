@@ -17567,9 +17567,10 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
     // Create wave key metadata
     db.createWaveKeyMetadata(waveId);
 
-    // Store encrypted keys for each participant
+    // Store encrypted keys for each participant (null userId = creator's own key)
     for (const { userId, encryptedWaveKey, senderPublicKey } of keyDistribution) {
-      db.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, 1);
+      const targetUserId = userId || req.user.userId;
+      db.createWaveEncryptionKey(waveId, targetUserId, encryptedWaveKey, senderPublicKey, 1);
     }
 
     // Check if there are existing pings that need encryption
