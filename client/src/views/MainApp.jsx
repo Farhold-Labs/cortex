@@ -45,6 +45,7 @@ function MainApp({ sharePingId }) {
   const { fetchAPI, isSlowConnection } = useAPI();
   const e2ee = useE2EE();
   const [toast, setToast] = useState(null);
+  const [forceWaveEncryption, setForceWaveEncryption] = useState(false);
 
   // Global voice call hook for docked call window (v2.6.1)
   const globalVoiceCall = useVoiceCall(null);
@@ -508,6 +509,12 @@ function MainApp({ sharePingId }) {
     // Log ALL incoming WebSocket messages (for debugging)
     if (data.type?.startsWith('call_')) {
       console.log('🔌 [WS] Received message:', data.type, data);
+    }
+
+    // Read server feature flags on connect
+    if (data.type === 'auth_success') {
+      setForceWaveEncryption(!!data.forceWaveEncryption);
+      return;
     }
 
     // Account moderated — show reason and force logout (v2.37.0)
@@ -1256,10 +1263,20 @@ function MainApp({ sharePingId }) {
 
   const handleCreateWave = async (data) => {
     try {
-      // E2EE disabled for new waves - always create unencrypted
-      // Previous behavior: if (e2ee.isUnlocked && e2ee.isE2EEEnabled) { create encrypted }
-      // New default: all waves are unencrypted
-      await fetchAPI('/waves', { method: 'POST', body: data });
+      let body = data;
+
+      // When server requires encryption and E2EE is unlocked, generate key distribution
+      if (forceWaveEncryption && e2ee.isUnlocked) {
+        try {
+          const { keyDistribution } = await e2ee.createWaveWithEncryption(data.participants || []);
+          body = { ...data, encrypted: true, keyDistribution };
+        } catch (encErr) {
+          console.warn('E2EE key generation failed, creating wave unencrypted:', encErr);
+          // Graceful degradation: redistribution will handle key delivery when E2EE is ready
+        }
+      }
+
+      await fetchAPI('/waves', { method: 'POST', body });
       showToastMsg(SUCCESS.waveCreated, 'success');
       loadWaves();
     } catch (err) {

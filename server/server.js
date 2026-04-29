@@ -98,6 +98,8 @@ const SESSION_DURATIONS = {
 // Session management configuration (v1.18.0)
 const SESSION_CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
 const SESSION_TRACKING_ENABLED = process.env.SESSION_TRACKING_ENABLED !== 'false'; // Default true
+// Require E2EE on all new waves. Client reads this flag from auth_success and sends keyDistribution.
+const FORCE_WAVE_ENCRYPTION = process.env.FORCE_WAVE_ENCRYPTION === 'true';
 
 // GIF API configuration (GIPHY and/or Tenor)
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || null;
@@ -16027,7 +16029,8 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   const hasFederatedParticipants = federatedParticipants.length > 0;
 
   // E2EE: Check if wave should be encrypted
-  const encrypted = !!req.body.encrypted;
+  // FORCE_WAVE_ENCRYPTION overrides client — still requires keyDistribution from client
+  const encrypted = FORCE_WAVE_ENCRYPTION || !!req.body.encrypted;
   const keyDistribution = req.body.keyDistribution;
 
   const wave = db.createWave({
@@ -18593,7 +18596,7 @@ wss.on('connection', (ws, req) => {
           db.updateUserStatus(userId, 'online');
           // Clear push debounce so user gets fresh notification on next offline period
           lastPushSent.delete(userId);
-          ws.send(JSON.stringify({ type: 'auth_success', userId, serverVersion: VERSION }));
+          ws.send(JSON.stringify({ type: 'auth_success', userId, serverVersion: VERSION, forceWaveEncryption: FORCE_WAVE_ENCRYPTION }));
 
           // On-login catch-up: notify of any events starting within 15 min (v2.47.0)
           try {
