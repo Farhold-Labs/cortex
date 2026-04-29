@@ -498,15 +498,14 @@ export function E2EEProvider({ children, token, API_URL }) {
     try {
       // Fetch from server
       const res = await fetchAPI(`/waves/${waveId}/key`);
-      if (!res.ok) {
-        const err = await res.json();
-        if (!err.encrypted) return null;  // Wave not encrypted
 
-        // No key found for this user on an encrypted wave — request redistribution
+      if (!res.ok) {
         if (res.status === 404) {
+          // Encrypted wave but no key for this user — trigger redistribution from other participants
           requestWaveKey(waveId);
-          return null;  // Treat as temporarily unreadable; wave_key_granted event will trigger reload
+          return null;  // Temporarily unreadable; wave_key_granted WS event triggers reload
         }
+        const err = await res.json();
         throw new Error(err.error || 'Failed to fetch wave key');
       }
 
@@ -587,7 +586,7 @@ export function E2EEProvider({ children, token, API_URL }) {
   const encryptPing = useCallback(async (content, waveId) => {
     const waveKey = await getWaveKey(waveId);
     if (!waveKey) {
-      throw new Error('Wave key not found');
+      throw new Error('Your encryption key is being redistributed — please try again in a moment');
     }
 
     const { ciphertext, nonce } = await crypto.encryptPing(content, waveKey);
