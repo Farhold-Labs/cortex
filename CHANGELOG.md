@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.5] - 2026-04-29
+
+### Added
+
+#### Wave Encryption Controls
+Two new ways to enable E2EE at the wave and server level, completing the path back to fully encrypted content.
+
+**Wave-level — Enable Encryption in Wave Settings:**
+The "Encryption" section in Wave Settings now shows an **Enable Encryption** button for unencrypted waves (wave creator only, E2EE must be unlocked). Clicking it generates a wave key, distributes it to all current participants who have E2EE set up, and marks the wave as encrypted. New messages in the wave are encrypted immediately. Participants without E2EE set up will receive the key automatically via the redistribution system (v2.47.4) once they set up their encryption. The existing "Decrypt Wave" button is unchanged — it's shown in the same section when the wave is already encrypted.
+
+**Server-level — `FORCE_WAVE_ENCRYPTION` env var:**
+When `FORCE_WAVE_ENCRYPTION=true` is set on the server, all new waves are created encrypted. The flag is broadcast to clients via the `auth_success` WebSocket payload (`forceWaveEncryption: true`). Clients that have E2EE unlocked automatically generate and send key distribution when creating a wave. Clients without E2EE unlocked create the wave encrypted but without keys — the redistribution system delivers keys once E2EE is set up.
+
+---
+
 ## [2.47.4] - 2026-04-29
 
 ### Added
