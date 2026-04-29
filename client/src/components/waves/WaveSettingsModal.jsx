@@ -193,6 +193,18 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       return;
     }
 
+    // Verify we actually hold the wave key before proceeding — if we don't,
+    // decryption will silently store ciphertext as plaintext and corrupt the wave.
+    let hasWaveKey = false;
+    try {
+      const key = await e2ee.getWaveKey(wave.id);
+      hasWaveKey = !!key;
+    } catch {}
+    if (!hasWaveKey) {
+      showToast('Your encryption key is not available yet. Wait for key redistribution to complete before decrypting.', 'error');
+      return;
+    }
+
     const confirmed = window.confirm(
       'This will permanently decrypt all messages in this wave. Encrypted content will be converted to plain text. This cannot be undone.\n\nContinue?'
     );
