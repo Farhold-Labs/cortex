@@ -568,6 +568,19 @@ function MainApp({ sharePingId }) {
         }
         showToastMsg(NOTIFICATION.keyRotated, 'info');
       }
+    } else if (data.type === 'wave_key_request') {
+      // Another participant needs us to re-encrypt the wave key for them (v2.47.3)
+      if (e2ee.isUnlocked && data.waveId && data.requestId && data.requesterPublicKey) {
+        e2ee.grantWaveKey(data.waveId, data.requestId, data.requesterPublicKey);
+      }
+    } else if (data.type === 'wave_key_granted') {
+      // We received a redistributed wave key — reload the wave to decrypt content (v2.47.3)
+      if (e2ee.isUnlocked && data.waveId) {
+        e2ee.invalidateWaveKey(data.waveId);
+        if (selectedWave?.id === data.waveId) {
+          setWaveReloadTrigger(prev => prev + 1);
+        }
+      }
     } else if (data.type === 'participant_added') {
       // Someone was added to a wave we're in
       if (selectedWave?.id === data.waveId) {
