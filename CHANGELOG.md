@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.6] - 2026-04-29
+
+### Fixed
+
+#### Wave Key Redistribution — Offline User Catch-Up
+Wave key requests fired via `wave_key_request` WebSocket events were lost if the granting participant was offline at the time of the request. On reconnect, they would never learn about the pending request, leaving the requester permanently locked out of the wave.
+
+**Fix:** On successful WebSocket authentication, the server now queries all pending `wave_key_requests` for waves the connecting user participates in and replays each one as a `wave_key_request` event. This ensures any participant who was offline when a request was created (or who missed it during a server restart) will receive and fulfill it as soon as they reconnect.
+
+---
+
 ## [2.47.5] - 2026-04-29
 
 ### Added

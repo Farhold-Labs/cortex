@@ -18619,6 +18619,33 @@ wss.on('connection', (ws, req) => {
               }
             }
           } catch (_) {}
+
+          // On-login catch-up: replay pending wave key requests for waves this user participates in (v2.47.5)
+          // Handles the case where the requester sent a request while this user was offline.
+          try {
+            const pendingRequests = db.db.prepare(`
+              SELECT wkr.id, wkr.wave_id, wkr.requester_id, wkr.requester_public_key,
+                     u.handle AS requester_handle
+              FROM wave_key_requests wkr
+              JOIN users u ON wkr.requester_id = u.id
+              WHERE wkr.status = 'pending'
+                AND wkr.requester_id != ?
+                AND wkr.wave_id IN (
+                  SELECT wave_id FROM wave_participants WHERE user_id = ?
+                )
+            `).all(userId, userId);
+
+            for (const req of pendingRequests) {
+              ws.send(JSON.stringify({
+                type: 'wave_key_request',
+                requestId: req.id,
+                waveId: req.wave_id,
+                requesterId: req.requester_id,
+                requesterHandle: req.requester_handle,
+                requesterPublicKey: req.requester_public_key
+              }));
+            }
+          } catch (_) {}
         } catch (err) {
           ws.send(JSON.stringify({ type: 'auth_error', error: 'Invalid token' }));
         }
