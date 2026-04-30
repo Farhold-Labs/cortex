@@ -44,6 +44,8 @@ function MainApp({ sharePingId }) {
   const { user, token, logout, updateUser } = useAuth();
   const { fetchAPI, isSlowConnection } = useAPI();
   const e2ee = useE2EE();
+  const e2eeRef = useRef(e2ee);
+  useEffect(() => { e2eeRef.current = e2ee; }, [e2ee]);
   const [toast, setToast] = useState(null);
   const [forceWaveEncryption, setForceWaveEncryption] = useState(false);
 
@@ -567,8 +569,8 @@ function MainApp({ sharePingId }) {
       loadWaves();
     } else if (data.type === 'wave_key_rotated') {
       // E2EE: Wave key was rotated, invalidate cached key
-      if (e2ee.isUnlocked && data.waveId) {
-        e2ee.invalidateWaveKey(data.waveId);
+      if (e2eeRef.current.isUnlocked && data.waveId) {
+        e2eeRef.current.invalidateWaveKey(data.waveId);
         // Reload wave if currently viewing it to re-fetch and re-decrypt with new key
         if (selectedWave?.id === data.waveId) {
           setWaveReloadTrigger(prev => prev + 1);
@@ -577,16 +579,16 @@ function MainApp({ sharePingId }) {
       }
     } else if (data.type === 'wave_key_request') {
       // Another participant needs us to re-encrypt the wave key for them (v2.47.3)
-      if (e2ee.isUnlocked && data.waveId && data.requestId && data.requesterPublicKey) {
-        e2ee.grantWaveKey(data.waveId, data.requestId, data.requesterPublicKey);
+      if (e2eeRef.current.isUnlocked && data.waveId && data.requestId && data.requesterPublicKey) {
+        e2eeRef.current.grantWaveKey(data.waveId, data.requestId, data.requesterPublicKey);
       }
     } else if (data.type === 'wave_key_granted') {
       // We received a redistributed wave key — reload the wave to decrypt content (v2.47.3)
-      if (e2ee.isUnlocked && data.waveId) {
-        e2ee.invalidateWaveKey(data.waveId);
-        if (selectedWave?.id === data.waveId) {
-          setWaveReloadTrigger(prev => prev + 1);
-        }
+      if (e2eeRef.current.isUnlocked && data.waveId) {
+        e2eeRef.current.invalidateWaveKey(data.waveId);
+        // Always reload — even if not currently viewing the wave, reload so messages decrypt
+        // when the user is on a different wave the reload is harmless (WaveView reloads its own wave)
+        setWaveReloadTrigger(prev => prev + 1);
       }
     } else if (data.type === 'participant_added') {
       // Someone was added to a wave we're in

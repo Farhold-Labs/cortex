@@ -18646,6 +18646,29 @@ wss.on('connection', (ws, req) => {
               }));
             }
           } catch (_) {}
+
+          // On-login catch-up: notify requester of any wave key grants they may have missed (v2.47.6)
+          // Handles the case where wave_key_granted was sent while the requester was disconnected.
+          try {
+            const grantedRequests = db.db.prepare(`
+              SELECT wkr.id, wkr.wave_id
+              FROM wave_key_requests wkr
+              WHERE wkr.status = 'granted'
+                AND wkr.requester_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM wave_encryption_keys wek
+                  WHERE wek.wave_id = wkr.wave_id AND wek.user_id = ?
+                )
+            `).all(userId, userId);
+
+            for (const req of grantedRequests) {
+              ws.send(JSON.stringify({
+                type: 'wave_key_granted',
+                waveId: req.wave_id,
+                requestId: req.id
+              }));
+            }
+          } catch (_) {}
         } catch (err) {
           ws.send(JSON.stringify({ type: 'auth_error', error: 'Invalid token' }));
         }
