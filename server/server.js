@@ -17387,9 +17387,9 @@ app.post('/api/waves/:id/key-request', authenticateToken, (req, res) => {
 
     // Notify all other participants so they can grant the key
     const participants = db.getWaveParticipants(waveId);
-    for (const participantId of participants) {
-      if (participantId === requesterId) continue;
-      broadcastToUser(participantId, {
+    for (const participant of participants) {
+      if (participant.id === requesterId) continue;
+      broadcastToUser(participant.id, {
         type: 'wave_key_request',
         requestId,
         waveId,

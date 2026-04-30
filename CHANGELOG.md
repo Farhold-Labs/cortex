@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Wave Key Redistribution — Multiple Reliability Fixes
 Several issues preventing reliable automatic wave key redistribution after an E2EE key reset.
 
-**Stale closure in WS handler (root cause of most failures):** `handleWSMessage` in MainApp captured `e2ee` via closure at creation time, so `e2ee.isUnlocked` was always `false` when key-related WS events arrived. The granting participant's `wave_key_request` handler silently skipped `grantWaveKey`, and the requester's `wave_key_granted` handler never invalidated the cache or triggered a reload. Fixed by storing `e2ee` in a `useRef` that updates every render, so `handleWSMessage` always reads the current E2EE state.
+**`wave_key_request` broadcast used wrong type (actual root cause):** The `POST /api/waves/:id/key-request` endpoint called `db.getWaveParticipants()` which returns objects `{id, name, avatar, ...}`, but iterated them as raw user ID strings. `broadcastToUser(participantObject)` called `clients.has(object)` which never matched any string key in the clients map, so the `wave_key_request` WebSocket event was silently dropped for every live granter. The on-login catch-up (`auth_success`) sends directly via `ws.send()` bypassing this path — which is why a browser refresh always worked. Fixed by extracting `participant.id` in the loop.
+
+**Stale closure in WS handler:** `handleWSMessage` in MainApp captured `e2ee` via closure at creation time, so `e2ee.isUnlocked` could be stale when key-related WS events arrived. Fixed by updating `e2eeRef.current = e2ee` synchronously during render (not via `useEffect`) so the WS handler always reads current E2EE state.
 
 **`grantWaveKey` only checked in-memory cache:** If the granting participant hadn't visited the encrypted wave in the current session, the wave key wasn't in cache and the grant was silently abandoned. Fixed by calling `getWaveKey(waveId)` (which fetches from the server if not cached) instead of only checking the in-memory map.
 

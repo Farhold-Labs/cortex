@@ -45,7 +45,7 @@ function MainApp({ sharePingId }) {
   const { fetchAPI, isSlowConnection } = useAPI();
   const e2ee = useE2EE();
   const e2eeRef = useRef(e2ee);
-  useEffect(() => { e2eeRef.current = e2ee; }, [e2ee]);
+  e2eeRef.current = e2ee;
   const [toast, setToast] = useState(null);
   const [forceWaveEncryption, setForceWaveEncryption] = useState(false);
 
