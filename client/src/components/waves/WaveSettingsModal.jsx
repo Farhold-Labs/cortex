@@ -11,6 +11,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
   const [title, setTitle] = useState(wave?.title || '');
   const [decrypting, setDecrypting] = useState(false);
   const [encrypting, setEncrypting] = useState(false);
+  const [encryptProgress, setEncryptProgress] = useState({ phase: 'idle', encrypted: 0, total: null });
 
   // Webhooks state
   const [webhooks, setWebhooks] = useState([]);
@@ -274,21 +275,40 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
     }
 
     const confirmed = window.confirm(
-      'Enable end-to-end encryption for this wave?\n\nNew messages will be encrypted. Existing messages remain as-is. Participants without E2EE set up will receive keys automatically once they set up their encryption.\n\nContinue?'
+      'Enable end-to-end encryption for this wave?\n\nAll existing and future messages will be encrypted. Participants without E2EE set up will receive keys automatically once they configure encryption.\n\nDo not close this window until encryption is complete.\n\nContinue?'
     );
     if (!confirmed) return;
 
     setEncrypting(true);
+    setEncryptProgress({ phase: 'setup', encrypted: 0, total: null });
     try {
+      // Step 1: generate wave key and distribute to all participants
       const participantIds = participants.map(p => p.id).filter(Boolean);
       const result = await e2ee.enableWaveEncryption(wave.id, participantIds);
       if (!result?.success) throw new Error('Encryption setup failed');
-      showToast('Wave encryption enabled. New messages will be encrypted.', 'success');
+
+      // Step 2: encrypt all existing messages in batches
+      setEncryptProgress({ phase: 'encrypting', encrypted: 0, total: null });
+      let totalEncrypted = 0;
+      let knownTotal = null;
+      let hasMore = true;
+      while (hasMore) {
+        const batch = await e2ee.encryptLegacyWaveBatch(wave.id, 50);
+        totalEncrypted += batch.encrypted;
+        if (knownTotal === null) {
+          knownTotal = totalEncrypted + (batch.remaining ?? 0);
+        }
+        hasMore = batch.hasMore;
+        setEncryptProgress({ phase: 'encrypting', encrypted: totalEncrypted, total: knownTotal });
+      }
+
+      showToast('Wave fully encrypted. All messages are now end-to-end encrypted.', 'success');
       onUpdate();
       onClose();
     } catch (err) {
       console.error('Wave encryption error:', err);
       showToast(err.message || 'Failed to enable encryption', 'error');
+      setEncryptProgress({ phase: 'idle', encrypted: 0, total: null });
     } finally {
       setEncrypting(false);
     }
@@ -306,7 +326,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
           <GlowText color="var(--accent-teal)" size="1.1rem">Wave Settings</GlowText>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+          <button onClick={onClose} disabled={encrypting} style={{ background: 'none', border: 'none', color: encrypting ? 'var(--text-muted)' : 'var(--text-dim)', cursor: encrypting ? 'not-allowed' : 'pointer', fontSize: '1.2rem' }}>✕</button>
         </div>
 
         <div style={{ marginBottom: '16px' }}>
@@ -413,15 +433,40 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
                   cursor: encrypting ? 'wait' : 'pointer',
                   fontFamily: 'monospace',
                   display: 'flex', alignItems: 'center', gap: '8px',
-                  opacity: encrypting ? 0.6 : 1,
+                  opacity: encrypting ? 0.8 : 1,
                 }}
               >
-                <span>🔒</span>
+                <span>{encrypting ? '⏳' : '🔒'}</span>
                 <div style={{ flex: 1 }}>
-                  <div>{encrypting ? 'Enabling encryption...' : 'Enable Encryption (E2EE)'}</div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    New messages will be end-to-end encrypted
-                  </div>
+                  {encrypting ? (
+                    <>
+                      <div>
+                        {encryptProgress.phase === 'setup'
+                          ? 'Setting up encryption keys...'
+                          : encryptProgress.total !== null
+                            ? `Encrypting messages... ${encryptProgress.encrypted} / ${encryptProgress.total}`
+                            : 'Encrypting messages...'}
+                      </div>
+                      {encryptProgress.phase === 'encrypting' && encryptProgress.total !== null && (
+                        <div style={{ marginTop: '6px', background: 'var(--bg-surface)', height: '3px', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{
+                            width: `${Math.min(100, Math.round((encryptProgress.encrypted / encryptProgress.total) * 100))}%`,
+                            height: '100%', background: 'var(--accent-teal)', transition: 'width 0.3s ease',
+                          }} />
+                        </div>
+                      )}
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        Do not close this window
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>Enable Encryption (E2EE)</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        Encrypts all existing and future messages
+                      </div>
+                    </>
+                  )}
                 </div>
               </button>
             ) : (
@@ -794,13 +839,15 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         )}
 
         <div style={{ display: 'flex', gap: '12px' }}>
-          <button onClick={onClose} style={{
+          <button onClick={onClose} disabled={encrypting} style={{
             flex: 1, padding: '12px', background: 'transparent',
-            border: '1px solid var(--border-primary)', color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace',
+            border: '1px solid var(--border-primary)', color: encrypting ? 'var(--text-muted)' : 'var(--text-dim)',
+            cursor: encrypting ? 'not-allowed' : 'pointer', fontFamily: 'monospace',
           }}>CANCEL</button>
-          <button onClick={handleSave} style={{
-            flex: 1, padding: '12px', background: 'var(--accent-teal)20',
-            border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)', cursor: 'pointer', fontFamily: 'monospace',
+          <button onClick={handleSave} disabled={encrypting} style={{
+            flex: 1, padding: '12px', background: encrypting ? 'transparent' : 'var(--accent-teal)20',
+            border: '1px solid var(--accent-teal)', color: encrypting ? 'var(--text-muted)' : 'var(--accent-teal)',
+            cursor: encrypting ? 'not-allowed' : 'pointer', fontFamily: 'monospace',
           }}>SAVE</button>
         </div>
       </div>
