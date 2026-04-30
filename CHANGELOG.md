@@ -5,6 +5,29 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.7] - 2026-04-30
+
+### Added
+
+#### Full Wave Encryption Migration
+Wave creators can now encrypt an entire wave — all historical messages and all future messages — in one operation from Wave Settings.
+
+Previously, "Enable Encryption" only set up the wave key and encrypted new messages going forward. Existing plaintext messages remained readable as ciphertext was never written for them.
+
+The updated flow:
+1. Wave creator opens Wave Settings → Encryption → Enable Encryption (E2EE)
+2. After confirmation, the client generates a wave key and distributes it to all participants who have E2EE configured (same as before)
+3. The client then iterates all existing unencrypted messages in batches of 50, encrypting each with the wave key and writing the ciphertext back to the server via `POST /api/waves/:id/encrypt-pings`
+4. A live progress indicator shows "Encrypting messages... X / Total" with a progress bar while batches run
+5. The modal is locked (close, cancel, and save buttons disabled) during the operation to prevent accidental interruption
+6. On completion the wave reloads fully encrypted
+
+The button label, icon, and subtext update in real time: ⏳ "Setting up encryption keys..." during key distribution, then ⏳ "Encrypting messages... N / Total" during the batch loop. If an error occurs mid-migration the error is shown and the user can retry.
+
+The server-side batch infrastructure (`GET /api/waves/:id/unencrypted-pings`, `POST /api/waves/:id/encrypt-pings`, `encryptLegacyWaveBatch` in the E2EE context) was already in place from v2.47.4; this release wires it into the UI.
+
+---
+
 ## [2.47.6] - 2026-04-29
 
 ### Fixed
