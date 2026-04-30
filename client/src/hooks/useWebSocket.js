@@ -50,6 +50,7 @@ export function useWebSocket(token, onMessage) {
             setConnected(true);
             if (data.serverVersion) setServerVersion(data.serverVersion);
             console.log('✅ WebSocket authenticated');
+            onMessageRef.current?.(data); // Forward so app can read server feature flags
           } else if (data.type === 'auth_error') {
             setConnected(false);
             console.error('❌ WebSocket auth failed');

@@ -421,6 +421,23 @@ CREATE TABLE IF NOT EXISTS wave_key_metadata (
     last_rotated_at TEXT
 );
 
+-- Wave key redistribution requests (v2.47.3)
+-- Created when a participant loses their wave key (e.g. after E2EE reset).
+-- Other participants receive a WebSocket event and can re-encrypt the key.
+CREATE TABLE IF NOT EXISTS wave_key_requests (
+    id TEXT PRIMARY KEY,
+    wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+    requester_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    requester_public_key TEXT NOT NULL,     -- Requester's new public key to encrypt for
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | granted
+    created_at TEXT NOT NULL,
+    granted_at TEXT,
+    granted_by TEXT REFERENCES users(id),
+    UNIQUE(wave_id, requester_id)           -- One pending request per wave per user
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wave_key_requests_wave_user ON wave_key_requests(wave_id, requester_id);
+CREATE INDEX IF NOT EXISTS idx_wave_key_requests_status ON wave_key_requests(status);
+
 -- E2EE Recovery (optional passphrase recovery)
 CREATE TABLE IF NOT EXISTS user_recovery_keys (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

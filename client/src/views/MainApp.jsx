@@ -44,7 +44,10 @@ function MainApp({ sharePingId }) {
   const { user, token, logout, updateUser } = useAuth();
   const { fetchAPI, isSlowConnection } = useAPI();
   const e2ee = useE2EE();
+  const e2eeRef = useRef(e2ee);
+  e2eeRef.current = e2ee;
   const [toast, setToast] = useState(null);
+  const [forceWaveEncryption, setForceWaveEncryption] = useState(false);
 
   // Global voice call hook for docked call window (v2.6.1)
   const globalVoiceCall = useVoiceCall(null);
@@ -510,6 +513,12 @@ function MainApp({ sharePingId }) {
       console.log('🔌 [WS] Received message:', data.type, data);
     }
 
+    // Read server feature flags on connect
+    if (data.type === 'auth_success') {
+      setForceWaveEncryption(!!data.forceWaveEncryption);
+      return;
+    }
+
     // Account moderated — show reason and force logout (v2.37.0)
     if (data.type === 'account_moderated') {
       showToastMsg(`Account ${data.status}: ${data.reason || 'Contact an administrator'}`, 'error');
@@ -560,13 +569,26 @@ function MainApp({ sharePingId }) {
       loadWaves();
     } else if (data.type === 'wave_key_rotated') {
       // E2EE: Wave key was rotated, invalidate cached key
-      if (e2ee.isUnlocked && data.waveId) {
-        e2ee.invalidateWaveKey(data.waveId);
+      if (e2eeRef.current.isUnlocked && data.waveId) {
+        e2eeRef.current.invalidateWaveKey(data.waveId);
         // Reload wave if currently viewing it to re-fetch and re-decrypt with new key
         if (selectedWave?.id === data.waveId) {
           setWaveReloadTrigger(prev => prev + 1);
         }
         showToastMsg(NOTIFICATION.keyRotated, 'info');
+      }
+    } else if (data.type === 'wave_key_request') {
+      // Another participant needs us to re-encrypt the wave key for them (v2.47.3)
+      if (e2eeRef.current.isUnlocked && data.waveId && data.requestId && data.requesterPublicKey) {
+        e2eeRef.current.grantWaveKey(data.waveId, data.requestId, data.requesterPublicKey);
+      }
+    } else if (data.type === 'wave_key_granted') {
+      // We received a redistributed wave key — reload the wave to decrypt content (v2.47.3)
+      if (e2eeRef.current.isUnlocked && data.waveId) {
+        e2eeRef.current.invalidateWaveKey(data.waveId);
+        // Always reload — even if not currently viewing the wave, reload so messages decrypt
+        // when the user is on a different wave the reload is harmless (WaveView reloads its own wave)
+        setWaveReloadTrigger(prev => prev + 1);
       }
     } else if (data.type === 'participant_added') {
       // Someone was added to a wave we're in
@@ -1243,10 +1265,20 @@ function MainApp({ sharePingId }) {
 
   const handleCreateWave = async (data) => {
     try {
-      // E2EE disabled for new waves - always create unencrypted
-      // Previous behavior: if (e2ee.isUnlocked && e2ee.isE2EEEnabled) { create encrypted }
-      // New default: all waves are unencrypted
-      await fetchAPI('/waves', { method: 'POST', body: data });
+      let body = data;
+
+      // When server requires encryption and E2EE is unlocked, generate key distribution
+      if (forceWaveEncryption && e2ee.isUnlocked) {
+        try {
+          const { keyDistribution } = await e2ee.createWaveWithEncryption(data.participants || []);
+          body = { ...data, encrypted: true, keyDistribution };
+        } catch (encErr) {
+          console.warn('E2EE key generation failed, creating wave unencrypted:', encErr);
+          // Graceful degradation: redistribution will handle key delivery when E2EE is ready
+        }
+      }
+
+      await fetchAPI('/waves', { method: 'POST', body });
       showToastMsg(SUCCESS.waveCreated, 'success');
       loadWaves();
     } catch (err) {

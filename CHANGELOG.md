@@ -5,6 +5,65 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.6] - 2026-04-29
+
+### Fixed
+
+#### Wave Key Redistribution — Multiple Reliability Fixes
+Several issues preventing reliable automatic wave key redistribution after an E2EE key reset.
+
+**`wave_key_request` broadcast used wrong type (actual root cause):** The `POST /api/waves/:id/key-request` endpoint called `db.getWaveParticipants()` which returns objects `{id, name, avatar, ...}`, but iterated them as raw user ID strings. `broadcastToUser(participantObject)` called `clients.has(object)` which never matched any string key in the clients map, so the `wave_key_request` WebSocket event was silently dropped for every live granter. The on-login catch-up (`auth_success`) sends directly via `ws.send()` bypassing this path — which is why a browser refresh always worked. Fixed by extracting `participant.id` in the loop.
+
+**Stale closure in WS handler:** `handleWSMessage` in MainApp captured `e2ee` via closure at creation time, so `e2ee.isUnlocked` could be stale when key-related WS events arrived. Fixed by updating `e2eeRef.current = e2ee` synchronously during render (not via `useEffect`) so the WS handler always reads current E2EE state.
+
+**`grantWaveKey` only checked in-memory cache:** If the granting participant hadn't visited the encrypted wave in the current session, the wave key wasn't in cache and the grant was silently abandoned. Fixed by calling `getWaveKey(waveId)` (which fetches from the server if not cached) instead of only checking the in-memory map.
+
+**`decryptPing` never triggered redistribution:** When rendering encrypted messages, `decryptPing` went through the versioned `/keys/all` path and never called `getWaveKey`, so a 404 (no key for user) never fired `requestWaveKey`. Fixed by falling through to `getWaveKey` when the versioned fetch returns no matching key.
+
+**`invalidateWaveKey` left versioned cache entries:** Only the plain `waveId` cache key was cleared on `wave_key_granted`, leaving `${waveId}:${keyVersion}` entries stale. Fixed to clear all entries for the wave.
+
+**On-login catch-up for both sides:** Server now replays missed events in both directions on WS authentication — pending `wave_key_request` events to granters who were offline, and `wave_key_granted` events to requesters who may have missed the original notification.
+
+**`wave_key_granted` always triggers reload:** Previously only reloaded the wave if the user was currently viewing it. Now always increments the reload trigger so the wave re-decrypts as soon as it's displayed.
+
+---
+
+## [2.47.5] - 2026-04-29
+
+### Added
+
+#### Wave Encryption Controls
+Two new ways to enable E2EE at the wave and server level, completing the path back to fully encrypted content.
+
+**Wave-level — Enable Encryption in Wave Settings:**
+The "Encryption" section in Wave Settings now shows an **Enable Encryption** button for unencrypted waves (wave creator only, E2EE must be unlocked). Clicking it generates a wave key, distributes it to all current participants who have E2EE set up, and marks the wave as encrypted. New messages in the wave are encrypted immediately. Participants without E2EE set up will receive the key automatically via the redistribution system (v2.47.4) once they set up their encryption. The existing "Decrypt Wave" button is unchanged — it's shown in the same section when the wave is already encrypted.
+
+**Server-level — `FORCE_WAVE_ENCRYPTION` env var:**
+When `FORCE_WAVE_ENCRYPTION=true` is set on the server, all new waves are created encrypted. The flag is broadcast to clients via the `auth_success` WebSocket payload (`forceWaveEncryption: true`). Clients that have E2EE unlocked automatically generate and send key distribution when creating a wave. Clients without E2EE unlocked create the wave encrypted but without keys — the redistribution system delivers keys once E2EE is set up.
+
+---
+
+## [2.47.4] - 2026-04-29
+
+### Added
+
+#### Wave Key Redistribution
+Users who reset their E2EE keys (e.g. via the new self-service reset in v2.47.3) previously lost access to all encrypted wave content permanently. Wave key redistribution solves this: when a participant can't decrypt a wave, the app silently requests a copy of the wave key from other participants, who re-encrypt it using the requester's new public key.
+
+**How it works:**
+- When `getWaveKey` returns a 404 (encrypted wave, no key for this user), it automatically fires `POST /api/waves/:id/key-request`. This creates a `wave_key_requests` record and broadcasts a `wave_key_request` WebSocket event to all other wave participants.
+- Any participant who is online and has the wave key cached receives the event and silently calls `POST /api/waves/:id/key-grant` with the re-encrypted wave key — no user interaction required.
+- The server stores the new key for the requester and sends a `wave_key_granted` WebSocket event back to them.
+- On `wave_key_granted`, the client invalidates the wave key cache and reloads the wave, making previously unreadable content visible again.
+
+**New database table:** `wave_key_requests` — tracks pending redistribution requests with requester's public key and grant status.
+
+**New endpoints:**
+- `POST /api/waves/:id/key-request` — create or refresh a key request (requester must be a wave participant with E2EE set up but no wave key)
+- `POST /api/waves/:id/key-grant` — fulfill a pending request (granter must be a different wave participant)
+
+---
+
 ## [2.47.3] - 2026-04-29
 
 ### Fixed

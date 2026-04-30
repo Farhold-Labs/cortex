@@ -98,6 +98,8 @@ const SESSION_DURATIONS = {
 // Session management configuration (v1.18.0)
 const SESSION_CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
 const SESSION_TRACKING_ENABLED = process.env.SESSION_TRACKING_ENABLED !== 'false'; // Default true
+// Require E2EE on all new waves. Client reads this flag from auth_success and sends keyDistribution.
+const FORCE_WAVE_ENCRYPTION = process.env.FORCE_WAVE_ENCRYPTION === 'true';
 
 // GIF API configuration (GIPHY and/or Tenor)
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || null;
@@ -16027,7 +16029,8 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   const hasFederatedParticipants = federatedParticipants.length > 0;
 
   // E2EE: Check if wave should be encrypted
-  const encrypted = !!req.body.encrypted;
+  // FORCE_WAVE_ENCRYPTION overrides client — still requires keyDistribution from client
+  const encrypted = FORCE_WAVE_ENCRYPTION || !!req.body.encrypted;
   const keyDistribution = req.body.keyDistribution;
 
   const wave = db.createWave({
@@ -17348,6 +17351,114 @@ app.post('/api/waves/:id/key/distribute', authenticateToken, (req, res) => {
   }
 });
 
+// Request wave key redistribution (v2.47.3)
+// Called by a participant who lost their wave key (e.g. after E2EE reset).
+// Creates a pending request and notifies other participants to re-encrypt the key.
+app.post('/api/waves/:id/key-request', authenticateToken, (req, res) => {
+  try {
+    const waveId = req.params.id;
+    const requesterId = req.user.userId;
+
+    // Must be a wave participant
+    if (!canAccessWaveFromCache(waveId, requesterId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (!db.isWaveEncrypted(waveId)) {
+      return res.status(400).json({ error: 'Wave is not encrypted' });
+    }
+
+    // Check if user already has a valid key — no need to request
+    const existing = db.getWaveKeyForUser(waveId, requesterId);
+    if (existing) {
+      return res.status(400).json({ error: 'You already have a wave key' });
+    }
+
+    // Get requester's current public key
+    const requesterKeys = db.db.prepare(
+      'SELECT public_key FROM user_encryption_keys WHERE user_id = ?'
+    ).get(requesterId);
+    if (!requesterKeys) {
+      return res.status(400).json({ error: 'E2EE not set up — complete E2EE setup first' });
+    }
+
+    const requester = db.findUserById(requesterId);
+    const requestId = db.upsertWaveKeyRequest(waveId, requesterId, requesterKeys.public_key);
+
+    // Notify all other participants so they can grant the key
+    const participants = db.getWaveParticipants(waveId);
+    for (const participant of participants) {
+      if (participant.id === requesterId) continue;
+      broadcastToUser(participant.id, {
+        type: 'wave_key_request',
+        requestId,
+        waveId,
+        requesterId,
+        requesterHandle: requester?.handle,
+        requesterPublicKey: requesterKeys.public_key
+      });
+    }
+
+    console.log(`Wave key request: user ${requester?.handle} requesting key for wave ${waveId}`);
+    res.json({ success: true, requestId });
+  } catch (err) {
+    console.error('Wave key request error:', err);
+    res.status(500).json({ error: 'Failed to create key request' });
+  }
+});
+
+// Grant a wave key redistribution request (v2.47.3)
+// Called by a participant who has the wave key and can re-encrypt it for the requester.
+app.post('/api/waves/:id/key-grant', authenticateToken, (req, res) => {
+  try {
+    const waveId = req.params.id;
+    const granterId = req.user.userId;
+    const { requestId, encryptedWaveKey, senderPublicKey } = req.body;
+
+    if (!requestId || !encryptedWaveKey || !senderPublicKey) {
+      return res.status(400).json({ error: 'Missing required fields: requestId, encryptedWaveKey, senderPublicKey' });
+    }
+
+    // Must be a wave participant
+    if (!canAccessWaveFromCache(waveId, granterId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const request = db.getWaveKeyRequest(requestId);
+    if (!request) {
+      return res.status(404).json({ error: 'Key request not found' });
+    }
+    if (request.wave_id !== waveId) {
+      return res.status(400).json({ error: 'Request does not belong to this wave' });
+    }
+    if (request.status !== 'pending') {
+      return res.json({ success: true, message: 'Request already fulfilled' });
+    }
+    if (request.requester_id === granterId) {
+      return res.status(400).json({ error: 'Cannot grant your own request' });
+    }
+
+    // Store the wave key for the requester at the current key version
+    const currentVersion = db.getWaveKeyVersion(waveId);
+    db.createWaveEncryptionKey(request.wave_id, request.requester_id, encryptedWaveKey, senderPublicKey, currentVersion);
+    db.grantWaveKeyRequest(requestId, granterId);
+
+    // Notify the requester they can now decrypt the wave
+    broadcastToUser(request.requester_id, {
+      type: 'wave_key_granted',
+      waveId,
+      requestId
+    });
+
+    const granter = db.findUserById(granterId);
+    console.log(`Wave key granted: ${granter?.handle} granted key for wave ${waveId} to user ${request.requester_id}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Wave key grant error:', err);
+    res.status(500).json({ error: 'Failed to grant wave key' });
+  }
+});
+
 // Rotate wave key (when participant is removed)
 app.post('/api/waves/:id/key/rotate', authenticateToken, (req, res) => {
   try {
@@ -17456,9 +17567,10 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
     // Create wave key metadata
     db.createWaveKeyMetadata(waveId);
 
-    // Store encrypted keys for each participant
+    // Store encrypted keys for each participant (null userId = creator's own key)
     for (const { userId, encryptedWaveKey, senderPublicKey } of keyDistribution) {
-      db.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, 1);
+      const targetUserId = userId || req.user.userId;
+      db.createWaveEncryptionKey(waveId, targetUserId, encryptedWaveKey, senderPublicKey, 1);
     }
 
     // Check if there are existing pings that need encryption
@@ -18485,7 +18597,7 @@ wss.on('connection', (ws, req) => {
           db.updateUserStatus(userId, 'online');
           // Clear push debounce so user gets fresh notification on next offline period
           lastPushSent.delete(userId);
-          ws.send(JSON.stringify({ type: 'auth_success', userId, serverVersion: VERSION }));
+          ws.send(JSON.stringify({ type: 'auth_success', userId, serverVersion: VERSION, forceWaveEncryption: FORCE_WAVE_ENCRYPTION }));
 
           // On-login catch-up: notify of any events starting within 15 min (v2.47.0)
           try {
@@ -18505,6 +18617,56 @@ wss.on('connection', (ws, req) => {
                   window: 'login',
                 }));
               }
+            }
+          } catch (_) {}
+
+          // On-login catch-up: replay pending wave key requests for waves this user participates in (v2.47.5)
+          // Handles the case where the requester sent a request while this user was offline.
+          try {
+            const pendingRequests = db.db.prepare(`
+              SELECT wkr.id, wkr.wave_id, wkr.requester_id, wkr.requester_public_key,
+                     u.handle AS requester_handle
+              FROM wave_key_requests wkr
+              JOIN users u ON wkr.requester_id = u.id
+              WHERE wkr.status = 'pending'
+                AND wkr.requester_id != ?
+                AND wkr.wave_id IN (
+                  SELECT wave_id FROM wave_participants WHERE user_id = ?
+                )
+            `).all(userId, userId);
+
+            for (const req of pendingRequests) {
+              ws.send(JSON.stringify({
+                type: 'wave_key_request',
+                requestId: req.id,
+                waveId: req.wave_id,
+                requesterId: req.requester_id,
+                requesterHandle: req.requester_handle,
+                requesterPublicKey: req.requester_public_key
+              }));
+            }
+          } catch (_) {}
+
+          // On-login catch-up: notify requester of any wave key grants they may have missed (v2.47.6)
+          // Handles the case where wave_key_granted was sent while the requester was disconnected.
+          try {
+            const grantedRequests = db.db.prepare(`
+              SELECT wkr.id, wkr.wave_id
+              FROM wave_key_requests wkr
+              WHERE wkr.status = 'granted'
+                AND wkr.requester_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM wave_encryption_keys wek
+                  WHERE wek.wave_id = wkr.wave_id AND wek.user_id = ?
+                )
+            `).all(userId, userId);
+
+            for (const req of grantedRequests) {
+              ws.send(JSON.stringify({
+                type: 'wave_key_granted',
+                waveId: req.wave_id,
+                requestId: req.id
+              }));
             }
           } catch (_) {}
         } catch (err) {

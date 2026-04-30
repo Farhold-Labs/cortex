@@ -425,6 +425,25 @@ export function E2EEProvider({ children, token, API_URL }) {
   }, [token, privateKey, publicKeyBase64, fetchAPI, saveToSessionCache]);
 
   // ============ Wave Key Management ============
+
+  // Request a wave key from other participants (v2.47.3 — redistribution)
+  // Called when this user has lost their wave key (e.g. after an E2EE reset).
+  // Silent — callers should treat the wave as temporarily unreadable while pending.
+  const requestWaveKey = useCallback(async (waveId) => {
+    if (!token) return;
+    try {
+      const res = await fetchAPI(`/waves/${waveId}/key-request`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.warn(`Wave key request failed for ${waveId}:`, err.error);
+      } else {
+        console.log(`E2EE: Wave key requested for ${waveId}`);
+      }
+    } catch (err) {
+      console.warn('Wave key request error:', err);
+    }
+  }, [token, fetchAPI]);
+
   const getWaveKey = useCallback(async (waveId) => {
     // Check cache first
     const cached = waveKeyCacheRef.current.get(waveId);
@@ -439,9 +458,14 @@ export function E2EEProvider({ children, token, API_URL }) {
     try {
       // Fetch from server
       const res = await fetchAPI(`/waves/${waveId}/key`);
+
       if (!res.ok) {
+        if (res.status === 404) {
+          // Encrypted wave but no key for this user — trigger redistribution from other participants
+          requestWaveKey(waveId);
+          return null;  // Temporarily unreadable; wave_key_granted WS event triggers reload
+        }
         const err = await res.json();
-        if (!err.encrypted) return null;  // Wave not encrypted
         throw new Error(err.error || 'Failed to fetch wave key');
       }
 
@@ -472,7 +496,46 @@ export function E2EEProvider({ children, token, API_URL }) {
       console.error('Get wave key error:', err);
       throw err;
     }
-  }, [privateKey, fetchAPI]);
+  }, [privateKey, fetchAPI, requestWaveKey]);
+
+  // Grant a pending wave key request from another participant (v2.47.4)
+  const grantWaveKey = useCallback(async (waveId, requestId, requesterPublicKey) => {
+    if (!privateKey || !publicKeyBase64) return;
+    try {
+      // Fetch our copy of the wave key (from cache or server)
+      const waveKey = await getWaveKey(waveId);
+      if (!waveKey) {
+        console.warn(`E2EE: Cannot grant wave key for ${waveId} — no key available`);
+        return;
+      }
+
+      // Re-encrypt the wave key for the requester using their new public key
+      const { encryptedWaveKey, nonce, senderPublicKey } = await crypto.addParticipantToWave(
+        waveKey,
+        requesterPublicKey,
+        privateKey,
+        publicKeyBase64
+      );
+
+      const res = await fetchAPI(`/waves/${waveId}/key-grant`, {
+        method: 'POST',
+        body: JSON.stringify({
+          requestId,
+          encryptedWaveKey: `${encryptedWaveKey}:${nonce}`,
+          senderPublicKey
+        })
+      });
+
+      if (res.ok) {
+        console.log(`E2EE: Wave key granted for request ${requestId}`);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        console.warn('Wave key grant failed:', err.error);
+      }
+    } catch (err) {
+      console.warn('Wave key grant error:', err);
+    }
+  }, [privateKey, publicKeyBase64, fetchAPI, getWaveKey]);
 
   const createWaveWithEncryption = useCallback(async (participants) => {
     if (!privateKey || !publicKeyBase64) {
@@ -522,7 +585,7 @@ export function E2EEProvider({ children, token, API_URL }) {
   const encryptPing = useCallback(async (content, waveId) => {
     const waveKey = await getWaveKey(waveId);
     if (!waveKey) {
-      throw new Error('Wave key not found');
+      throw new Error('Your encryption key is being redistributed — please try again in a moment');
     }
 
     const { ciphertext, nonce } = await crypto.encryptPing(content, waveKey);
@@ -552,7 +615,11 @@ export function E2EEProvider({ children, token, API_URL }) {
           }
         }
       }
-    } else {
+    }
+
+    // If we still don't have a key (no version match, or keyVersion was null), use getWaveKey.
+    // This also handles the 404 case, which triggers redistribution via requestWaveKey.
+    if (!waveKey) {
       waveKey = await getWaveKey(waveId);
     }
 
@@ -884,6 +951,9 @@ export function E2EEProvider({ children, token, API_URL }) {
   // ============ Invalidate wave key cache ============
   const invalidateWaveKey = useCallback((waveId) => {
     waveKeyCacheRef.current.delete(waveId);
+    for (const key of [...waveKeyCacheRef.current.keys()]) {
+      if (key.startsWith(`${waveId}:`)) waveKeyCacheRef.current.delete(key);
+    }
   }, []);
 
   // ============ Distribute key to new participant ============
@@ -1087,6 +1157,8 @@ export function E2EEProvider({ children, token, API_URL }) {
 
     // Wave operations
     getWaveKey,
+    requestWaveKey,
+    grantWaveKey,
     createWaveWithEncryption,
     invalidateWaveKey,
     rotateWaveKey,

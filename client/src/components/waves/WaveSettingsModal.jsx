@@ -10,6 +10,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
   const [selectedGroup, setSelectedGroup] = useState(wave?.groupId || null);
   const [title, setTitle] = useState(wave?.title || '');
   const [decrypting, setDecrypting] = useState(false);
+  const [encrypting, setEncrypting] = useState(false);
 
   // Webhooks state
   const [webhooks, setWebhooks] = useState([]);
@@ -192,6 +193,18 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       return;
     }
 
+    // Verify we actually hold the wave key before proceeding — if we don't,
+    // decryption will silently store ciphertext as plaintext and corrupt the wave.
+    let hasWaveKey = false;
+    try {
+      const key = await e2ee.getWaveKey(wave.id);
+      hasWaveKey = !!key;
+    } catch {}
+    if (!hasWaveKey) {
+      showToast('Your encryption key is not available yet. Wait for key redistribution to complete before decrypting.', 'error');
+      return;
+    }
+
     const confirmed = window.confirm(
       'This will permanently decrypt all messages in this wave. Encrypted content will be converted to plain text. This cannot be undone.\n\nContinue?'
     );
@@ -247,6 +260,37 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       showToast(err.message || formatError('Failed to decrypt wave'), 'error');
     } finally {
       setDecrypting(false);
+    }
+  };
+
+  const handleEncryptWave = async () => {
+    if (wave.encrypted) {
+      showToast('Wave is already encrypted', 'error');
+      return;
+    }
+    if (!e2ee.isUnlocked) {
+      showToast('Unlock E2EE first to enable encryption', 'error');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Enable end-to-end encryption for this wave?\n\nNew messages will be encrypted. Existing messages remain as-is. Participants without E2EE set up will receive keys automatically once they set up their encryption.\n\nContinue?'
+    );
+    if (!confirmed) return;
+
+    setEncrypting(true);
+    try {
+      const participantIds = participants.map(p => p.id).filter(Boolean);
+      const result = await e2ee.enableWaveEncryption(wave.id, participantIds);
+      if (!result?.success) throw new Error('Encryption setup failed');
+      showToast('Wave encryption enabled. New messages will be encrypted.', 'success');
+      onUpdate();
+      onClose();
+    } catch (err) {
+      console.error('Wave encryption error:', err);
+      showToast(err.message || 'Failed to enable encryption', 'error');
+    } finally {
+      setEncrypting(false);
     }
   };
 
@@ -352,32 +396,58 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
           </div>
         )}
 
-        {/* Decrypt Wave Button - Only show for encrypted waves */}
-        {wave.encrypted && (
+        {/* Encryption controls — shown to wave creator when E2EE is unlocked */}
+        {isWaveCreator && e2ee.isUnlocked && (
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>ENCRYPTION</div>
-            <button
-              onClick={handleDecryptWave}
-              disabled={decrypting}
-              style={{
-                width: '100%', padding: '12px', textAlign: 'left',
-                background: 'var(--accent-orange)15',
-                border: '1px solid var(--accent-orange)',
-                color: 'var(--accent-orange)',
-                cursor: decrypting ? 'wait' : 'pointer',
-                fontFamily: 'monospace',
-                display: 'flex', alignItems: 'center', gap: '8px',
-                opacity: decrypting ? 0.6 : 1,
-              }}
-            >
-              <span>🔓</span>
-              <div style={{ flex: 1 }}>
-                <div>{decrypting ? 'Decrypting wave...' : 'Decrypt Wave (Remove E2EE)'}</div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  Convert all encrypted messages to plain text
+
+            {!wave.encrypted ? (
+              <button
+                onClick={handleEncryptWave}
+                disabled={encrypting}
+                style={{
+                  width: '100%', padding: '12px', textAlign: 'left',
+                  background: 'var(--accent-teal)15',
+                  border: '1px solid var(--accent-teal)',
+                  color: 'var(--accent-teal)',
+                  cursor: encrypting ? 'wait' : 'pointer',
+                  fontFamily: 'monospace',
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  opacity: encrypting ? 0.6 : 1,
+                }}
+              >
+                <span>🔒</span>
+                <div style={{ flex: 1 }}>
+                  <div>{encrypting ? 'Enabling encryption...' : 'Enable Encryption (E2EE)'}</div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    New messages will be end-to-end encrypted
+                  </div>
                 </div>
-              </div>
-            </button>
+              </button>
+            ) : (
+              <button
+                onClick={handleDecryptWave}
+                disabled={decrypting}
+                style={{
+                  width: '100%', padding: '12px', textAlign: 'left',
+                  background: 'var(--accent-orange)15',
+                  border: '1px solid var(--accent-orange)',
+                  color: 'var(--accent-orange)',
+                  cursor: decrypting ? 'wait' : 'pointer',
+                  fontFamily: 'monospace',
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  opacity: decrypting ? 0.6 : 1,
+                }}
+              >
+                <span>🔓</span>
+                <div style={{ flex: 1 }}>
+                  <div>{decrypting ? 'Decrypting wave...' : 'Decrypt Wave (Remove E2EE)'}</div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    Convert all encrypted messages to plain text
+                  </div>
+                </div>
+              </button>
+            )}
           </div>
         )}
 

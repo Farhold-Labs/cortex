@@ -1963,6 +1963,30 @@ export class DatabaseSQLite {
       console.log('✅ Wave tokens table created');
     }
 
+    // v2.47.3: Wave key redistribution — pending requests from users who lost their wave key
+    const hasKeyRequests = this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='wave_key_requests'"
+    ).get();
+    if (!hasKeyRequests) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS wave_key_requests (
+          id TEXT PRIMARY KEY,
+          wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          requester_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          requester_public_key TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at TEXT NOT NULL,
+          granted_at TEXT,
+          granted_by TEXT REFERENCES users(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_wave_key_requests_wave_user
+          ON wave_key_requests(wave_id, requester_id);
+        CREATE INDEX IF NOT EXISTS idx_wave_key_requests_status
+          ON wave_key_requests(status);
+      `);
+      console.log('✅ Wave key requests table created');
+    }
+
     // v2.47.0: Full Calendar — extend events table and add calendar support tables
     const eventsColumns = this.db.prepare('PRAGMA table_info(events)').all().map(c => c.name);
     const calendarColumns = [
@@ -8735,6 +8759,41 @@ export class DatabaseSQLite {
       userId: row.user_id,
       publicKey: row.public_key  // May be null if user hasn't set up E2EE
     }));
+  }
+
+  // ============ Wave Key Redistribution (v2.47.3) ============
+
+  upsertWaveKeyRequest(waveId, requesterId, requesterPublicKey) {
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    // Upsert: one pending request per wave per user; update public key if it changed
+    this.db.prepare(`
+      INSERT INTO wave_key_requests (id, wave_id, requester_id, requester_public_key, status, created_at)
+      VALUES (?, ?, ?, ?, 'pending', ?)
+      ON CONFLICT(wave_id, requester_id) DO UPDATE SET
+        requester_public_key = excluded.requester_public_key,
+        status = 'pending',
+        created_at = excluded.created_at,
+        granted_at = NULL,
+        granted_by = NULL
+    `).run(id, waveId, requesterId, requesterPublicKey, now);
+
+    return this.db.prepare(
+      'SELECT id FROM wave_key_requests WHERE wave_id = ? AND requester_id = ?'
+    ).get(waveId, requesterId).id;
+  }
+
+  getWaveKeyRequest(requestId) {
+    return this.db.prepare('SELECT * FROM wave_key_requests WHERE id = ?').get(requestId);
+  }
+
+  grantWaveKeyRequest(requestId, grantedByUserId) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE wave_key_requests
+      SET status = 'granted', granted_at = ?, granted_by = ?
+      WHERE id = ? AND status = 'pending'
+    `).run(now, grantedByUserId, requestId);
   }
 
   // Check if a wave is encrypted
