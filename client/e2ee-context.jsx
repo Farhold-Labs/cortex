@@ -444,46 +444,6 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
   }, [token, fetchAPI]);
 
-  // Grant a pending wave key request from another participant (v2.47.3)
-  const grantWaveKey = useCallback(async (waveId, requestId, requesterPublicKey) => {
-    if (!privateKey || !publicKeyBase64) return;
-    try {
-      // Fetch our copy of the wave key
-      const waveKey = waveKeyCacheRef.current.get(waveId);
-      if (!waveKey) {
-        console.warn(`E2EE: Cannot grant wave key for ${waveId} — not in cache`);
-        return;
-      }
-
-      // Re-encrypt the wave key for the requester using their new public key
-      const requesterPubKey = await crypto.importPublicKey(requesterPublicKey);
-      const { encryptedWaveKey, nonce, senderPublicKey } = await crypto.addParticipantToWave(
-        waveKey,
-        requesterPublicKey,
-        privateKey,
-        publicKeyBase64
-      );
-
-      const res = await fetchAPI(`/waves/${waveId}/key-grant`, {
-        method: 'POST',
-        body: JSON.stringify({
-          requestId,
-          encryptedWaveKey: `${encryptedWaveKey}:${nonce}`,
-          senderPublicKey
-        })
-      });
-
-      if (res.ok) {
-        console.log(`E2EE: Wave key granted for request ${requestId}`);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        console.warn('Wave key grant failed:', err.error);
-      }
-    } catch (err) {
-      console.warn('Wave key grant error:', err);
-    }
-  }, [privateKey, publicKeyBase64, fetchAPI]);
-
   const getWaveKey = useCallback(async (waveId) => {
     // Check cache first
     const cached = waveKeyCacheRef.current.get(waveId);
@@ -537,6 +497,45 @@ export function E2EEProvider({ children, token, API_URL }) {
       throw err;
     }
   }, [privateKey, fetchAPI, requestWaveKey]);
+
+  // Grant a pending wave key request from another participant (v2.47.4)
+  const grantWaveKey = useCallback(async (waveId, requestId, requesterPublicKey) => {
+    if (!privateKey || !publicKeyBase64) return;
+    try {
+      // Fetch our copy of the wave key (from cache or server)
+      const waveKey = await getWaveKey(waveId);
+      if (!waveKey) {
+        console.warn(`E2EE: Cannot grant wave key for ${waveId} — no key available`);
+        return;
+      }
+
+      // Re-encrypt the wave key for the requester using their new public key
+      const { encryptedWaveKey, nonce, senderPublicKey } = await crypto.addParticipantToWave(
+        waveKey,
+        requesterPublicKey,
+        privateKey,
+        publicKeyBase64
+      );
+
+      const res = await fetchAPI(`/waves/${waveId}/key-grant`, {
+        method: 'POST',
+        body: JSON.stringify({
+          requestId,
+          encryptedWaveKey: `${encryptedWaveKey}:${nonce}`,
+          senderPublicKey
+        })
+      });
+
+      if (res.ok) {
+        console.log(`E2EE: Wave key granted for request ${requestId}`);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        console.warn('Wave key grant failed:', err.error);
+      }
+    } catch (err) {
+      console.warn('Wave key grant error:', err);
+    }
+  }, [privateKey, publicKeyBase64, fetchAPI, getWaveKey]);
 
   const createWaveWithEncryption = useCallback(async (participants) => {
     if (!privateKey || !publicKeyBase64) {
@@ -616,7 +615,11 @@ export function E2EEProvider({ children, token, API_URL }) {
           }
         }
       }
-    } else {
+    }
+
+    // If we still don't have a key (no version match, or keyVersion was null), use getWaveKey.
+    // This also handles the 404 case, which triggers redistribution via requestWaveKey.
+    if (!waveKey) {
       waveKey = await getWaveKey(waveId);
     }
 
@@ -948,6 +951,9 @@ export function E2EEProvider({ children, token, API_URL }) {
   // ============ Invalidate wave key cache ============
   const invalidateWaveKey = useCallback((waveId) => {
     waveKeyCacheRef.current.delete(waveId);
+    for (const key of [...waveKeyCacheRef.current.keys()]) {
+      if (key.startsWith(`${waveId}:`)) waveKeyCacheRef.current.delete(key);
+    }
   }, []);
 
   // ============ Distribute key to new participant ============

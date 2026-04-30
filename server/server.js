@@ -17387,9 +17387,9 @@ app.post('/api/waves/:id/key-request', authenticateToken, (req, res) => {
 
     // Notify all other participants so they can grant the key
     const participants = db.getWaveParticipants(waveId);
-    for (const participantId of participants) {
-      if (participantId === requesterId) continue;
-      broadcastToUser(participantId, {
+    for (const participant of participants) {
+      if (participant.id === requesterId) continue;
+      broadcastToUser(participant.id, {
         type: 'wave_key_request',
         requestId,
         waveId,
@@ -18617,6 +18617,56 @@ wss.on('connection', (ws, req) => {
                   window: 'login',
                 }));
               }
+            }
+          } catch (_) {}
+
+          // On-login catch-up: replay pending wave key requests for waves this user participates in (v2.47.5)
+          // Handles the case where the requester sent a request while this user was offline.
+          try {
+            const pendingRequests = db.db.prepare(`
+              SELECT wkr.id, wkr.wave_id, wkr.requester_id, wkr.requester_public_key,
+                     u.handle AS requester_handle
+              FROM wave_key_requests wkr
+              JOIN users u ON wkr.requester_id = u.id
+              WHERE wkr.status = 'pending'
+                AND wkr.requester_id != ?
+                AND wkr.wave_id IN (
+                  SELECT wave_id FROM wave_participants WHERE user_id = ?
+                )
+            `).all(userId, userId);
+
+            for (const req of pendingRequests) {
+              ws.send(JSON.stringify({
+                type: 'wave_key_request',
+                requestId: req.id,
+                waveId: req.wave_id,
+                requesterId: req.requester_id,
+                requesterHandle: req.requester_handle,
+                requesterPublicKey: req.requester_public_key
+              }));
+            }
+          } catch (_) {}
+
+          // On-login catch-up: notify requester of any wave key grants they may have missed (v2.47.6)
+          // Handles the case where wave_key_granted was sent while the requester was disconnected.
+          try {
+            const grantedRequests = db.db.prepare(`
+              SELECT wkr.id, wkr.wave_id
+              FROM wave_key_requests wkr
+              WHERE wkr.status = 'granted'
+                AND wkr.requester_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM wave_encryption_keys wek
+                  WHERE wek.wave_id = wkr.wave_id AND wek.user_id = ?
+                )
+            `).all(userId, userId);
+
+            for (const req of grantedRequests) {
+              ws.send(JSON.stringify({
+                type: 'wave_key_granted',
+                waveId: req.wave_id,
+                requestId: req.id
+              }));
             }
           } catch (_) {}
         } catch (err) {

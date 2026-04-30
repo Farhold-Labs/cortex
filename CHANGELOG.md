@@ -5,6 +5,29 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.6] - 2026-04-29
+
+### Fixed
+
+#### Wave Key Redistribution — Multiple Reliability Fixes
+Several issues preventing reliable automatic wave key redistribution after an E2EE key reset.
+
+**`wave_key_request` broadcast used wrong type (actual root cause):** The `POST /api/waves/:id/key-request` endpoint called `db.getWaveParticipants()` which returns objects `{id, name, avatar, ...}`, but iterated them as raw user ID strings. `broadcastToUser(participantObject)` called `clients.has(object)` which never matched any string key in the clients map, so the `wave_key_request` WebSocket event was silently dropped for every live granter. The on-login catch-up (`auth_success`) sends directly via `ws.send()` bypassing this path — which is why a browser refresh always worked. Fixed by extracting `participant.id` in the loop.
+
+**Stale closure in WS handler:** `handleWSMessage` in MainApp captured `e2ee` via closure at creation time, so `e2ee.isUnlocked` could be stale when key-related WS events arrived. Fixed by updating `e2eeRef.current = e2ee` synchronously during render (not via `useEffect`) so the WS handler always reads current E2EE state.
+
+**`grantWaveKey` only checked in-memory cache:** If the granting participant hadn't visited the encrypted wave in the current session, the wave key wasn't in cache and the grant was silently abandoned. Fixed by calling `getWaveKey(waveId)` (which fetches from the server if not cached) instead of only checking the in-memory map.
+
+**`decryptPing` never triggered redistribution:** When rendering encrypted messages, `decryptPing` went through the versioned `/keys/all` path and never called `getWaveKey`, so a 404 (no key for user) never fired `requestWaveKey`. Fixed by falling through to `getWaveKey` when the versioned fetch returns no matching key.
+
+**`invalidateWaveKey` left versioned cache entries:** Only the plain `waveId` cache key was cleared on `wave_key_granted`, leaving `${waveId}:${keyVersion}` entries stale. Fixed to clear all entries for the wave.
+
+**On-login catch-up for both sides:** Server now replays missed events in both directions on WS authentication — pending `wave_key_request` events to granters who were offline, and `wave_key_granted` events to requesters who may have missed the original notification.
+
+**`wave_key_granted` always triggers reload:** Previously only reloaded the wave if the user was currently viewing it. Now always increments the reload trigger so the wave re-decrypts as soon as it's displayed.
+
+---
+
 ## [2.47.5] - 2026-04-29
 
 ### Added
