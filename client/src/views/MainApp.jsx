@@ -66,11 +66,15 @@ function MainApp({ sharePingId }) {
   const MAX_TABS = 10;
   const [openTabs, setOpenTabs] = useState([]);       // [{ id, waveId, title }]
   const [activeTabId, setActiveTabId] = useState(null);
+  const [previewWaveId, setPreviewWaveId] = useState(null); // wave viewed without a tab (default navigation mode)
   const tabIdCounter = useRef(0);
 
   // Derived for backward compatibility
   const activeTab = openTabs.find(t => t.id === activeTabId) || null;
-  const selectedWave = activeTab ? { id: activeTab.waveId, title: activeTab.title, privacy: activeTab.privacy } : null;
+  const previewWave = previewWaveId ? (waves.find(w => w.id === previewWaveId) || { id: previewWaveId }) : null;
+  const selectedWave = activeTab
+    ? { id: activeTab.waveId, title: activeTab.title, privacy: activeTab.privacy }
+    : previewWave;
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [scrollToMessageId, setScrollToMessageId] = useState(null); // Ping to scroll to after wave loads
@@ -283,17 +287,11 @@ function MainApp({ sharePingId }) {
       // Check if wave is already open
       const existing = prev.find(t => t.waveId === wave.id);
       if (existing) {
-        // Switch to existing tab (unless background)
         if (!background) {
           setActiveTabId(existing.id);
+          setPreviewWaveId(null);
           setFocusStack([]);
         }
-        return prev;
-      }
-
-      // Enforce tab limit
-      if (prev.length >= MAX_TABS) {
-        setToast({ message: `Maximum ${MAX_TABS} tabs allowed. Close a tab first.`, type: 'error' });
         return prev;
       }
 
@@ -302,11 +300,39 @@ function MainApp({ sharePingId }) {
       const newTab = { id: `tab-${tabIdCounter.current}`, waveId: wave.id, title: wave.title || '', privacy: wave.privacy || 'private' };
       if (!background) {
         setActiveTabId(newTab.id);
+        setPreviewWaveId(null);
         setFocusStack([]);
       }
+
+      // At limit: silently cycle out the oldest non-active tab
+      if (prev.length >= MAX_TABS) {
+        const oldest = prev.find(t => t.id !== activeTabId) || prev[0];
+        return [...prev.filter(t => t.id !== oldest.id), newTab];
+      }
+
       return [...prev, newTab];
     });
-  }, []);
+  }, [activeTabId]);
+
+  // Select a wave for viewing without opening a tab (default navigation).
+  // Switches to the existing tab if the wave is already tabbed.
+  const selectWave = useCallback((wave, opts = {}) => {
+    if (!wave?.id) return;
+    const existing = openTabs.find(t => t.waveId === wave.id);
+    if (existing) {
+      if (!opts.background) {
+        setActiveTabId(existing.id);
+        setPreviewWaveId(null);
+        setFocusStack([]);
+        setActiveThread(null);
+      }
+      return;
+    }
+    setPreviewWaveId(wave.id);
+    setActiveTabId(null);
+    setFocusStack([]);
+    setActiveThread(null);
+  }, [openTabs]);
 
   const closeTab = useCallback((tabId) => {
     setOpenTabs(prev => {
@@ -333,6 +359,7 @@ function MainApp({ sharePingId }) {
 
   const switchTab = useCallback((tabId) => {
     setActiveTabId(tabId);
+    setPreviewWaveId(null);
     setFocusStack([]);
     setActiveThread(null);
   }, []);
@@ -1541,7 +1568,7 @@ function MainApp({ sharePingId }) {
                   waves={waves}
                   categories={waveCategories}
                   selectedWave={selectedWave}
-                  onSelectWave={(wave, opts) => openWaveTab(wave, opts)}
+                  onSelectWave={(wave, opts) => selectWave(wave, opts)}
                   onNewWave={() => setShowNewWave(true)}
                   showArchived={showArchived}
                   onToggleArchived={() => { setShowArchived(!showArchived); loadWaves(); }}
@@ -1583,8 +1610,8 @@ function MainApp({ sharePingId }) {
               </div>
             )}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
-              {/* Tab bar (desktop only, when tabs exist) */}
-              {!isMobile && openTabs.length > 0 && (
+              {/* Tab bar (desktop only, when tabs exist or previewing) */}
+              {!isMobile && (openTabs.length > 0 || previewWave) && (
                 <div style={{
                   display: 'flex',
                   alignItems: 'stretch',
@@ -1595,6 +1622,32 @@ function MainApp({ sharePingId }) {
                   flexShrink: 0,
                   scrollbarWidth: 'thin',
                 }}>
+                  {/* Preview pill — shown when viewing a wave without a tab */}
+                  {previewWave && !activeTab && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: '6px',
+                      padding: '6px 10px', borderRight: '1px solid var(--border-subtle)',
+                      flexShrink: 0,
+                    }}>
+                      <span style={{
+                        color: 'var(--text-secondary)', fontSize: '0.75rem', fontFamily: 'monospace',
+                        maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {previewWave.title || 'Untitled'}
+                      </span>
+                      <button
+                        onClick={() => openWaveTab(previewWave)}
+                        title="Open in tab"
+                        style={{
+                          padding: '2px 7px', background: 'var(--accent-amber)15',
+                          border: '1px solid var(--accent-amber)60', color: 'var(--accent-amber)',
+                          cursor: 'pointer', fontSize: '0.65rem', fontFamily: 'monospace', whiteSpace: 'nowrap',
+                        }}
+                      >
+                        pin
+                      </button>
+                    </div>
+                  )}
                   {openTabs.map(tab => {
                     const isActive = tab.id === activeTabId;
                     const notifInfo = waveNotifications[tab.waveId];
@@ -1703,7 +1756,7 @@ function MainApp({ sharePingId }) {
                   {/* On mobile, hide WaveView when thread panel is open */}
                   {!(isMobile && activeThread && activeThread.waveId === selectedWave.id) && (
                   <ErrorBoundary key={activeTab?.id || selectedWave.id}>
-                    <WaveView wave={selectedWave} onBack={() => { closeTab(activeTabId); loadWaves(); loadWaveNotifications(); setActiveThread(null); }}
+                    <WaveView wave={selectedWave} onBack={() => { if (activeTabId) closeTab(activeTabId); else setPreviewWaveId(null); loadWaves(); loadWaveNotifications(); setActiveThread(null); }}
                       fetchAPI={fetchAPI} showToast={showToastMsg} currentUser={user}
                       groups={groups} onWaveUpdate={loadWaves} isMobile={isMobile}
                       sendWSMessage={sendWSMessage}
