@@ -5,6 +5,30 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.8] - 2026-05-05
+
+### Fixed
+
+#### Encrypted Wave Notifications No Longer Expose Ciphertext
+Notifications from E2EE-encrypted waves previously stored the raw ciphertext blob as the notification preview, making the in-app notification bell show an unreadable base64 string (e.g. `"eyJpdiI6IjF0c3pHV1d..."`).
+
+The server now detects whether a ping is encrypted (`ping.encrypted || ping.nonce`) at the top of `createPingNotifications` and substitutes `[E2E encrypted]` as the preview for all notification types (direct_mention, reply, wave_activity). This value is stored in the notifications table and broadcast over WebSocket.
+
+The notification bell renders the sentinel value in teal monospace (`[E2E encrypted]`) rather than quoting it like a message excerpt, making it clear the content exists but requires opening Cortex to read.
+
+Push notification bodies were already correct (they omitted the preview for encrypted pings); this fix closes the gap for in-app notifications.
+
+#### macOS Window Not Movable
+The Electron desktop app on macOS could not be dragged to move the window. The `titleBarStyle: 'hiddenInset'` option was configured but no `-webkit-app-region: drag` CSS was ever wired up, leaving no drag handle.
+
+Fixed by:
+- Making the app header the primary drag zone (`-webkit-app-region: drag`) with left padding (`88px`) to clear the inset traffic lights
+- Marking the nav buttons div and right-side controls div as `no-drag` to keep all interactive elements clickable
+- Adding a flex-grow spacer at the end of the tab bar as a secondary drag zone
+- Setting `trafficLightPosition: { x: 16, y: 14 }` in `BrowserWindow` options so traffic lights sit centered in the header
+
+---
+
 ## [2.47.7] - 2026-04-30
 
 ### Added
