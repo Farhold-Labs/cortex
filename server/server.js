@@ -19073,7 +19073,8 @@ function extractMentions(content) {
 // Create notifications for a new ping
 function createPingNotifications(ping, wave, author) {
   const notificationsToSend = [];
-  const contentPreview = ping.content.replace(/<[^>]*>/g, '').substring(0, 100);
+  const isEncrypted = !!(ping.encrypted || ping.nonce);
+  const contentPreview = isEncrypted ? '[E2E encrypted]' : ping.content.replace(/<[^>]*>/g, '').substring(0, 100);
   // For bot posts, owner_user_id is used only as a FK reference — not the real author
   const isBot = !!(ping.botId || ping.isBot || ping.bot_id);
 
@@ -19110,7 +19111,6 @@ function createPingNotifications(ping, wave, author) {
       // the popup when the app is visible, so double-delivery is safe.
       // WS-connected doesn't mean the user is looking at the app (Android backgrounding).
       db.markNotificationPushSent(notification.id);
-      const isEncrypted = ping.encrypted || ping.nonce;
       sendPushNotification(mentionedUser.id, {
         type: 'direct_mention',
         title: notification.title,
@@ -19147,7 +19147,6 @@ function createPingNotifications(ping, wave, author) {
 
         // Always send push for replies (same reasoning as direct_mention above)
         db.markNotificationPushSent(notification.id);
-        const isEncrypted = ping.encrypted || ping.nonce;
         sendPushNotification(parentPing.authorId, {
           type: 'reply',
           title: notification.title,
@@ -19215,7 +19214,6 @@ function createPingNotifications(ping, wave, author) {
         db.markNotificationPushSent(notification.id);
         // Suppress details for hidden waves (privacy)
         const meta = participation.getMetadata(wave.id, participant.id);
-        const isEncrypted = ping.encrypted || ping.nonce;
         const pushTitle = meta.hidden === 1 ? 'Cortex' : notification.title;
         const pushBody = meta.hidden === 1
           ? 'New activity on the cortex'
