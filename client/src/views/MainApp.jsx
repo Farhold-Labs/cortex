@@ -113,6 +113,7 @@ function MainApp({ sharePingId }) {
   const notifSyncRef = useRef(null);
   const selectedWaveRef = useRef(null);
   const { width, isMobile, isTablet, isDesktop, hasMeasured } = useWindowSize();
+  const isElectronMac = window.electronAPI?.platform === 'darwin';
 
   // Keyboard shortcut: Ctrl+B / Cmd+B to toggle sidebar (desktop only)
   useEffect(() => {
@@ -1420,9 +1421,11 @@ function MainApp({ sharePingId }) {
       <header style={{
         padding: isMobile ? '8px 10px' : '12px 24px',
         paddingTop: isMobile ? 'calc(8px + env(safe-area-inset-top, 0px))' : '12px',
+        paddingLeft: isElectronMac ? '88px' : (isMobile ? '10px' : '24px'),
         borderBottom: '2px solid var(--accent-amber)40',
         background: 'linear-gradient(90deg, var(--bg-surface), var(--bg-hover), var(--bg-surface))',
         display: 'flex', alignItems: 'center', gap: isMobile ? '8px' : '12px',
+        WebkitAppRegion: isElectronMac ? 'drag' : undefined,
       }}>
         {/* Logo and Status */}
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '8px' : '12px', flexShrink: 0 }}>
@@ -1471,7 +1474,7 @@ function MainApp({ sharePingId }) {
 
         {/* Nav Items - grows to fill space - hidden on mobile (using bottom nav instead) */}
         {!isMobile && (
-          <div style={{ display: 'flex', gap: '4px', flex: 1, justifyContent: 'center' }}>
+          <div style={{ display: 'flex', gap: '4px', flex: 1, justifyContent: 'center', WebkitAppRegion: 'no-drag' }}>
             {navItems.map(view => {
               const totalUnread = view === 'waves' ? waves.reduce((sum, w) => sum + (w.unread_count || 0), 0) : 0;
               const pendingRequests = view === 'people' ? (contactRequests.length + groupInvitations.length) : 0;
@@ -1510,7 +1513,7 @@ function MainApp({ sharePingId }) {
 
         {/* Notifications, Search and User - desktop only */}
         {!isMobile && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, WebkitAppRegion: 'no-drag' }}>
             <NotificationBell
               fetchAPI={fetchAPI}
               onNavigateToWave={handleNavigateToWaveById}
@@ -1610,17 +1613,18 @@ function MainApp({ sharePingId }) {
               </div>
             )}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
-              {/* Tab bar (desktop only, when tabs exist or previewing) */}
-              {!isMobile && (openTabs.length > 0 || previewWave) && (
+              {/* Tab bar (desktop only, when tabs exist or previewing; always on macOS for drag region) */}
+              {!isMobile && (isElectronMac || openTabs.length > 0 || previewWave) && (
                 <div style={{
                   display: 'flex',
                   alignItems: 'stretch',
                   background: 'var(--bg-base)',
-                  borderBottom: '1px solid var(--border-subtle)',
+                  borderBottom: (openTabs.length > 0 || previewWave) ? '1px solid var(--border-subtle)' : 'none',
                   overflowX: 'auto',
                   overflowY: 'hidden',
                   flexShrink: 0,
                   scrollbarWidth: 'thin',
+                  minHeight: isElectronMac ? '30px' : undefined,
                 }}>
                   {/* Preview pill — shown when viewing a wave without a tab */}
                   {previewWave && !activeTab && (
@@ -1714,6 +1718,10 @@ function MainApp({ sharePingId }) {
                       </div>
                     );
                   })}
+                  {/* macOS drag region — fills empty tab bar space so window is movable */}
+                  {isElectronMac && (
+                    <div style={{ flex: 1, WebkitAppRegion: 'drag', cursor: 'default', minWidth: 20 }} />
+                  )}
                 </div>
               )}
               {selectedWave && focusStack.length > 0 ? (

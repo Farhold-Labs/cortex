@@ -192,8 +192,9 @@ async function createWindow() {
       webSecurity: true,
       spellcheck: true,
     },
-    // Hide frame on macOS for native title bar integration
+    // Hide title bar on macOS; traffic lights inset into header drag region
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 14 } : undefined,
     show: false,
   });
 

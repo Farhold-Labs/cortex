@@ -81,15 +81,26 @@ const NotificationItem = ({ notification, onRead, onDismiss, onClick }) => {
           {notification.body || typeConfig.label}
         </div>
         {notification.preview && (
-          <div style={{
-            color: 'var(--text-dim)',
-            fontSize: '0.7rem',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}>
-            "{notification.preview.substring(0, 60)}{notification.preview.length > 60 ? '...' : ''}"
-          </div>
+          notification.preview === '[E2E encrypted]' ? (
+            <div style={{
+              color: 'var(--accent-teal)',
+              fontSize: '0.7rem',
+              fontFamily: 'monospace',
+              opacity: 0.8,
+            }}>
+              [E2E encrypted]
+            </div>
+          ) : (
+            <div style={{
+              color: 'var(--text-dim)',
+              fontSize: '0.7rem',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}>
+              "{notification.preview.substring(0, 60)}{notification.preview.length > 60 ? '...' : ''}"
+            </div>
+          )
         )}
         {notification.waveTitle && (
           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
