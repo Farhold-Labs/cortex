@@ -103,17 +103,23 @@ const MessageComposer = forwardRef(({
   }, [mentionSearch, showMentionPicker]);
 
   const getMentionableUsers = () => {
+    const search = mentionSearch.toLowerCase();
+    // @everyone — shown when search is empty or matches 'everyone'
+    const everyoneOption = (!search || 'everyone'.includes(search))
+      ? [{ id: '__everyone__', handle: 'everyone', displayName: 'Everyone', _isEveryone: true }]
+      : [];
+
     const local = [...(contacts || []), ...(participants || [])]
       .filter(u => u.id !== currentUser?.id)
       .filter(u => {
         const name = (u.displayName || u.display_name || u.name || u.handle || '').toLowerCase();
         const handle = (u.handle || '').toLowerCase();
-        return !mentionSearch || name.includes(mentionSearch) || handle.includes(mentionSearch);
+        return !search || name.includes(search) || handle.includes(search);
       });
     // Merge server results, deduplicating by id
     const merged = [...local, ...serverMentionResults.filter(u => u.id !== currentUser?.id)]
       .filter((u, i, arr) => arr.findIndex(x => x.id === u.id) === i);
-    return merged.slice(0, 8);
+    return [...everyoneOption, ...merged.slice(0, 8)];
   };
 
   return (
@@ -320,18 +326,27 @@ const MessageComposer = forwardRef(({
                     borderBottom: idx < mentionableUsers.length - 1 ? '1px solid var(--border-subtle)' : 'none',
                   }}
                 >
-                  <Avatar
-                    letter={(user.displayName || user.display_name || user.handle || '?')[0]}
-                    color="var(--accent-teal)"
-                    size={24}
-                    imageUrl={user.avatarUrl || user.avatar_url}
-                  />
+                  {user._isEveryone ? (
+                    <div style={{
+                      width: 24, height: 24, borderRadius: '50%',
+                      background: 'var(--accent-amber)20', border: '1px solid var(--accent-amber)60',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.7rem', color: 'var(--accent-amber)', flexShrink: 0,
+                    }}>@</div>
+                  ) : (
+                    <Avatar
+                      letter={(user.displayName || user.display_name || user.handle || '?')[0]}
+                      color="var(--accent-teal)"
+                      size={24}
+                      imageUrl={user.avatarUrl || user.avatar_url}
+                    />
+                  )}
                   <div>
-                    <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem' }}>
+                    <div style={{ color: user._isEveryone ? 'var(--accent-amber)' : 'var(--text-primary)', fontSize: '0.85rem' }}>
                       {user.displayName || user.display_name || user.handle}
                     </div>
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
-                      @{user.handle}
+                      @{user.handle}{user._isEveryone ? ' — notify all participants' : ''}
                     </div>
                   </div>
                 </div>

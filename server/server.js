@@ -15713,6 +15713,25 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
 
 // Paginated pings endpoint for loading pings in batches (v1.10.0)
 // v2.10.0: Added fields=minimal support for low-bandwidth mode
+// Fetch a single ping by ID — used by notification bell to decrypt encrypted previews
+app.get('/api/pings/:pingId', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.pingId);
+  const ping = db.getPing(pingId);
+  if (!ping) return res.status(404).json({ error: 'Ping not found' });
+  if (!canAccessWaveFromCache(ping.waveId, req.user.userId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  // Return only what the client needs to decrypt the preview
+  res.json({
+    id: ping.id,
+    waveId: ping.waveId,
+    content: ping.content,
+    encrypted: ping.encrypted,
+    nonce: ping.nonce,
+    keyVersion: ping.keyVersion,
+  });
+});
+
 app.get('/api/waves/:id/pings', authenticateToken, (req, res) => {
   const waveId = sanitizeInput(req.params.id);
   const minimal = req.query.fields === 'minimal'; // Low-bandwidth mode (v2.10.0)
@@ -19086,9 +19105,49 @@ function createPingNotifications(ping, wave, author) {
   const mentionedHandles = extractMentions(ping.content);
   const mentionedUsers = new Set();
 
+  // @everyone — notify all wave participants as direct mentions
+  if (mentionedHandles.includes('everyone')) {
+    for (const participant of participants) {
+      if (!isBot && participant.id === author.id) continue;
+      if (!shouldCreateNotification(participant.id, 'direct_mention')) continue;
+
+      mentionedUsers.add(participant.id);
+
+      const notification = db.createNotification({
+        userId: participant.id,
+        type: 'direct_mention',
+        waveId: wave.id,
+        pingId: ping.id,
+        actorId: author.id,
+        title: `${author.displayName} mentioned everyone`,
+        body: `in ${wave.title}`,
+        preview: contentPreview,
+        groupKey: `mention:${wave.id}:${ping.id}`
+      });
+
+      db.markNotificationPushSent(notification.id);
+      sendPushNotification(participant.id, {
+        type: 'direct_mention',
+        title: notification.title,
+        body: isEncrypted ? `Encrypted message in ${wave.title} — tap to read` : `${wave.title}: ${contentPreview}`,
+        url: `/?wave=${wave.id}`,
+        waveId: wave.id,
+        messageId: ping.id,
+        senderId: author.id,
+        senderHandle: author.handle,
+        encrypted: !!isEncrypted,
+      });
+
+      notificationsToSend.push({ userId: participant.id, notification });
+    }
+  }
+
   for (const handle of mentionedHandles) {
+    if (handle === 'everyone') continue; // already handled above
     const mentionedUser = db.findUserByMention ? db.findUserByMention(handle) : db.findUserByHandle(handle);
     if (mentionedUser && (isBot || mentionedUser.id !== author.id) && participantIds.has(mentionedUser.id)) {
+      if (mentionedUsers.has(mentionedUser.id)) continue; // already notified via @everyone
+
       mentionedUsers.add(mentionedUser.id);
 
       // Check user's notification preferences
@@ -19114,7 +19173,7 @@ function createPingNotifications(ping, wave, author) {
       sendPushNotification(mentionedUser.id, {
         type: 'direct_mention',
         title: notification.title,
-        body: isEncrypted ? `in ${wave.title}` : `${wave.title}: ${contentPreview}`,
+        body: isEncrypted ? `Encrypted message in ${wave.title} — tap to read` : `${wave.title}: ${contentPreview}`,
         url: `/?wave=${wave.id}`,
         waveId: wave.id,
         messageId: ping.id,
@@ -19150,7 +19209,7 @@ function createPingNotifications(ping, wave, author) {
         sendPushNotification(parentPing.authorId, {
           type: 'reply',
           title: notification.title,
-          body: isEncrypted ? `in ${wave.title}` : `${wave.title}: ${contentPreview}`,
+          body: isEncrypted ? `Encrypted message in ${wave.title} — tap to read` : `${wave.title}: ${contentPreview}`,
           url: `/?wave=${wave.id}`,
           waveId: wave.id,
           messageId: ping.id,
@@ -19218,7 +19277,7 @@ function createPingNotifications(ping, wave, author) {
         const pushBody = meta.hidden === 1
           ? 'New activity on the cortex'
           : isEncrypted
-            ? `from ${author.displayName}`
+            ? `Encrypted message from ${author.displayName} — tap to read`
             : `${author.displayName}: ${contentPreview}`;
         sendPushNotification(participant.id, {
           type: 'wave_activity',
