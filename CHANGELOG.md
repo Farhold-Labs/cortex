@@ -5,6 +5,26 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.9] - 2026-05-07
+
+### Fixed
+
+#### @everyone Notifications Now Delivered
+`@everyone` in a message was already rendered client-side as a broadcast mention, but the server's `createPingNotifications` function only looked up individual handles via `findUserByMention` — `everyone` resolved to nothing and no notifications were sent.
+
+Fixed by handling `@everyone` as a special case before the per-handle loop: when detected, all wave participants (excluding the author) receive a `direct_mention` notification with title "X mentioned everyone in Y". Individual `@handle` mentions in the same message still work and are skipped if the user was already notified via `@everyone`.
+
+The client-side mention autocomplete now shows `@everyone` as a pinned first option (with a distinct amber `@` avatar and "notify all participants" subtitle) whenever the picker is open or the search matches "everyone".
+
+#### Encrypted Notification Text Improved
+The push notification body for messages from encrypted waves previously showed only `in Wave Title` or `from Author` — vague and easy to mistake for a system message. All three notification types now read:
+- `direct_mention` / `reply`: `Encrypted message in [Wave] — tap to read`
+- `wave_activity`: `Encrypted message from [Author] — tap to read`
+
+The in-app notification bell sentinel text changed from the raw `[E2E encrypted]` tag to the friendlier `Encrypted message — open Cortex to read`, still rendered in teal monospace.
+
+---
+
 ## [2.47.8] - 2026-05-05
 
 ### Fixed

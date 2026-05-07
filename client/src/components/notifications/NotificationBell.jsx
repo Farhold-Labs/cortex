@@ -88,7 +88,7 @@ const NotificationItem = ({ notification, onRead, onDismiss, onClick }) => {
               fontFamily: 'monospace',
               opacity: 0.8,
             }}>
-              [E2E encrypted]
+              Encrypted message — open Cortex to read
             </div>
           ) : (
             <div style={{
