@@ -133,7 +133,7 @@ const NotificationItem = ({ notification, onRead, onDismiss, onClick, decryptedP
   );
 };
 
-const NotificationDropdown = ({ notifications, unreadCount, onRead, onDismiss, onClick, onReadAll, onDismissAll, onClose, isMobile }) => {
+const NotificationDropdown = ({ notifications, unreadCount, onRead, onDismiss, onClick, onReadAll, onDismissAll, onClose, isMobile, decryptedPreviews }) => {
   return (
     <div style={{
       position: isMobile ? 'fixed' : 'absolute',
@@ -436,6 +436,7 @@ const NotificationBell = ({ fetchAPI, onNavigateToWave, isMobile, refreshTrigger
           onDismissAll={handleDismissAll}
           onClose={() => setShowDropdown(false)}
           isMobile={isMobile}
+          decryptedPreviews={decryptedPreviews}
         />
       )}
     </div>
