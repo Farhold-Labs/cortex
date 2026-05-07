@@ -5,6 +5,24 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.10] - 2026-05-07
+
+### Added
+
+#### In-App Notification Bell Decrypts Encrypted Message Previews
+The notification bell now shows the actual decrypted message content for notifications from E2EE-encrypted waves, rather than the "Encrypted message — open Cortex to read" sentinel.
+
+When the bell is opened, any notification with an encrypted preview fetches the ping via the new `GET /api/pings/:id` endpoint and decrypts it client-side using `e2ee.decryptPing` (the same path used to render messages in the wave view). The decrypted text is cached in component state for the session. If the wave key is not available (e.g. key redistribution hasn't completed), the fallback sentinel is shown.
+
+Push notifications remain obfuscated — the server has no decryption keys and sends "Encrypted message in [Wave] — tap to read" for OS-level notifications.
+
+### Fixed
+
+- `decryptedPreviews` state was defined in `NotificationBell` but referenced inside the separate `NotificationDropdown` child component without being passed as a prop, causing a `ReferenceError` crash when the bell was opened
+- The decrypt effect was using `res.ok` / `res.json()` patterns from raw `fetch()` against `fetchAPI`, which already returns parsed JSON and throws on errors — `!res.ok` always evaluated to `true` (undefined is falsy), silently aborting every decryption attempt
+
+---
+
 ## [2.47.9] - 2026-05-07
 
 ### Fixed
