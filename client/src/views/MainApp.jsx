@@ -1452,6 +1452,7 @@ function MainApp({ sharePingId }) {
                 isMobile={true}
                 refreshTrigger={notificationRefreshTrigger}
                 onAllRead={() => { loadWaves(); loadWaveNotifications(); }}
+                e2ee={e2ee}
               />
               <button
                 onClick={() => setShowSearch(true)}
@@ -1520,6 +1521,7 @@ function MainApp({ sharePingId }) {
               isMobile={false}
               refreshTrigger={notificationRefreshTrigger}
               onAllRead={() => { loadWaves(); loadWaveNotifications(); }}
+              e2ee={e2ee}
             />
             <button
               onClick={() => setShowSearch(true)}

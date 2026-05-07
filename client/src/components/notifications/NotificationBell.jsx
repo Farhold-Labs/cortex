@@ -10,7 +10,7 @@ const NOTIFICATION_TYPES = {
   system: { icon: '⚡', color: 'var(--accent-orange)', label: 'System' },
 };
 
-const NotificationItem = ({ notification, onRead, onDismiss, onClick }) => {
+const NotificationItem = ({ notification, onRead, onDismiss, onClick, decryptedPreview }) => {
   const typeConfig = NOTIFICATION_TYPES[notification.type] || NOTIFICATION_TYPES.system;
   const timeAgo = (date) => {
     const diff = Date.now() - new Date(date).getTime();
@@ -80,17 +80,21 @@ const NotificationItem = ({ notification, onRead, onDismiss, onClick }) => {
         <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '4px' }}>
           {notification.body || typeConfig.label}
         </div>
-        {notification.preview && (
-          notification.preview === '[E2E encrypted]' ? (
-            <div style={{
-              color: 'var(--accent-teal)',
-              fontSize: '0.7rem',
-              fontFamily: 'monospace',
-              opacity: 0.8,
-            }}>
-              Encrypted message — open Cortex to read
-            </div>
-          ) : (
+        {(decryptedPreview || notification.preview) && (() => {
+          const preview = decryptedPreview || notification.preview;
+          if (preview === '[E2E encrypted]') {
+            return (
+              <div style={{
+                color: 'var(--accent-teal)',
+                fontSize: '0.7rem',
+                fontFamily: 'monospace',
+                opacity: 0.8,
+              }}>
+                Encrypted message — open Cortex to read
+              </div>
+            );
+          }
+          return (
             <div style={{
               color: 'var(--text-dim)',
               fontSize: '0.7rem',
@@ -98,10 +102,10 @@ const NotificationItem = ({ notification, onRead, onDismiss, onClick }) => {
               overflow: 'hidden',
               textOverflow: 'ellipsis',
             }}>
-              "{notification.preview.substring(0, 60)}{notification.preview.length > 60 ? '...' : ''}"
+              "{preview.substring(0, 60)}{preview.length > 60 ? '...' : ''}"
             </div>
-          )
-        )}
+          );
+        })()}
         {notification.waveTitle && (
           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
             in {notification.waveTitle}
@@ -233,6 +237,7 @@ const NotificationDropdown = ({ notifications, unreadCount, onRead, onDismiss, o
               onRead={onRead}
               onDismiss={onDismiss}
               onClick={onClick}
+              decryptedPreview={decryptedPreviews[n.id]}
             />
           ))
         )}
@@ -241,11 +246,13 @@ const NotificationDropdown = ({ notifications, unreadCount, onRead, onDismiss, o
   );
 };
 
-const NotificationBell = ({ fetchAPI, onNavigateToWave, isMobile, refreshTrigger, onAllRead }) => {
+const NotificationBell = ({ fetchAPI, onNavigateToWave, isMobile, refreshTrigger, onAllRead, e2ee }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [decryptedPreviews, setDecryptedPreviews] = useState({}); // { notifId: string }
   const bellRef = useRef(null);
+  const decryptingRef = useRef(new Set()); // prevents concurrent duplicate decryption
 
   // Load notifications
   const loadNotifications = useCallback(async () => {
@@ -274,6 +281,32 @@ const NotificationBell = ({ fetchAPI, onNavigateToWave, isMobile, refreshTrigger
       loadNotifications();
     }
   }, [refreshTrigger, loadNotifications]);
+
+  // Decrypt encrypted previews when bell opens or notifications change
+  useEffect(() => {
+    if (!showDropdown || !e2ee?.decryptPing) return;
+    const encrypted = notifications.filter(
+      n => n.preview === '[E2E encrypted]' && n.pingId && !decryptedPreviews[n.id] && !decryptingRef.current.has(n.id)
+    );
+    if (encrypted.length === 0) return;
+
+    encrypted.forEach(async (notif) => {
+      decryptingRef.current.add(notif.id);
+      try {
+        const res = await fetchAPI(`/pings/${notif.pingId}`);
+        if (!res.ok) return;
+        const ping = await res.json();
+        if (!ping.encrypted || !ping.nonce) return;
+        const plaintext = await e2ee.decryptPing(ping.content, ping.nonce, ping.waveId, ping.keyVersion);
+        const preview = plaintext.replace(/<[^>]*>/g, '').substring(0, 100);
+        setDecryptedPreviews(prev => ({ ...prev, [notif.id]: preview }));
+      } catch {
+        // Key not available or decryption failed — leave as encrypted sentinel
+      } finally {
+        decryptingRef.current.delete(notif.id);
+      }
+    });
+  }, [showDropdown, notifications, e2ee, fetchAPI, decryptedPreviews]);
 
   // Close dropdown when clicking outside
   useEffect(() => {

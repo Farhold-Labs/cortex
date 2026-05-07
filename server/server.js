@@ -15713,6 +15713,25 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
 
 // Paginated pings endpoint for loading pings in batches (v1.10.0)
 // v2.10.0: Added fields=minimal support for low-bandwidth mode
+// Fetch a single ping by ID — used by notification bell to decrypt encrypted previews
+app.get('/api/pings/:pingId', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.pingId);
+  const ping = db.getPing(pingId);
+  if (!ping) return res.status(404).json({ error: 'Ping not found' });
+  if (!canAccessWaveFromCache(ping.waveId, req.user.userId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  // Return only what the client needs to decrypt the preview
+  res.json({
+    id: ping.id,
+    waveId: ping.waveId,
+    content: ping.content,
+    encrypted: ping.encrypted,
+    nonce: ping.nonce,
+    keyVersion: ping.keyVersion,
+  });
+});
+
 app.get('/api/waves/:id/pings', authenticateToken, (req, res) => {
   const waveId = sanitizeInput(req.params.id);
   const minimal = req.query.fields === 'minimal'; // Low-bandwidth mode (v2.10.0)
