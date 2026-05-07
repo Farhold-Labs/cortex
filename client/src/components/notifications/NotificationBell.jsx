@@ -293,15 +293,13 @@ const NotificationBell = ({ fetchAPI, onNavigateToWave, isMobile, refreshTrigger
     encrypted.forEach(async (notif) => {
       decryptingRef.current.add(notif.id);
       try {
-        const res = await fetchAPI(`/pings/${notif.pingId}`);
-        if (!res.ok) return;
-        const ping = await res.json();
+        const ping = await fetchAPI(`/pings/${notif.pingId}`);
         if (!ping.encrypted || !ping.nonce) return;
         const plaintext = await e2ee.decryptPing(ping.content, ping.nonce, ping.waveId, ping.keyVersion);
         const preview = plaintext.replace(/<[^>]*>/g, '').substring(0, 100);
         setDecryptedPreviews(prev => ({ ...prev, [notif.id]: preview }));
       } catch {
-        // Key not available or decryption failed — leave as encrypted sentinel
+        // fetchAPI throws on error, or wave key unavailable — leave as encrypted sentinel
       } finally {
         decryptingRef.current.delete(notif.id);
       }
