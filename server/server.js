@@ -148,6 +148,7 @@ const ghostVerifications = new Map();
 // Federation configuration
 const FEDERATION_ENABLED = process.env.FEDERATION_ENABLED === 'true';
 const FEDERATION_NODE_NAME = process.env.FEDERATION_NODE_NAME || null;
+const SUPPORT_WAVE_ID = process.env.SUPPORT_WAVE_ID || null;
 
 // Federation cover traffic (v2.28.0)
 let FEDERATION_DECOY_ENABLED = process.env.FEDERATION_DECOY_ENABLED === 'true';
@@ -420,6 +421,14 @@ const crawlLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: RATE_LIMIT_CRAWL_MAX,
   message: { error: 'Too many crawl bar requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const supportTicketLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  message: { error: 'Too many support tickets submitted. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -12065,6 +12074,106 @@ app.get('/api/reports', authenticateToken, (req, res) => {
 });
 
 // Get reports (moderator+)
+// ============ SUPPORT TICKETS ============
+
+// Submit a support ticket — public endpoint, no auth required
+app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
+  const { email, message } = req.body || {};
+  if (!message || typeof message !== 'string' || message.trim().length < 10) {
+    return res.status(400).json({ error: 'Please describe the issue (at least 10 characters).' });
+  }
+  if (message.trim().length > 2000) {
+    return res.status(400).json({ error: 'Message too long (max 2000 characters).' });
+  }
+
+  const id = `ticket-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sanitizedEmail = email ? sanitizeInput(String(email).trim().slice(0, 200)) : null;
+  const sanitizedMessage = sanitizeInput(message.trim());
+  const userAgent = req.headers['user-agent']?.slice(0, 300) || null;
+
+  db.db.prepare(`
+    INSERT INTO support_tickets (id, email, message, user_agent, status, created_at)
+    VALUES (?, ?, ?, ?, 'open', datetime('now'))
+  `).run(id, sanitizedEmail, sanitizedMessage, userAgent);
+
+  // Notify via bot post to support wave if configured
+  if (SUPPORT_WAVE_ID) {
+    try {
+      const wave = db.getWave(SUPPORT_WAVE_ID);
+      if (wave) {
+        const botUser = { id: 'system', displayName: 'Support Bot', handle: 'support', isAdmin: true };
+        const content = `New support ticket submitted.\n\nID: ${id}\nEmail: ${sanitizedEmail || '(not provided)'}\n\nMessage:\n${sanitizedMessage}`;
+        const ping = db.createPing({
+          waveId: SUPPORT_WAVE_ID,
+          authorId: null,
+          content,
+          privacy: wave.privacy,
+          botId: null,
+          isBot: true,
+          senderName: 'Support',
+        });
+        if (ping) broadcastToWave(SUPPORT_WAVE_ID, { type: 'new_ping', ping });
+      }
+    } catch (err) {
+      console.error('[Support] Failed to post ticket notification:', err.message);
+    }
+  }
+
+  console.log(`[Support] Ticket submitted: ${id} from ${sanitizedEmail || 'anonymous'}`);
+  res.json({ success: true, ticketId: id });
+});
+
+// List support tickets — admin only
+app.get('/api/admin/support/tickets', authenticateToken, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+
+  const status = req.query.status || 'open';
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+  const tickets = db.db.prepare(`
+    SELECT t.*, u.display_name as resolved_by_name
+    FROM support_tickets t
+    LEFT JOIN users u ON t.resolved_by = u.id
+    WHERE (? = 'all' OR t.status = ?)
+    ORDER BY t.created_at DESC
+    LIMIT ?
+  `).all(status, status, limit);
+
+  res.json({ tickets });
+});
+
+// Resolve a support ticket — admin only
+app.patch('/api/admin/support/tickets/:id/resolve', authenticateToken, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+
+  const ticketId = sanitizeInput(req.params.id);
+  const ticket = db.db.prepare('SELECT * FROM support_tickets WHERE id = ?').get(ticketId);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+  db.db.prepare(`
+    UPDATE support_tickets SET status = 'resolved', resolved_at = datetime('now'), resolved_by = ? WHERE id = ?
+  `).run(req.user.userId, ticketId);
+
+  res.json({ success: true });
+});
+
+// Reopen a support ticket — admin only
+app.patch('/api/admin/support/tickets/:id/reopen', authenticateToken, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+
+  const ticketId = sanitizeInput(req.params.id);
+  const ticket = db.db.prepare('SELECT * FROM support_tickets WHERE id = ?').get(ticketId);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+  db.db.prepare(`
+    UPDATE support_tickets SET status = 'open', resolved_at = NULL, resolved_by = NULL WHERE id = ?
+  `).run(ticketId);
+
+  res.json({ success: true });
+});
+
 app.get('/api/admin/reports', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!requireRole(user, ROLES.MODERATOR, res)) return;

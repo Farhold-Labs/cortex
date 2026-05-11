@@ -2065,6 +2065,23 @@ export class DatabaseSQLite {
       `);
       console.log('✅ calendar_feed_tokens table created (v2.47.0)');
     }
+
+    if (!this.tableExists('support_tickets')) {
+      this.db.exec(`
+        CREATE TABLE support_tickets (
+          id          TEXT PRIMARY KEY,
+          email       TEXT,
+          message     TEXT NOT NULL,
+          user_agent  TEXT,
+          status      TEXT NOT NULL DEFAULT 'open',
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          resolved_at TEXT,
+          resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX idx_support_tickets_status ON support_tickets(status, created_at DESC);
+      `);
+      console.log('✅ support_tickets table created (v2.47.11)');
+    }
   }
 
   prepareStatements() {

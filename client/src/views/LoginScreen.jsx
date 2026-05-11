@@ -39,7 +39,36 @@ const LoginScreen = ({ onAbout }) => {
   const [serverUrl, setServerUrl] = useState(storage.getServerUrl() || BASE_URL);
   const [serverUrlError, setServerUrlError] = useState('');
   const [testingServer, setTestingServer] = useState(false);
+  // Support ticket state
+  const [showSupportForm, setShowSupportForm] = useState(false);
+  const [supportEmail, setSupportEmail] = useState('');
+  const [supportMessage, setSupportMessage] = useState('');
+  const [supportStatus, setSupportStatus] = useState({ loading: false, message: '', error: '' });
   const { isMobile, isTablet, isDesktop } = useWindowSize();
+
+  const handleSupportTicket = async (e) => {
+    e.preventDefault();
+    if (!supportMessage.trim()) {
+      setSupportStatus({ loading: false, message: '', error: 'Please describe your issue.' });
+      return;
+    }
+    setSupportStatus({ loading: true, message: '', error: '' });
+    try {
+      const baseUrl = storage.getServerUrl() || BASE_URL;
+      const res = await fetch(`${baseUrl}/api/support/ticket`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: supportEmail.trim() || undefined, message: supportMessage.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to submit ticket');
+      setSupportStatus({ loading: false, message: 'Your report has been submitted. Thank you!', error: '' });
+      setSupportEmail('');
+      setSupportMessage('');
+    } catch (err) {
+      setSupportStatus({ loading: false, message: '', error: err.message });
+    }
+  };
 
   const handleForgotPassword = async (e) => {
     e.preventDefault();
@@ -723,6 +752,56 @@ const LoginScreen = ({ onAbout }) => {
           >
             Having trouble? Clear all data ✕
           </button>
+        </div>
+
+        {/* Support ticket form */}
+        <div style={{ textAlign: 'center', marginTop: '8px' }}>
+          {!showSupportForm ? (
+            <button
+              onClick={() => { setShowSupportForm(true); setSupportStatus({ loading: false, message: '', error: '' }); }}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem', opacity: 0.7 }}
+            >
+              Still having trouble? Report an issue
+            </button>
+          ) : (
+            <div style={{ marginTop: '8px', padding: '12px', border: '1px solid var(--border-subtle)', borderRadius: '6px', textAlign: 'left' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 'bold' }}>Report an Issue</span>
+                <button onClick={() => setShowSupportForm(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.8rem' }}>✕</button>
+              </div>
+              {supportStatus.message ? (
+                <p style={{ color: 'var(--accent)', fontFamily: 'monospace', fontSize: '0.75rem', margin: 0 }}>{supportStatus.message}</p>
+              ) : (
+                <form onSubmit={handleSupportTicket}>
+                  <input
+                    type="email"
+                    placeholder="Your email (optional)"
+                    value={supportEmail}
+                    onChange={e => setSupportEmail(e.target.value)}
+                    style={{ width: '100%', padding: '8px', marginBottom: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.75rem', boxSizing: 'border-box' }}
+                  />
+                  <textarea
+                    placeholder="Describe the issue you're experiencing..."
+                    value={supportMessage}
+                    onChange={e => setSupportMessage(e.target.value)}
+                    rows={4}
+                    required
+                    style={{ width: '100%', padding: '8px', marginBottom: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }}
+                  />
+                  {supportStatus.error && (
+                    <p style={{ color: 'var(--error)', fontFamily: 'monospace', fontSize: '0.7rem', margin: '0 0 8px' }}>{supportStatus.error}</p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={supportStatus.loading}
+                    style={{ width: '100%', padding: '8px', background: 'var(--accent)', color: 'var(--bg-primary)', border: 'none', borderRadius: '4px', fontFamily: 'monospace', fontSize: '0.75rem', cursor: supportStatus.loading ? 'not-allowed' : 'pointer', opacity: supportStatus.loading ? 0.7 : 1 }}
+                  >
+                    {supportStatus.loading ? 'Submitting...' : 'Submit Report'}
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

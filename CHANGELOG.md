@@ -5,6 +5,25 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.47.11] - 2026-04-30
+
+### Added
+
+#### Support Ticket Submission from Login Screen
+Users who cannot log in can now submit a support ticket directly from the login screen without needing an account. A "Still having trouble? Report an issue" link appears below the "Clear all data" button; clicking it expands an inline form with an optional email field and a required message field.
+
+Tickets are submitted to the public `POST /api/support/ticket` endpoint (rate-limited to 5 per hour per IP). If `SUPPORT_WAVE_ID` is set in the server environment, a bot notification is posted to that wave with the ticket ID, email (if provided), and message content. Tickets are stored in the new `support_tickets` SQLite table.
+
+#### Support Tickets Admin Panel
+A new **Support Tickets** panel in the admin section of Profile Settings lists all submitted tickets filterable by status (open / resolved / all). Admins can resolve or reopen individual tickets. Resolved tickets display the resolver's handle and resolution timestamp.
+
+- `POST /api/support/ticket` — public, unauthenticated, rate-limited (5/hr)
+- `GET /api/admin/support/tickets?status=open|resolved|all` — admin only
+- `PATCH /api/admin/support/tickets/:id/resolve` — admin only
+- `PATCH /api/admin/support/tickets/:id/reopen` — admin only
+
+---
+
 ## [2.47.10] - 2026-05-07
 
 ### Added
