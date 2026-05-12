@@ -12081,7 +12081,7 @@ app.get('/api/reports', authenticateToken, (req, res) => {
 
 // Submit a support ticket — public endpoint, no auth required
 app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
-  const { email, message } = req.body || {};
+  const { email, handle, message } = req.body || {};
   if (!message || typeof message !== 'string' || message.trim().length < 10) {
     return res.status(400).json({ error: 'Please describe the issue (at least 10 characters).' });
   }
@@ -12091,13 +12091,14 @@ app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
 
   const id = `ticket-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const sanitizedEmail = email ? sanitizeInput(String(email).trim().slice(0, 200)) : null;
+  const sanitizedHandle = handle ? sanitizeInput(String(handle).trim().replace(/^@/, '').slice(0, 50)) : null;
   const sanitizedMessage = sanitizeInput(message.trim());
   const userAgent = req.headers['user-agent']?.slice(0, 300) || null;
 
   db.db.prepare(`
-    INSERT INTO support_tickets (id, email, message, user_agent, status, created_at)
-    VALUES (?, ?, ?, ?, 'open', datetime('now'))
-  `).run(id, sanitizedEmail, sanitizedMessage, userAgent);
+    INSERT INTO support_tickets (id, email, handle, message, user_agent, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'open', datetime('now'))
+  `).run(id, sanitizedEmail, sanitizedHandle, sanitizedMessage, userAgent);
 
   // Notify via wave post to support wave if configured
   if (SUPPORT_WAVE_ID && (SUPPORT_POSTING_TOKEN || SUPPORT_BOT_KEY)) {
@@ -12128,7 +12129,9 @@ app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
       }
 
       if (wave && authorId) {
-        const content = `New support ticket submitted.\n\nID: ${id}\nEmail: ${sanitizedEmail || '(not provided)'}\n\nMessage:\n${sanitizedMessage}`;
+        const fromParts = [sanitizedHandle ? `@${sanitizedHandle}` : null, sanitizedEmail].filter(Boolean);
+        const from = fromParts.length ? fromParts.join(' / ') : '(anonymous)';
+        const content = `New support ticket submitted.\n\nID: ${id}\nFrom: ${from}\n\nMessage:\n${sanitizedMessage}`;
         const ping = db.createMessage({ waveId: SUPPORT_WAVE_ID, authorId, content, privacy: wave.privacy, botId });
         if (ping) {
           broadcastToWave(SUPPORT_WAVE_ID, { type: 'new_ping', data: ping });
@@ -12140,7 +12143,7 @@ app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
     }
   }
 
-  console.log(`[Support] Ticket submitted: ${id} from ${sanitizedEmail || 'anonymous'}`);
+  console.log(`[Support] Ticket submitted: ${id} from ${sanitizedHandle ? '@' + sanitizedHandle : sanitizedEmail || 'anonymous'}`);
   res.json({ success: true, ticketId: id });
 });
 

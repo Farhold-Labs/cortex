@@ -2072,6 +2072,7 @@ export class DatabaseSQLite {
         CREATE TABLE support_tickets (
           id          TEXT PRIMARY KEY,
           email       TEXT,
+          handle      TEXT,
           message     TEXT NOT NULL,
           user_agent  TEXT,
           status      TEXT NOT NULL DEFAULT 'open',
@@ -2082,6 +2083,13 @@ export class DatabaseSQLite {
         CREATE INDEX idx_support_tickets_status ON support_tickets(status, created_at DESC);
       `);
       console.log('✅ support_tickets table created (v2.47.11)');
+    } else {
+      // Migration: add handle column if missing
+      const cols = this.db.prepare(`PRAGMA table_info(support_tickets)`).all();
+      if (!cols.find(c => c.name === 'handle')) {
+        this.db.exec(`ALTER TABLE support_tickets ADD COLUMN handle TEXT`);
+        console.log('✅ support_tickets.handle column added');
+      }
     }
   }
 

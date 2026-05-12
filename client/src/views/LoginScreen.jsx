@@ -42,6 +42,7 @@ const LoginScreen = ({ onAbout }) => {
   // Support ticket state
   const [showHavingTrouble, setShowHavingTrouble] = useState(false);
   const [showSupportForm, setShowSupportForm] = useState(false);
+  const [supportHandle, setSupportHandle] = useState('');
   const [supportEmail, setSupportEmail] = useState('');
   const [supportMessage, setSupportMessage] = useState('');
   const [supportStatus, setSupportStatus] = useState({ loading: false, message: '', error: '' });
@@ -59,11 +60,12 @@ const LoginScreen = ({ onAbout }) => {
       const res = await fetch(`${baseUrl}/api/support/ticket`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: supportEmail.trim() || undefined, message: supportMessage.trim() }),
+        body: JSON.stringify({ handle: supportHandle.trim() || undefined, email: supportEmail.trim() || undefined, message: supportMessage.trim() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to submit ticket');
       setSupportStatus({ loading: false, message: 'Your report has been submitted. Thank you!', error: '' });
+      setSupportHandle('');
       setSupportEmail('');
       setSupportMessage('');
     } catch (err) {
@@ -693,6 +695,13 @@ const LoginScreen = ({ onAbout }) => {
                       <p style={{ color: 'var(--accent)', fontFamily: 'monospace', fontSize: '0.75rem', margin: 0 }}>{supportStatus.message}</p>
                     ) : (
                       <form onSubmit={handleSupportTicket}>
+                        <input
+                          type="text"
+                          placeholder="Your handle (optional)"
+                          value={supportHandle}
+                          onChange={e => setSupportHandle(e.target.value.replace(/^@/, ''))}
+                          style={{ width: '100%', padding: '8px', marginBottom: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.75rem', boxSizing: 'border-box' }}
+                        />
                         <input
                           type="email"
                           placeholder="Your email (optional)"

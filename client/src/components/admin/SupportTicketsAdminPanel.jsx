@@ -128,6 +128,9 @@ const SupportTicketsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
                       }}>
                         {ticket.status.toUpperCase()}
                       </span>
+                      {ticket.handle && (
+                        <span style={{ color: 'var(--accent)', fontFamily: 'monospace', fontSize: '0.75rem' }}>@{ticket.handle}</span>
+                      )}
                       {ticket.email && (
                         <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '0.75rem' }}>{ticket.email}</span>
                       )}
