@@ -149,6 +149,7 @@ const ghostVerifications = new Map();
 const FEDERATION_ENABLED = process.env.FEDERATION_ENABLED === 'true';
 const FEDERATION_NODE_NAME = process.env.FEDERATION_NODE_NAME || null;
 const SUPPORT_WAVE_ID = process.env.SUPPORT_WAVE_ID || null;
+const SUPPORT_BOT_KEY = process.env.SUPPORT_BOT_KEY || null;
 
 // Federation cover traffic (v2.28.0)
 let FEDERATION_DECOY_ENABLED = process.env.FEDERATION_DECOY_ENABLED === 'true';
@@ -12097,22 +12098,22 @@ app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
   `).run(id, sanitizedEmail, sanitizedMessage, userAgent);
 
   // Notify via bot post to support wave if configured
-  if (SUPPORT_WAVE_ID) {
+  if (SUPPORT_WAVE_ID && SUPPORT_BOT_KEY) {
     try {
       const wave = db.getWave(SUPPORT_WAVE_ID);
-      const adminUser = db.db.prepare(`SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`).get();
-      if (wave && adminUser) {
+      const bot = db.findBotByApiKeyHash(hashToken(SUPPORT_BOT_KEY));
+      if (wave && bot && bot.status === 'active') {
         const content = `New support ticket submitted.\n\nID: ${id}\nEmail: ${sanitizedEmail || '(not provided)'}\n\nMessage:\n${sanitizedMessage}`;
-        const ping = db.createPing({
+        const ping = db.createMessage({
           waveId: SUPPORT_WAVE_ID,
-          authorId: adminUser.id,
+          authorId: bot.owner_user_id,
           content,
           privacy: wave.privacy,
-          botId: null,
-          isBot: true,
-          senderName: 'Support',
+          botId: bot.id,
         });
         if (ping) broadcastToWave(SUPPORT_WAVE_ID, { type: 'new_ping', ping });
+      } else if (!bot) {
+        console.warn('[Support] SUPPORT_BOT_KEY is set but no matching active bot found');
       }
     } catch (err) {
       console.error('[Support] Failed to post ticket notification:', err.message);
