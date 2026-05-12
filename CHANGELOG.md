@@ -5,6 +5,46 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.48.0] - 2026-05-12
+
+### Added
+
+#### Inline Emoji Autocomplete (`:shortcode:`)
+Typing `:` followed by letters in the message composer opens an autocomplete picker filtered by emoji name. Arrow keys navigate the list (with auto-scroll to keep the highlighted item visible), Enter or Tab inserts the emoji character, and Escape dismisses. Clicking a row also works. Selecting an option inserts the actual Unicode character so it renders correctly everywhere including push notifications.
+
+Any `:shortcode:` patterns left in the message are resolved to Unicode on send as a fallback for fast typists.
+
+826 emoji are included across all major categories: smileys & emotion, people & body, hearts, animals & nature, food & drink, activities & sports, travel & places, objects, symbols, and weather. Aliases are supported (`:+1:` → 👍, `:-1:` → 👎, `:shrug:` → 🤷, `:facepalm:` → 🤦, `:lol:` → 😆, `:boba:` → 🧋, etc.). Search ranks prefix matches above substring matches.
+
+#### Support Ticket Submission from Login Screen
+Users who cannot log in can submit a support ticket directly from the login screen without an account. A **Having trouble?** collapsible toggle consolidates Forgot password, Clear all data, and Report an issue into a single section, keeping the login page clean.
+
+The ticket form captures an optional handle (`@handle`) and/or email alongside the issue description. Tickets are stored in a new `support_tickets` SQLite table, rate-limited to 5 per hour per IP.
+
+If `SUPPORT_POSTING_TOKEN` (preferred) or `SUPPORT_BOT_KEY` is set alongside `SUPPORT_WAVE_ID`, a bot notification is posted to the configured wave. Wave participants receive a `wave_activity` notification.
+
+#### Support Tickets Admin Panel
+A new **Support Tickets** section in Profile Settings → Admin lists all submitted tickets, filterable by open / resolved / all. Admins can resolve or reopen individual tickets; resolved tickets show the resolver's handle and timestamp.
+
+New endpoints:
+- `POST /api/support/ticket` — public, unauthenticated, rate-limited (5/hr)
+- `GET /api/admin/support/tickets?status=open|resolved|all` — admin only
+- `PATCH /api/admin/support/tickets/:id/resolve` — admin only
+- `PATCH /api/admin/support/tickets/:id/reopen` — admin only
+
+### Changed
+
+- **Bot API key prefix** renamed from `fh_bot_` → `bot_` for new keys. Existing `fh_bot_` and `cx_bot_` keys continue to work without changes.
+- Support wave notifications now prefer `SUPPORT_POSTING_TOKEN` (wave-scoped posting token, no bot setup required) over `SUPPORT_BOT_KEY`. Both are still supported.
+
+### Fixed
+
+- Support ticket wave notification was not calling `createPingNotifications`, so wave participants received no notification when a ticket arrived.
+- `support_tickets` DB migration used `this.tableExists()` which does not exist — changed to the standard `sqlite_master` query pattern used by all other migrations.
+- Support ticket bot post used `authorId: null`, violating the `NOT NULL` constraint on `pings.author_id`.
+
+---
+
 ## [2.47.11] - 2026-04-30
 
 ### Added
