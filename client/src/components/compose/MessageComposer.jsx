@@ -46,6 +46,7 @@ const MessageComposer = forwardRef(({
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const fileAttachInputRef = useRef(null);
+  const emojiPickerRef = useRef(null);
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
@@ -121,6 +122,13 @@ const MessageComposer = forwardRef(({
     }, 150);
     return () => clearTimeout(timer);
   }, [mentionSearch, showMentionPicker]);
+
+  // Scroll active emoji row into view when index changes
+  useEffect(() => {
+    if (!showEmojiPicker || !emojiPickerRef.current) return;
+    const active = emojiPickerRef.current.querySelector('[data-active="true"]');
+    active?.scrollIntoView({ block: 'nearest' });
+  }, [emojiIndex, showEmojiPicker]);
 
   const getMentionableUsers = () => {
     const search = mentionSearch.toLowerCase();
@@ -409,7 +417,7 @@ const MessageComposer = forwardRef(({
           const results = searchEmoji(emojiSearch);
           if (results.length === 0) return null;
           return (
-            <div style={{
+            <div ref={emojiPickerRef} style={{
               position: 'absolute', bottom: '100%', left: 0, right: 0, marginBottom: '4px',
               background: 'var(--bg-surface)', border: '1px solid var(--border-primary)',
               maxHeight: '200px', overflowY: 'auto', zIndex: 20,
@@ -417,6 +425,7 @@ const MessageComposer = forwardRef(({
               {results.map((emoji, idx) => (
                 <div
                   key={emoji.name}
+                  data-active={idx === emojiIndex ? 'true' : 'false'}
                   onClick={() => insertEmoji(emoji)}
                   style={{
                     padding: isMobile ? '10px 12px' : '6px 12px',
