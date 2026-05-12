@@ -12100,12 +12100,12 @@ app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
   if (SUPPORT_WAVE_ID) {
     try {
       const wave = db.getWave(SUPPORT_WAVE_ID);
-      if (wave) {
-        const botUser = { id: 'system', displayName: 'Support Bot', handle: 'support', isAdmin: true };
+      const adminUser = db.db.prepare(`SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`).get();
+      if (wave && adminUser) {
         const content = `New support ticket submitted.\n\nID: ${id}\nEmail: ${sanitizedEmail || '(not provided)'}\n\nMessage:\n${sanitizedMessage}`;
         const ping = db.createPing({
           waveId: SUPPORT_WAVE_ID,
-          authorId: null,
+          authorId: adminUser.id,
           content,
           privacy: wave.privacy,
           botId: null,
