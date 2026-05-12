@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
+import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 
-const SupportTicketsAdminPanel = ({ fetchAPI, showToast, isOpen, onToggle }) => {
+const SupportTicketsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('open');
@@ -55,27 +55,46 @@ const SupportTicketsAdminPanel = ({ fetchAPI, showToast, isOpen, onToggle }) => 
   };
 
   return (
-    <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
-      <button
-        onClick={onToggle}
-        style={{ width: '100%', padding: '12px 16px', background: 'var(--bg-secondary)', border: 'none', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.85rem', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', textAlign: 'left' }}
-      >
-        <GlowText>Support Tickets</GlowText>
-        <span style={{ color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
-      </button>
+    <div style={{
+      marginTop: '20px',
+      padding: isMobile ? '16px' : '20px',
+      background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
+      border: '1px solid var(--accent-teal)40',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ color: 'var(--accent-teal)', fontSize: '0.8rem', fontWeight: 500 }}>🎫 SUPPORT TICKETS</div>
+        <button
+          onClick={onToggle}
+          style={{
+            padding: isMobile ? '8px 12px' : '6px 10px',
+            background: isOpen ? 'var(--accent-teal)20' : 'transparent',
+            border: `1px solid ${isOpen ? 'var(--accent-teal)' : 'var(--border-primary)'}`,
+            color: isOpen ? 'var(--accent-teal)' : 'var(--text-dim)',
+            cursor: 'pointer',
+            fontFamily: 'monospace',
+            fontSize: '0.7rem',
+          }}
+        >
+          {isOpen ? '▼ HIDE' : '▶ SHOW'}
+        </button>
+      </div>
 
       {isOpen && (
-        <div style={{ padding: '16px' }}>
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+        <div style={{ marginTop: '16px' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
             {['open', 'resolved', 'all'].map(s => (
               <button
                 key={s}
                 onClick={() => setStatusFilter(s)}
                 style={{
-                  padding: '4px 12px', border: '1px solid var(--border-subtle)', borderRadius: '4px',
+                  padding: '4px 12px',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '4px',
                   background: statusFilter === s ? 'var(--accent)' : 'var(--bg-secondary)',
                   color: statusFilter === s ? 'var(--bg-primary)' : 'var(--text-secondary)',
-                  fontFamily: 'monospace', fontSize: '0.75rem', cursor: 'pointer',
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
                 }}
               >
                 {s.charAt(0).toUpperCase() + s.slice(1)}
