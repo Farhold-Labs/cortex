@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { Avatar } from '../ui/SimpleComponents.jsx';
+import { searchEmoji, resolveEmojiShortcodes } from '../../config/emojiData.js';
 
 const MessageComposer = forwardRef(({
   participants = [],
@@ -35,6 +36,10 @@ const MessageComposer = forwardRef(({
   const [mentionSearch, setMentionSearch] = useState('');
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionStartPos, setMentionStartPos] = useState(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [emojiSearch, setEmojiSearch] = useState('');
+  const [emojiIndex, setEmojiIndex] = useState(0);
+  const [emojiStartPos, setEmojiStartPos] = useState(null);
   const [serverMentionResults, setServerMentionResults] = useState([]);
   const [showPhotoOptions, setShowPhotoOptions] = useState(false);
   const [showActionMenu, setShowActionMenu] = useState(false);
@@ -53,7 +58,7 @@ const MessageComposer = forwardRef(({
 
   const handleSend = () => {
     if (!newMessage.trim()) return;
-    onSend(newMessage);
+    onSend(resolveEmojiShortcodes(newMessage));
     setNewMessage('');
   };
 
@@ -86,6 +91,21 @@ const MessageComposer = forwardRef(({
     setMentionSearch('');
     setMentionStartPos(null);
     textareaRef.current?.focus();
+  };
+
+  const insertEmoji = (emoji) => {
+    const cursorPos = textareaRef.current?.selectionStart ?? newMessage.length;
+    const before = newMessage.slice(0, emojiStartPos);
+    const after = newMessage.slice(cursorPos);
+    setNewMessage(before + emoji.char + ' ' + after);
+    setShowEmojiPicker(false);
+    setEmojiSearch('');
+    setEmojiStartPos(null);
+    setTimeout(() => {
+      const pos = emojiStartPos + emoji.char.length + 1;
+      textareaRef.current?.setSelectionRange(pos, pos);
+      textareaRef.current?.focus();
+    }, 0);
   };
 
   // Server search fallback for mentions — catches stale/missing local participant data
@@ -208,21 +228,50 @@ const MessageComposer = forwardRef(({
             setNewMessage(value);
             onTyping?.();
 
-            // Detect @ mention
             const textBeforeCursor = value.slice(0, cursorPos);
+
+            // Detect @ mention
             const atMatch = textBeforeCursor.match(/@(\w*)$/);
             if (atMatch) {
               setShowMentionPicker(true);
               setMentionSearch(atMatch[1].toLowerCase());
               setMentionStartPos(cursorPos - atMatch[0].length);
               setMentionIndex(0);
+              setShowEmojiPicker(false);
             } else {
               setShowMentionPicker(false);
               setMentionSearch('');
               setMentionStartPos(null);
             }
+
+            // Detect :emoji shortcode
+            const colonMatch = textBeforeCursor.match(/:([a-z0-9_+\-]*)$/);
+            if (colonMatch && !atMatch) {
+              setShowEmojiPicker(true);
+              setEmojiSearch(colonMatch[1].toLowerCase());
+              setEmojiStartPos(cursorPos - colonMatch[0].length);
+              setEmojiIndex(0);
+            } else if (!atMatch) {
+              setShowEmojiPicker(false);
+              setEmojiSearch('');
+              setEmojiStartPos(null);
+            }
           }}
           onKeyDown={(e) => {
+            // Handle emoji picker navigation
+            if (showEmojiPicker) {
+              const results = searchEmoji(emojiSearch);
+              if (e.key === 'ArrowDown') { e.preventDefault(); setEmojiIndex(i => Math.min(i + 1, results.length - 1)); return; }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setEmojiIndex(i => Math.max(i - 1, 0)); return; }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                if (results.length > 0) { e.preventDefault(); insertEmoji(results[emojiIndex]); return; }
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setShowEmojiPicker(false); setEmojiSearch(''); setEmojiStartPos(null); return;
+              }
+            }
+
             // Handle mention picker navigation
             if (showMentionPicker) {
               const mentionableUsers = getMentionableUsers();
@@ -276,7 +325,7 @@ const MessageComposer = forwardRef(({
               }
             }
           }}
-          placeholder={placeholder || 'Type a ping... (Shift+Enter for new line, @ to mention)'}
+          placeholder={placeholder || 'Type a ping... (@ to mention, : for emoji)'}
           rows={1}
           style={{
             width: '100%',
@@ -349,6 +398,35 @@ const MessageComposer = forwardRef(({
                       @{user.handle}{user._isEveryone ? ' — notify all participants' : ''}
                     </div>
                   </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* Emoji Picker */}
+        {showEmojiPicker && (() => {
+          const results = searchEmoji(emojiSearch);
+          if (results.length === 0) return null;
+          return (
+            <div style={{
+              position: 'absolute', bottom: '100%', left: 0, right: 0, marginBottom: '4px',
+              background: 'var(--bg-surface)', border: '1px solid var(--border-primary)',
+              maxHeight: '200px', overflowY: 'auto', zIndex: 20,
+            }}>
+              {results.map((emoji, idx) => (
+                <div
+                  key={emoji.name}
+                  onClick={() => insertEmoji(emoji)}
+                  style={{
+                    padding: isMobile ? '10px 12px' : '6px 12px',
+                    display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
+                    background: idx === emojiIndex ? 'var(--bg-hover)' : 'transparent',
+                    borderBottom: idx < results.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                  }}
+                >
+                  <span style={{ fontSize: '1.2rem', lineHeight: 1, width: 24, textAlign: 'center' }}>{emoji.char}</span>
+                  <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '0.8rem' }}>:{emoji.name}:</span>
                 </div>
               ))}
             </div>
