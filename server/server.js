@@ -148,6 +148,11 @@ const ghostVerifications = new Map();
 // Federation configuration
 const FEDERATION_ENABLED = process.env.FEDERATION_ENABLED === 'true';
 const FEDERATION_NODE_NAME = process.env.FEDERATION_NODE_NAME || null;
+const SUPPORT_WAVE_ID = process.env.SUPPORT_WAVE_ID || null;
+// SUPPORT_POSTING_TOKEN: a wave posting token for the support wave (simpler than a bot key)
+// SUPPORT_BOT_KEY: a bot API key (bot_... or legacy fh_bot_/cx_bot_) — fallback if posting token not set
+const SUPPORT_POSTING_TOKEN = process.env.SUPPORT_POSTING_TOKEN || null;
+const SUPPORT_BOT_KEY = process.env.SUPPORT_BOT_KEY || null;
 
 // Federation cover traffic (v2.28.0)
 let FEDERATION_DECOY_ENABLED = process.env.FEDERATION_DECOY_ENABLED === 'true';
@@ -420,6 +425,14 @@ const crawlLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: RATE_LIMIT_CRAWL_MAX,
   message: { error: 'Too many crawl bar requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const supportTicketLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  message: { error: 'Too many support tickets submitted. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -4394,8 +4407,8 @@ function authenticateBotToken(req, res, next) {
     return res.status(401).json({ error: 'Bot authentication required' });
   }
 
-  // Validate format: fh_bot_xxxxx
-  if (!token.startsWith('fh_bot_')) {
+  // Validate format: bot_xxxxx (fh_bot_ and cx_bot_ accepted for backward compat)
+  if (!token.startsWith('bot_') && !token.startsWith('cx_bot_') && !token.startsWith('fh_bot_')) {
     return res.status(401).json({ error: 'Invalid bot token format' });
   }
 
@@ -10692,8 +10705,7 @@ app.post('/api/admin/bots', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Bot name must be at least 3 characters' });
     }
 
-    // Generate secure API key: fh_bot_{32 random hex chars}
-    const apiKey = `fh_bot_${crypto.randomBytes(32).toString('hex')}`;
+    const apiKey = `bot_${crypto.randomBytes(32).toString('hex')}`;
     const apiKeyHash = hashToken(apiKey);
 
     // Generate optional webhook secret
@@ -10887,7 +10899,7 @@ app.post('/api/admin/bots/:id/regenerate', authenticateToken, (req, res) => {
     }
 
     // Generate new API key
-    const newApiKey = `fh_bot_${crypto.randomBytes(32).toString('hex')}`;
+    const newApiKey = `bot_${crypto.randomBytes(32).toString('hex')}`;
     const newApiKeyHash = hashToken(newApiKey);
 
     db.regenerateBotApiKey(botId, newApiKeyHash);
@@ -12065,6 +12077,127 @@ app.get('/api/reports', authenticateToken, (req, res) => {
 });
 
 // Get reports (moderator+)
+// ============ SUPPORT TICKETS ============
+
+// Submit a support ticket — public endpoint, no auth required
+app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
+  const { email, handle, message } = req.body || {};
+  if (!message || typeof message !== 'string' || message.trim().length < 10) {
+    return res.status(400).json({ error: 'Please describe the issue (at least 10 characters).' });
+  }
+  if (message.trim().length > 2000) {
+    return res.status(400).json({ error: 'Message too long (max 2000 characters).' });
+  }
+
+  const id = `ticket-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sanitizedEmail = email ? sanitizeInput(String(email).trim().slice(0, 200)) : null;
+  const sanitizedHandle = handle ? sanitizeInput(String(handle).trim().replace(/^@/, '').slice(0, 50)) : null;
+  const sanitizedMessage = sanitizeInput(message.trim());
+  const userAgent = req.headers['user-agent']?.slice(0, 300) || null;
+
+  db.db.prepare(`
+    INSERT INTO support_tickets (id, email, handle, message, user_agent, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'open', datetime('now'))
+  `).run(id, sanitizedEmail, sanitizedHandle, sanitizedMessage, userAgent);
+
+  // Notify via wave post to support wave if configured
+  if (SUPPORT_WAVE_ID && (SUPPORT_POSTING_TOKEN || SUPPORT_BOT_KEY)) {
+    try {
+      const wave = db.getWave(SUPPORT_WAVE_ID);
+      let authorId = null;
+      let botId = null;
+      let senderName = 'Support';
+
+      if (SUPPORT_POSTING_TOKEN) {
+        const tokenRow = db.getWaveTokenByHash(crypto.createHash('sha256').update(SUPPORT_POSTING_TOKEN).digest('hex'));
+        if (tokenRow && tokenRow.wave_id === SUPPORT_WAVE_ID) {
+          authorId = tokenRow.created_by;
+          botId = tokenRow.bot_id || null;
+          if (tokenRow.name) senderName = tokenRow.name;
+        } else {
+          console.warn('[Support] SUPPORT_POSTING_TOKEN invalid or not scoped to SUPPORT_WAVE_ID');
+        }
+      } else if (SUPPORT_BOT_KEY) {
+        const bot = db.findBotByApiKeyHash(hashToken(SUPPORT_BOT_KEY));
+        if (bot && bot.status === 'active') {
+          authorId = bot.owner_user_id;
+          botId = bot.id;
+          senderName = bot.name;
+        } else {
+          console.warn('[Support] SUPPORT_BOT_KEY is set but no matching active bot found');
+        }
+      }
+
+      if (wave && authorId) {
+        const fromParts = [sanitizedHandle ? `@${sanitizedHandle}` : null, sanitizedEmail].filter(Boolean);
+        const from = fromParts.length ? fromParts.join(' / ') : '(anonymous)';
+        const content = `New support ticket submitted.\n\nID: ${id}\nFrom: ${from}\n\nMessage:\n${sanitizedMessage}`;
+        const ping = db.createMessage({ waveId: SUPPORT_WAVE_ID, authorId, content, privacy: wave.privacy, botId });
+        if (ping) {
+          broadcastToWave(SUPPORT_WAVE_ID, { type: 'new_ping', data: ping });
+          createPingNotifications(ping, wave, { id: authorId, handle: senderName, displayName: senderName });
+        }
+      }
+    } catch (err) {
+      console.error('[Support] Failed to post ticket notification:', err.message);
+    }
+  }
+
+  console.log(`[Support] Ticket submitted: ${id} from ${sanitizedHandle ? '@' + sanitizedHandle : sanitizedEmail || 'anonymous'}`);
+  res.json({ success: true, ticketId: id });
+});
+
+// List support tickets — admin only
+app.get('/api/admin/support/tickets', authenticateToken, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+
+  const status = req.query.status || 'open';
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+  const tickets = db.db.prepare(`
+    SELECT t.*, u.display_name as resolved_by_name
+    FROM support_tickets t
+    LEFT JOIN users u ON t.resolved_by = u.id
+    WHERE (? = 'all' OR t.status = ?)
+    ORDER BY t.created_at DESC
+    LIMIT ?
+  `).all(status, status, limit);
+
+  res.json({ tickets });
+});
+
+// Resolve a support ticket — admin only
+app.patch('/api/admin/support/tickets/:id/resolve', authenticateToken, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+
+  const ticketId = sanitizeInput(req.params.id);
+  const ticket = db.db.prepare('SELECT * FROM support_tickets WHERE id = ?').get(ticketId);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+  db.db.prepare(`
+    UPDATE support_tickets SET status = 'resolved', resolved_at = datetime('now'), resolved_by = ? WHERE id = ?
+  `).run(req.user.userId, ticketId);
+
+  res.json({ success: true });
+});
+
+// Reopen a support ticket — admin only
+app.patch('/api/admin/support/tickets/:id/reopen', authenticateToken, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+
+  const ticketId = sanitizeInput(req.params.id);
+  const ticket = db.db.prepare('SELECT * FROM support_tickets WHERE id = ?').get(ticketId);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+  db.db.prepare(`
+    UPDATE support_tickets SET status = 'open', resolved_at = NULL, resolved_by = NULL WHERE id = ?
+  `).run(ticketId);
+
+  res.json({ success: true });
+});
+
 app.get('/api/admin/reports', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!requireRole(user, ROLES.MODERATOR, res)) return;
