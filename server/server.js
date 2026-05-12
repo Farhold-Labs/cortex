@@ -149,6 +149,9 @@ const ghostVerifications = new Map();
 const FEDERATION_ENABLED = process.env.FEDERATION_ENABLED === 'true';
 const FEDERATION_NODE_NAME = process.env.FEDERATION_NODE_NAME || null;
 const SUPPORT_WAVE_ID = process.env.SUPPORT_WAVE_ID || null;
+// SUPPORT_POSTING_TOKEN: a wave posting token for the support wave (simpler than a bot key)
+// SUPPORT_BOT_KEY: a bot API key (cx_bot_... or fh_bot_...) — fallback if posting token not set
+const SUPPORT_POSTING_TOKEN = process.env.SUPPORT_POSTING_TOKEN || null;
 const SUPPORT_BOT_KEY = process.env.SUPPORT_BOT_KEY || null;
 
 // Federation cover traffic (v2.28.0)
@@ -4404,8 +4407,8 @@ function authenticateBotToken(req, res, next) {
     return res.status(401).json({ error: 'Bot authentication required' });
   }
 
-  // Validate format: fh_bot_xxxxx
-  if (!token.startsWith('fh_bot_')) {
+  // Validate format: cx_bot_xxxxx (fh_bot_ accepted for backward compat)
+  if (!token.startsWith('cx_bot_') && !token.startsWith('fh_bot_')) {
     return res.status(401).json({ error: 'Invalid bot token format' });
   }
 
@@ -10702,8 +10705,8 @@ app.post('/api/admin/bots', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Bot name must be at least 3 characters' });
     }
 
-    // Generate secure API key: fh_bot_{32 random hex chars}
-    const apiKey = `fh_bot_${crypto.randomBytes(32).toString('hex')}`;
+    // Generate secure API key: cx_bot_{32 random hex chars}
+    const apiKey = `cx_bot_${crypto.randomBytes(32).toString('hex')}`;
     const apiKeyHash = hashToken(apiKey);
 
     // Generate optional webhook secret
@@ -10897,7 +10900,7 @@ app.post('/api/admin/bots/:id/regenerate', authenticateToken, (req, res) => {
     }
 
     // Generate new API key
-    const newApiKey = `fh_bot_${crypto.randomBytes(32).toString('hex')}`;
+    const newApiKey = `cx_bot_${crypto.randomBytes(32).toString('hex')}`;
     const newApiKeyHash = hashToken(newApiKey);
 
     db.regenerateBotApiKey(botId, newApiKeyHash);
@@ -12097,23 +12100,41 @@ app.post('/api/support/ticket', supportTicketLimiter, (req, res) => {
     VALUES (?, ?, ?, ?, 'open', datetime('now'))
   `).run(id, sanitizedEmail, sanitizedMessage, userAgent);
 
-  // Notify via bot post to support wave if configured
-  if (SUPPORT_WAVE_ID && SUPPORT_BOT_KEY) {
+  // Notify via wave post to support wave if configured
+  if (SUPPORT_WAVE_ID && (SUPPORT_POSTING_TOKEN || SUPPORT_BOT_KEY)) {
     try {
       const wave = db.getWave(SUPPORT_WAVE_ID);
-      const bot = db.findBotByApiKeyHash(hashToken(SUPPORT_BOT_KEY));
-      if (wave && bot && bot.status === 'active') {
+      let authorId = null;
+      let botId = null;
+      let senderName = 'Support';
+
+      if (SUPPORT_POSTING_TOKEN) {
+        const tokenRow = db.getWaveTokenByHash(crypto.createHash('sha256').update(SUPPORT_POSTING_TOKEN).digest('hex'));
+        if (tokenRow && tokenRow.wave_id === SUPPORT_WAVE_ID) {
+          authorId = tokenRow.created_by;
+          botId = tokenRow.bot_id || null;
+          if (tokenRow.name) senderName = tokenRow.name;
+        } else {
+          console.warn('[Support] SUPPORT_POSTING_TOKEN invalid or not scoped to SUPPORT_WAVE_ID');
+        }
+      } else if (SUPPORT_BOT_KEY) {
+        const bot = db.findBotByApiKeyHash(hashToken(SUPPORT_BOT_KEY));
+        if (bot && bot.status === 'active') {
+          authorId = bot.owner_user_id;
+          botId = bot.id;
+          senderName = bot.name;
+        } else {
+          console.warn('[Support] SUPPORT_BOT_KEY is set but no matching active bot found');
+        }
+      }
+
+      if (wave && authorId) {
         const content = `New support ticket submitted.\n\nID: ${id}\nEmail: ${sanitizedEmail || '(not provided)'}\n\nMessage:\n${sanitizedMessage}`;
-        const ping = db.createMessage({
-          waveId: SUPPORT_WAVE_ID,
-          authorId: bot.owner_user_id,
-          content,
-          privacy: wave.privacy,
-          botId: bot.id,
-        });
-        if (ping) broadcastToWave(SUPPORT_WAVE_ID, { type: 'new_ping', ping });
-      } else if (!bot) {
-        console.warn('[Support] SUPPORT_BOT_KEY is set but no matching active bot found');
+        const ping = db.createMessage({ waveId: SUPPORT_WAVE_ID, authorId, content, privacy: wave.privacy, botId });
+        if (ping) {
+          broadcastToWave(SUPPORT_WAVE_ID, { type: 'new_ping', data: ping });
+          createPingNotifications(ping, wave, { id: authorId, handle: senderName, displayName: senderName });
+        }
       }
     } catch (err) {
       console.error('[Support] Failed to post ticket notification:', err.message);
