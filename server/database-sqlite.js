@@ -2065,6 +2065,32 @@ export class DatabaseSQLite {
       `);
       console.log('✅ calendar_feed_tokens table created (v2.47.0)');
     }
+
+    const supportTicketsExists = this.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='support_tickets'`).get();
+    if (!supportTicketsExists) {
+      this.db.exec(`
+        CREATE TABLE support_tickets (
+          id          TEXT PRIMARY KEY,
+          email       TEXT,
+          handle      TEXT,
+          message     TEXT NOT NULL,
+          user_agent  TEXT,
+          status      TEXT NOT NULL DEFAULT 'open',
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          resolved_at TEXT,
+          resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX idx_support_tickets_status ON support_tickets(status, created_at DESC);
+      `);
+      console.log('✅ support_tickets table created (v2.47.11)');
+    } else {
+      // Migration: add handle column if missing
+      const cols = this.db.prepare(`PRAGMA table_info(support_tickets)`).all();
+      if (!cols.find(c => c.name === 'handle')) {
+        this.db.exec(`ALTER TABLE support_tickets ADD COLUMN handle TEXT`);
+        console.log('✅ support_tickets.handle column added');
+      }
+    }
   }
 
   prepareStatements() {

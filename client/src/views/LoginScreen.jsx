@@ -39,7 +39,39 @@ const LoginScreen = ({ onAbout }) => {
   const [serverUrl, setServerUrl] = useState(storage.getServerUrl() || BASE_URL);
   const [serverUrlError, setServerUrlError] = useState('');
   const [testingServer, setTestingServer] = useState(false);
+  // Support ticket state
+  const [showHavingTrouble, setShowHavingTrouble] = useState(false);
+  const [showSupportForm, setShowSupportForm] = useState(false);
+  const [supportHandle, setSupportHandle] = useState('');
+  const [supportEmail, setSupportEmail] = useState('');
+  const [supportMessage, setSupportMessage] = useState('');
+  const [supportStatus, setSupportStatus] = useState({ loading: false, message: '', error: '' });
   const { isMobile, isTablet, isDesktop } = useWindowSize();
+
+  const handleSupportTicket = async (e) => {
+    e.preventDefault();
+    if (!supportMessage.trim()) {
+      setSupportStatus({ loading: false, message: '', error: 'Please describe your issue.' });
+      return;
+    }
+    setSupportStatus({ loading: true, message: '', error: '' });
+    try {
+      const baseUrl = storage.getServerUrl() || BASE_URL;
+      const res = await fetch(`${baseUrl}/api/support/ticket`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handle: supportHandle.trim() || undefined, email: supportEmail.trim() || undefined, message: supportMessage.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to submit ticket');
+      setSupportStatus({ loading: false, message: 'Your report has been submitted. Thank you!', error: '' });
+      setSupportHandle('');
+      setSupportEmail('');
+      setSupportMessage('');
+    } catch (err) {
+      setSupportStatus({ loading: false, message: '', error: err.message });
+    }
+  };
 
   const handleForgotPassword = async (e) => {
     e.preventDefault();
@@ -554,55 +586,157 @@ const LoginScreen = ({ onAbout }) => {
           </button>
         </div>
 
-        {!isRegistering && !showForgotPassword && (
-          <div style={{ textAlign: 'center', marginTop: '12px' }}>
-            <button onClick={() => { setShowForgotPassword(true); setError(''); setForgotStatus({ loading: false, message: '', error: '' }); }}
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem' }}>
-              Forgot password?
+        {!isRegistering && (
+          <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
+            <button
+              onClick={() => { setShowHavingTrouble(t => !t); setShowForgotPassword(false); setShowSupportForm(false); }}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem', width: '100%', textAlign: 'center' }}
+            >
+              Having trouble? {showHavingTrouble ? '▲' : '▼'}
             </button>
-          </div>
-        )}
 
-        {showForgotPassword && (
-          <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border-subtle)' }}>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
-              Enter your email address and we'll send you a link to reset your password.
-            </div>
-            <form onSubmit={handleForgotPassword}>
-              <div style={{ marginBottom: '16px' }}>
-                <input
-                  type="email"
-                  value={forgotEmail}
-                  onChange={(e) => setForgotEmail(e.target.value)}
-                  placeholder="Enter your email"
-                  style={inputStyle}
-                />
+            {showHavingTrouble && (
+              <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+
+                {/* Forgot password */}
+                {!showForgotPassword && !showSupportForm && (
+                  <button
+                    onClick={() => { setShowForgotPassword(true); setForgotStatus({ loading: false, message: '', error: '' }); }}
+                    style={{ background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem', padding: '8px' }}
+                  >
+                    Forgot password?
+                  </button>
+                )}
+
+                {showForgotPassword && (
+                  <div style={{ padding: '12px', border: '1px solid var(--border-subtle)', borderRadius: '6px' }}>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
+                      Enter your email and we'll send a reset link.
+                    </div>
+                    <form onSubmit={handleForgotPassword}>
+                      <input
+                        type="email"
+                        value={forgotEmail}
+                        onChange={(e) => setForgotEmail(e.target.value)}
+                        placeholder="Enter your email"
+                        style={{ ...inputStyle, marginBottom: '10px' }}
+                      />
+                      {forgotStatus.error && (
+                        <div style={{ color: 'var(--accent-orange)', fontSize: '0.8rem', marginBottom: '10px', padding: '8px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)30' }}>
+                          {forgotStatus.error}
+                        </div>
+                      )}
+                      {forgotStatus.message && (
+                        <div style={{ color: 'var(--accent-green)', fontSize: '0.8rem', marginBottom: '10px', padding: '8px', background: 'var(--accent-green)10', border: '1px solid var(--accent-green)30' }}>
+                          {forgotStatus.message}
+                        </div>
+                      )}
+                      <button type="submit" disabled={forgotStatus.loading} style={{
+                        width: '100%', padding: '10px',
+                        background: forgotStatus.loading ? 'var(--border-subtle)' : 'var(--accent-teal)20',
+                        border: `1px solid ${forgotStatus.loading ? 'var(--border-primary)' : 'var(--accent-teal)'}`,
+                        color: forgotStatus.loading ? 'var(--text-muted)' : 'var(--accent-teal)',
+                        cursor: forgotStatus.loading ? 'not-allowed' : 'pointer',
+                        fontFamily: 'monospace', fontSize: '0.85rem',
+                      }}>
+                        {forgotStatus.loading ? 'SENDING...' : 'SEND RESET LINK'}
+                      </button>
+                    </form>
+                    <button onClick={() => { setShowForgotPassword(false); setForgotStatus({ loading: false, message: '', error: '' }); }}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.72rem', marginTop: '8px', display: 'block', width: '100%', textAlign: 'center' }}>
+                      ← Back
+                    </button>
+                  </div>
+                )}
+
+                {/* Clear all data */}
+                {!showForgotPassword && !showSupportForm && (
+                  <button
+                    onClick={async () => {
+                      if (confirm(CONFIRM_DIALOG.clearLocalData)) {
+                        try {
+                          const savedServerUrl = localStorage.getItem('farhold_server_url');
+                          localStorage.clear();
+                          if (savedServerUrl) localStorage.setItem('farhold_server_url', savedServerUrl);
+                          sessionStorage.clear();
+                          const databases = await indexedDB.databases?.() || [];
+                          for (const db of databases) { if (db.name) indexedDB.deleteDatabase(db.name); }
+                          const registrations = await navigator.serviceWorker?.getRegistrations() || [];
+                          for (const registration of registrations) { await registration.unregister(); }
+                          const cacheNames = await caches?.keys() || [];
+                          for (const cacheName of cacheNames) { await caches.delete(cacheName); }
+                          alert('All data cleared. The page will now reload.');
+                          window.location.reload();
+                        } catch (err) {
+                          console.error('Failed to clear data:', err);
+                          alert('Failed to clear some data. Try clearing manually in browser settings.');
+                        }
+                      }
+                    }}
+                    style={{ background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem', padding: '8px' }}
+                  >
+                    Clear all local data ✕
+                  </button>
+                )}
+
+                {/* Report an issue */}
+                {!showForgotPassword && !showSupportForm && (
+                  <button
+                    onClick={() => { setShowSupportForm(true); setSupportStatus({ loading: false, message: '', error: '' }); }}
+                    style={{ background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem', padding: '8px' }}
+                  >
+                    Report an issue
+                  </button>
+                )}
+
+                {showSupportForm && (
+                  <div style={{ padding: '12px', border: '1px solid var(--border-subtle)', borderRadius: '6px' }}>
+                    {supportStatus.message ? (
+                      <p style={{ color: 'var(--accent)', fontFamily: 'monospace', fontSize: '0.75rem', margin: 0 }}>{supportStatus.message}</p>
+                    ) : (
+                      <form onSubmit={handleSupportTicket}>
+                        <input
+                          type="text"
+                          placeholder="Your handle (optional)"
+                          value={supportHandle}
+                          onChange={e => setSupportHandle(e.target.value.replace(/^@/, ''))}
+                          style={{ width: '100%', padding: '8px', marginBottom: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.75rem', boxSizing: 'border-box' }}
+                        />
+                        <input
+                          type="email"
+                          placeholder="Your email (optional)"
+                          value={supportEmail}
+                          onChange={e => setSupportEmail(e.target.value)}
+                          style={{ width: '100%', padding: '8px', marginBottom: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.75rem', boxSizing: 'border-box' }}
+                        />
+                        <textarea
+                          placeholder="Describe the issue you're experiencing..."
+                          value={supportMessage}
+                          onChange={e => setSupportMessage(e.target.value)}
+                          rows={4}
+                          required
+                          style={{ width: '100%', padding: '8px', marginBottom: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }}
+                        />
+                        {supportStatus.error && (
+                          <p style={{ color: 'var(--error)', fontFamily: 'monospace', fontSize: '0.7rem', margin: '0 0 8px' }}>{supportStatus.error}</p>
+                        )}
+                        <button
+                          type="submit"
+                          disabled={supportStatus.loading}
+                          style={{ width: '100%', padding: '8px', background: 'var(--accent)', color: 'var(--bg-primary)', border: 'none', borderRadius: '4px', fontFamily: 'monospace', fontSize: '0.75rem', cursor: supportStatus.loading ? 'not-allowed' : 'pointer', opacity: supportStatus.loading ? 0.7 : 1 }}
+                        >
+                          {supportStatus.loading ? 'Submitting...' : 'Submit Report'}
+                        </button>
+                      </form>
+                    )}
+                    <button onClick={() => setShowSupportForm(false)}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.72rem', marginTop: '8px', display: 'block', width: '100%', textAlign: 'center' }}>
+                      ← Back
+                    </button>
+                  </div>
+                )}
               </div>
-              {forgotStatus.error && (
-                <div style={{ color: 'var(--accent-orange)', fontSize: '0.85rem', marginBottom: '16px', padding: '10px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)30' }}>
-                  {forgotStatus.error}
-                </div>
-              )}
-              {forgotStatus.message && (
-                <div style={{ color: 'var(--accent-green)', fontSize: '0.85rem', marginBottom: '16px', padding: '10px', background: 'var(--accent-green)10', border: '1px solid var(--accent-green)30' }}>
-                  {forgotStatus.message}
-                </div>
-              )}
-              <button type="submit" disabled={forgotStatus.loading} style={{
-                width: '100%', padding: '12px',
-                background: forgotStatus.loading ? 'var(--border-subtle)' : 'var(--accent-teal)20',
-                border: `1px solid ${forgotStatus.loading ? 'var(--border-primary)' : 'var(--accent-teal)'}`,
-                color: forgotStatus.loading ? 'var(--text-muted)' : 'var(--accent-teal)',
-                cursor: forgotStatus.loading ? 'not-allowed' : 'pointer',
-                fontFamily: 'monospace', fontSize: '0.9rem',
-              }}>
-                {forgotStatus.loading ? 'SENDING...' : 'SEND RESET LINK'}
-              </button>
-            </form>
-            <button onClick={() => { setShowForgotPassword(false); setForgotStatus({ loading: false, message: '', error: '' }); }}
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem', marginTop: '12px', display: 'block', width: '100%', textAlign: 'center' }}>
-              ← Back to login
-            </button>
+            )}
           </div>
         )}
         </>
@@ -681,49 +815,6 @@ const LoginScreen = ({ onAbout }) => {
           )}
         </div>
 
-        {/* Clear All Data - for troubleshooting stale data issues */}
-        <div style={{ textAlign: 'center', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
-          <button
-            onClick={async () => {
-              if (confirm(CONFIRM_DIALOG.clearLocalData)) {
-                try {
-                  // Clear all storage (preserve server URL)
-                  const savedServerUrl = localStorage.getItem('farhold_server_url');
-                  localStorage.clear();
-                  if (savedServerUrl) localStorage.setItem('farhold_server_url', savedServerUrl);
-                  sessionStorage.clear();
-
-                  // Clear IndexedDB
-                  const databases = await indexedDB.databases?.() || [];
-                  for (const db of databases) {
-                    if (db.name) indexedDB.deleteDatabase(db.name);
-                  }
-
-                  // Unregister service workers
-                  const registrations = await navigator.serviceWorker?.getRegistrations() || [];
-                  for (const registration of registrations) {
-                    await registration.unregister();
-                  }
-
-                  // Clear caches
-                  const cacheNames = await caches?.keys() || [];
-                  for (const cacheName of cacheNames) {
-                    await caches.delete(cacheName);
-                  }
-
-                  alert('All data cleared. The page will now reload.');
-                  window.location.reload();
-                } catch (err) {
-                  console.error('Failed to clear data:', err);
-                  alert('Failed to clear some data. Try clearing manually in browser settings.');
-                }
-              }
-            }}
-            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem', opacity: 0.7 }}
-          >
-            Having trouble? Clear all data ✕
-          </button>
-        </div>
       </div>
     </div>
   );

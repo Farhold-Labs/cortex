@@ -23,6 +23,7 @@ import EventsAdminPanel from '../admin/EventsAdminPanel.jsx';
 import FederationAdminPanel from '../admin/FederationAdminPanel.jsx';
 import HandleRequestsList from '../admin/HandleRequestsList.jsx';
 import BotsAdminPanel from '../admin/BotsAdminPanel.jsx';
+import SupportTicketsAdminPanel from '../admin/SupportTicketsAdminPanel.jsx';
 import PrivacyDashboard from '../admin/PrivacyDashboard.jsx';
 import ModerationAppealsPanel from '../admin/ModerationAppealsPanel.jsx';
 import ThemeCustomizationModal from '../settings/ThemeCustomizationModal.jsx';
@@ -2151,6 +2152,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
               {/* Bots Admin Panel (v2.1.0) */}
               <BotsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'bots'} onToggle={() => toggleAdminSection('bots')} />
+
+              {/* Support Tickets (v2.47.11) */}
+              <SupportTicketsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isOpen={openAdminSection === 'support'} onToggle={() => toggleAdminSection('support')} />
 
               {/* Privacy & Encryption Dashboard (v2.21.0) */}
               <PrivacyDashboard fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'privacy'} onToggle={() => toggleAdminSection('privacy')} />
