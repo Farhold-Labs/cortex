@@ -150,7 +150,7 @@ const FEDERATION_ENABLED = process.env.FEDERATION_ENABLED === 'true';
 const FEDERATION_NODE_NAME = process.env.FEDERATION_NODE_NAME || null;
 const SUPPORT_WAVE_ID = process.env.SUPPORT_WAVE_ID || null;
 // SUPPORT_POSTING_TOKEN: a wave posting token for the support wave (simpler than a bot key)
-// SUPPORT_BOT_KEY: a bot API key (cx_bot_... or fh_bot_...) — fallback if posting token not set
+// SUPPORT_BOT_KEY: a bot API key (bot_... or legacy fh_bot_/cx_bot_) — fallback if posting token not set
 const SUPPORT_POSTING_TOKEN = process.env.SUPPORT_POSTING_TOKEN || null;
 const SUPPORT_BOT_KEY = process.env.SUPPORT_BOT_KEY || null;
 
@@ -4407,8 +4407,8 @@ function authenticateBotToken(req, res, next) {
     return res.status(401).json({ error: 'Bot authentication required' });
   }
 
-  // Validate format: cx_bot_xxxxx (fh_bot_ accepted for backward compat)
-  if (!token.startsWith('cx_bot_') && !token.startsWith('fh_bot_')) {
+  // Validate format: bot_xxxxx (fh_bot_ and cx_bot_ accepted for backward compat)
+  if (!token.startsWith('bot_') && !token.startsWith('cx_bot_') && !token.startsWith('fh_bot_')) {
     return res.status(401).json({ error: 'Invalid bot token format' });
   }
 
@@ -10705,8 +10705,7 @@ app.post('/api/admin/bots', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Bot name must be at least 3 characters' });
     }
 
-    // Generate secure API key: cx_bot_{32 random hex chars}
-    const apiKey = `cx_bot_${crypto.randomBytes(32).toString('hex')}`;
+    const apiKey = `bot_${crypto.randomBytes(32).toString('hex')}`;
     const apiKeyHash = hashToken(apiKey);
 
     // Generate optional webhook secret
@@ -10900,7 +10899,7 @@ app.post('/api/admin/bots/:id/regenerate', authenticateToken, (req, res) => {
     }
 
     // Generate new API key
-    const newApiKey = `cx_bot_${crypto.randomBytes(32).toString('hex')}`;
+    const newApiKey = `bot_${crypto.randomBytes(32).toString('hex')}`;
     const newApiKeyHash = hashToken(newApiKey);
 
     db.regenerateBotApiKey(botId, newApiKeyHash);
