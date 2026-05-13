@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **E2EE message edit bug**: editing a message in an encrypted wave showed `[unable to decrypt]` after save. The edit path was sending plaintext to the server while the database retained the `encrypted = 1` flag with a stale nonce, making the stored ciphertext unreadable. Fix spans three layers: the client re-encrypts the edited content before sending (`encryptPing`), the server accepts `encrypted`, `nonce`, and `keyVersion` fields on `PUT /api/pings/:id`, and the database skips `sanitizeMessage`/`detectAndEmbedMedia` for ciphertext payloads.
+
 - **Emoji autocomplete closing-colon bug**: typing a full `:shortcode:` with a closing colon and pressing Enter inserted the wrong (default) emoji instead of the intended one. The closing colon was matching the partial-shortcode pattern with an empty search string, resetting the picker to index 0. Fix: the onChange handler now checks for a completed `/:name:$/` pattern before the partial pattern. Known shortcodes are auto-inserted inline immediately on the closing colon; unknown shortcodes close the picker silently.
 
 ---
