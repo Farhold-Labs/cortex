@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { Avatar } from '../ui/SimpleComponents.jsx';
-import { searchEmoji, resolveEmojiShortcodes } from '../../config/emojiData.js';
+import { searchEmoji, resolveEmojiShortcodes, EMOJI_MAP } from '../../config/emojiData.js';
 
 const MessageComposer = forwardRef(({
   participants = [],
@@ -253,16 +253,30 @@ const MessageComposer = forwardRef(({
             }
 
             // Detect :emoji shortcode
-            const colonMatch = textBeforeCursor.match(/:([a-z0-9_+\-]*)$/);
-            if (colonMatch && !atMatch) {
-              setShowEmojiPicker(true);
-              setEmojiSearch(colonMatch[1].toLowerCase());
-              setEmojiStartPos(cursorPos - colonMatch[0].length);
-              setEmojiIndex(0);
-            } else if (!atMatch) {
+            const completedMatch = !atMatch && textBeforeCursor.match(/:([a-z0-9_+\-]+):$/);
+            if (completedMatch) {
+              const emojiChar = EMOJI_MAP.get(completedMatch[1].toLowerCase());
+              if (emojiChar) {
+                const matchStart = cursorPos - completedMatch[0].length;
+                setNewMessage(value.slice(0, matchStart) + emojiChar + ' ' + value.slice(cursorPos));
+                const newPos = matchStart + emojiChar.length + 1;
+                setTimeout(() => { textareaRef.current?.setSelectionRange(newPos, newPos); }, 0);
+              }
               setShowEmojiPicker(false);
               setEmojiSearch('');
               setEmojiStartPos(null);
+            } else {
+              const colonMatch = !atMatch && textBeforeCursor.match(/:([a-z0-9_+\-]*)$/);
+              if (colonMatch) {
+                setShowEmojiPicker(true);
+                setEmojiSearch(colonMatch[1].toLowerCase());
+                setEmojiStartPos(cursorPos - colonMatch[0].length);
+                setEmojiIndex(0);
+              } else if (!atMatch) {
+                setShowEmojiPicker(false);
+                setEmojiSearch('');
+                setEmojiStartPos(null);
+              }
             }
           }}
           onKeyDown={(e) => {

@@ -5,6 +5,14 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.48.1] - 2026-05-13
+
+### Fixed
+
+- **Emoji autocomplete closing-colon bug**: typing a full `:shortcode:` with a closing colon and pressing Enter inserted the wrong (default) emoji instead of the intended one. The closing colon was matching the partial-shortcode pattern with an empty search string, resetting the picker to index 0. Fix: the onChange handler now checks for a completed `/:name:$/` pattern before the partial pattern. Known shortcodes are auto-inserted inline immediately on the closing colon; unknown shortcodes close the picker silently.
+
+---
+
 ## [2.48.0] - 2026-05-12
 
 ### Added

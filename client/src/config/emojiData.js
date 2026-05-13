@@ -356,7 +356,7 @@ const EMOJI_DATA = [
   ['puzzle', '🧩'], ['teddy', '🧸'],
 ];
 
-const EMOJI_MAP = new Map();
+export const EMOJI_MAP = new Map();
 export const EMOJI_LIST = [];
 
 for (const entry of EMOJI_DATA) {
