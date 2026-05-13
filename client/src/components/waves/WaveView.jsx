@@ -1515,9 +1515,24 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     }
 
     try {
+      let body = { content: editContent };
+
+      if (waveData?.encrypted && e2ee.isUnlocked) {
+        try {
+          const { ciphertext, nonce } = await e2ee.encryptPing(editContent, wave.id);
+          const keyVersion = await fetchAPI(`/waves/${wave.id}/key`).then(r => r.keyVersion).catch(() => 1);
+          body = { content: ciphertext, encrypted: true, nonce, keyVersion: keyVersion || 1 };
+        } catch (encryptErr) {
+          console.error('Failed to encrypt edited message:', encryptErr);
+          showToast('Failed to encrypt message', 'error');
+          userActionInProgressRef.current = false;
+          return;
+        }
+      }
+
       await fetchAPI(`/pings/${messageId}`, {
         method: 'PUT',
-        body: { content: editContent },
+        body,
       });
       showToast(SUCCESS.messageUpdated, 'success');
       setEditingMessageId(null);

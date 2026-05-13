@@ -18090,9 +18090,19 @@ app.put('/api/pings/:id', authenticateToken, (req, res) => {
   if (ping.authorId !== req.user.userId) return res.status(403).json({ error: 'Not authorized' });
 
   const content = req.body.content;
-  if (content.length > 10000) return res.status(400).json({ error: 'Message too long' });
+  const encrypted = !!req.body.encrypted;
+  const nonce = req.body.nonce || null;
+  const keyVersion = req.body.keyVersion || null;
 
-  const updated = db.updateMessage(pingId, content);
+  const maxLength = encrypted ? 20000 : 10000;
+  if (content.length > maxLength) return res.status(400).json({ error: 'Message too long' });
+
+  // Encrypted edits require nonce and keyVersion
+  if (encrypted && (!nonce || !keyVersion)) {
+    return res.status(400).json({ error: 'Encrypted edits require nonce and keyVersion' });
+  }
+
+  const updated = db.updateMessage(pingId, content, { encrypted, nonce, keyVersion });
   broadcastToWave(ping.waveId, { type: 'ping_edited', data: updated });
   broadcastToWave(ping.waveId, { type: 'droplet_edited', data: updated }); // Legacy
   broadcastToWave(ping.waveId, { type: 'message_edited', data: updated }); // Legacy
