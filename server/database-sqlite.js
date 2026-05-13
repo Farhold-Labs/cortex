@@ -6322,7 +6322,7 @@ export class DatabaseSQLite {
     return { success: true, ping: updated };
   }
 
-  updatePing(pingId, content) {
+  updatePing(pingId, content, { encrypted = false, nonce = null, keyVersion = null } = {}) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
     if (!existing || existing.deleted) return null;
 
@@ -6332,13 +6332,25 @@ export class DatabaseSQLite {
       VALUES (?, ?, ?, ?, ?)
     `).run(`hist-${uuidv4()}`, pingId, existing.content, existing.version, new Date().toISOString());
 
-    // Sanitize and auto-embed media URLs (same as createPing)
-    let processedContent = sanitizeMessage(content);
-    processedContent = detectAndEmbedMedia(processedContent);
+    // Encrypted content must not be sanitized or media-embedded — it is ciphertext
+    let processedContent;
+    if (encrypted) {
+      processedContent = content;
+    } else {
+      processedContent = sanitizeMessage(content);
+      processedContent = detectAndEmbedMedia(processedContent);
+    }
 
-    // Update ping
+    // Update ping — also write back E2EE fields so key version and nonce stay in sync
     const now = new Date().toISOString();
-    this.db.prepare('UPDATE pings SET content = ?, version = ?, edited_at = ? WHERE id = ?').run(processedContent, existing.version + 1, now, pingId);
+    this.db.prepare(`
+      UPDATE pings
+      SET content = ?, version = ?, edited_at = ?,
+          encrypted = ?, nonce = ?, key_version = ?
+      WHERE id = ?
+    `).run(processedContent, existing.version + 1, now,
+           encrypted ? 1 : 0, nonce ?? existing.nonce, keyVersion ?? existing.key_version,
+           pingId);
 
     // Return updated ping
     const updated = this.db.prepare(`
@@ -6367,12 +6379,15 @@ export class DatabaseSQLite {
       wave_id: updated.wave_id,
       created_at: updated.created_at,
       edited_at: updated.edited_at,
+      encrypted: updated.encrypted,
+      nonce: updated.nonce,
+      keyVersion: updated.key_version,
     };
   }
 
   // Backward compatibility aliases
-  updateMessage(id, content) { return this.updatePing(id, content); }
-  updateDroplet(id, content) { return this.updatePing(id, content); }
+  updateMessage(id, content, opts) { return this.updatePing(id, content, opts); }
+  updateDroplet(id, content, opts) { return this.updatePing(id, content, opts); }
 
   deletePing(pingId, userId) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
