@@ -1,22 +1,15 @@
-import { app, BrowserWindow, ipcMain, Notification, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification, screen, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import electronUpdater from 'electron-updater';
 const { autoUpdater } = electronUpdater;
 import contextMenu from 'electron-context-menu';
-import serve from 'electron-serve';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const isDev = !app.isPackaged;
-
-// Must be called at module level (before app is ready) so electron-serve can
-// call protocol.registerSchemesAsPrivileged in time. No-op in dev mode.
-if (!isDev) {
-  serve({ directory: path.join(__dirname, '../dist') });
-}
 
 contextMenu({
   showSaveImageAs: true,
@@ -26,6 +19,7 @@ contextMenu({
   showLookUpSelection: process.platform === 'darwin',
   showSearchWithGoogle: true,
 });
+
 const APP_PROTOCOL = 'cortex';
 
 // ============ WINDOW STATE PERSISTENCE ============
@@ -53,9 +47,7 @@ function loadWindowState() {
     if (fs.existsSync(stateFile)) {
       return JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
     }
-  } catch {
-    // Ignore corrupt state file
-  }
+  } catch {}
   return null;
 }
 
@@ -71,9 +63,7 @@ function saveWindowState(win) {
   };
   try {
     fs.writeFileSync(stateFile, JSON.stringify(state));
-  } catch {
-    // Non-critical — ignore write failures
-  }
+  } catch {}
 }
 
 // ============ DEEP LINK PROTOCOL ============
@@ -113,7 +103,6 @@ if (!gotLock) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
-    // Windows/Linux: deep link URL is in argv
     const deepLinkUrl = argv.find(arg => arg.startsWith(`${APP_PROTOCOL}://`));
     if (deepLinkUrl) handleDeepLink(deepLinkUrl);
   });
@@ -143,12 +132,7 @@ ipcMain.on('clear-cache-and-reload', async () => {
   const win = BrowserWindow.getAllWindows()[0];
   if (win) {
     await win.webContents.session.clearCache();
-    if (isDev) {
-      win.webContents.reloadIgnoringCache();
-    } else {
-      // Reload local assets with the (possibly updated) server URL in query param
-      win.loadURL(`app://-/?server=${encodeURIComponent(getSavedServerUrl())}`);
-    }
+    win.webContents.reloadIgnoringCache();
   }
 });
 
@@ -159,7 +143,6 @@ let mainWindow = null;
 async function createWindow() {
   const savedState = loadWindowState();
 
-  // Ensure saved position is still on a visible display
   let { x, y, width, height } = savedState || {};
   width = width || 1200;
   height = height || 800;
@@ -192,84 +175,48 @@ async function createWindow() {
       webSecurity: true,
       spellcheck: true,
     },
-    // Hide title bar on macOS; traffic lights inset into header drag region
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 14 } : undefined,
     show: false,
   });
 
-  // Restore maximized state
   if (savedState?.isMaximized) {
     mainWindow.maximize();
   }
 
-  // Show when ready to avoid white flash
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
 
-  // CORS bridging for local asset serving (app://-):
-  //
-  // Problem: the server doesn't recognise app://-  as an allowed origin, so it
-  // returns a non-200 for OPTIONS preflight requests, blocking all POST/PUT/DELETE.
-  //
-  // Solution (two hooks working together):
-  //   1. onBeforeSendHeaders — replace outgoing Origin: app://- with the real
-  //      server URL so the server passes its own CORS check and returns 200 for
-  //      preflight and proper ACAO headers for actual requests.
-  //   2. onHeadersReceived   — replace the server's ACAO value back to app://-
-  //      so the browser's check (against the true origin) also passes.
-  if (!isDev) {
-    mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
-      const requestHeaders = { ...details.requestHeaders };
-      if (requestHeaders['Origin'] === 'app://-') {
-        requestHeaders['Origin'] = getSavedServerUrl();
-      }
-      callback({ requestHeaders });
-    });
+  // Open target="_blank" links and window.open() calls in the OS browser
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
 
-    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-      const headers = { ...details.responseHeaders };
-      const corsKey = Object.keys(headers).find(
-        k => k.toLowerCase() === 'access-control-allow-origin'
-      );
-      if (corsKey) {
-        headers[corsKey] = ['app://-'];
-      } else {
-        headers['Access-Control-Allow-Origin'] = ['app://-'];
+  // Intercept in-page navigation to external origins and open in OS browser
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    try {
+      const appOrigin = new URL(isDev ? 'http://localhost:3000' : getSavedServerUrl()).origin;
+      if (new URL(url).origin !== appOrigin) {
+        event.preventDefault();
+        shell.openExternal(url);
       }
-      callback({ responseHeaders: headers });
-    });
-  }
+    } catch {
+      event.preventDefault();
+    }
+  });
 
-  // Save window state on move/resize
   mainWindow.on('resize', () => saveWindowState(mainWindow));
   mainWindow.on('move', () => saveWindowState(mainWindow));
   mainWindow.on('close', () => saveWindowState(mainWindow));
 
-  // Load the app
+  // Load app: dev server in development, configured server URL in production
   if (isDev) {
     await mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    const serverUrl = getSavedServerUrl();
-    // Serve bundled React assets locally; pass API server URL as query param
-    // so constants.js can read it synchronously without async IPC.
-    await mainWindow.loadURL(`app://-/?server=${encodeURIComponent(serverUrl)}`);
-
-    // Migration: if the web UI previously saved a server URL to localStorage
-    // (before Electron IPC persistence existed), pick it up and save to file.
-    mainWindow.webContents.once('did-finish-load', async () => {
-      try {
-        const storedUrl = await mainWindow.webContents.executeJavaScript(
-          `localStorage.getItem('farhold_server_url')`
-        );
-        if (storedUrl && storedUrl !== getSavedServerUrl()) {
-          saveServerUrl(storedUrl);
-          mainWindow.loadURL(`app://-/?server=${encodeURIComponent(storedUrl)}`);
-        }
-      } catch {}
-    });
+    await mainWindow.loadURL(getSavedServerUrl());
   }
 }
 
@@ -278,7 +225,6 @@ async function createWindow() {
 app.whenReady().then(async () => {
   await createWindow();
 
-  // macOS: re-create window when dock icon clicked
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -286,15 +232,12 @@ app.whenReady().then(async () => {
   });
 
   // Auto-updater (production only)
-  // Disabled until GitHub Releases with electron-builder artifacts are published.
-  // To enable: uncomment the block below and publish a release with latest-linux.yml / latest-mac.yml etc.
   // if (!isDev) {
   //   autoUpdater.autoDownload = false;
   //   autoUpdater.checkForUpdatesAndNotify().catch(() => {});
   // }
 });
 
-// Quit when all windows are closed (except macOS)
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
@@ -306,17 +249,13 @@ app.on('window-all-closed', () => {
 autoUpdater.on('update-available', (info) => {
   console.log('[Updater] Update available:', info.version);
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
-    win.webContents.send('update-available', info.version);
-  }
+  if (win) win.webContents.send('update-available', info.version);
 });
 
 autoUpdater.on('update-downloaded', (info) => {
   console.log('[Updater] Update downloaded:', info.version);
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
-    win.webContents.send('update-downloaded', info.version);
-  }
+  if (win) win.webContents.send('update-downloaded', info.version);
 });
 
 autoUpdater.on('error', (err) => {

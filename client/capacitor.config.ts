@@ -5,9 +5,9 @@ const config: CapacitorConfig = {
   appName: 'Cortex',
   webDir: 'dist',
 
-  // Loads bundled dist/ on launch; API calls go to the configured server
   server: {
-    allowNavigation: ['cortex.farhold.com'],
+    url: 'https://cortex.farhold.com',
+    cleartext: false,
   },
 
   plugins: {

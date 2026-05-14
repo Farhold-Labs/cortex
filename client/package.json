@@ -1,6 +1,6 @@
 {
   "name": "cortex-client",
-  "version": "2.48.1",
+  "version": "2.49.0",
   "description": "Cortex - Privacy-First Federated Communication Platform",
   "author": "Cortex Project <admin@farhold.com>",
   "homepage": "https://cortex.farhold.com",
@@ -35,7 +35,6 @@
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.1",
     "electron-context-menu": "^4.1.1",
-    "electron-serve": "^2.1.1",
     "electron-updater": "^6.8.3"
   },
   "devDependencies": {
