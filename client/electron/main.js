@@ -132,7 +132,12 @@ ipcMain.on('clear-cache-and-reload', async () => {
   const win = BrowserWindow.getAllWindows()[0];
   if (win) {
     await win.webContents.session.clearCache();
-    win.webContents.reloadIgnoringCache();
+    if (isDev) {
+      win.webContents.reloadIgnoringCache();
+    } else {
+      // Navigate to the (possibly updated) server URL rather than reloading the old one
+      win.loadURL(getSavedServerUrl());
+    }
   }
 });
 
