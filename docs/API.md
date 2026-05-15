@@ -1,6 +1,6 @@
 # Cortex REST API Documentation
 
-Version: 2.47.2
+Version: 2.50.0
 
 ## Overview
 
@@ -60,9 +60,10 @@ Authorization: Bearer <your-jwt-token>
 
 ### Token Lifecycle
 
-- **Expiration:** 7 days (configurable via `JWT_EXPIRES_IN` environment variable)
-- **Refresh:** No automatic refresh; users must re-authenticate after expiration
-- **Logout:** Tokens are not invalidated server-side; logout only updates user status
+- **Expiration:** Configurable per login — `24h`, `7d` (default), `30d`, or session-only (client uses `24h` TTL, stores token in `sessionStorage` only)
+- **Silent renewal:** `POST /api/auth/renew` — no password required; used automatically by the client when a session is approaching expiry and the user is active
+- **Grace-period re-auth:** `POST /api/auth/reauth` — accepts expired tokens within a 1-hour window; requires password; used for the re-auth overlay instead of a full logout
+- **Logout:** `POST /api/auth/logout` — revokes the session server-side and updates user status to offline
 
 ### Example Authentication Flow
 
@@ -217,9 +218,16 @@ Authenticate an existing user.
 ```json
 {
   "handle": "mal",
-  "password": "demo123"
+  "password": "demo123",
+  "sessionDuration": "7d"
 }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `handle` | string | Yes | User handle |
+| `password` | string | Yes | User password |
+| `sessionDuration` | string | No | `24h`, `7d` (default), or `30d`. The client may send `24h` when the user selects "This session only" and stores the token in `sessionStorage` instead of `localStorage`. |
 
 **Response (200 OK):**
 
@@ -309,7 +317,7 @@ Refresh the current session by issuing a new JWT token. Requires a valid (non-ex
 ```json
 {
   "password": "string (required)",
-  "sessionDuration": "24h | 7d | 30d (optional, defaults to 24h)"
+  "sessionDuration": "24h | 7d | 30d (optional, defaults to 7d)"
 }
 ```
 
@@ -463,7 +471,7 @@ Re-authenticate after session expiry using a password. Accepts tokens expired wi
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `password` | string | Yes | User's current password |
-| `sessionDuration` | string | No | `24h`, `7d`, or `30d` (defaults to previous duration) |
+| `sessionDuration` | string | No | `24h`, `7d` (default), or `30d`; session-only logins always renew with `24h` |
 
 **Response (200 OK):**
 

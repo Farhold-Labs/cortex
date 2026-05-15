@@ -16,7 +16,7 @@ export function E2EESetupModal({ onSetup, onSkip, isLoading }) {
   const [recoveryKey, setRecoveryKey] = useState(null);
   const [copied, setCopied] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
-  const [rememberDuration, setRememberDuration] = useState('days7');  // Default to 7 days for new users
+  const [rememberDuration, setRememberDuration] = useState('auto');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -162,6 +162,7 @@ export function E2EESetupModal({ onSetup, onSkip, isLoading }) {
                 </label>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {[
+                    { value: 'auto', label: 'Until my session expires' },
                     { value: 'session', label: 'This session only' },
                     { value: 'days7', label: 'For 7 days' },
                     { value: 'days30', label: 'For 30 days' }
@@ -271,7 +272,7 @@ export function PassphraseUnlockModal({ onUnlock, onRecover, onLogout, isLoading
   const [showRecovery, setShowRecovery] = useState(recoveryOnly);
   const [recoveryKey, setRecoveryKey] = useState('');
   const [error, setError] = useState(propError);
-  const [rememberDuration, setRememberDuration] = useState('session');
+  const [rememberDuration, setRememberDuration] = useState('auto');
 
   const handleUnlock = async (e) => {
     e.preventDefault();
@@ -408,6 +409,7 @@ export function PassphraseUnlockModal({ onUnlock, onRecover, onLogout, isLoading
                 </label>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {[
+                    { value: 'auto', label: 'Until my session expires' },
                     { value: 'session', label: 'This session only' },
                     { value: 'days7', label: 'For 7 days' },
                     { value: 'days30', label: 'For 30 days' }

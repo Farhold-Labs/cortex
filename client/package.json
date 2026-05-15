@@ -1,6 +1,6 @@
 {
   "name": "cortex-client",
-  "version": "2.48.1",
+  "version": "2.50.0",
   "description": "Cortex - Privacy-First Federated Communication Platform",
   "author": "Cortex Project <admin@farhold.com>",
   "homepage": "https://cortex.farhold.com",
@@ -35,20 +35,19 @@
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.1",
     "electron-context-menu": "^4.1.1",
-    "electron-serve": "^2.1.1",
     "electron-updater": "^6.8.3"
   },
   "devDependencies": {
     "@livekit/components-react": "^2.6.0",
     "@vitejs/plugin-react": "^4.3.2",
     "canvas": "^3.2.0",
-    "electron": "^35.7.5",
+    "electron": "^42.0.0",
     "electron-builder": "^26.8.1",
     "hls.js": "^1.6.15",
     "livekit-client": "^2.6.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^5.9.3",
-    "vite": "^5.4.8"
+    "vite": "^6.4.2"
   }
 }

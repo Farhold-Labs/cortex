@@ -5,6 +5,52 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.50.0] - 2026-05-15
+
+### Added
+
+#### "This session only" login option
+A new **This session only** option in the SESSION DURATION dropdown lets users log in from a shared device without leaving a persistent token behind. When selected:
+
+- The JWT is stored in `sessionStorage` instead of `localStorage` — it is automatically cleared when the tab or browser closes
+- The server is sent a 24-hour TTL (same as the previous default)
+- The user's saved duration preference is not updated, so their next login on their own device defaults to 7 days as usual
+
+The default session duration has been changed from 24 hours to **7 days** to reduce friction for users on personal devices.
+
+Session-only state is preserved through the full auth lifecycle: silent renewal (`/auth/renew`), session refresh (`/auth/refresh`), and grace-period re-auth (`/auth/reauth`) all check `storage.isSessionOnly()` and continue storing tokens in `sessionStorage`. MFA logins also carry the session-only choice through the challenge flow via `pendingSessionOnlyRef`.
+
+### Fixed
+
+- **Session-only stale user state**: after a session-only login, closing and reopening the browser would show a broken app state (amber circle, no errors) instead of the login screen. The JWT was correctly cleared from `sessionStorage` on close, but `setUser()` always writes to `localStorage` — so the user object survived. On next open: `token = null`, `user = stale data` → the app rendered the authenticated shell without a valid session. Fixed by clearing stale user/session data from `localStorage` in `AuthProvider`'s init `useEffect` when no token is present.
+
+#### E2EE "Until my session expires" unlock duration
+The E2EE passphrase unlock modal now defaults to **Until my session expires**, which reads the JWT expiry claim and sets a matching `localStorage` TTL. E2EE stays unlocked across app restarts and page reloads for as long as the login session is valid — no re-entry needed unless the session actually expires. When the session expires and the user logs in again, E2EE re-locks automatically.
+
+---
+
+## [2.49.0] - 2026-05-14
+
+### Changed
+
+#### Electron — web redirect instead of bundled assets
+Electron now loads the configured server URL (`https://cortex.farhold.com` by default, or a custom URL saved in `~/.config/Cortex/server-url.txt`) directly in the BrowserWindow, the same way any browser would. Previously the app bundled the React assets and served them via `electron-serve` under an `app://` protocol, requiring a new installer for every UI change and causing media and link handling issues.
+
+- External links (`target="_blank"`, `window.open()`) now open in the OS default browser via `shell.openExternal()` instead of inside the Electron WebView
+- YouTube, TikTok, and other embedded media now play correctly
+- UI updates are live on next app launch without reinstalling — same behaviour as the mobile app
+- CORS bridging (`onBeforeSendHeaders` / `onHeadersReceived` hacks for `app://-`) removed
+- `electron-serve` dependency removed
+- `?server=` query parameter approach removed; server URL resolution now uses `window.location.origin` directly
+
+#### Capacitor — `server.url` made explicit
+`capacitor.config.ts` now explicitly sets `server.url: 'https://cortex.farhold.com'`, making the web-redirect behaviour intentional and documented. Previously this was implicit (relying on a setting baked into older APK builds). Fresh builds now consistently load from the live server.
+
+#### `constants.js` — simplified server URL resolution
+Removed the Electron `?server=` query-param special case. Both Electron and Capacitor now load the server URL directly, so `window.location.origin` is the authoritative source. The `localStorage` override is retained for web users on self-hosted instances.
+
+---
+
 ## [2.48.1] - 2026-05-13
 
 ### Fixed

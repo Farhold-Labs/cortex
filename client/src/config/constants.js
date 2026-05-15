@@ -1,30 +1,23 @@
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.48.1';
+export const VERSION = '2.50.0';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
 const isElectron = typeof window !== 'undefined' && window.navigator?.userAgent?.includes('Electron');
 export const isNativeApp = isCapacitor || isElectron;
 
-// Resolve server URL: Electron query param > localStorage override > native remote origin > native default > auto-detect
-// Electron (production) passes the configured API server as ?server= so we can read it synchronously
-// without async IPC, while still serving the React bundle from local assets via app://-/
-const _electronServerParam = new URLSearchParams(window.location.search).get('server');
-const storedServerUrl = _electronServerParam || localStorage.getItem('farhold_server_url');
-const isLocalOrigin = ['localhost', ''].includes(window.location.hostname) ||
-  window.location.protocol === 'capacitor:' || window.location.protocol === 'ionic:';
+// Resolve server URL: both Electron and Capacitor load the server URL directly,
+// so window.location.origin is authoritative. localStorage override is kept for
+// web users who self-host at a non-standard origin.
+const storedServerUrl = localStorage.getItem('farhold_server_url');
+const isLocalOrigin = ['localhost', '127.0.0.1', ''].includes(window.location.hostname);
 const resolvedUrl = (() => {
   if (storedServerUrl) return storedServerUrl;
-  if (isCapacitor && !isLocalOrigin) {
-    // Native app redirected to remote server — use that origin
-    return window.location.origin;
-  }
-  if (isNativeApp) return 'https://cortex.farhold.com';
-  // Web app: auto-detect from current origin (unchanged behavior)
-  return window.location.hostname !== 'localhost'
-    ? `${window.location.protocol}//${window.location.hostname}`
-    : 'http://localhost:3001';
+  // Non-localhost origin means we're either running on the server itself (web),
+  // or Electron/Capacitor loaded the server URL directly — use it as-is.
+  if (!isLocalOrigin) return window.location.origin;
+  return 'http://localhost:3001';
 })();
 
 export const isProduction = isNativeApp || window.location.hostname !== 'localhost';
