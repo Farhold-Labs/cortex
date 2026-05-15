@@ -97,6 +97,14 @@ function AuthProvider({ children }) {
         .finally(() => setLoading(false));
     } else {
       clearTimeout(timeoutId);
+      // No token — clear any stale user data left over from a session-only login
+      // (token was in sessionStorage and cleared when the browser closed, but
+      // the user object remained in localStorage)
+      if (storage.getUser()) {
+        storage.removeUser();
+        storage.removeSessionStart();
+        setUser(null);
+      }
       setLoading(false);
     }
 
