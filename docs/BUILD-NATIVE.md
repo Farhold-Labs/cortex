@@ -2,7 +2,7 @@
 
 These instructions cover building the Cortex desktop and mobile apps for all platforms.
 
-> **Architecture note**: All Electron apps (Linux, Windows, macOS) are remote wrappers — they load the web UI from `https://cortex.farhold.com` via `electron/app/index.html`. They only need rebuilding when `electron/main.js`, `electron/preload.cjs`, or native dependencies change. The Android and iOS Capacitor apps similarly load from the server after initial launch.
+> **Architecture note**: All Electron apps (Linux, Windows, macOS) are remote wrappers — `electron/main.js` calls `mainWindow.loadURL(serverUrl)` directly (default: `https://cortex.farhold.com`). There are no bundled web assets; the Electron app only needs rebuilding when `main.js`, `preload.cjs`, or native dependencies change. The Android and iOS Capacitor apps similarly load from `https://cortex.farhold.com` via `server.url` in `capacitor.config.ts`.
 
 ---
 
@@ -504,7 +504,7 @@ npx cap copy ios           # Copy web assets only (skip plugin sync — faster)
 
 ## Electron architecture notes
 
-- **Production mode**: The app loads a redirect page (`electron/app/index.html`) that navigates to `https://cortex.farhold.com`. There is no bundled offline app — it's a wrapper around the web app.
+- **Production mode**: `main.js` calls `mainWindow.loadURL(getSavedServerUrl())` — the configured server URL (default `https://cortex.farhold.com`) is loaded directly. There is no bundled offline app; it's a thin wrapper around the web app. External links and `window.open()` calls are routed to `shell.openExternal()` so they open in the OS default browser.
 - **Dev mode**: Run `npm run dev` first (starts Vite on port 3000), then `npm run electron:dev` — it connects to `http://localhost:3000` with DevTools auto-opened.
 - Window state (position/size/maximized) persists across launches via `window-state.json` in the user data directory.
 - Deep links via `cortex://` protocol are registered automatically.

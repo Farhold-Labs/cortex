@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.47.2** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.49.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -50,18 +50,28 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Waves** — Conversation containers with threaded pings
 - **Focus View** — View any ping with replies as its own wave-like context
 - **Threading** — Isolate reply chains within a wave for focused conversations
+- **Untabbed navigation** — Wave list clicks open a preview; pin to promote to a persistent tab (max 10)
 - **Crews & Contacts** — Organize connections with request/invitation workflows
 - **Wave Categories** — User-defined categories with drag-and-drop organization
 - **Search** — Full-text search across all pings (SQLite FTS5)
+- **Inline emoji autocomplete** — Type `:shortcode:` to pick from 826 emoji; closing colon auto-inserts
 - **PWA** — Installable app with offline support and push notifications
-- **Notification Sync** — Client-side polling catches missed notifications when push is unreliable; targeted push for mentions/replies only, with visibility-aware local notification display
-- **Notification Preferences** — Per-type controls (mentions, replies, wave activity) with always/app-closed/never levels, suppress-while-focused, and per-user push throttle
+- **Notification Sync** — Client-side polling catches missed notifications when push is unreliable
+- **Notification Preferences** — Per-type controls (mentions, replies, wave activity) with always/app-closed/never levels
 - **Collapsible Messages** — Collapse long messages to compact previews
+- **Support Tickets** — Unauthenticated ticket submission from the login screen; admin management panel
+
+### Calendar & Events
+- **Wave calendar** — Attach events to any wave with date, time, location, and description
+- **Recurring events** — Daily, weekly, monthly, and yearly recurrence patterns
+- **RSVP** — Accept, decline, or mark tentative; organizer sees attendee responses
+- **Reminders** — Configurable push notifications before events
 
 ### End-to-End Encryption
 - **ECDH P-384 + AES-256-GCM** — Per-wave symmetric keys distributed via key exchange
 - **Zero-knowledge server** — Server never sees plaintext message content
 - **Key rotation** — Automatic re-encryption when participants are removed
+- **Migration UI** — Bulk re-encryption of existing messages when enabling E2EE on a wave
 - **Web Crypto API** — Native browser cryptography, no external libraries
 
 ### Privacy Hardening
@@ -97,15 +107,15 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 - **Weather data** — Current conditions from OpenWeatherMap
 - **Breaking news** — Headlines from NewsAPI.org and GNews.io
 - **Admin alerts** — Scheduled system alerts with priority levels
+- **Holiday effects** — Automatic seasonal celebrations with themed alerts and visual effects
 
 ### Customization
 - **Custom themes** — Visual theme editor, gallery, create/share/install themes
-- **Holiday effects** — Automatic seasonal visual effects (toggleable)
 - **Firefly personality** — Easter eggs and themed UI throughout
 - **Outgoing webhooks** — Forward wave messages to Discord, Slack, Teams
 
 ### Security
-- JWT authentication with session management, token revocation, and proactive session renewal
+- JWT authentication with configurable session duration, silent renewal, and grace-period re-auth
 - End-to-end encryption (ECDH P-384 + AES-256-GCM)
 - Multi-factor authentication (TOTP and email-based 2FA)
 - Role-based access control (Admin / Moderator / User)
@@ -114,6 +124,35 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 - HTML sanitization, Helmet.js security headers, HSTS
 - HTTP Signature verification for federation
 - GDPR compliance — data export ("Ship's Manifest") and account deletion ("Abandon Ship")
+
+### Bot API
+- Post pings to waves using `Authorization: Bearer bot_<key>` authentication
+- Wave-scoped posting tokens as a lightweight alternative to full bot accounts
+- New keys use `bot_` prefix; legacy `fh_bot_` and `cx_bot_` keys remain valid
+
+---
+
+## Native Apps
+
+Both native clients are thin wrappers that load `https://cortex.farhold.com` (or a configured server URL) directly — there are no bundled web assets. UI updates are live on next launch without reinstalling.
+
+### Electron (Desktop — Linux, Windows, macOS)
+
+- Loads the configured server URL in a BrowserWindow (`https://cortex.farhold.com` by default)
+- External links and embedded media open in the OS default browser via `shell.openExternal()`
+- Custom server URL saved to `~/.config/Cortex/server-url.txt`
+- macOS: `hiddenInset` title bar with inset traffic lights
+- Deep links via `cortex://` protocol
+
+See [docs/BUILD-NATIVE.md](docs/BUILD-NATIVE.md) for build instructions.
+
+### Android (Capacitor)
+
+- `capacitor.config.ts` sets `server.url: 'https://cortex.farhold.com'` — the WebView loads from the live server
+- Push notifications via FCM with `priority: high` to bypass Android Doze mode
+- Links open in the system browser; media plays natively
+
+See [docs/BUILD-NATIVE.md](docs/BUILD-NATIVE.md) for build instructions.
 
 ---
 
@@ -127,23 +166,25 @@ cortex/
 │   ├── email-service.js       # Email provider abstraction
 │   ├── storage.js             # File/S3 storage abstraction
 │   ├── schema.sql             # Database schema
-│   ├── migrations/            # Database migrations
+│   ├── holidays.js            # Holiday detection for alerts
 │   └── data/                  # Data storage
 ├── client/
 │   ├── CortexApp.jsx          # Root React component
-│   ├── messages.js            # UI strings and Firefly messages
+│   ├── electron/
+│   │   ├── main.js            # Electron main process
+│   │   └── preload.cjs        # Electron preload (IPC bridge)
+│   ├── capacitor.config.ts    # Capacitor config (iOS/Android)
 │   └── src/
 │       ├── views/             # Page-level components
 │       ├── components/        # Feature components (admin, calls, media, etc.)
 │       ├── hooks/             # Custom React hooks (API, WebSocket, etc.)
 │       ├── services/          # Voice call service
-│       ├── config/            # Constants, holidays, theme config
+│       ├── config/            # Constants, emoji data, holidays, theme config
 │       └── utils/             # Shared utilities
 ├── landing/
 │   ├── index.html             # Landing page (static)
 │   └── nginx.conf             # Nginx config for landing + app
-├── tools/                     # Migration utilities
-└── docs/                      # API docs, privacy policy, backlog
+└── docs/                      # API docs, privacy policy, build instructions
 ```
 
 ---
@@ -197,6 +238,11 @@ FINNHUB_API_KEY=your-key           # Stock quotes
 OPENWEATHERMAP_API_KEY=your-key    # Weather data
 NEWSAPI_KEY=your-key               # News headlines
 GNEWS_API_KEY=your-key             # News headlines (backup)
+
+# Support tickets (optional)
+SUPPORT_WAVE_ID=thread-xxxxxxxx    # Wave to post ticket notifications to
+SUPPORT_POSTING_TOKEN=bot_...      # Preferred: wave-scoped posting token
+SUPPORT_BOT_KEY=bot_...            # Fallback: bot API key
 ```
 
 ---
@@ -208,6 +254,9 @@ GNEWS_API_KEY=your-key             # News headlines (backup)
 |--------|----------|-------------|
 | POST | `/api/auth/register` | Create account |
 | POST | `/api/auth/login` | Login (returns JWT) |
+| POST | `/api/auth/logout` | Logout current session |
+| POST | `/api/auth/renew` | Silent token renewal (no password) |
+| POST | `/api/auth/reauth` | Grace-period re-authentication (requires password) |
 | GET | `/api/auth/me` | Current user info |
 
 ### Waves & Pings
@@ -217,9 +266,17 @@ GNEWS_API_KEY=your-key             # News headlines (backup)
 | POST | `/api/waves` | Create wave |
 | GET | `/api/waves/:id` | Get wave with pings |
 | POST | `/api/waves/:id/pings` | Send ping |
-| PUT | `/api/pings/:id` | Edit ping |
+| PUT | `/api/pings/:id` | Edit ping (supports E2EE fields) |
 | DELETE | `/api/pings/:id` | Delete ping |
 
+### Calendar
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/waves/:id/events` | List wave events |
+| POST | `/api/waves/:id/events` | Create event |
+| PUT | `/api/events/:id` | Update event |
+| DELETE | `/api/events/:id` | Delete event |
+| POST | `/api/events/:id/rsvp` | RSVP to event |
 
 ### Crews & Contacts
 | Method | Endpoint | Description |
@@ -234,17 +291,25 @@ GNEWS_API_KEY=your-key             # News headlines (backup)
 |--------|----------|-------------|
 | GET | `/api/notifications` | List notifications |
 | GET | `/api/notifications/count` | Get unread count by type |
-| GET | `/api/notifications/pending` | Poll for undelivered notifications (marks as delivered) |
+| GET | `/api/notifications/pending` | Poll for undelivered notifications |
 | PUT | `/api/notifications/preferences` | Update notification preferences |
-| POST | `/api/notifications/read-all` | Mark all read (notifications + wave messages) |
+| POST | `/api/notifications/read-all` | Mark all read |
 | DELETE | `/api/notifications` | Dismiss all notifications |
 
 ### Bot API
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/bot/ping` | Post a ping as bot |
-| GET | `/api/bot/waves` | List bot's accessible waves |
+| POST | `/api/bot/ping` | Post a ping as a bot (`Authorization: Bearer bot_<key>`) |
+| GET | `/api/bot/waves` | List bot-accessible waves |
 | GET | `/api/bot/waves/:id` | Get wave details |
+
+### Support Tickets
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/support/ticket` | Submit ticket (public, rate-limited 5/hr) |
+| GET | `/api/admin/support/tickets` | List tickets — admin only |
+| PATCH | `/api/admin/support/tickets/:id/resolve` | Resolve ticket — admin only |
+| PATCH | `/api/admin/support/tickets/:id/reopen` | Reopen ticket — admin only |
 
 See [docs/API.md](docs/API.md) for complete API documentation.
 
@@ -308,6 +373,7 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 
 - [CHANGELOG.md](CHANGELOG.md) — Complete version history
 - [docs/API.md](docs/API.md) — API endpoint documentation
+- [docs/BUILD-NATIVE.md](docs/BUILD-NATIVE.md) — Desktop and mobile build instructions
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Hardened VPS deployment guide (LUKS, SQLCipher, backups)
 - [docs/PRIVACY.md](docs/PRIVACY.md) — Privacy policy
 - [OUTSTANDING-FEATURES.md](OUTSTANDING-FEATURES.md) — Future roadmap

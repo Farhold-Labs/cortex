@@ -5,6 +5,28 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.49.0] - 2026-05-14
+
+### Changed
+
+#### Electron — web redirect instead of bundled assets
+Electron now loads the configured server URL (`https://cortex.farhold.com` by default, or a custom URL saved in `~/.config/Cortex/server-url.txt`) directly in the BrowserWindow, the same way any browser would. Previously the app bundled the React assets and served them via `electron-serve` under an `app://` protocol, requiring a new installer for every UI change and causing media and link handling issues.
+
+- External links (`target="_blank"`, `window.open()`) now open in the OS default browser via `shell.openExternal()` instead of inside the Electron WebView
+- YouTube, TikTok, and other embedded media now play correctly
+- UI updates are live on next app launch without reinstalling — same behaviour as the mobile app
+- CORS bridging (`onBeforeSendHeaders` / `onHeadersReceived` hacks for `app://-`) removed
+- `electron-serve` dependency removed
+- `?server=` query parameter approach removed; server URL resolution now uses `window.location.origin` directly
+
+#### Capacitor — `server.url` made explicit
+`capacitor.config.ts` now explicitly sets `server.url: 'https://cortex.farhold.com'`, making the web-redirect behaviour intentional and documented. Previously this was implicit (relying on a setting baked into older APK builds). Fresh builds now consistently load from the live server.
+
+#### `constants.js` — simplified server URL resolution
+Removed the Electron `?server=` query-param special case. Both Electron and Capacitor now load the server URL directly, so `window.location.origin` is the authoritative source. The `localStorage` override is retained for web users on self-hosted instances.
+
+---
+
 ## [2.48.1] - 2026-05-13
 
 ### Fixed
