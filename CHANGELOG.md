@@ -20,6 +20,10 @@ The default session duration has been changed from 24 hours to **7 days** to red
 
 Session-only state is preserved through the full auth lifecycle: silent renewal (`/auth/renew`), session refresh (`/auth/refresh`), and grace-period re-auth (`/auth/reauth`) all check `storage.isSessionOnly()` and continue storing tokens in `sessionStorage`. MFA logins also carry the session-only choice through the challenge flow via `pendingSessionOnlyRef`.
 
+### Fixed
+
+- **Session-only stale user state**: after a session-only login, closing and reopening the browser would show a broken app state (amber circle, no errors) instead of the login screen. The JWT was correctly cleared from `sessionStorage` on close, but `setUser()` always writes to `localStorage` — so the user object survived. On next open: `token = null`, `user = stale data` → the app rendered the authenticated shell without a valid session. Fixed by clearing stale user/session data from `localStorage` in `AuthProvider`'s init `useEffect` when no token is present.
+
 #### E2EE "Until my session expires" unlock duration
 The E2EE passphrase unlock modal now defaults to **Until my session expires**, which reads the JWT expiry claim and sets a matching `localStorage` TTL. E2EE stays unlocked across app restarts and page reloads for as long as the login session is valid — no re-entry needed unless the session actually expires. When the session expires and the user logs in again, E2EE re-locks automatically.
 
