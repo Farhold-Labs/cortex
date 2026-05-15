@@ -29,6 +29,8 @@ function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   // Temporary password storage for E2EE unlock (cleared after use)
   const pendingPasswordRef = useRef(null);
+  // Track session-only logins through MFA flow
+  const pendingSessionOnlyRef = useRef(false);
 
   // Session expiry monitoring (v2.29.0)
   const [sessionExpiring, setSessionExpiring] = useState(false);
@@ -118,9 +120,10 @@ function AuthProvider({ children }) {
       });
       if (!res.ok) return;
       const data = await res.json();
-      storage.setToken(data.token);
+      const sessionOnly = storage.isSessionOnly();
+      storage.setToken(data.token, sessionOnly);
       storage.setUser(data.user);
-      storage.setSessionStart(storage.getSessionDuration());
+      storage.setSessionStart(sessionOnly ? 'session' : storage.getSessionDuration());
       setSessionExpiresAt(getTokenExpiry(data.token));
       setSessionExpiring(false);
       tokenJustRenewedRef.current = true; // suppress /auth/me re-check on token change
@@ -217,10 +220,12 @@ function AuthProvider({ children }) {
     pendingPasswordRef.current = null;
   };
 
-  const login = async (handle, password, sessionDuration = '24h') => {
+  const login = async (handle, password, sessionDuration = '7d') => {
+    const sessionOnly = sessionDuration === 'session';
+    const serverDuration = sessionOnly ? '24h' : sessionDuration;
     const res = await fetch(`${API_URL}/auth/login`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ handle, password, sessionDuration }),
+      body: JSON.stringify({ handle, password, sessionDuration: serverDuration }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -237,13 +242,14 @@ function AuthProvider({ children }) {
     }
     // Check if MFA is required
     if (data.mfaRequired) {
-      // Store password for later E2EE unlock after MFA
+      // Store password and session preference for later E2EE unlock after MFA
       pendingPasswordRef.current = password;
+      pendingSessionOnlyRef.current = sessionOnly;
       return { mfaRequired: true, mfaChallenge: data.mfaChallenge, mfaMethods: data.mfaMethods };
     }
     // Store password for E2EE unlock
     pendingPasswordRef.current = password;
-    storage.setToken(data.token); storage.setUser(data.user);
+    storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
     storage.setSessionStart(sessionDuration); // Start browser session timer with user's selected duration
     setSessionExpiresAt(getTokenExpiry(data.token));
     setSessionExpiring(false);
@@ -259,10 +265,10 @@ function AuthProvider({ children }) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'MFA verification failed');
-    // Note: MFA completion should use the duration from the original login attempt
-    // For now, we'll use a safe default since the duration isn't passed through MFA flow
-    const duration = storage.getSessionDuration() || '24h';
-    storage.setToken(data.token); storage.setUser(data.user);
+    const sessionOnly = pendingSessionOnlyRef.current;
+    pendingSessionOnlyRef.current = false;
+    const duration = sessionOnly ? 'session' : (storage.getSessionDuration() || '7d');
+    storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
     storage.setSessionStart(duration); // Start browser session timer
     setSessionExpiresAt(getTokenExpiry(data.token));
     setSessionExpiring(false);
@@ -271,7 +277,7 @@ function AuthProvider({ children }) {
     return { success: true };
   };
 
-  const register = async (handle, email, password, displayName, sessionDuration = '24h') => {
+  const register = async (handle, email, password, displayName, sessionDuration = '7d') => {
     const res = await fetch(`${API_URL}/auth/register`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ handle, email, password, displayName, sessionDuration }),
@@ -326,7 +332,8 @@ function AuthProvider({ children }) {
 
   // Refresh session with password (v2.29.0)
   const refreshSession = useCallback(async (password, sessionDuration) => {
-    const duration = sessionDuration || storage.getSessionDuration() || '24h';
+    const sessionOnly = storage.isSessionOnly();
+    const duration = sessionOnly ? '24h' : (sessionDuration || storage.getSessionDuration() || '7d');
     const res = await fetch(`${API_URL}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -336,8 +343,8 @@ function AuthProvider({ children }) {
     if (!res.ok) throw new Error(data.error || 'Session refresh failed');
 
     // Update token and user state
-    storage.setToken(data.token); storage.setUser(data.user);
-    storage.setSessionStart(data.sessionDuration || duration);
+    storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
+    storage.setSessionStart(sessionOnly ? 'session' : (data.sessionDuration || duration));
     setSessionExpiresAt(getTokenExpiry(data.token));
     setSessionExpiring(false);
     dismissedUntilRef.current = 0;
@@ -347,7 +354,8 @@ function AuthProvider({ children }) {
 
   // Re-authenticate after session expiry — uses grace-period endpoint (v2.45.3)
   const reauth = useCallback(async (password, sessionDuration) => {
-    const duration = sessionDuration || storage.getSessionDuration() || '24h';
+    const sessionOnly = storage.isSessionOnly();
+    const duration = sessionOnly ? '24h' : (sessionDuration || storage.getSessionDuration() || '7d');
     const res = await fetch(`${API_URL}/auth/reauth`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -366,8 +374,8 @@ function AuthProvider({ children }) {
       }
       throw new Error(data.error || 'Re-authentication failed');
     }
-    storage.setToken(data.token); storage.setUser(data.user);
-    storage.setSessionStart(data.sessionDuration || duration);
+    storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
+    storage.setSessionStart(sessionOnly ? 'session' : (data.sessionDuration || duration));
     setSessionExpiresAt(getTokenExpiry(data.token));
     setSessionExpired(false);
     setSessionExpiring(false);

@@ -37,9 +37,21 @@ export function getTokenIssuedAt(token) {
 }
 
 export const storage = {
-  getToken: () => localStorage.getItem('farhold_token'),
-  setToken: (token) => localStorage.setItem('farhold_token', token),
-  removeToken: () => localStorage.removeItem('farhold_token'),
+  getToken: () => sessionStorage.getItem('farhold_token') || localStorage.getItem('farhold_token'),
+  setToken: (token, sessionOnly = false) => {
+    if (sessionOnly) {
+      sessionStorage.setItem('farhold_token', token);
+      localStorage.removeItem('farhold_token');
+    } else {
+      localStorage.setItem('farhold_token', token);
+      sessionStorage.removeItem('farhold_token');
+    }
+  },
+  removeToken: () => {
+    localStorage.removeItem('farhold_token');
+    sessionStorage.removeItem('farhold_token');
+  },
+  isSessionOnly: () => !!sessionStorage.getItem('farhold_token') && !localStorage.getItem('farhold_token'),
   getUser: () => { try { return JSON.parse(localStorage.getItem('farhold_user')); } catch { return null; } },
   setUser: (user) => {
     localStorage.setItem('farhold_user', JSON.stringify(user));
@@ -58,16 +70,19 @@ export const storage = {
     const start = localStorage.getItem('farhold_session_start');
     return start ? parseInt(start, 10) : null;
   },
-  setSessionStart: (duration = '24h') => {
+  setSessionStart: (duration = '7d') => {
     localStorage.setItem('farhold_session_start', Date.now().toString());
-    localStorage.setItem('farhold_session_duration', duration);
+    // Don't persist 'session' as a preference — it's a device-specific choice
+    if (duration !== 'session') {
+      localStorage.setItem('farhold_session_duration', duration);
+    }
   },
   removeSessionStart: () => {
     localStorage.removeItem('farhold_session_start');
     // Intentionally keep 'farhold_session_duration' — it doubles as a preference
     // so the login form can pre-fill the user's last-used duration next time.
   },
-  getSessionDuration: () => localStorage.getItem('farhold_session_duration') || '24h',
+  getSessionDuration: () => localStorage.getItem('farhold_session_duration') || '7d',
   // Server URL override (v2.30.0)
   getServerUrl: () => localStorage.getItem('farhold_server_url'),
   setServerUrl: (url) => localStorage.setItem('farhold_server_url', url),
