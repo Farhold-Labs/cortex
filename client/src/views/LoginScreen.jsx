@@ -542,12 +542,15 @@ const LoginScreen = ({ onAbout }) => {
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SESSION DURATION</label>
             <select value={sessionDuration} onChange={(e) => setSessionDuration(e.target.value)} style={inputStyle}>
-              <option value="24h">24 hours (recommended)</option>
               <option value="7d">7 days</option>
+              <option value="24h">24 hours</option>
               <option value="30d">30 days</option>
+              <option value="session">This session only</option>
             </select>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem', marginTop: '4px' }}>
-              Your session will expire after this duration for security
+              {sessionDuration === 'session'
+                ? 'You will be logged out when you close this tab or browser'
+                : 'Your session will expire after this duration for security'}
             </div>
           </div>
 

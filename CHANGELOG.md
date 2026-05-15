@@ -5,6 +5,26 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.50.0] - 2026-05-15
+
+### Added
+
+#### "This session only" login option
+A new **This session only** option in the SESSION DURATION dropdown lets users log in from a shared device without leaving a persistent token behind. When selected:
+
+- The JWT is stored in `sessionStorage` instead of `localStorage` — it is automatically cleared when the tab or browser closes
+- The server is sent a 24-hour TTL (same as the previous default)
+- The user's saved duration preference is not updated, so their next login on their own device defaults to 7 days as usual
+
+The default session duration has been changed from 24 hours to **7 days** to reduce friction for users on personal devices.
+
+Session-only state is preserved through the full auth lifecycle: silent renewal (`/auth/renew`), session refresh (`/auth/refresh`), and grace-period re-auth (`/auth/reauth`) all check `storage.isSessionOnly()` and continue storing tokens in `sessionStorage`. MFA logins also carry the session-only choice through the challenge flow via `pendingSessionOnlyRef`.
+
+#### E2EE "Until my session expires" unlock duration
+The E2EE passphrase unlock modal now defaults to **Until my session expires**, which reads the JWT expiry claim and sets a matching `localStorage` TTL. E2EE stays unlocked across app restarts and page reloads for as long as the login session is valid — no re-entry needed unless the session actually expires. When the session expires and the user logs in again, E2EE re-locks automatically.
+
+---
+
 ## [2.49.0] - 2026-05-14
 
 ### Changed

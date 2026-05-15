@@ -28,11 +28,21 @@ const PERSISTENT_PUBLIC_KEY = 'farhold_e2ee_persistent_public';
 const PERSISTENT_EXPIRY = 'farhold_e2ee_persistent_expiry';
 
 // Remember duration options (in milliseconds)
+// 'auto' is handled separately — it reads the JWT expiry and matches session length
 export const REMEMBER_DURATIONS = {
-  session: 0,  // Use sessionStorage (current behavior)
-  days7: 7 * 24 * 60 * 60 * 1000,   // 7 days
-  days30: 30 * 24 * 60 * 60 * 1000, // 30 days
+  session: 0,  // Use sessionStorage (clears when app closes)
+  days7: 7 * 24 * 60 * 60 * 1000,
+  days30: 30 * 24 * 60 * 60 * 1000,
 };
+
+function getJWTRemainingMs(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return Math.max((payload.exp * 1000) - Date.now(), 0);
+  } catch {
+    return 0;
+  }
+}
 
 // ============ Context ============
 const E2EEContext = createContext(null);
@@ -62,14 +72,17 @@ export function E2EEProvider({ children, token, API_URL }) {
   const sessionRestoreAttempted = useRef(false);
 
   // ============ Session Cache Helpers ============
-  const saveToSessionCache = useCallback(async (privKey, pubKeyBase64, duration = 'session') => {
+  const saveToSessionCache = useCallback(async (privKey, pubKeyBase64, duration = 'auto') => {
     try {
       // Generate a session key and encrypt the private key
       const { key: sessionKey, keyBase64 } = await crypto.generateSessionKey();
       const jwkString = await crypto.exportPrivateKeyForSession(privKey);
       const encryptedData = await crypto.encryptForSession(jwkString, sessionKey);
 
-      const durationMs = REMEMBER_DURATIONS[duration] || 0;
+      // 'auto': match the JWT session lifetime so E2EE stays unlocked as long as the user is logged in
+      const durationMs = duration === 'auto'
+        ? getJWTRemainingMs(token)
+        : (REMEMBER_DURATIONS[duration] ?? 0);
 
       if (durationMs > 0) {
         // Use localStorage with expiry for persistent storage
@@ -222,7 +235,7 @@ export function E2EEProvider({ children, token, API_URL }) {
   }, [token, fetchAPI, restoreFromSessionCache]);
 
   // ============ E2EE Setup ============
-  const setupE2EE = useCallback(async (passphrase, createRecoveryKey = true, rememberDuration = 'session') => {
+  const setupE2EE = useCallback(async (passphrase, createRecoveryKey = true, rememberDuration = 'auto') => {
     if (!token) throw new Error('Not authenticated');
 
     try {
@@ -282,7 +295,7 @@ export function E2EEProvider({ children, token, API_URL }) {
   }, [token, fetchAPI, saveToSessionCache]);
 
   // ============ Unlock with Passphrase ============
-  const unlockE2EE = useCallback(async (passphrase, rememberDuration = 'session') => {
+  const unlockE2EE = useCallback(async (passphrase, rememberDuration = 'auto') => {
     if (!token) throw new Error('Not authenticated');
 
     setIsUnlocking(true);
