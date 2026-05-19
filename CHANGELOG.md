@@ -5,6 +5,14 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Images and file attachments not rendering in E2EE waves**: The server's `detectAndEmbedMedia` converts upload paths and `[file:...]` markers to embedded HTML before storing messages, but encrypted content bypasses this processing and is stored as ciphertext. After client-side decryption, the original plain-text URL (`/uploads/messages/...`) or file marker (`[file:name:size]/path`) was passed directly to `MessageWithEmbeds` with no further processing, causing images to appear as raw path text and files to appear as raw markers. Fixed by adding equivalent embed detection to `displayContent` in `MessageWithEmbeds.jsx`: bare `/uploads/messages/` image paths are converted to `<img>` thumbnails, and raw `[file:...]` markers are converted to styled download cards. The existing absolutize step then prefixes them with `BASE_URL` as normal.
+
+---
+
 ## [2.50.0] - 2026-05-15
 
 ### Added
