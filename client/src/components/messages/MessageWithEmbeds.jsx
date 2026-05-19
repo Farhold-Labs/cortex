@@ -494,6 +494,39 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
       }
     );
 
+    // Embed bare /uploads/messages/ paths as <img> tags.
+    // Server does this via detectAndEmbedMedia, but E2EE waves store encrypted content,
+    // so decrypted messages arrive as plain text URLs instead of pre-processed HTML.
+    result = result.replace(
+      /(?<!['">/])(\/uploads\/messages\/[^\s<"'>]+\.(?:webp|jpg|jpeg|png|gif|svg))(?!['">/])/gi,
+      (match) => `<img src="${match}" alt="Uploaded image" style="max-width:200px;max-height:150px;border-radius:4px;cursor:pointer;object-fit:cover;display:block;border:1px solid #3a4a3a;" class="zoomable-image" />`
+    );
+
+    // Convert raw [file:name:size]/path markers to styled download cards.
+    // Same situation as images — E2EE decrypted messages carry the unprocessed marker.
+    result = result.replace(
+      /\[file:([^\]:]+):(\d+)\](\/uploads\/files\/[^\s<"']+)/g,
+      (match, filename, sizeStr, url) => {
+        const size = parseInt(sizeStr, 10);
+        let formatted;
+        if (size >= 1024 * 1024) formatted = `${(size / (1024 * 1024)).toFixed(1)} MB`;
+        else if (size >= 1024) formatted = `${(size / 1024).toFixed(1)} KB`;
+        else formatted = `${size} B`;
+        const ext = filename.split('.').pop()?.toLowerCase() || '';
+        let icon = '📄';
+        if (ext === 'pdf') icon = '📕';
+        else if (['doc', 'docx', 'odt', 'rtf', 'txt'].includes(ext)) icon = '📝';
+        else if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) icon = '📊';
+        else if (['ppt', 'pptx', 'odp'].includes(ext)) icon = '📽️';
+        else if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(ext)) icon = '📦';
+        else if (['mp3', 'wav', 'ogg', 'flac', 'aac'].includes(ext)) icon = '🎵';
+        else if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext)) icon = '🎬';
+        else if (['json', 'xml', 'yaml', 'yml', 'toml'].includes(ext)) icon = '📋';
+        else if (['js', 'ts', 'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'css', 'html', 'jsx', 'tsx'].includes(ext)) icon = '💻';
+        return `<a href="${url}" download="${filename}" class="file-attachment-card" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:6px;text-decoration:none;color:var(--text-primary);margin:6px 0;max-width:320px;cursor:pointer;transition:border-color 0.15s;" onmouseover="this.style.borderColor='var(--accent-teal)'" onmouseout="this.style.borderColor='var(--border-subtle)'"><span style="font-size:1.5rem;flex-shrink:0;">${icon}</span><span style="flex:1;min-width:0;"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;font-family:monospace;color:var(--text-primary);">${filename}</span><span style="display:block;font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${formatted}</span></span><span style="flex-shrink:0;color:var(--text-dim);font-size:0.9rem;" title="Download">⬇</span></a>`;
+      }
+    );
+
     // Absolutize relative server paths so Electron (app:// origin) loads
     // images and file links from the remote server, not the local filesystem.
     if (BASE_URL) {
