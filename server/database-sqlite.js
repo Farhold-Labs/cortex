@@ -2091,6 +2091,28 @@ export class DatabaseSQLite {
         console.log('✅ support_tickets.handle column added');
       }
     }
+
+    // v2.51.0 — Incoming Webhooks (Discord-compatible)
+    const incomingWebhooksExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='incoming_webhooks'`
+    ).get();
+    if (!incomingWebhooksExists) {
+      console.log('📝 Adding incoming_webhooks table (v2.51.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS incoming_webhooks (
+          id          TEXT PRIMARY KEY,
+          token       TEXT UNIQUE NOT NULL,
+          wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          name        TEXT NOT NULL,
+          bot_id      TEXT REFERENCES bots(id),
+          created_by  TEXT REFERENCES users(id),
+          created_at  TEXT NOT NULL,
+          last_used_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_incoming_webhooks_wave ON incoming_webhooks(wave_id);
+      `);
+      console.log('✅ incoming_webhooks table created');
+    }
   }
 
   prepareStatements() {
@@ -9362,6 +9384,57 @@ export class DatabaseSQLite {
   touchWaveToken(tokenId) {
     this.db.prepare(`UPDATE wave_tokens SET last_used_at = ? WHERE id = ?`)
       .run(new Date().toISOString(), tokenId);
+  }
+
+  // ============ Incoming Webhooks (v2.51.0) ============
+
+  createIncomingWebhook(waveId, createdBy, name) {
+    const id = `iwh-${crypto.randomUUID()}`;
+    const token = crypto.randomBytes(32).toString('hex');
+    const now = new Date().toISOString();
+
+    // Backing bot entry so pings show the webhook name as sender_name
+    const botId = `bot-iwh-${crypto.randomUUID()}`;
+    const dummyKeyHash = crypto.createHash('sha256').update(`${botId}-${now}`).digest('hex');
+    this.db.prepare(`
+      INSERT INTO bots (id, name, owner_user_id, api_key_hash, status, created_at)
+      VALUES (?, ?, ?, ?, 'active', ?)
+    `).run(botId, name, createdBy, dummyKeyHash, now);
+
+    this.db.prepare(`
+      INSERT INTO incoming_webhooks (id, token, wave_id, name, bot_id, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, token, waveId, name, botId, createdBy, now);
+
+    return { id, token, waveId, name, botId, createdBy, createdAt: now };
+  }
+
+  getIncomingWebhook(id, token) {
+    return this.db.prepare(`
+      SELECT * FROM incoming_webhooks WHERE id = ? AND token = ?
+    `).get(id, token);
+  }
+
+  listIncomingWebhooksForWave(waveId) {
+    return this.db.prepare(`
+      SELECT id, wave_id, name, created_by, created_at, last_used_at
+      FROM incoming_webhooks WHERE wave_id = ? ORDER BY created_at ASC
+    `).all(waveId);
+  }
+
+  deleteIncomingWebhook(id, userId) {
+    const row = this.db.prepare(`SELECT bot_id, created_by FROM incoming_webhooks WHERE id = ?`).get(id);
+    if (!row) return false;
+    this.db.prepare(`DELETE FROM incoming_webhooks WHERE id = ?`).run(id);
+    if (row.bot_id) {
+      this.db.prepare(`DELETE FROM bots WHERE id = ? AND id LIKE 'bot-iwh-%'`).run(row.bot_id);
+    }
+    return true;
+  }
+
+  touchIncomingWebhook(id) {
+    this.db.prepare(`UPDATE incoming_webhooks SET last_used_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), id);
   }
 
   // ============ Jellyfin Integration Methods (v2.14.0) ============

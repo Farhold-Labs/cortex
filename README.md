@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.50.1** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.51.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -113,6 +113,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 - **Custom themes** — Visual theme editor, gallery, create/share/install themes
 - **Firefly personality** — Easter eggs and themed UI throughout
 - **Outgoing webhooks** — Forward wave messages to Discord, Slack, Teams
+- **Incoming webhooks** — Discord-compatible webhook URLs; point GitHub, Grafana, Uptime Kuma, etc. at Cortex with no code changes
 
 ### Security
 - JWT authentication with configurable session duration, silent renewal, and grace-period re-auth
