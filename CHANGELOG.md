@@ -5,6 +5,37 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.51.0] - 2026-05-20
+
+### Added
+
+#### Incoming Webhooks (Discord-compatible)
+Wave creators can now create incoming webhook URLs that accept posts from any service that supports Discord webhooks — GitHub, Grafana, Datadog, Uptime Kuma, and hundreds of other tools work out of the box with no code changes.
+
+**How it works:**
+- Each incoming webhook is a unique URL in the form `/api/webhooks/discord/{id}/{token}`
+- The endpoint is fully Discord-compatible: services that POST `{ content, username, embeds }` to a Discord webhook URL will work identically when pointed at Cortex
+- Discord `embeds` are converted to formatted HTML: title (optionally linked), description, fields, and footer are rendered inline in the ping
+- The `username` field in the payload overrides the webhook's configured sender name for that message
+- Pings appear with the webhook's name as the sender (backed by a hidden bot entry, same pattern as wave posting tokens)
+- Up to 10 incoming webhooks per wave; each has its own URL so sources can be revoked individually
+
+**Management UI:**
+- INCOMING WEBHOOKS section in Wave Settings (wave creator only), below POSTING TOKENS
+- Create: enter a name → the full URL is shown once (copy-and-dismiss, never stored in plaintext again)
+- Delete: removes the webhook and its backing bot entry; any service still posting to the old URL gets a 401
+
+**API endpoints:**
+- `GET /api/webhooks/discord/:id/:token` — Discord-compatible info response (used by services to verify the webhook)
+- `POST /api/webhooks/discord/:id/:token` — accept Discord-format payload; returns 204 No Content on success
+- `GET /api/waves/:id/incoming-webhooks` — list webhooks for a wave (creator only)
+- `POST /api/waves/:id/incoming-webhooks` — create webhook, returns `{ webhook, url }` (URL shown once)
+- `DELETE /api/incoming-webhooks/:id` — delete webhook (creator or admin)
+
+**Database:** New `incoming_webhooks` table (`id, token, wave_id, name, bot_id, created_by, created_at, last_used_at`) with cascade delete on wave removal. Migration runs automatically on server start.
+
+---
+
 ## [2.50.1] - 2026-05-19
 
 ### Fixed

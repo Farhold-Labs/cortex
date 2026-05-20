@@ -11781,6 +11781,189 @@ app.post('/api/webhooks/:webhookId/test', authenticateToken, async (req, res) =>
   }
 });
 
+// ============ Incoming Webhooks (v2.51.0) ============
+// Discord-compatible incoming webhook endpoint — lets any service that POSTs to
+// Discord webhooks point to Cortex instead, with no code changes on their end.
+
+/**
+ * GET /api/webhooks/discord/:id/:token — Discord-compatible info response
+ */
+app.get('/api/webhooks/discord/:id/:token', (req, res) => {
+  try {
+    const id = sanitizeInput(req.params.id);
+    const token = sanitizeInput(req.params.token);
+    const hook = db.getIncomingWebhook(id, token);
+    if (!hook) return res.status(401).json({ message: '401: Unauthorized', code: 0 });
+    res.json({
+      id: hook.id,
+      name: hook.name,
+      type: 1,
+      channel_id: hook.wave_id,
+      guild_id: null,
+      application_id: null,
+      token: hook.token,
+    });
+  } catch (err) {
+    console.error('Incoming webhook GET error:', err);
+    res.status(500).json({ error: 'Failed to get webhook info' });
+  }
+});
+
+/**
+ * POST /api/webhooks/discord/:id/:token — Accept Discord-format payload and post to wave
+ */
+app.post('/api/webhooks/discord/:id/:token', express.json({ limit: '50kb' }), botLimiter, (req, res) => {
+  try {
+    const id = sanitizeInput(req.params.id);
+    const token = sanitizeInput(req.params.token);
+    const hook = db.getIncomingWebhook(id, token);
+    if (!hook) return res.status(401).json({ message: '401: Unauthorized', code: 0 });
+
+    const wave = db.getWave(hook.wave_id);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+
+    // Build content from Discord payload: content + embeds
+    const parts = [];
+
+    if (req.body.content && typeof req.body.content === 'string') {
+      parts.push(sanitizeMessage(req.body.content));
+    }
+
+    if (Array.isArray(req.body.embeds)) {
+      for (const embed of req.body.embeds.slice(0, 10)) {
+        const embedParts = [];
+        if (embed.title) embedParts.push(`<strong>${sanitizeMessage(embed.title)}</strong>`);
+        if (embed.url && embed.title) {
+          // Replace last title push with a linked title
+          embedParts[embedParts.length - 1] = `<strong><a href="${sanitizeInput(embed.url)}">${sanitizeMessage(embed.title)}</a></strong>`;
+        } else if (embed.url) {
+          embedParts.push(`<a href="${sanitizeInput(embed.url)}">${sanitizeInput(embed.url)}</a>`);
+        }
+        if (embed.description) embedParts.push(sanitizeMessage(embed.description));
+        if (Array.isArray(embed.fields)) {
+          for (const field of embed.fields.slice(0, 25)) {
+            if (field.name && field.value) {
+              embedParts.push(`<strong>${sanitizeMessage(field.name)}:</strong> ${sanitizeMessage(field.value)}`);
+            }
+          }
+        }
+        if (embed.footer?.text) embedParts.push(`<em>${sanitizeMessage(embed.footer.text)}</em>`);
+        if (embedParts.length > 0) parts.push(embedParts.join('<br>'));
+      }
+    }
+
+    const combined = parts.join('<br><br>');
+    if (!combined.trim()) return res.status(400).json({ error: 'No content to post' });
+
+    // Use webhook name as override if payload provides username
+    const senderName = req.body.username
+      ? sanitizeInput(String(req.body.username)).substring(0, 64)
+      : hook.name;
+
+    const creator = db.findUserById(hook.created_by);
+    if (!creator) return res.status(403).json({ error: 'Webhook owner not found' });
+
+    const ping = db.createMessage({
+      waveId: wave.id,
+      authorId: hook.created_by,
+      content: combined,
+      privacy: wave.privacy,
+      botId: hook.bot_id,
+    });
+
+    db.touchIncomingWebhook(hook.id);
+
+    // Broadcast to wave participants
+    broadcastToWave(wave.id, { type: 'new_ping', data: ping });
+    broadcastToWave(wave.id, { type: 'new_droplet', data: ping });
+    broadcastToWave(wave.id, { type: 'new_message', data: ping });
+
+    createPingNotifications(ping, wave, { ...creator, displayName: senderName });
+
+    // Discord returns 204 No Content on success
+    res.status(204).send();
+  } catch (err) {
+    console.error('Incoming webhook POST error:', err);
+    res.status(500).json({ error: 'Failed to post webhook message' });
+  }
+});
+
+/**
+ * List incoming webhooks for a wave (creator only)
+ */
+app.get('/api/waves/:id/incoming-webhooks', authenticateToken, (req, res) => {
+  try {
+    const wave = db.getWave(req.params.id);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+    if (wave.createdBy !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage incoming webhooks' });
+    const hooks = db.listIncomingWebhooksForWave(wave.id);
+    res.json({ webhooks: hooks });
+  } catch (err) {
+    console.error('List incoming webhooks error:', err);
+    res.status(500).json({ error: 'Failed to list webhooks' });
+  }
+});
+
+/**
+ * Create an incoming webhook for a wave (creator only, max 10 per wave)
+ */
+app.post('/api/waves/:id/incoming-webhooks', authenticateToken, (req, res) => {
+  try {
+    const wave = db.getWave(req.params.id);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+    if (wave.createdBy !== req.user.userId) return res.status(403).json({ error: 'Only the wave creator can manage incoming webhooks' });
+
+    const name = sanitizeInput(String(req.body.name || '')).trim();
+    if (!name) return res.status(400).json({ error: 'Webhook name is required' });
+    if (name.length > 64) return res.status(400).json({ error: 'Name too long (max 64 chars)' });
+
+    const existing = db.listIncomingWebhooksForWave(wave.id);
+    if (existing.length >= 10) return res.status(400).json({ error: 'Maximum 10 incoming webhooks per wave' });
+
+    const hook = db.createIncomingWebhook(wave.id, req.user.userId, name);
+    db.logActivity(req.user.userId, 'incoming_webhook_created', 'wave', wave.id, { webhookId: hook.id, name });
+
+    // Derive the public-facing URL
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const baseUrl = process.env.BASE_URL || `${protocol}://${host}`;
+    const webhookUrl = `${baseUrl}/api/webhooks/discord/${hook.id}/${hook.token}`;
+
+    res.status(201).json({
+      webhook: { id: hook.id, name: hook.name, createdAt: hook.createdAt },
+      url: webhookUrl,
+    });
+  } catch (err) {
+    console.error('Create incoming webhook error:', err);
+    res.status(500).json({ error: 'Failed to create webhook' });
+  }
+});
+
+/**
+ * Delete an incoming webhook (creator only)
+ */
+app.delete('/api/incoming-webhooks/:id', authenticateToken, (req, res) => {
+  try {
+    const hookId = sanitizeInput(req.params.id);
+    // Fetch just enough to check ownership (no token needed here — user is authenticated)
+    const row = db.db.prepare(`SELECT wave_id, created_by FROM incoming_webhooks WHERE id = ?`).get(hookId);
+    if (!row) return res.status(404).json({ error: 'Webhook not found' });
+
+    const wave = db.getWave(row.wave_id);
+    const user = db.findUserById(req.user.userId);
+    if (row.created_by !== req.user.userId && !hasRole(user, ROLES.ADMIN)) {
+      return res.status(403).json({ error: 'Only the wave creator or admin can delete this webhook' });
+    }
+
+    db.deleteIncomingWebhook(hookId, req.user.userId);
+    db.logActivity(req.user.userId, 'incoming_webhook_deleted', 'wave', row.wave_id, { webhookId: hookId });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete incoming webhook error:', err);
+    res.status(500).json({ error: 'Failed to delete webhook' });
+  }
+});
+
 // ============ Share Routes (v1.17.0) ============
 
 // GET /share/:pingId - HTML page with Open Graph meta tags for social sharing
