@@ -33,6 +33,13 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
   const [newTokenName, setNewTokenName] = useState('');
   const [revealedToken, setRevealedToken] = useState(null); // { id, plaintext }
 
+  // Incoming webhooks state
+  const [incomingWebhooks, setIncomingWebhooks] = useState([]);
+  const [loadingIncoming, setLoadingIncoming] = useState(false);
+  const [showAddIncoming, setShowAddIncoming] = useState(false);
+  const [newIncomingName, setNewIncomingName] = useState('');
+  const [revealedWebhookUrl, setRevealedWebhookUrl] = useState(null); // { id, url }
+
   const isWaveCreator = wave?.createdBy === currentUserId || wave?.creatorId === currentUserId;
 
   useEffect(() => {
@@ -65,6 +72,17 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
     }
   }, [isOpen, wave?.id, isWaveCreator]);
 
+  // Fetch incoming webhooks when modal opens (only for wave creator)
+  useEffect(() => {
+    if (isOpen && wave && isWaveCreator) {
+      setLoadingIncoming(true);
+      fetchAPI(`/waves/${wave.id}/incoming-webhooks`)
+        .then(data => setIncomingWebhooks(data.webhooks || []))
+        .catch(err => console.error('Failed to load incoming webhooks:', err))
+        .finally(() => setLoadingIncoming(false));
+    }
+  }, [isOpen, wave?.id, isWaveCreator]);
+
   const handleCreateToken = async () => {
     if (!newTokenName.trim()) {
       showToast('Token name is required', 'error');
@@ -93,6 +111,37 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       showToast('Token revoked', 'success');
     } catch (err) {
       showToast(err.message || formatError('Failed to revoke token'), 'error');
+    }
+  };
+
+  const handleCreateIncomingWebhook = async () => {
+    if (!newIncomingName.trim()) {
+      showToast('Webhook name is required', 'error');
+      return;
+    }
+    try {
+      const data = await fetchAPI(`/waves/${wave.id}/incoming-webhooks`, {
+        method: 'POST',
+        body: { name: newIncomingName.trim() },
+      });
+      setIncomingWebhooks([...incomingWebhooks, data.webhook]);
+      setRevealedWebhookUrl({ id: data.webhook.id, url: data.url });
+      setNewIncomingName('');
+      setShowAddIncoming(false);
+    } catch (err) {
+      showToast(err.message || 'Failed to create incoming webhook', 'error');
+    }
+  };
+
+  const handleDeleteIncomingWebhook = async (webhookId) => {
+    if (!window.confirm('Delete this incoming webhook? Any services posting to it will stop working.')) return;
+    try {
+      await fetchAPI(`/incoming-webhooks/${webhookId}`, { method: 'DELETE' });
+      setIncomingWebhooks(incomingWebhooks.filter(h => h.id !== webhookId));
+      if (revealedWebhookUrl?.id === webhookId) setRevealedWebhookUrl(null);
+      showToast('Incoming webhook deleted', 'success');
+    } catch (err) {
+      showToast(err.message || 'Failed to delete incoming webhook', 'error');
     }
   };
 
@@ -831,6 +880,148 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
                 {tokens.length === 0 && !showAddToken && (
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                     Post to this wave via API without a user account
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Incoming Webhooks - Only show for wave creator */}
+        {isWaveCreator && (
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+              INCOMING WEBHOOKS
+              <span style={{ color: 'var(--text-muted)', marginLeft: '8px', fontWeight: 'normal' }}>
+                ({incomingWebhooks.length}/10)
+              </span>
+            </div>
+
+            {/* Revealed URL — shown once after creation */}
+            {revealedWebhookUrl && (
+              <div style={{
+                padding: '10px 12px', marginBottom: '8px',
+                background: 'var(--accent-teal)10', border: '1px solid var(--accent-teal)',
+              }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--accent-teal)', marginBottom: '6px' }}>
+                  Webhook URL — copy it now, it won't be shown again:
+                </div>
+                <div style={{
+                  fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-primary)',
+                  wordBreak: 'break-all', background: 'var(--bg-surface)', padding: '6px 8px',
+                  border: '1px solid var(--border-subtle)', marginBottom: '6px',
+                }}>
+                  {revealedWebhookUrl.url}
+                </div>
+                <button
+                  onClick={() => { navigator.clipboard?.writeText(revealedWebhookUrl.url); showToast('Webhook URL copied', 'success'); }}
+                  style={{
+                    padding: '4px 10px', background: 'var(--accent-teal)20',
+                    border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)',
+                    cursor: 'pointer', fontSize: '0.75rem', marginRight: '8px',
+                  }}
+                >
+                  Copy
+                </button>
+                <button
+                  onClick={() => setRevealedWebhookUrl(null)}
+                  style={{
+                    padding: '4px 10px', background: 'transparent',
+                    border: '1px solid var(--border-subtle)', color: 'var(--text-dim)',
+                    cursor: 'pointer', fontSize: '0.75rem',
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {loadingIncoming ? (
+              <div style={{ color: 'var(--text-muted)', padding: '10px', background: 'var(--bg-elevated)' }}>
+                Loading webhooks...
+              </div>
+            ) : (
+              <>
+                {incomingWebhooks.map(hook => (
+                  <div key={hook.id} style={{
+                    padding: '10px 12px', marginBottom: '8px',
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{hook.name}</span>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          Created {new Date(hook.created_at).toLocaleDateString()}
+                          {hook.last_used_at && ` • Last used ${new Date(hook.last_used_at).toLocaleDateString()}`}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteIncomingWebhook(hook.id)}
+                        style={{
+                          padding: '4px 8px', background: 'var(--bg-surface)',
+                          border: '1px solid var(--accent-red)', color: 'var(--accent-red)',
+                          cursor: 'pointer', fontSize: '0.75rem',
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {showAddIncoming ? (
+                  <div style={{ padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--accent-teal)', marginBottom: '8px' }}>
+                    <input
+                      type="text"
+                      placeholder="Webhook name (e.g., GitHub Alerts)"
+                      value={newIncomingName}
+                      onChange={(e) => setNewIncomingName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleCreateIncomingWebhook()}
+                      style={{
+                        width: '100%', padding: '8px', boxSizing: 'border-box',
+                        background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+                        color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.85rem',
+                        marginBottom: '8px',
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => { setShowAddIncoming(false); setNewIncomingName(''); }}
+                        style={{
+                          flex: 1, padding: '8px', background: 'transparent',
+                          border: '1px solid var(--border-subtle)', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.85rem',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleCreateIncomingWebhook}
+                        style={{
+                          flex: 1, padding: '8px', background: 'var(--accent-teal)20',
+                          border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)', cursor: 'pointer', fontSize: '0.85rem',
+                        }}
+                      >
+                        Create Webhook
+                      </button>
+                    </div>
+                  </div>
+                ) : incomingWebhooks.length < 10 && (
+                  <button
+                    onClick={() => setShowAddIncoming(true)}
+                    style={{
+                      width: '100%', padding: '10px', textAlign: 'left',
+                      background: 'var(--bg-elevated)', border: '1px dashed var(--border-subtle)',
+                      color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.8rem',
+                      display: 'flex', alignItems: 'center', gap: '8px',
+                    }}
+                  >
+                    <span>+</span> Create incoming webhook
+                  </button>
+                )}
+
+                {incomingWebhooks.length === 0 && !showAddIncoming && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Accept posts from Discord-compatible services (GitHub, Grafana, etc.)
                   </div>
                 )}
               </>
