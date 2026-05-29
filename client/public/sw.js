@@ -1,14 +1,19 @@
-// Cortex Service Worker v2.12.1
-// Includes: Push notifications, offline caching, low-bandwidth API caching
-// v2.10.0: Added stale-while-revalidate for wave list API
-const CACHE_NAME = 'cortex-v2.12.1';
-const API_CACHE_NAME = 'cortex-api-v2.12.1';
+// Cortex Service Worker v2.13.0
+// Includes: Push notifications, offline caching, low-bandwidth API caching,
+//           pre-caching of hashed build assets at install time (v2.13.0)
+const CACHE_NAME = 'cortex-v2.13.0';
+const API_CACHE_NAME = 'cortex-api-v2.13.0';
 const API_CACHE_MAX_AGE = 30000; // 30 seconds for API cache
 const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/manifest.json'
+  '/manifest.json',
 ];
+
+// Injected at build time by scripts/inject-sw-assets.mjs —
+// contains all hashed JS/CSS filenames from the Vite manifest.
+// __PRECACHE_ASSETS__
+const PRECACHE_ASSETS = [];
 
 // Stale-while-revalidate helper for API requests (v2.10.0)
 // Returns cached response immediately, then updates cache in background
@@ -63,16 +68,13 @@ async function staleWhileRevalidate(request, cacheName, maxAge) {
   return fetchPromise;
 }
 
-// Install: Cache static assets
+// Install: pre-cache static shell + all hashed build assets
 self.addEventListener('install', (event) => {
-  console.log('[SW] Installing service worker v2.10.0...');
+  const allAssets = [...STATIC_ASSETS, ...PRECACHE_ASSETS];
+  console.log(`[SW] Installing v2.13.0 — pre-caching ${allAssets.length} assets`);
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('[SW] Caching static assets');
-      return cache.addAll(STATIC_ASSETS);
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(allAssets))
   );
-  // Activate immediately without waiting
   self.skipWaiting();
 });
 
