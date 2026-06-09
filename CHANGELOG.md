@@ -5,6 +5,14 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.52.1] - 2026-06-09
+
+### Fixed
+
+- **GIFs not rendering in E2EE waves**: When a user selected a GIF, its CDN URL (e.g. `https://media.tenor.com/…gif`) was appended to the composer as plain text. For non-encrypted waves, the server's `detectAndEmbedMedia` converts CDN URLs matching known GIF hosts into `<img>` tags before storage, so GIFs displayed correctly. Encrypted content bypasses that processing entirely — the server stores the raw ciphertext — so after client-side decryption the URL came back as plain text. The client-side embed detector (`detectEmbedUrls`) only recognises Tenor/GIPHY page URLs (e.g. `tenor.com/view/…`), not CDN media URLs, so the GIF was silently rendered as a plain-text URL. Fixed by wrapping the selected GIF URL in an `<img>` tag on the client before it is appended to the composer (and therefore before encryption). Non-E2EE waves are unaffected: `sanitizeMessage` preserves `<img>` tags with their `src` attributes, and `detectAndEmbedMedia` no longer finds a bare CDN URL to convert, so the stored HTML is equivalent to what was produced before. Changes: `WaveView.jsx`, `FocusView.jsx`, `ThreadPanel.jsx`.
+
+---
+
 ## [2.51.0] - 2026-05-20
 
 ### Added

@@ -2758,10 +2758,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           isOpen={showGifSearch}
           onClose={() => setShowGifSearch(false)}
           onSelect={(gifUrl) => {
+            const gifHtml = `<img src="${gifUrl}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
             if (composerRef.current) {
-              composerRef.current.appendMessage(gifUrl);
+              composerRef.current.appendMessage(gifHtml);
             } else {
-              setNewMessage(prev => prev + (prev.trim() ? ' ' : '') + gifUrl);
+              setNewMessage(prev => prev + (prev.trim() ? ' ' : '') + gifHtml);
             }
             setShowGifSearch(false);
           }}
