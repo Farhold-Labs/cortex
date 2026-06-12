@@ -1794,9 +1794,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               + Set topic
             </div>
           ) : null}
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
-            {participants.length} participants • {total} pings
-          </div>
         </div>
         {/* Wave header actions: three-dot menu + privacy badge */}
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -1861,6 +1858,52 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     <span>📞</span>
                     <span>Voice/Video Call</span>
                   </div>
+
+                  {/* Playback */}
+                  {total > 0 && (
+                    <div
+                      onClick={() => { setShowPlayback(!showPlayback); setShowWaveMenu(false); }}
+                      style={{
+                        padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem',
+                        color: showPlayback ? config.color : 'var(--text-primary)',
+                        background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>▶</span>
+                      <span>{showPlayback ? 'Hide Playback' : 'Playback'}</span>
+                    </div>
+                  )}
+
+                  {/* Mark All Read */}
+                  {allPings.some(m => m.is_unread && m.author_id !== currentUser.id) && (
+                    <div
+                      onClick={async () => {
+                        setShowWaveMenu(false);
+                        try {
+                          const unreadPings = allPings.filter(m => m.is_unread && m.author_id !== currentUser.id);
+                          if (unreadPings.length === 0) return;
+                          await Promise.all(unreadPings.map(m => fetchAPI(`/pings/${m.id}/read`, { method: 'POST' })));
+                          await loadWave(true);
+                          onWaveUpdate?.();
+                          showToast(`Marked ${unreadPings.length} ping${unreadPings.length !== 1 ? 's' : ''} as read`, 'success');
+                        } catch (err) {
+                          showToast(formatError('Failed to mark pings as read'), 'error');
+                        }
+                      }}
+                      style={{
+                        padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem',
+                        color: 'var(--accent-amber)', background: 'transparent',
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>✓</span>
+                      <span>Mark All Read</span>
+                    </div>
+                  )}
 
                   {/* Archive/Restore */}
                   <div
@@ -2119,98 +2162,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         </div>
       </div>
 
-      {/* Wave Toolbar - Participants & Playback */}
-      {(participants.length > 0 || total > 0) && (
-        <div style={{
-          padding: isMobile ? '6px 12px' : '6px 20px',
-          borderBottom: '1px solid var(--border-subtle)',
-          background: 'var(--bg-elevated)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: isMobile ? '8px' : '12px',
-          flexShrink: 0
-        }}>
-          {/* Playback Toggle */}
-          {total > 0 && (
-            <button
-              onClick={() => setShowPlayback(!showPlayback)}
-              style={{
-                padding: isMobile ? '8px 12px' : '6px 10px',
-                background: showPlayback ? `${config.color}20` : 'transparent',
-                border: `1px solid ${showPlayback ? config.color : 'var(--border-primary)'}`,
-                color: showPlayback ? config.color : 'var(--text-dim)',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: isMobile ? '0.7rem' : '0.65rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <span>{showPlayback ? '▼' : '▶'}</span>
-              PLAYBACK
-            </button>
-          )}
-
-          {/* Thread Collapse/Expand Toggle */}
-          {total > 0 && (
-            <button
-              onClick={() => {
-                const allCollapsed = Object.keys(collapsed).length > 0;
-                if (allCollapsed) {
-                  expandAllThreads();
-                } else {
-                  collapseAllThreads();
-                }
-              }}
-              style={{
-                padding: isMobile ? '8px 12px' : '6px 10px',
-                background: 'transparent',
-                border: '1px solid var(--border-primary)',
-                color: 'var(--text-dim)',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: isMobile ? '0.7rem' : '0.65rem',
-              }}
-              title={Object.keys(collapsed).length > 0 ? 'Expand all threads' : 'Collapse all threads'}
-            >
-              {Object.keys(collapsed).length > 0 ? '▼' : '▶'} ALL
-            </button>
-          )}
-
-          {/* Mark All Read Button - always visible if unread */}
-          {allPings.some(m => m.is_unread && m.author_id !== currentUser.id) && (
-            <button
-              onClick={async () => {
-                try {
-                  // Use is_unread flag from server for consistency
-                  const unreadPings = allPings
-                    .filter(m => m.is_unread && m.author_id !== currentUser.id);
-                  if (unreadPings.length === 0) return;
-                  await Promise.all(unreadPings.map(m => fetchAPI(`/pings/${m.id}/read`, { method: 'POST' })));
-                  await loadWave(true);
-                  onWaveUpdate?.();
-                  showToast(`Marked ${unreadPings.length} ping${unreadPings.length !== 1 ? 's' : ''} as read`, 'success');
-                } catch (err) {
-                  showToast(formatError('Failed to mark pings as read'), 'error');
-                }
-              }}
-              style={{
-                padding: isMobile ? '8px 12px' : '6px 10px',
-                marginLeft: 'auto',
-                background: 'transparent',
-                border: '1px solid var(--accent-amber)',
-                color: 'var(--accent-amber)',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: isMobile ? '0.7rem' : '0.65rem',
-              }}
-            >
-              MARK ALL READ
-            </button>
-          )}
-        </div>
-      )}
 
       {/* Expanded Participants Panel */}
       {showParticipants && participants.length > 0 && (
