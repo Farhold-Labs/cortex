@@ -148,7 +148,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
               </span>
             )}
             {/* Move menu button (mobile/PWA alternative to drag-and-drop) */}
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -160,8 +160,8 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
                   border: 'none',
                   color: 'var(--text-dim)',
                   cursor: 'pointer',
-                  fontSize: '1rem',
-                  padding: '2px 4px',
+                  fontSize: '0.85rem',
+                  padding: '0 3px',
                   lineHeight: 1,
                 }}
               >
@@ -253,7 +253,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
                 </div>
               )}
             </div>
-            <span style={{ color: config.color }}>{config.icon}</span>
+            <span style={{ color: config.color, fontSize: '0.7rem', lineHeight: 1 }}>{config.icon}</span>
           </div>
         </div>
       </div>
@@ -304,7 +304,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
     <div style={{ flex: 1, overflowY: 'auto' }}>
       {/* Pinned Section */}
       {groupedWaves.pinned.length > 0 && (
-        <div style={{ marginBottom: '8px' }}>
+        <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
             title="PINNED"
             badge={groupedWaves.pinned.length.toString()}
@@ -312,6 +312,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
             titleColor="var(--accent-amber)"
             accentColor="var(--accent-amber)"
             isMobile={isMobile}
+            compact
           >
             {renderDropZone('__pinned__', 'Pinned')}
             {groupedWaves.pinned.map(wave => renderWaveItem(wave, true))}
@@ -325,7 +326,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
         const unreadCount = getGroupUnreadCount(categoryWaves);
 
         return (
-          <div key={category.id} style={{ marginBottom: '8px' }}>
+          <div key={category.id} style={{ marginBottom: '1px' }}>
             <CollapsibleSection
               title={category.name.toUpperCase()}
               badge={categoryWaves.length > 0 ? `${categoryWaves.length}${unreadCount > 0 ? ` (${unreadCount})` : ''}` : '0'}
@@ -334,6 +335,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
               titleColor={category.color}
               accentColor={category.color}
               isMobile={isMobile}
+              compact
             >
               {renderDropZone(category.id, category.name)}
               {categoryWaves.length === 0 ? (
@@ -350,7 +352,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
 
       {/* Uncategorized Section */}
       {groupedWaves.uncategorized.length > 0 && (
-        <div style={{ marginBottom: '8px' }}>
+        <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
             title="UNCATEGORIZED"
             badge={groupedWaves.uncategorized.length.toString()}
@@ -358,6 +360,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
             titleColor="var(--text-dim)"
             accentColor="var(--border-primary)"
             isMobile={isMobile}
+            compact
           >
             {renderDropZone(null, 'Uncategorized')}
             {groupedWaves.uncategorized.map(wave => renderWaveItem(wave, true))}
@@ -382,7 +385,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
     display: 'flex', flexDirection: 'column', height: '100%',
     borderBottom: isMobile ? '1px solid var(--border-subtle)' : 'none',
   }}>
-    <div style={{ padding: isMobile ? '14px 16px' : '12px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+    <div style={{ padding: isMobile ? '10px 12px' : '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
       <GlowText color={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{ghostMode ? GHOST_PROTOCOL.modeActive : 'WAVES'}</GlowText>
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
         {categories.length > 0 && (
@@ -549,7 +552,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
                     📞 {callInfo.participantCount}
                   </span>
                 )}
-                <span style={{ color: config.color }}>{config.icon}</span>
+                <span style={{ color: config.color, fontSize: '0.7rem', lineHeight: 1 }}>{config.icon}</span>
               </div>
             </div>
           </div>

@@ -1,11 +1,45 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge }) => {
+const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, compact = false }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
 
-  // Use controlled mode if onToggle is provided, otherwise use internal state
   const isOpen = onToggle ? controlledIsOpen : internalIsOpen;
   const handleToggle = onToggle || (() => setInternalIsOpen(!internalIsOpen));
+
+  if (compact) {
+    return (
+      <div>
+        {/* Compact header: just a label row with toggle, no box */}
+        <div
+          onClick={handleToggle}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '3px 12px',
+            cursor: 'pointer',
+            userSelect: 'none',
+            borderTop: '1px solid var(--bg-hover)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ color: titleColor, fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.05em' }}>{title}</span>
+            {badge && (
+              <span style={{
+                color: 'var(--text-muted)',
+                fontSize: '0.6rem',
+                fontFamily: 'monospace',
+              }}>{badge}</span>
+            )}
+          </div>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.6rem', fontFamily: 'monospace' }}>
+            {isOpen ? '▾' : '▸'}
+          </span>
+        </div>
+        {isOpen && children}
+      </div>
+    );
+  }
 
   return (
     <div style={{
