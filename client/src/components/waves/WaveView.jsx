@@ -2627,8 +2627,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         }}
         style={{
           flexShrink: 0,
-          padding: isMobile ? '12px' : '16px 20px',
-          paddingBottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom, 0px))' : '16px',
+          padding: isMobile ? '6px 10px' : '6px 10px',
+          paddingBottom: isMobile ? 'calc(6px + env(safe-area-inset-bottom, 0px))' : '6px',
           background: dragOver ? 'linear-gradient(0deg, var(--bg-hover), var(--border-subtle))' : 'linear-gradient(0deg, var(--bg-surface), var(--bg-hover))',
           borderTop: dragOver ? '2px dashed var(--accent-orange)' : '1px solid var(--border-subtle)',
           transition: 'all 0.2s ease',
@@ -2744,7 +2744,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               }
             }
           }}
-          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}... (Shift+Enter for new line)` : 'Type a ping... (Shift+Enter for new line, @ to mention)'}
+          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}...` : 'Shift+Enter for new line, @ to mention'}
           uploading={uploading}
           uploadingMedia={uploadingMedia}
           mediaUploadStatus={mediaUploadStatus}

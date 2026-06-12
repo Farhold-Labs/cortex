@@ -41,13 +41,17 @@ const MessageComposer = forwardRef(({
   const [emojiIndex, setEmojiIndex] = useState(0);
   const [emojiStartPos, setEmojiStartPos] = useState(null);
   const [serverMentionResults, setServerMentionResults] = useState([]);
-  const [showPhotoOptions, setShowPhotoOptions] = useState(false);
-  const [showActionMenu, setShowActionMenu] = useState(false);
-  const [showToolbar, setShowToolbar] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [gifSearch, setGifSearch] = useState('');
+  const [gifResults, setGifResults] = useState([]);
+  const [gifLoading, setGifLoading] = useState(false);
+  const [gifStartPos, setGifStartPos] = useState(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const fileAttachInputRef = useRef(null);
   const emojiPickerRef = useRef(null);
+  const gifSearchTimeoutRef = useRef(null);
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
@@ -130,6 +134,37 @@ const MessageComposer = forwardRef(({
     const active = emojiPickerRef.current.querySelector('[data-active="true"]');
     active?.scrollIntoView({ block: 'nearest' });
   }, [emojiIndex, showEmojiPicker]);
+
+  // Fetch GIFs when /gif search term changes
+  useEffect(() => {
+    if (!showGifPicker || !fetchAPI) return;
+    if (gifSearchTimeoutRef.current) clearTimeout(gifSearchTimeoutRef.current);
+    const delay = gifSearch.trim() ? 350 : 0;
+    gifSearchTimeoutRef.current = setTimeout(async () => {
+      setGifLoading(true);
+      try {
+        const url = gifSearch.trim()
+          ? `/gifs/search?q=${encodeURIComponent(gifSearch.trim())}&limit=12`
+          : `/gifs/trending?limit=12`;
+        const data = await fetchAPI(url);
+        setGifResults(data.gifs || []);
+      } catch { setGifResults([]); }
+      finally { setGifLoading(false); }
+    }, delay);
+    return () => { if (gifSearchTimeoutRef.current) clearTimeout(gifSearchTimeoutRef.current); };
+  }, [gifSearch, showGifPicker]);
+
+  const insertGif = (gifUrl) => {
+    const gifHtml = `<img src="${gifUrl}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
+    const before = newMessage.slice(0, gifStartPos ?? 0);
+    const after = newMessage.slice(textareaRef.current?.selectionStart ?? (gifStartPos ?? 0));
+    setNewMessage(before + gifHtml + after);
+    setShowGifPicker(false);
+    setGifSearch('');
+    setGifResults([]);
+    setGifStartPos(null);
+    textareaRef.current?.focus();
+  };
 
   const getMentionableUsers = () => {
     const search = mentionSearch.toLowerCase();
@@ -226,8 +261,84 @@ const MessageComposer = forwardRef(({
         </div>
       )}
 
-      {/* Textarea with mention picker */}
-      <div style={{ position: 'relative' }}>
+      {/* Input row: [+] [textarea] [SEND] */}
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+        <div style={{ position: 'relative', flexShrink: 0, alignSelf: 'flex-end' }}>
+          <input type="file" ref={fileInputRef} onChange={(e) => { const file = e.target.files?.[0]; if (file) handleImageFile(file); }} accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" style={{ display: 'none' }} />
+          <input type="file" ref={fileAttachInputRef} onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFileAttach(file); }} style={{ display: 'none' }} />
+          <button
+            onClick={() => setShowAttachMenu(!showAttachMenu)}
+            title="Attach media or file"
+            style={{
+              padding: isMobile ? '8px 10px' : '5px 8px',
+              minHeight: isMobile ? '36px' : '28px',
+              background: showAttachMenu ? 'var(--bg-hover)' : 'transparent',
+              border: `1px solid ${showAttachMenu ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
+              color: showAttachMenu ? 'var(--accent-amber)' : 'var(--text-dim)',
+              cursor: 'pointer',
+              fontFamily: 'monospace',
+              fontSize: isMobile ? '1.1rem' : '1rem',
+              lineHeight: 1,
+            }}
+          >⋮</button>
+          {showAttachMenu && (
+            <div style={{
+              position: 'absolute', bottom: '100%', left: 0, marginBottom: '4px',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', zIndex: 100, minWidth: '148px',
+            }}>
+              {showGifButton && onGifClick && (
+                <button onClick={() => { setShowAttachMenu(false); onGifClick(); }}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--accent-teal)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 700 }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >GIF</button>
+              )}
+              {showPhotoButton && (
+                <button onClick={() => { setShowAttachMenu(false); fileInputRef.current?.click(); }}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >📁 Upload Image</button>
+              )}
+              {showPhotoButton && onCameraClick && (
+                <button onClick={() => { setShowAttachMenu(false); onCameraClick(); }}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >📷 Take Photo</button>
+              )}
+              {showFileButton && (
+                <button onClick={() => { setShowAttachMenu(false); fileAttachInputRef.current?.click(); }}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >📎 Attach File</button>
+              )}
+              {onAudioRecord && (
+                <button onClick={() => { setShowAttachMenu(false); onAudioRecord(); }} disabled={uploadingMedia}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)', cursor: uploadingMedia ? 'wait' : 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', opacity: uploadingMedia ? 0.7 : 1 }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >🎤 Record Audio</button>
+              )}
+              {onVideoRecord && (
+                <button onClick={() => { setShowAttachMenu(false); onVideoRecord(); }} disabled={uploadingMedia}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)', cursor: uploadingMedia ? 'wait' : 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', opacity: uploadingMedia ? 0.7 : 1 }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >🎥 Record Video</button>
+              )}
+              {plexConnections.length > 0 && onPlexClick && (
+                <button onClick={() => { setShowAttachMenu(false); onPlexClick(); }}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', color: '#e5a00d', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >🎬 Share Plex</button>
+              )}
+            </div>
+          )}
+        </div>
+        <div style={{ position: 'relative', flex: 1 }}>
         <textarea
           ref={textareaRef}
           value={newMessage}
@@ -278,9 +389,29 @@ const MessageComposer = forwardRef(({
                 setEmojiSearch('');
                 setEmojiStartPos(null);
               }
+
+              // Detect /gif command
+              const gifMatch = !atMatch && textBeforeCursor.match(/(^|\s)(\/gif(\s+.*)?)$/);
+              if (gifMatch) {
+                const gifText = gifMatch[2]; // "/gif" or "/gif searchterm"
+                const search = gifText.replace(/^\/gif\s*/, '');
+                setShowGifPicker(true);
+                setGifSearch(search);
+                setGifStartPos(cursorPos - gifText.length);
+              } else {
+                setShowGifPicker(false);
+                setGifSearch('');
+                setGifStartPos(null);
+              }
             }
           }}
           onKeyDown={(e) => {
+            // Handle GIF picker dismiss
+            if (showGifPicker && e.key === 'Escape') {
+              e.preventDefault();
+              setShowGifPicker(false); setGifSearch(''); setGifResults([]); setGifStartPos(null); return;
+            }
+
             // Handle emoji picker navigation
             if (showEmojiPicker) {
               const results = searchEmoji(emojiSearch);
@@ -348,11 +479,11 @@ const MessageComposer = forwardRef(({
               }
             }
           }}
-          placeholder={placeholder || 'Type a ping... (@ to mention, : for emoji)'}
+          placeholder={placeholder || 'Shift+Enter for new line, @ to mention'}
           rows={1}
           style={{
             width: '100%',
-            padding: isMobile ? '14px 16px' : (compact ? '10px 12px' : '12px 16px'),
+            padding: isMobile ? '10px 12px' : (compact ? '7px 10px' : '8px 10px'),
             minHeight: isMobile ? '44px' : (compact ? '40px' : 'auto'),
             maxHeight: compact ? '150px' : '200px',
             background: 'var(--bg-elevated)',
@@ -456,31 +587,63 @@ const MessageComposer = forwardRef(({
             </div>
           );
         })()}
+
+        {/* GIF Picker (triggered by /gif search) */}
+        {showGifPicker && (
+          <div style={{
+            position: 'absolute', bottom: '100%', left: 0, right: 0, marginBottom: '4px',
+            background: 'var(--bg-surface)', border: '1px solid var(--border-primary)',
+            maxHeight: '220px', overflowY: 'auto', zIndex: 20,
+          }}>
+            <div style={{ padding: '4px 8px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ color: 'var(--accent-teal)', fontFamily: 'monospace', fontSize: '0.65rem', fontWeight: 700 }}>GIF</span>
+              <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.65rem' }}>{gifSearch ? `"${gifSearch}"` : 'trending'}</span>
+              <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.6rem', marginLeft: 'auto' }}>esc to close</span>
+            </div>
+            {gifLoading ? (
+              <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'monospace', fontSize: '0.75rem' }}>searching...</div>
+            ) : gifResults.length === 0 ? (
+              <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.75rem' }}>no results</div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '3px', padding: '3px' }}>
+                {gifResults.map((gif) => (
+                  <button
+                    key={gif.id}
+                    onClick={() => insertGif(gif.url)}
+                    title={gif.title}
+                    style={{ padding: 0, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', cursor: 'pointer', aspectRatio: '1', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    <img src={gif.preview} alt={gif.title} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        </div>
+
+        <button
+          onClick={handleSend}
+          disabled={!newMessage.trim() || uploading}
+          style={{
+            padding: isMobile ? '8px 16px' : '6px 12px',
+            minHeight: isMobile ? '36px' : '28px',
+            background: newMessage.trim() ? 'var(--accent-amber)20' : 'transparent',
+            border: `1px solid ${newMessage.trim() ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
+            color: newMessage.trim() ? 'var(--accent-amber)' : 'var(--text-muted)',
+            cursor: newMessage.trim() ? 'pointer' : 'not-allowed',
+            fontFamily: 'monospace',
+            fontSize: isMobile ? '0.85rem' : '0.75rem',
+            flexShrink: 0,
+            alignSelf: 'flex-end',
+          }}
+        >
+          SEND
+        </button>
       </div>
 
-      {/* Button row */}
-      <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center', position: 'relative' }}>
-        {/* + expander */}
-        <button
-          onClick={() => { setShowToolbar(!showToolbar); setShowPhotoOptions(false); setShowActionMenu(false); }}
-          title={showToolbar ? 'Hide attachments' : 'Add attachment'}
-          style={{
-            padding: isMobile ? '8px 10px' : '6px 8px',
-            minHeight: isMobile ? '36px' : '28px',
-            background: showToolbar ? 'var(--bg-hover)' : 'transparent',
-            border: `1px solid ${showToolbar ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
-            color: showToolbar ? 'var(--accent-amber)' : 'var(--text-dim)',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: isMobile ? '1rem' : '0.85rem',
-            fontWeight: 700,
-            flexShrink: 0,
-            lineHeight: 1,
-          }}
-        >{showToolbar ? '×' : '+'}</button>
-
-        {/* Left side: media buttons (collapsed behind +) */}
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', overflow: 'hidden', maxWidth: showToolbar ? '300px' : '0px', transition: 'max-width 0.2s ease', }}>
+      {/* (toolbar removed — all attach options in ⋮ menu) */}
+      {false && <div>
           {/* GIF button */}
           {showGifButton && onGifClick && (
             <button
@@ -696,36 +859,12 @@ const MessageComposer = forwardRef(({
               )}
             </div>
           )}
-        </div>
+        </div>}
 
-        {/* Spacer */}
-        <div style={{ flex: 1 }} />
-
-        {/* Send button */}
-        <button
-          onClick={handleSend}
-          disabled={!newMessage.trim() || uploading}
-          style={{
-            padding: isMobile ? '8px 18px' : '6px 16px',
-            minHeight: isMobile ? '36px' : '28px',
-            background: newMessage.trim() ? 'var(--accent-amber)20' : 'transparent',
-            border: `1px solid ${newMessage.trim() ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
-            color: newMessage.trim() ? 'var(--accent-amber)' : 'var(--text-muted)',
-            cursor: newMessage.trim() ? 'pointer' : 'not-allowed',
-            fontFamily: 'monospace',
-            fontSize: isMobile ? '0.85rem' : '0.75rem',
-            flexShrink: 0,
-          }}
-        >
-          SEND
-        </button>
-      </div>
-
-      {/* Click outside handler for dropdowns */}
-      {(showPhotoOptions || showActionMenu) && (
+      {showAttachMenu && (
         <div
           style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99 }}
-          onClick={() => { setShowPhotoOptions(false); setShowActionMenu(false); }}
+          onClick={() => setShowAttachMenu(false)}
         />
       )}
     </div>
