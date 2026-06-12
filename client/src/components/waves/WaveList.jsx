@@ -378,65 +378,57 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
   );
 };
 
-const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol }) => (
+const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol }) => {
+  const [showWaveMenu, setShowWaveMenu] = React.useState(false);
+  return (
   <div style={{
     width: '100%',
     minWidth: 0,
     display: 'flex', flexDirection: 'column', height: '100%',
     borderBottom: isMobile ? '1px solid var(--border-subtle)' : 'none',
   }}>
-    <div style={{ padding: isMobile ? '10px 12px' : '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+    {showWaveMenu && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99 }} onClick={() => setShowWaveMenu(false)} />}
+    <div style={{ padding: isMobile ? '10px 12px' : '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
       <GlowText color={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{ghostMode ? GHOST_PROTOCOL.modeActive : 'WAVES'}</GlowText>
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        {categories.length > 0 && (
-          <button
-            onClick={onManageCategories}
-            title="Manage categories"
-            style={{
-              padding: isMobile ? '12px 14px' : '6px 10px',
-              minHeight: isMobile ? '44px' : 'auto',
-              minWidth: isMobile ? '44px' : 'auto',
-              background: 'transparent',
-              border: '1px solid var(--border-primary)',
-              color: 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.85rem' : '0.7rem',
-            }}
-          >
-            {isMobile ? '⚙' : '⚙ MANAGE'}
-          </button>
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => setShowWaveMenu(!showWaveMenu)}
+          title="Wave options"
+          style={{
+            padding: isMobile ? '10px 12px' : '5px 8px',
+            background: showWaveMenu ? 'var(--bg-hover)' : 'transparent',
+            border: `1px solid ${showWaveMenu ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
+            color: ghostMode ? 'var(--accent-orange)' : (showWaveMenu ? 'var(--accent-amber)' : 'var(--text-dim)'),
+            cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '1.1rem' : '1rem', lineHeight: 1,
+          }}
+        >⋮</button>
+        {showWaveMenu && (
+          <div style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: '4px',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', zIndex: 100, minWidth: '170px',
+          }}>
+            {[
+              { label: '+ New Wave', color: 'var(--accent-amber)', action: onNewWave },
+              categories.length > 0 && { label: '⚙ Manage Categories', color: 'var(--text-primary)', action: onManageCategories },
+              { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol', color: ghostMode ? 'var(--accent-orange)' : 'var(--text-primary)', action: onToggleGhostProtocol },
+              { label: showArchived ? '📬 Show Active' : '📦 Show Archived', color: showArchived ? 'var(--accent-teal)' : 'var(--text-primary)', action: onToggleArchived },
+            ].filter(Boolean).map((item, i, arr) => (
+              <button
+                key={item.label}
+                onClick={() => { setShowWaveMenu(false); item.action?.(); }}
+                style={{
+                  display: 'block', width: '100%', padding: '9px 12px',
+                  background: 'transparent', border: 'none',
+                  borderBottom: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                  color: item.color, cursor: 'pointer', textAlign: 'left',
+                  fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.75rem',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >{item.label}</button>
+            ))}
+          </div>
         )}
-        <button
-          onClick={onToggleGhostProtocol}
-          title={ghostMode ? GHOST_PROTOCOL.exit : GHOST_PROTOCOL.menuItem}
-          style={{
-            padding: isMobile ? '12px 14px' : '6px 10px',
-            minHeight: isMobile ? '44px' : 'auto',
-            minWidth: isMobile ? '44px' : 'auto',
-            background: ghostMode ? 'var(--accent-orange)20' : 'transparent',
-            border: `1px solid ${ghostMode ? 'var(--accent-orange)' : 'var(--border-primary)'}`,
-            color: ghostMode ? 'var(--accent-orange)' : 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.7rem',
-          }}
-        >{ghostMode ? '👻 GHOST' : '👻'}</button>
-        <button
-          onClick={onToggleArchived}
-          title={showArchived ? 'Show active waves' : 'Show archived waves'}
-          style={{
-            padding: isMobile ? '12px 14px' : '6px 10px',
-            minHeight: isMobile ? '44px' : 'auto',
-            minWidth: isMobile ? '44px' : 'auto',
-            background: showArchived ? 'var(--accent-teal)20' : 'transparent',
-            border: `1px solid ${showArchived ? 'var(--accent-teal)' : 'var(--border-primary)'}`,
-            color: showArchived ? 'var(--accent-teal)' : 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.7rem',
-          }}
-        >{showArchived ? '📦 ARCHIVED' : '📬'}</button>
-        <button onClick={onNewWave} style={{
-          padding: isMobile ? '12px 16px' : '6px 12px',
-          minHeight: isMobile ? '44px' : 'auto',
-          background: 'var(--accent-amber)20', border: '1px solid var(--accent-amber)50',
-          color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.75rem',
-        }}>+ NEW</button>
       </div>
     </div>
     {categories.length > 0 ? (
@@ -561,6 +553,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
       </div>
     )}
   </div>
-);
+  );
+};
 
 export default WaveList;
