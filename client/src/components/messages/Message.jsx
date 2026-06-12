@@ -69,6 +69,7 @@ const Message = ({
   isFirstInGroup = true,
   parentPing = null,
   threadReplyCount = 0,
+  onScrollToMessage = null,
 }) => {
   const config = PRIVACY_LEVELS[message.privacy] || PRIVACY_LEVELS.private;
   const isHighlighted = highlightId === message.id;
@@ -318,16 +319,22 @@ const Message = ({
           )}
           {/* Compact parent quote for replies */}
           {parentPing && !isDeleted && (
-            <div style={{
-              fontSize: '0.7rem',
-              color: 'var(--text-muted)',
-              marginBottom: '2px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              overflow: 'hidden',
-              fontFamily: 'monospace',
-            }}>
+            <div
+              onClick={onScrollToMessage ? () => onScrollToMessage(parentPing.id) : undefined}
+              style={{
+                fontSize: '0.7rem',
+                color: 'var(--text-muted)',
+                marginBottom: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                overflow: 'hidden',
+                fontFamily: 'monospace',
+                cursor: onScrollToMessage ? 'pointer' : 'default',
+                opacity: 0.85,
+              }}
+              title={onScrollToMessage ? 'Jump to original message' : undefined}
+            >
               <span style={{ color: 'var(--accent-teal)', flexShrink: 0 }}>↩</span>
               <span style={{ color: config.color, flexShrink: 0, fontWeight: 600 }}>{parentPing.sender_name}:</span>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.65 }}>
@@ -576,13 +583,15 @@ const Message = ({
                   style={{
                     position: 'absolute', bottom: '100%', right: 0, marginBottom: '4px', zIndex: 30,
                     background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
-                    padding: '4px', display: 'flex', flexWrap: 'wrap', gap: '2px', width: 'max-content',
+                    padding: '4px', display: 'flex', flexWrap: 'nowrap', gap: '2px',
+                    overflowX: 'auto', maxWidth: isMobile ? '200px' : 'max-content',
+                    WebkitOverflowScrolling: 'touch',
                   }}
                 >
                   {quickReactions.map(emoji => (
                     <button key={emoji}
                       onClick={() => { onReact(message.id, emoji); setShowReactionPicker(false); }}
-                      style={{ padding: '4px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1rem' }}
+                      style={{ padding: isMobile ? '6px' : '4px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: isMobile ? '1.3rem' : '1rem', flexShrink: 0 }}
                     >{emoji}</button>
                   ))}
                 </div>
