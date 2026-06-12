@@ -43,6 +43,7 @@ const MessageComposer = forwardRef(({
   const [serverMentionResults, setServerMentionResults] = useState([]);
   const [showPhotoOptions, setShowPhotoOptions] = useState(false);
   const [showActionMenu, setShowActionMenu] = useState(false);
+  const [showToolbar, setShowToolbar] = useState(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const fileAttachInputRef = useRef(null);
@@ -458,16 +459,35 @@ const MessageComposer = forwardRef(({
       </div>
 
       {/* Button row */}
-      <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center', position: 'relative' }}>
-        {/* Left side: media buttons */}
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center', position: 'relative' }}>
+        {/* + expander */}
+        <button
+          onClick={() => { setShowToolbar(!showToolbar); setShowPhotoOptions(false); setShowActionMenu(false); }}
+          title={showToolbar ? 'Hide attachments' : 'Add attachment'}
+          style={{
+            padding: isMobile ? '8px 10px' : '6px 8px',
+            minHeight: isMobile ? '36px' : '28px',
+            background: showToolbar ? 'var(--bg-hover)' : 'transparent',
+            border: `1px solid ${showToolbar ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
+            color: showToolbar ? 'var(--accent-amber)' : 'var(--text-dim)',
+            cursor: 'pointer',
+            fontFamily: 'monospace',
+            fontSize: isMobile ? '1rem' : '0.85rem',
+            fontWeight: 700,
+            flexShrink: 0,
+            lineHeight: 1,
+          }}
+        >{showToolbar ? '×' : '+'}</button>
+
+        {/* Left side: media buttons (collapsed behind +) */}
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', overflow: 'hidden', maxWidth: showToolbar ? '300px' : '0px', transition: 'max-width 0.2s ease', }}>
           {/* GIF button */}
           {showGifButton && onGifClick && (
             <button
               onClick={onGifClick}
               style={{
-                padding: isMobile ? '8px 10px' : '8px 10px',
-                minHeight: isMobile ? '38px' : '32px',
+                padding: isMobile ? '8px 10px' : '6px 8px',
+                minHeight: isMobile ? '36px' : '28px',
                 background: 'transparent',
                 border: '1px solid var(--border-subtle)',
                 color: 'var(--accent-teal)',
@@ -475,6 +495,7 @@ const MessageComposer = forwardRef(({
                 fontFamily: 'monospace',
                 fontSize: isMobile ? '0.7rem' : '0.65rem',
                 fontWeight: 700,
+                whiteSpace: 'nowrap',
               }}
               title="Insert GIF"
             >
@@ -685,8 +706,8 @@ const MessageComposer = forwardRef(({
           onClick={handleSend}
           disabled={!newMessage.trim() || uploading}
           style={{
-            padding: isMobile ? '10px 20px' : '8px 20px',
-            minHeight: isMobile ? '38px' : '32px',
+            padding: isMobile ? '8px 18px' : '6px 16px',
+            minHeight: isMobile ? '36px' : '28px',
             background: newMessage.trim() ? 'var(--accent-amber)20' : 'transparent',
             border: `1px solid ${newMessage.trim() ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
             color: newMessage.trim() ? 'var(--accent-amber)' : 'var(--text-muted)',

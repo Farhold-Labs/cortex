@@ -88,7 +88,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
           if (!isSelected) e.currentTarget.style.background = 'transparent';
         }}
         style={{
-          padding: '12px 16px',
+          padding: '6px 12px',
           cursor: isMobile ? 'pointer' : 'move',
           background: isSelected ? 'var(--accent-amber)10' : (showNotificationBadge ? `${badgeStyle.bg}08` : 'transparent'),
           borderBottom: '1px solid var(--bg-hover)',
@@ -96,7 +96,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
           transition: 'background 0.2s ease',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: '8px' }}>
             {wave.is_archived && '📦 '}
             {showPinButton && wave.pinned && '📌 '}
@@ -255,15 +255,6 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
             </div>
             <span style={{ color: config.color }}>{config.icon}</span>
           </div>
-        </div>
-        {wave.topic && (
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {wave.topic}
-          </div>
-        )}
-        <div style={{ color: 'var(--text-muted)', fontSize: isMobile ? '0.85rem' : '0.7rem' }}>
-          {wave.creator_name || 'Unknown'} • {wave.ping_count || 0} pings
-          {wave.crew_name && <span> • {wave.crew_name}</span>}
         </div>
       </div>
     );
@@ -503,13 +494,13 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
               }
             }}
             style={{
-            padding: '12px 16px', cursor: 'pointer',
+            padding: '6px 12px', cursor: 'pointer',
             background: isSelected ? 'var(--accent-amber)10' : (showNotificationBadge ? `${badgeStyle.bg}08` : 'transparent'),
             borderBottom: '1px solid var(--bg-hover)',
             borderLeft: `3px solid ${showNotificationBadge ? badgeStyle.bg : (isSelected ? config.color : 'transparent')}`,
             transition: 'background 0.2s ease',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: '8px' }}>
                 {wave.is_archived && '📦 '}{wave.title}
               </div>
@@ -560,15 +551,6 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
                 )}
                 <span style={{ color: config.color }}>{config.icon}</span>
               </div>
-            </div>
-            {wave.topic && (
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {wave.topic}
-              </div>
-            )}
-            <div style={{ color: 'var(--text-muted)', fontSize: isMobile ? '0.85rem' : '0.7rem' }}>
-              {wave.creator_name || 'Unknown'} • {wave.message_count} msgs
-              {wave.group_name && <span> • {wave.group_name}</span>}
             </div>
           </div>
         );

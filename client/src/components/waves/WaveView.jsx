@@ -1665,8 +1665,23 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   // Note: API returns `messages` and `all_messages` but we use `pings` internally (v1.11.0)
   const allPings = waveData.all_messages || [];
   const participants = waveData.participants || [];
-  const pings = waveData.messages || [];
   const total = allPings.length;
+
+  // Build id→ping lookup for parent quote resolution
+  const parentMap = React.useMemo(() => {
+    const map = new Map();
+    allPings.forEach(m => map.set(m.id, m));
+    return map;
+  }, [allPings]);
+
+  // Flat chronological list: exclude replies to threaded pings (those live in the thread panel)
+  const pings = React.useMemo(() => {
+    return allPings.filter(m => {
+      if (!m.parent_id) return true;
+      const parent = parentMap.get(m.parent_id);
+      return !parent?.threaded;
+    });
+  }, [allPings, parentMap]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -2540,22 +2555,30 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             </button>
           </div>
         )}
-        {pings.map((msg) => (
-          <Message key={msg.id} message={msg} onReply={setReplyingTo} onDelete={handleDeleteMessage}
-            onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
-            editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
-            currentUserId={currentUser?.id} highlightId={replyingTo?.id} playbackIndex={playbackIndex}
-            collapsed={collapsed} onToggleCollapse={toggleThreadCollapse} isMobile={isMobile}
-            contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
-            onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
-            contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
-            onOpenThread={onOpenThread}
-            onShare={handleSharePing} wave={wave || waveData}
-            onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
-            autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
-            fetchAPI={fetchAPI}
-            currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
-        ))}
+        {pings.map((msg, i) => {
+          const prev = pings[i - 1];
+          const isFirstInGroup = !prev ||
+            prev.author_id !== msg.author_id ||
+            (new Date(msg.created_at) - new Date(prev.created_at)) > 5 * 60 * 1000;
+          const parentPing = msg.parent_id ? parentMap.get(msg.parent_id) : null;
+          return (
+            <Message key={msg.id} message={msg} isFirstInGroup={isFirstInGroup} parentPing={parentPing}
+              onReply={setReplyingTo} onDelete={handleDeleteMessage}
+              onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
+              editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
+              currentUserId={currentUser?.id} highlightId={replyingTo?.id} playbackIndex={playbackIndex}
+              collapsed={collapsed} onToggleCollapse={toggleThreadCollapse} isMobile={isMobile}
+              contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
+              onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
+              contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
+              onOpenThread={onOpenThread}
+              onShare={handleSharePing} wave={wave || waveData}
+              onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
+              autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
+              fetchAPI={fetchAPI}
+              currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
+          );
+        })}
       </div>
 
       {/* Typing Indicator */}
