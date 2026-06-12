@@ -5,6 +5,49 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.53.0] - 2026-06-12
+
+### Added
+
+#### Dense Discord-Style Chat UI
+The main wave view has been overhauled to match the compact, grouped layout familiar from Discord and Slack.
+
+**Message grouping**: Consecutive pings from the same author within a 5-minute window suppress the repeated avatar and name header. Only the first ping in a run shows the full header (avatar + display name + timestamp). Subsequent pings in the group show only a subtle hover timestamp in the left column, keeping the timeline clean.
+
+**Flat chronological list**: WaveView switched from nested inline children to a flat `all_messages` list. Replies to non-threaded pings appear inline with a compact `↩ Name: quote…` parent reference above the content. Replies to threaded pings are excluded from the main timeline and only appear in the Thread Panel, preserving thread isolation.
+
+**Hover action pill**: Message actions (react, reply, collapse, more) appear in an absolutely-positioned pill on hover rather than always taking up space in the layout.
+
+**Read receipts inline**: The `✓N` read count is folded into the left-column hover timestamp for grouped messages, and shown inline in the header row for the first message in a group — no longer occupying its own line.
+
+#### `/gif` Inline Search
+Type `/gif` anywhere in the composer to open a live GIF picker above the textarea:
+- Trending GIFs load immediately when `/gif` is typed
+- Continue typing (e.g. `/gif cats`) to search with a 350ms debounce
+- Click any GIF to replace the `/gif …` text with the embedded GIF HTML
+- Press `Escape` to dismiss without selecting
+- The GIF modal under `⋮` remains available as an alternative
+
+#### Composer ⋮ Attach Menu
+The `+` toolbar has been replaced with a single `⋮` button that opens a flat dropdown containing all attachment options: GIF (opens modal), Upload Image, Take Photo, Attach File, Record Audio, Record Video, Share Plex. The `⋮` and Send buttons now sit inline with the textarea in a single row — the separate button row below the input is gone.
+
+#### WaveList ⋮ Menu
+The four header buttons in the wave list (⚙ Manage Categories, 👻 Ghost Protocol, 📦 Show Archived, + New Wave) are consolidated into a single `⋮` dropdown. The button tints orange when Ghost Protocol is active so the mode remains visually apparent.
+
+### Changed
+
+- **Composer padding**: Outer wrapper reduced from `16px 20px` to `6px 10px`; overall input area is noticeably more compact
+- **Placeholder text**: All composer instances now read `Shift+Enter for new line, @ to mention` — removed the "Type a ping…" prefix from MessageComposer, WaveView, and FocusView
+- **Privacy icons**: Simplified to `●` (encrypted: private, crew, verse-wide) and `○` (public) for a cleaner wave list
+
+### Fixed
+
+- Thread reply count and thread entry link now work correctly in the flat list (previously lost because flat-list items have no `children` array)
+- Thread Panel now applies message grouping (was showing a full avatar header on every reply)
+- WaveList `⋮` button and privacy icon alignment corrected
+
+---
+
 ## [2.52.1] - 2026-06-09
 
 ### Fixed
