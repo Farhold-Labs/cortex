@@ -2540,22 +2540,29 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             </button>
           </div>
         )}
-        {pings.map((msg) => (
-          <Message key={msg.id} message={msg} onReply={setReplyingTo} onDelete={handleDeleteMessage}
-            onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
-            editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
-            currentUserId={currentUser?.id} highlightId={replyingTo?.id} playbackIndex={playbackIndex}
-            collapsed={collapsed} onToggleCollapse={toggleThreadCollapse} isMobile={isMobile}
-            contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
-            onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
-            contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
-            onOpenThread={onOpenThread}
-            onShare={handleSharePing} wave={wave || waveData}
-            onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
-            autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
-            fetchAPI={fetchAPI}
-            currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
-        ))}
+        {pings.map((msg, i) => {
+          const prev = pings[i - 1];
+          const isFirstInGroup = !prev ||
+            prev.author_id !== msg.author_id ||
+            (new Date(msg.created_at) - new Date(prev.created_at)) > 5 * 60 * 1000;
+          return (
+            <Message key={msg.id} message={msg} isFirstInGroup={isFirstInGroup}
+              onReply={setReplyingTo} onDelete={handleDeleteMessage}
+              onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
+              editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
+              currentUserId={currentUser?.id} highlightId={replyingTo?.id} playbackIndex={playbackIndex}
+              collapsed={collapsed} onToggleCollapse={toggleThreadCollapse} isMobile={isMobile}
+              contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
+              onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
+              contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
+              onOpenThread={onOpenThread}
+              onShare={handleSharePing} wave={wave || waveData}
+              onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
+              autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
+              fetchAPI={fetchAPI}
+              currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
+          );
+        })}
       </div>
 
       {/* Typing Indicator */}
