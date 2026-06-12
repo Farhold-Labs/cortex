@@ -1669,6 +1669,15 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     return map;
   }, [allPings]);
 
+  // Count of direct children per ping (for thread reply count on threaded messages)
+  const replyCountMap = React.useMemo(() => {
+    const map = new Map();
+    allPings.forEach(m => {
+      if (m.parent_id) map.set(m.parent_id, (map.get(m.parent_id) || 0) + 1);
+    });
+    return map;
+  }, [allPings]);
+
   const pings = React.useMemo(() => {
     return allPings.filter(m => {
       if (!m.parent_id) return true;
@@ -2562,8 +2571,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             prev.author_id !== msg.author_id ||
             (new Date(msg.created_at) - new Date(prev.created_at)) > 5 * 60 * 1000;
           const parentPing = msg.parent_id ? parentMap.get(msg.parent_id) : null;
+          const threadReplyCount = replyCountMap.get(msg.id) || 0;
           return (
-            <Message key={msg.id} message={msg} isFirstInGroup={isFirstInGroup} parentPing={parentPing}
+            <Message key={msg.id} message={msg} isFirstInGroup={isFirstInGroup} parentPing={parentPing} threadReplyCount={threadReplyCount}
               onReply={setReplyingTo} onDelete={handleDeleteMessage}
               onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
               editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}

@@ -68,6 +68,7 @@ const Message = ({
   currentUser, moveSource, onStartMove, onCompleteMove,
   isFirstInGroup = true,
   parentPing = null,
+  threadReplyCount = 0,
 }) => {
   const config = PRIVACY_LEVELS[message.privacy] || PRIVACY_LEVELS.private;
   const isHighlighted = highlightId === message.id;
@@ -466,7 +467,7 @@ const Message = ({
           )}
 
           {/* Thread reply count link (threaded mode) */}
-          {hasChildren && message.threaded && !isInThreadPanel && onOpenThread && (
+          {message.threaded && !isInThreadPanel && onOpenThread && (hasChildren || threadReplyCount > 0) && (
             <div
               onClick={() => onOpenThread(message)}
               style={{
@@ -477,7 +478,7 @@ const Message = ({
               }}
             >
               <span style={{ opacity: 0.7 }}>↳</span>
-              <span>{totalChildCount} {totalChildCount === 1 ? 'reply' : 'replies'}</span>
+              <span>{threadReplyCount || totalChildCount} {(threadReplyCount || totalChildCount) === 1 ? 'reply' : 'replies'}</span>
               <span style={{ opacity: 0.5, fontSize: '0.6rem' }}>— view thread</span>
             </div>
           )}
