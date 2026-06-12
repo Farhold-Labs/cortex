@@ -527,6 +527,15 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
       }
     );
 
+    // Convert bare GIF CDN URLs to <img> tags.
+    // Server does this via detectAndEmbedMedia, but E2EE waves store encrypted
+    // content so decrypted messages arrive with the raw CDN URL as plain text.
+    // The negative lookbehind skips URLs already inside HTML attributes.
+    result = result.replace(
+      /(?<!['"=])(https?:\/\/(?:media[0-9]?\.tenor\.com|c\.tenor\.com|media[0-9]?\.giphy\.com|i\.giphy\.com)[^\s<"']+)/gi,
+      '<img src="$1" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />'
+    );
+
     // Absolutize relative server paths so Electron (app:// origin) loads
     // images and file links from the remote server, not the local filesystem.
     if (BASE_URL) {

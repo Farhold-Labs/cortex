@@ -590,7 +590,8 @@ const ThreadPanel = ({
           isOpen={showGifSearch}
           onClose={() => setShowGifSearch(false)}
           onSelect={(gifUrl) => {
-            composerRef.current?.appendMessage(gifUrl);
+            const gifHtml = `<img src="${gifUrl}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
+            composerRef.current?.appendMessage(gifHtml);
             setShowGifSearch(false);
           }}
           fetchAPI={fetchAPI}
