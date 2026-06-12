@@ -2538,7 +2538,15 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
               autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
               fetchAPI={fetchAPI}
-              currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
+              currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove}
+              onScrollToMessage={(msgId) => {
+                const el = messagesRef.current?.querySelector(`[data-message-id="${msgId}"]`);
+                if (!el) return;
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.style.transition = 'background 0.1s';
+                el.style.background = 'var(--accent-amber)18';
+                setTimeout(() => { el.style.background = ''; }, 1200);
+              }} />
           );
         })}
       </div>
