@@ -509,10 +509,15 @@ const ThreadPanel = ({
             No replies yet
           </div>
         ) : (
-          threadReplies.map((msg) => (
-            <Message
+          threadReplies.map((msg, i) => {
+            const prev = threadReplies[i - 1];
+            const isFirstInGroup = !prev ||
+              prev.author_id !== msg.author_id ||
+              (new Date(msg.created_at) - new Date(prev.created_at)) > 5 * 60 * 1000;
+            return (<Message
               key={msg.id}
               message={msg}
+              isFirstInGroup={isFirstInGroup}
               depth={0}
               onReply={handleReply}
               onDelete={handleDeleteMessage}
@@ -539,7 +544,8 @@ const ThreadPanel = ({
               fetchAPI={fetchAPI}
               currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove}
             />
-          ))
+            );
+          })
         )}
       </div>
 

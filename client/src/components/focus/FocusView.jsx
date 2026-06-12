@@ -634,7 +634,7 @@ const FocusView = ({
           isMobile={isMobile}
           onSend={handleSend}
           onTyping={sendTypingIndicator}
-          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}...` : 'Type a ping... (Shift+Enter for new line, @ to mention)'}
+          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}...` : 'Shift+Enter for new line, @ to mention'}
           replyingTo={replyingTo}
           onCancelReply={() => setReplyingTo(null)}
           uploading={uploading}
