@@ -88,7 +88,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
           if (!isSelected) e.currentTarget.style.background = 'transparent';
         }}
         style={{
-          padding: '12px 16px',
+          padding: '6px 12px',
           cursor: isMobile ? 'pointer' : 'move',
           background: isSelected ? 'var(--accent-amber)10' : (showNotificationBadge ? `${badgeStyle.bg}08` : 'transparent'),
           borderBottom: '1px solid var(--bg-hover)',
@@ -96,7 +96,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
           transition: 'background 0.2s ease',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: '8px' }}>
             {wave.is_archived && '📦 '}
             {showPinButton && wave.pinned && '📌 '}
@@ -148,7 +148,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
               </span>
             )}
             {/* Move menu button (mobile/PWA alternative to drag-and-drop) */}
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -160,8 +160,8 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
                   border: 'none',
                   color: 'var(--text-dim)',
                   cursor: 'pointer',
-                  fontSize: '1rem',
-                  padding: '2px 4px',
+                  fontSize: '0.85rem',
+                  padding: '0 3px',
                   lineHeight: 1,
                 }}
               >
@@ -253,17 +253,8 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
                 </div>
               )}
             </div>
-            <span style={{ color: config.color }}>{config.icon}</span>
+            <span style={{ color: config.color, fontSize: '0.7rem', lineHeight: 1 }}>{config.icon}</span>
           </div>
-        </div>
-        {wave.topic && (
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {wave.topic}
-          </div>
-        )}
-        <div style={{ color: 'var(--text-muted)', fontSize: isMobile ? '0.85rem' : '0.7rem' }}>
-          {wave.creator_name || 'Unknown'} • {wave.ping_count || 0} pings
-          {wave.crew_name && <span> • {wave.crew_name}</span>}
         </div>
       </div>
     );
@@ -313,7 +304,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
     <div style={{ flex: 1, overflowY: 'auto' }}>
       {/* Pinned Section */}
       {groupedWaves.pinned.length > 0 && (
-        <div style={{ marginBottom: '8px' }}>
+        <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
             title="PINNED"
             badge={groupedWaves.pinned.length.toString()}
@@ -321,6 +312,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
             titleColor="var(--accent-amber)"
             accentColor="var(--accent-amber)"
             isMobile={isMobile}
+            compact
           >
             {renderDropZone('__pinned__', 'Pinned')}
             {groupedWaves.pinned.map(wave => renderWaveItem(wave, true))}
@@ -334,7 +326,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
         const unreadCount = getGroupUnreadCount(categoryWaves);
 
         return (
-          <div key={category.id} style={{ marginBottom: '8px' }}>
+          <div key={category.id} style={{ marginBottom: '1px' }}>
             <CollapsibleSection
               title={category.name.toUpperCase()}
               badge={categoryWaves.length > 0 ? `${categoryWaves.length}${unreadCount > 0 ? ` (${unreadCount})` : ''}` : '0'}
@@ -343,6 +335,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
               titleColor={category.color}
               accentColor={category.color}
               isMobile={isMobile}
+              compact
             >
               {renderDropZone(category.id, category.name)}
               {categoryWaves.length === 0 ? (
@@ -359,7 +352,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
 
       {/* Uncategorized Section */}
       {groupedWaves.uncategorized.length > 0 && (
-        <div style={{ marginBottom: '8px' }}>
+        <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
             title="UNCATEGORIZED"
             badge={groupedWaves.uncategorized.length.toString()}
@@ -367,6 +360,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
             titleColor="var(--text-dim)"
             accentColor="var(--border-primary)"
             isMobile={isMobile}
+            compact
           >
             {renderDropZone(null, 'Uncategorized')}
             {groupedWaves.uncategorized.map(wave => renderWaveItem(wave, true))}
@@ -384,65 +378,57 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
   );
 };
 
-const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol }) => (
+const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol }) => {
+  const [showWaveMenu, setShowWaveMenu] = React.useState(false);
+  return (
   <div style={{
     width: '100%',
     minWidth: 0,
     display: 'flex', flexDirection: 'column', height: '100%',
     borderBottom: isMobile ? '1px solid var(--border-subtle)' : 'none',
   }}>
-    <div style={{ padding: isMobile ? '14px 16px' : '12px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+    {showWaveMenu && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99 }} onClick={() => setShowWaveMenu(false)} />}
+    <div style={{ padding: isMobile ? '10px 12px' : '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
       <GlowText color={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{ghostMode ? GHOST_PROTOCOL.modeActive : 'WAVES'}</GlowText>
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        {categories.length > 0 && (
-          <button
-            onClick={onManageCategories}
-            title="Manage categories"
-            style={{
-              padding: isMobile ? '12px 14px' : '6px 10px',
-              minHeight: isMobile ? '44px' : 'auto',
-              minWidth: isMobile ? '44px' : 'auto',
-              background: 'transparent',
-              border: '1px solid var(--border-primary)',
-              color: 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.85rem' : '0.7rem',
-            }}
-          >
-            {isMobile ? '⚙' : '⚙ MANAGE'}
-          </button>
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => setShowWaveMenu(!showWaveMenu)}
+          title="Wave options"
+          style={{
+            padding: isMobile ? '10px 12px' : '5px 8px',
+            background: showWaveMenu ? 'var(--bg-hover)' : 'transparent',
+            border: `1px solid ${showWaveMenu ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
+            color: ghostMode ? 'var(--accent-orange)' : (showWaveMenu ? 'var(--accent-amber)' : 'var(--text-dim)'),
+            cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '1.1rem' : '1rem', lineHeight: 1,
+          }}
+        >⋮</button>
+        {showWaveMenu && (
+          <div style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: '4px',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', zIndex: 100, minWidth: '170px',
+          }}>
+            {[
+              { label: '+ New Wave', color: 'var(--accent-amber)', action: onNewWave },
+              categories.length > 0 && { label: '⚙ Manage Categories', color: 'var(--text-primary)', action: onManageCategories },
+              { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol', color: ghostMode ? 'var(--accent-orange)' : 'var(--text-primary)', action: onToggleGhostProtocol },
+              { label: showArchived ? '📬 Show Active' : '📦 Show Archived', color: showArchived ? 'var(--accent-teal)' : 'var(--text-primary)', action: onToggleArchived },
+            ].filter(Boolean).map((item, i, arr) => (
+              <button
+                key={item.label}
+                onClick={() => { setShowWaveMenu(false); item.action?.(); }}
+                style={{
+                  display: 'block', width: '100%', padding: '9px 12px',
+                  background: 'transparent', border: 'none',
+                  borderBottom: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                  color: item.color, cursor: 'pointer', textAlign: 'left',
+                  fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.75rem',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >{item.label}</button>
+            ))}
+          </div>
         )}
-        <button
-          onClick={onToggleGhostProtocol}
-          title={ghostMode ? GHOST_PROTOCOL.exit : GHOST_PROTOCOL.menuItem}
-          style={{
-            padding: isMobile ? '12px 14px' : '6px 10px',
-            minHeight: isMobile ? '44px' : 'auto',
-            minWidth: isMobile ? '44px' : 'auto',
-            background: ghostMode ? 'var(--accent-orange)20' : 'transparent',
-            border: `1px solid ${ghostMode ? 'var(--accent-orange)' : 'var(--border-primary)'}`,
-            color: ghostMode ? 'var(--accent-orange)' : 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.7rem',
-          }}
-        >{ghostMode ? '👻 GHOST' : '👻'}</button>
-        <button
-          onClick={onToggleArchived}
-          title={showArchived ? 'Show active waves' : 'Show archived waves'}
-          style={{
-            padding: isMobile ? '12px 14px' : '6px 10px',
-            minHeight: isMobile ? '44px' : 'auto',
-            minWidth: isMobile ? '44px' : 'auto',
-            background: showArchived ? 'var(--accent-teal)20' : 'transparent',
-            border: `1px solid ${showArchived ? 'var(--accent-teal)' : 'var(--border-primary)'}`,
-            color: showArchived ? 'var(--accent-teal)' : 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.7rem',
-          }}
-        >{showArchived ? '📦 ARCHIVED' : '📬'}</button>
-        <button onClick={onNewWave} style={{
-          padding: isMobile ? '12px 16px' : '6px 12px',
-          minHeight: isMobile ? '44px' : 'auto',
-          background: 'var(--accent-amber)20', border: '1px solid var(--accent-amber)50',
-          color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.75rem',
-        }}>+ NEW</button>
       </div>
     </div>
     {categories.length > 0 ? (
@@ -503,13 +489,13 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
               }
             }}
             style={{
-            padding: '12px 16px', cursor: 'pointer',
+            padding: '6px 12px', cursor: 'pointer',
             background: isSelected ? 'var(--accent-amber)10' : (showNotificationBadge ? `${badgeStyle.bg}08` : 'transparent'),
             borderBottom: '1px solid var(--bg-hover)',
             borderLeft: `3px solid ${showNotificationBadge ? badgeStyle.bg : (isSelected ? config.color : 'transparent')}`,
             transition: 'background 0.2s ease',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: '8px' }}>
                 {wave.is_archived && '📦 '}{wave.title}
               </div>
@@ -558,17 +544,8 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
                     📞 {callInfo.participantCount}
                   </span>
                 )}
-                <span style={{ color: config.color }}>{config.icon}</span>
+                <span style={{ color: config.color, fontSize: '0.7rem', lineHeight: 1 }}>{config.icon}</span>
               </div>
-            </div>
-            {wave.topic && (
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {wave.topic}
-              </div>
-            )}
-            <div style={{ color: 'var(--text-muted)', fontSize: isMobile ? '0.85rem' : '0.7rem' }}>
-              {wave.creator_name || 'Unknown'} • {wave.message_count} msgs
-              {wave.group_name && <span> • {wave.group_name}</span>}
             </div>
           </div>
         );
@@ -576,6 +553,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
       </div>
     )}
   </div>
-);
+  );
+};
 
 export default WaveList;

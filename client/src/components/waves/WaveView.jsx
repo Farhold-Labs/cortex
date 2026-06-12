@@ -1658,14 +1658,39 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   };
 
   const config = PRIVACY_LEVELS[wave.privacy] || PRIVACY_LEVELS.private;
+
+  // Must be declared before any conditional returns (Rules of Hooks)
+  const allPings = waveData?.all_messages || [];
+  const participants = waveData?.participants || [];
+
+  const parentMap = React.useMemo(() => {
+    const map = new Map();
+    allPings.forEach(m => map.set(m.id, m));
+    return map;
+  }, [allPings]);
+
+  // Count of direct children per ping (for thread reply count on threaded messages)
+  const replyCountMap = React.useMemo(() => {
+    const map = new Map();
+    allPings.forEach(m => {
+      if (m.parent_id) map.set(m.parent_id, (map.get(m.parent_id) || 0) + 1);
+    });
+    return map;
+  }, [allPings]);
+
+  const pings = React.useMemo(() => {
+    return allPings.filter(m => {
+      if (!m.parent_id) return true;
+      const parent = parentMap.get(m.parent_id);
+      return !parent?.threaded;
+    });
+  }, [allPings, parentMap]);
+
   if (loading) return <LoadingSpinner />;
   if (!waveData) return <div style={{ padding: '20px', color: 'var(--text-dim)' }}>Wave not found</div>;
 
   // Safe access with fallbacks for pagination fields
   // Note: API returns `messages` and `all_messages` but we use `pings` internally (v1.11.0)
-  const allPings = waveData.all_messages || [];
-  const participants = waveData.participants || [];
-  const pings = waveData.messages || [];
   const total = allPings.length;
 
   return (
@@ -2540,22 +2565,31 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             </button>
           </div>
         )}
-        {pings.map((msg) => (
-          <Message key={msg.id} message={msg} onReply={setReplyingTo} onDelete={handleDeleteMessage}
-            onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
-            editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
-            currentUserId={currentUser?.id} highlightId={replyingTo?.id} playbackIndex={playbackIndex}
-            collapsed={collapsed} onToggleCollapse={toggleThreadCollapse} isMobile={isMobile}
-            contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
-            onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
-            contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
-            onOpenThread={onOpenThread}
-            onShare={handleSharePing} wave={wave || waveData}
-            onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
-            autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
-            fetchAPI={fetchAPI}
-            currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
-        ))}
+        {pings.map((msg, i) => {
+          const prev = pings[i - 1];
+          const isFirstInGroup = !prev ||
+            prev.author_id !== msg.author_id ||
+            (new Date(msg.created_at) - new Date(prev.created_at)) > 5 * 60 * 1000;
+          const parentPing = msg.parent_id ? parentMap.get(msg.parent_id) : null;
+          const threadReplyCount = replyCountMap.get(msg.id) || 0;
+          return (
+            <Message key={msg.id} message={msg} isFirstInGroup={isFirstInGroup} parentPing={parentPing} threadReplyCount={threadReplyCount}
+              onReply={setReplyingTo} onDelete={handleDeleteMessage}
+              onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
+              editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
+              currentUserId={currentUser?.id} highlightId={replyingTo?.id} playbackIndex={playbackIndex}
+              collapsed={collapsed} onToggleCollapse={toggleThreadCollapse} isMobile={isMobile}
+              contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
+              onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
+              contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
+              onOpenThread={onOpenThread}
+              onShare={handleSharePing} wave={wave || waveData}
+              onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
+              autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
+              fetchAPI={fetchAPI}
+              currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove} />
+          );
+        })}
       </div>
 
       {/* Typing Indicator */}
@@ -2593,8 +2627,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         }}
         style={{
           flexShrink: 0,
-          padding: isMobile ? '12px' : '16px 20px',
-          paddingBottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom, 0px))' : '16px',
+          padding: isMobile ? '6px 10px' : '6px 10px',
+          paddingBottom: isMobile ? 'calc(6px + env(safe-area-inset-bottom, 0px))' : '6px',
           background: dragOver ? 'linear-gradient(0deg, var(--bg-hover), var(--border-subtle))' : 'linear-gradient(0deg, var(--bg-surface), var(--bg-hover))',
           borderTop: dragOver ? '2px dashed var(--accent-orange)' : '1px solid var(--border-subtle)',
           transition: 'all 0.2s ease',
@@ -2710,7 +2744,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               }
             }
           }}
-          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}... (Shift+Enter for new line)` : 'Type a ping... (Shift+Enter for new line, @ to mention)'}
+          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}...` : 'Shift+Enter for new line, @ to mention'}
           uploading={uploading}
           uploadingMedia={uploadingMedia}
           mediaUploadStatus={mediaUploadStatus}
