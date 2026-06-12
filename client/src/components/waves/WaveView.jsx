@@ -1658,23 +1658,17 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   };
 
   const config = PRIVACY_LEVELS[wave.privacy] || PRIVACY_LEVELS.private;
-  if (loading) return <LoadingSpinner />;
-  if (!waveData) return <div style={{ padding: '20px', color: 'var(--text-dim)' }}>Wave not found</div>;
 
-  // Safe access with fallbacks for pagination fields
-  // Note: API returns `messages` and `all_messages` but we use `pings` internally (v1.11.0)
-  const allPings = waveData.all_messages || [];
-  const participants = waveData.participants || [];
-  const total = allPings.length;
+  // Must be declared before any conditional returns (Rules of Hooks)
+  const allPings = waveData?.all_messages || [];
+  const participants = waveData?.participants || [];
 
-  // Build id→ping lookup for parent quote resolution
   const parentMap = React.useMemo(() => {
     const map = new Map();
     allPings.forEach(m => map.set(m.id, m));
     return map;
   }, [allPings]);
 
-  // Flat chronological list: exclude replies to threaded pings (those live in the thread panel)
   const pings = React.useMemo(() => {
     return allPings.filter(m => {
       if (!m.parent_id) return true;
@@ -1682,6 +1676,13 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       return !parent?.threaded;
     });
   }, [allPings, parentMap]);
+
+  if (loading) return <LoadingSpinner />;
+  if (!waveData) return <div style={{ padding: '20px', color: 'var(--text-dim)' }}>Wave not found</div>;
+
+  // Safe access with fallbacks for pagination fields
+  // Note: API returns `messages` and `all_messages` but we use `pings` internally (v1.11.0)
+  const total = allPings.length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
