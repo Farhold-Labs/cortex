@@ -217,19 +217,49 @@ const Message = ({
               />
             </div>
           ) : isHovered ? (
-            <span style={{
-              position: 'absolute',
-              right: 0,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              fontSize: '0.5rem',
-              color: 'var(--text-muted)',
-              whiteSpace: 'nowrap',
-              fontFamily: 'monospace',
-              lineHeight: 1,
-            }}>
-              {timeStr}
-            </span>
+            <>
+              <span
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  fontSize: '0.5rem',
+                  color: 'var(--text-muted)',
+                  whiteSpace: 'nowrap',
+                  fontFamily: 'monospace',
+                  lineHeight: 1,
+                  cursor: (!isDeleted && message.readBy?.length > 0) ? 'pointer' : 'default',
+                }}
+                onClick={(!isDeleted && message.readBy?.length > 0)
+                  ? (e) => { e.stopPropagation(); setShowReaderList(v => !v); }
+                  : undefined}
+              >
+                {timeStr}{!isDeleted && message.readBy?.length > 0 ? ` ✓${message.readBy.length}` : ''}
+              </span>
+              {showReaderList && !isDeleted && message.readBy?.length > 0 && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'absolute', top: '100%', left: 0, marginTop: '2px', zIndex: 50,
+                    background: 'var(--bg-elevated)', border: '1px solid var(--accent-green)40',
+                    borderRadius: '4px', padding: '4px 6px',
+                    display: 'flex', flexWrap: 'wrap', gap: '3px', maxWidth: '220px',
+                  }}
+                >
+                  {message.readBy.map(userId => {
+                    const p = participants.find(q => q.id === userId);
+                    return (
+                      <span key={userId} title={p?.handle || ''} style={{
+                        padding: '1px 4px', background: 'var(--accent-green)15',
+                        border: '1px solid var(--accent-green)40', color: 'var(--accent-green)',
+                        fontSize: '0.55rem', fontFamily: 'monospace',
+                      }}>{p ? p.name : userId}</span>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           ) : null}
         </div>
 
@@ -286,39 +316,6 @@ const Message = ({
               )}
             </div>
           )}
-          {/* Read count for non-first-in-group (no timestamp row to attach to) */}
-          {!isFirstInGroup && !isDeleted && message.readBy?.length > 0 && (
-            <div style={{ textAlign: 'right', position: 'relative' }}>
-              <span
-                onClick={(e) => { e.stopPropagation(); setShowReaderList(v => !v); }}
-                style={{ color: 'var(--accent-green)', fontSize: '0.55rem', fontFamily: 'monospace', cursor: 'pointer', userSelect: 'none' }}
-                title="Read by"
-              >✓{message.readBy.length}</span>
-              {showReaderList && (
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  style={{
-                    position: 'absolute', bottom: '100%', right: 0, marginBottom: '2px', zIndex: 50,
-                    background: 'var(--bg-elevated)', border: '1px solid var(--accent-green)40',
-                    borderRadius: '4px', padding: '4px 6px',
-                    display: 'flex', flexWrap: 'wrap', gap: '3px', maxWidth: '220px',
-                  }}
-                >
-                  {message.readBy.map(userId => {
-                    const p = participants.find(q => q.id === userId);
-                    return (
-                      <span key={userId} title={p?.handle || ''} style={{
-                        padding: '1px 4px', background: 'var(--accent-green)15',
-                        border: '1px solid var(--accent-green)40', color: 'var(--accent-green)',
-                        fontSize: '0.55rem', fontFamily: 'monospace',
-                      }}>{p ? p.name : userId}</span>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Compact parent quote for replies */}
           {parentPing && !isDeleted && (
             <div style={{
