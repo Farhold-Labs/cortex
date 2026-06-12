@@ -87,6 +87,7 @@ const Message = ({
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showMessageMenu, setShowMessageMenu] = useState(false);
   const [lightboxImage, setLightboxImage] = useState(null);
+  const [showReaderList, setShowReaderList] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
 
   useEffect(() => {
@@ -236,7 +237,7 @@ const Message = ({
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* Name + timestamp (first in group only) */}
           {isFirstInGroup && (
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '1px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '1px', position: 'relative' }}>
               <span
                 style={{
                   color: config.color,
@@ -253,7 +254,68 @@ const Message = ({
               <span style={{ color: 'var(--text-muted)', fontSize: '0.6rem', fontFamily: 'monospace' }}>
                 {dateStr} {timeStr}
               </span>
+              {!isDeleted && message.readBy?.length > 0 && (
+                <span
+                  onClick={(e) => { e.stopPropagation(); setShowReaderList(v => !v); }}
+                  style={{ color: 'var(--accent-green)', fontSize: '0.6rem', fontFamily: 'monospace', cursor: 'pointer', userSelect: 'none' }}
+                  title="Read by"
+                >✓{message.readBy.length}</span>
+              )}
               {wave?.privacy !== message.privacy && <PrivacyBadge level={message.privacy} compact />}
+              {showReaderList && message.readBy?.length > 0 && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'absolute', top: '100%', left: 0, marginTop: '2px', zIndex: 50,
+                    background: 'var(--bg-elevated)', border: '1px solid var(--accent-green)40',
+                    borderRadius: '4px', padding: '4px 6px',
+                    display: 'flex', flexWrap: 'wrap', gap: '3px', maxWidth: '220px',
+                  }}
+                >
+                  {message.readBy.map(userId => {
+                    const p = participants.find(q => q.id === userId);
+                    return (
+                      <span key={userId} title={p?.handle || ''} style={{
+                        padding: '1px 4px', background: 'var(--accent-green)15',
+                        border: '1px solid var(--accent-green)40', color: 'var(--accent-green)',
+                        fontSize: '0.55rem', fontFamily: 'monospace',
+                      }}>{p ? p.name : userId}</span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {/* Read count for non-first-in-group (no timestamp row to attach to) */}
+          {!isFirstInGroup && !isDeleted && message.readBy?.length > 0 && (
+            <div style={{ textAlign: 'right', position: 'relative' }}>
+              <span
+                onClick={(e) => { e.stopPropagation(); setShowReaderList(v => !v); }}
+                style={{ color: 'var(--accent-green)', fontSize: '0.55rem', fontFamily: 'monospace', cursor: 'pointer', userSelect: 'none' }}
+                title="Read by"
+              >✓{message.readBy.length}</span>
+              {showReaderList && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'absolute', bottom: '100%', right: 0, marginBottom: '2px', zIndex: 50,
+                    background: 'var(--bg-elevated)', border: '1px solid var(--accent-green)40',
+                    borderRadius: '4px', padding: '4px 6px',
+                    display: 'flex', flexWrap: 'wrap', gap: '3px', maxWidth: '220px',
+                  }}
+                >
+                  {message.readBy.map(userId => {
+                    const p = participants.find(q => q.id === userId);
+                    return (
+                      <span key={userId} title={p?.handle || ''} style={{
+                        padding: '1px 4px', background: 'var(--accent-green)15',
+                        border: '1px solid var(--accent-green)40', color: 'var(--accent-green)',
+                        fontSize: '0.55rem', fontFamily: 'monospace',
+                      }}>{p ? p.name : userId}</span>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -438,33 +500,6 @@ const Message = ({
             </div>
           )}
 
-          {/* Read receipts */}
-          {!isDeleted && message.readBy && message.readBy.length > 0 && (
-            <details style={{ marginTop: '2px', cursor: 'pointer' }}>
-              <summary style={{
-                color: 'var(--text-muted)', fontSize: '0.55rem', userSelect: 'none',
-                fontFamily: 'monospace', listStyle: 'none',
-                display: 'inline-flex', alignItems: 'center', gap: '3px',
-              }}>
-                <span style={{ color: 'var(--accent-green)' }}>✓</span>
-                {message.readBy.length}
-              </summary>
-              <div style={{ marginTop: '3px', display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
-                {message.readBy.map(userId => {
-                  const participant = participants.find(p => p.id === userId);
-                  return (
-                    <span key={userId} title={participant?.handle || ''} style={{
-                      padding: '1px 4px', background: 'var(--accent-green)15',
-                      border: '1px solid var(--accent-green)40', color: 'var(--accent-green)',
-                      fontSize: '0.55rem', fontFamily: 'monospace',
-                    }}>
-                      {participant ? participant.name : userId}
-                    </span>
-                  );
-                })}
-              </div>
-            </details>
-          )}
 
           {/* Thread reply count link (threaded mode) */}
           {message.threaded && !isInThreadPanel && onOpenThread && (hasChildren || threadReplyCount > 0) && (
