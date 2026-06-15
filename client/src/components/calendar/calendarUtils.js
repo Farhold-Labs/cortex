@@ -1,5 +1,11 @@
 // ============ Calendar Utilities (v2.47.0) ============
 
+// Returns 'YYYY-MM-DD' in the browser's local timezone (not UTC).
+// new Date().toISOString() returns UTC, which is wrong after 8 PM EDT.
+export function toLocalDateStr(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 export const CATEGORY_COLORS = {
   general:   'var(--accent-teal)',
   birthday:  'var(--accent-purple)',
