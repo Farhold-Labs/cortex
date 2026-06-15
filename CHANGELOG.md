@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.53.3] - 2026-06-15
+
+### Fixed
+
+- **Calendar timezone bug**: The calendar was using `toISOString()` to determine today's date, which returns UTC. For users in EDT (UTC-4), this caused the wrong day to be highlighted as "today" after 8 PM local time, the "TODAY" button to jump to tomorrow, and the agenda view to drop today's remaining events. Fixed by computing the local date via `getFullYear()`/`getMonth()`/`getDate()` on the `Date` object, added as a shared `toLocalDateStr()` helper in `calendarUtils.js`.
+- **Server reminder scheduler**: Same UTC bug in `database-sqlite.js` `getUpcomingTimedEvents()` — after 8 PM the SQL lower bound advanced to tomorrow, silently skipping reminder checks for any same-day events still in the future.
+
+---
+
+
 ## [2.53.2] - 2026-06-12
 
 ### Fixed

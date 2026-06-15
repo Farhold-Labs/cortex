@@ -10488,7 +10488,9 @@ export class DatabaseSQLite {
     // Using date range on SQL to avoid scanning old events, then precise ms check in JS
     const now = Date.now();
     const ceilDate = new Date(now + withinMs + 86400000).toISOString().slice(0, 10); // +1 day buffer
-    const todayDate = new Date(now).toISOString().slice(0, 10);
+    // Use local date (not UTC) so the lower bound stays on the correct day after 8 PM in negative-offset timezones
+    const _d = new Date(now);
+    const todayDate = `${_d.getFullYear()}-${String(_d.getMonth() + 1).padStart(2, '0')}-${String(_d.getDate()).padStart(2, '0')}`;
     const rows = this.db.prepare(`
       SELECT * FROM events
       WHERE recurrence IS NULL AND event_time IS NOT NULL
