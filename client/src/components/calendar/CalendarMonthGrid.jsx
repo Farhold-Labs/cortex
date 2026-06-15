@@ -1,9 +1,9 @@
 import React from 'react';
-import { getMonthDays, eventsForDate, CATEGORY_COLORS, DAY_NAMES } from './calendarUtils.js';
+import { getMonthDays, eventsForDate, CATEGORY_COLORS, DAY_NAMES, toLocalDateStr } from './calendarUtils.js';
 
 const CalendarMonthGrid = ({ year, month, events, selectedDate, onSelectDate }) => {
   const days = getMonthDays(year, month);
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = toLocalDateStr();
 
   return (
     <div>

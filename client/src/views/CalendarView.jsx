@@ -3,7 +3,7 @@ import CalendarMonthGrid from '../components/calendar/CalendarMonthGrid.jsx';
 import CalendarAgendaView from '../components/calendar/CalendarAgendaView.jsx';
 import EventDetailModal from '../components/calendar/EventDetailModal.jsx';
 import EventCreateModal from '../components/calendar/EventCreateModal.jsx';
-import { MONTH_NAMES } from '../components/calendar/calendarUtils.js';
+import { MONTH_NAMES, toLocalDateStr } from '../components/calendar/calendarUtils.js';
 
 const CalendarView = ({ fetchAPI, showToast, currentUser, isMobile, waves = [] }) => {
   const today        = new Date();
@@ -22,8 +22,8 @@ const CalendarView = ({ fetchAPI, showToast, currentUser, isMobile, waves = [] }
   const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
-      const from = new Date(year, month - 1, 1).toISOString().slice(0, 10);
-      const to   = new Date(year, month + 2, 0).toISOString().slice(0, 10);
+      const from = toLocalDateStr(new Date(year, month - 1, 1));
+      const to   = toLocalDateStr(new Date(year, month + 2, 0));
       const data = await fetchAPI(`/events?from=${from}&to=${to}&scope=server,personal,wave`);
       setEvents(data.events || []);
     } catch (err) {
@@ -53,7 +53,7 @@ const CalendarView = ({ fetchAPI, showToast, currentUser, isMobile, waves = [] }
   const goToToday = () => {
     setYear(today.getFullYear());
     setMonth(today.getMonth());
-    setSelectedDate(today.toISOString().slice(0, 10));
+    setSelectedDate(toLocalDateStr(today));
   };
 
   const handleDeleteEvent = async (event) => {
@@ -70,7 +70,7 @@ const CalendarView = ({ fetchAPI, showToast, currentUser, isMobile, waves = [] }
 
   // Agenda: show next 3 months from today
   const agendaEvents = events
-    .filter(e => new Date(e.eventDate + 'T12:00:00') >= new Date(today.toISOString().slice(0, 10) + 'T00:00:00'))
+    .filter(e => new Date(e.eventDate + 'T12:00:00') >= new Date(toLocalDateStr(today) + 'T00:00:00'))
     .sort((a, b) => a.eventDate.localeCompare(b.eventDate));
 
   return (
