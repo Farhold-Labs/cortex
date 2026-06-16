@@ -5,6 +5,33 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.54.0] - 2026-06-16
+
+### Added
+
+#### Email Notifications
+
+Users can now receive email notifications when they're offline. All email delivery uses the existing `email-service.js` layer (SMTP / SendGrid / Mailgun — configured via environment variables).
+
+**Notification types:**
+- **@Mentions** — email when someone @mentions you and you've been offline past your threshold
+- **Replies** — email when someone replies to your ping and you're offline
+- **Calendar reminders** — email for the 1-day and 1-hour reminder windows on events you're participating in
+
+**User controls** (Profile → Notifications → Email Notifications):
+- Master enable/disable toggle (opt-in, off by default)
+- Per-type toggles: Mentions, Replies, Calendar Reminders
+- Offline threshold: Immediately / 15 min / 30 min / 1 hour — only emails if you've been offline longer than this
+
+**Implementation details:**
+- `sendEmailNotificationIfOffline(userId, type, data)` — shared helper that checks prefs, WS connection status, offline duration, decrypts email, then fires the appropriate template
+- Three new email templates in `email-service.js`: `sendMentionEmail`, `sendReplyEmail`, `sendCalendarReminderEmail` — styled with the Firefly terminal aesthetic
+- Email prefs stored as a nested `email` object in `notificationPreferences` on the user record
+- `getAppBaseUrl()` helper derives the absolute URL from `ALLOWED_ORIGINS` env var for use in email links
+- Calendar reminder emails fire-and-forget inside `processEventReminders` for the `1day` and `1hour` windows only
+
+---
+
 ## [2.53.3] - 2026-06-15
 
 ### Fixed

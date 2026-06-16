@@ -2087,6 +2087,90 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                     ↻ Reset Push State
                   </button>
                 </div>
+
+                {/* Email Notifications */}
+                <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
+                  <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                    ✉️ EMAIL NOTIFICATIONS
+                  </label>
+                  <button
+                    onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), enabled: !(notificationPrefs.email?.enabled) } })}
+                    style={{
+                      padding: isMobile ? '10px 16px' : '8px 16px',
+                      minHeight: isMobile ? '44px' : 'auto',
+                      background: notificationPrefs.email?.enabled ? 'var(--accent-green)20' : 'transparent',
+                      border: `1px solid ${notificationPrefs.email?.enabled ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
+                      color: notificationPrefs.email?.enabled ? 'var(--accent-green)' : 'var(--text-dim)',
+                      cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.85rem',
+                    }}
+                  >
+                    {notificationPrefs.email?.enabled ? '✉️ ENABLED' : '✉️ DISABLED'}
+                  </button>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+                    Send email notifications when you're offline. Requires a verified email on your account.
+                  </div>
+
+                  {notificationPrefs.email?.enabled && (
+                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {[
+                        { key: 'mentions', label: '@ Mentions', desc: 'When someone @mentions you' },
+                        { key: 'replies', label: '↩ Replies', desc: 'When someone replies to your ping' },
+                        { key: 'calendarReminders', label: '📅 Calendar Reminders', desc: '1-day and 1-hour reminders for events' },
+                      ].map(({ key, label, desc }) => (
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                          <div>
+                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontFamily: 'monospace' }}>{label}</div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem' }}>{desc}</div>
+                          </div>
+                          <button
+                            onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), [key]: !(notificationPrefs.email?.[key] ?? true) } })}
+                            style={{
+                              padding: '6px 12px', flexShrink: 0,
+                              background: (notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)20' : 'transparent',
+                              border: `1px solid ${(notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                              color: (notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)' : 'var(--text-dim)',
+                              cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem',
+                            }}
+                          >
+                            {(notificationPrefs.email?.[key] ?? true) ? 'ON' : 'OFF'}
+                          </button>
+                        </div>
+                      ))}
+
+                      <div style={{ marginTop: '4px' }}>
+                        <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.7rem', marginBottom: '6px' }}>
+                          OFFLINE THRESHOLD
+                        </label>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {[
+                            { value: 0, label: 'Immediately' },
+                            { value: 15, label: '15 min' },
+                            { value: 30, label: '30 min' },
+                            { value: 60, label: '1 hour' },
+                          ].map(opt => (
+                            <button
+                              key={opt.value}
+                              onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), offlineThresholdMinutes: opt.value } })}
+                              style={{
+                                padding: isMobile ? '8px 12px' : '6px 12px',
+                                minHeight: isMobile ? '40px' : 'auto',
+                                background: (notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)20' : 'transparent',
+                                border: `1px solid ${(notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                                color: (notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)' : 'var(--text-dim)',
+                                cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem',
+                              }}
+                            >
+                              {opt.label.toUpperCase()}
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>
+                          Only send email if you've been offline longer than this
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 

@@ -2486,6 +2486,7 @@ export class DatabaseSQLite {
       soundEnabled: false,
       suppressWhileFocused: true,
       pushDebounceMinutes: 5,
+      email: { enabled: false, mentions: true, replies: true, calendarReminders: true, offlineThresholdMinutes: 15 },
     };
 
     const currentPrefs = user.notificationPreferences || DEFAULT_NOTIFICATION_PREFS;

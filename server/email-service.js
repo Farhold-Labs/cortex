@@ -277,6 +277,72 @@ class EmailService {
     return this.sendEmail({ to: email, subject, html });
   }
 
+  // ============ Notification Emails ============
+
+  _baseLayout(bodyHtml) {
+    return `
+      <div style="font-family:'Courier New',monospace;max-width:600px;margin:0 auto;padding:20px;background:#050805;color:#e8e8e8;">
+        <h1 style="color:#ffd23f;text-align:center;border-bottom:1px solid #3a4a3a;padding-bottom:16px;margin-bottom:20px;letter-spacing:4px;">CORTEX</h1>
+        ${bodyHtml}
+        <hr style="border:none;border-top:1px solid #3a4a3a;margin:30px 0;">
+        <p style="color:#444;font-size:0.75em;text-align:center;">You're receiving this because email notifications are enabled on your account.<br>Manage your preferences in Profile &rsaquo; Notifications.</p>
+      </div>`;
+  }
+
+  async sendMentionEmail(email, { mentionerName, waveName, preview, waveUrl, isEncrypted }) {
+    const subject = `${mentionerName} mentioned you in ${waveName}`;
+    const previewLine = isEncrypted
+      ? '<p style="color:#888;font-style:italic;">[Encrypted message — open Cortex to read]</p>'
+      : `<div style="margin:16px 0;padding:12px 16px;background:#0ead6910;border-left:3px solid #0ead69;color:#ccc;font-size:0.9em;">${preview}</div>`;
+    const html = this._baseLayout(`
+      <p style="color:#0ead69;font-size:0.8em;letter-spacing:2px;margin-bottom:8px;">@ MENTION</p>
+      <p><strong style="color:#ffd23f;">${mentionerName}</strong> mentioned you in <strong style="color:#ffd23f;">${waveName}</strong>.</p>
+      ${previewLine}
+      <p style="margin-top:24px;text-align:center;">
+        <a href="${waveUrl}" style="display:inline-block;padding:10px 24px;background:#ffd23f20;border:1px solid #ffd23f;color:#ffd23f;text-decoration:none;font-family:monospace;font-size:0.85rem;">
+          OPEN WAVE →
+        </a>
+      </p>`);
+    return this.sendEmail({ to: email, subject, html });
+  }
+
+  async sendReplyEmail(email, { replierName, waveName, preview, waveUrl, isEncrypted }) {
+    const subject = `${replierName} replied to you in ${waveName}`;
+    const previewLine = isEncrypted
+      ? '<p style="color:#888;font-style:italic;">[Encrypted message — open Cortex to read]</p>'
+      : `<div style="margin:16px 0;padding:12px 16px;background:#0ead6910;border-left:3px solid #0ead69;color:#ccc;font-size:0.9em;">${preview}</div>`;
+    const html = this._baseLayout(`
+      <p style="color:#0ead69;font-size:0.8em;letter-spacing:2px;margin-bottom:8px;">↩ REPLY</p>
+      <p><strong style="color:#ffd23f;">${replierName}</strong> replied to your ping in <strong style="color:#ffd23f;">${waveName}</strong>.</p>
+      ${previewLine}
+      <p style="margin-top:24px;text-align:center;">
+        <a href="${waveUrl}" style="display:inline-block;padding:10px 24px;background:#ffd23f20;border:1px solid #ffd23f;color:#ffd23f;text-decoration:none;font-family:monospace;font-size:0.85rem;">
+          OPEN WAVE →
+        </a>
+      </p>`);
+    return this.sendEmail({ to: email, subject, html });
+  }
+
+  async sendCalendarReminderEmail(email, { eventTitle, eventDate, eventTime, location, waveUrl, window: win }) {
+    const windowLabels = { '1day': 'Tomorrow', '1hour': 'In 1 hour', '30min': 'In 30 minutes', '15min': 'In 15 minutes' };
+    const label = windowLabels[win] || 'Upcoming event';
+    const subject = `📅 ${label}: ${eventTitle}`;
+    const fmt12 = (t) => {
+      if (!t) return 'All day';
+      const [h, m] = t.split(':').map(Number);
+      return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+    };
+    const html = this._baseLayout(`
+      <p style="color:#ffd23f;font-size:0.8em;letter-spacing:2px;margin-bottom:8px;">📅 CALENDAR REMINDER</p>
+      <p style="font-size:1.1em;color:#ffd23f;font-weight:bold;">${eventTitle}</p>
+      <table style="margin:16px 0;border-collapse:collapse;font-size:0.85em;color:#ccc;">
+        <tr><td style="padding:4px 12px 4px 0;color:#888;">When</td><td><strong>${label}</strong> &mdash; ${eventDate}${eventTime ? ' at ' + fmt12(eventTime) : ''}</td></tr>
+        ${location ? `<tr><td style="padding:4px 12px 4px 0;color:#888;">Where</td><td>${location}</td></tr>` : ''}
+      </table>
+      ${waveUrl ? `<p style="margin-top:24px;text-align:center;"><a href="${waveUrl}" style="display:inline-block;padding:10px 24px;background:#ffd23f20;border:1px solid #ffd23f;color:#ffd23f;text-decoration:none;font-family:monospace;font-size:0.85rem;">VIEW EVENT →</a></p>` : ''}`);
+    return this.sendEmail({ to: email, subject, html });
+  }
+
   /**
    * Strip HTML tags to create plain text version
    * @param {string} html - HTML content
