@@ -2111,29 +2111,30 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                   </div>
 
                   {notificationPrefs.email?.enabled && (
-                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                       {[
-                        { key: 'mentions', label: '@ Mentions', desc: 'When someone @mentions you' },
-                        { key: 'replies', label: '↩ Replies', desc: 'When someone replies to your ping' },
-                        { key: 'calendarReminders', label: '📅 Calendar Reminders', desc: '1-day and 1-hour reminders for events' },
+                        { key: 'mentions', label: '@ MENTIONS', desc: 'When someone @mentions you' },
+                        { key: 'replies', label: '↩ REPLIES', desc: 'When someone replies to your ping' },
+                        { key: 'calendarReminders', label: '📅 CALENDAR REMINDERS', desc: '1-day and 1-hour reminders for events' },
                       ].map(({ key, label, desc }) => (
-                        <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-                          <div>
-                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontFamily: 'monospace' }}>{label}</div>
-                            <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem' }}>{desc}</div>
-                          </div>
+                        <div key={key}>
+                          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                            {label}
+                          </label>
                           <button
                             onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), [key]: !(notificationPrefs.email?.[key] ?? true) } })}
                             style={{
-                              padding: '6px 12px', flexShrink: 0,
+                              padding: isMobile ? '8px 12px' : '6px 12px',
+                              minHeight: isMobile ? '40px' : 'auto',
                               background: (notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)20' : 'transparent',
                               border: `1px solid ${(notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
                               color: (notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)' : 'var(--text-dim)',
-                              cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem',
+                              cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',
                             }}
                           >
                             {(notificationPrefs.email?.[key] ?? true) ? 'ON' : 'OFF'}
                           </button>
+                          <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>{desc}</div>
                         </div>
                       ))}
 
