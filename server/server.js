@@ -19476,12 +19476,20 @@ async function sendEmailNotificationIfOffline(userId, type, emailData) {
     const recipientEmail = db.getDecryptedEmail ? db.getDecryptedEmail(userId) : user.email;
     if (!recipientEmail || recipientEmail.startsWith('[protected:')) return;
 
+    // Safety net: if preview looks like raw ciphertext (no spaces, long, base64-only chars)
+    // force isEncrypted so the template never leaks encrypted content into the email body.
+    const preview = emailData.preview || '';
+    const looksLikeCiphertext = preview.length > 20 && !/\s/.test(preview) && /^[A-Za-z0-9+/=]+$/.test(preview);
+    const safeData = (looksLikeCiphertext && !emailData.isEncrypted)
+      ? { ...emailData, isEncrypted: true }
+      : emailData;
+
     if (type === 'mention') {
-      await emailService.sendMentionEmail(recipientEmail, emailData);
+      await emailService.sendMentionEmail(recipientEmail, safeData);
     } else if (type === 'reply') {
-      await emailService.sendReplyEmail(recipientEmail, emailData);
+      await emailService.sendReplyEmail(recipientEmail, safeData);
     } else if (type === 'calendar') {
-      await emailService.sendCalendarReminderEmail(recipientEmail, emailData);
+      await emailService.sendCalendarReminderEmail(recipientEmail, safeData);
     }
   } catch (err) {
     console.error(`[email-notif] Failed to send ${type} email to user ${userId}:`, err.message);
