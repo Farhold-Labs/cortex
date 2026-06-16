@@ -2399,7 +2399,7 @@ export class DatabaseSQLite {
     if (updates.email && updates.email !== user.email) {
       const newHash = hashEmail(updates.email);
       const newEncryption = encryptEmail(updates.email);
-      updated.email = newEncryption ? newHash : updates.email;
+      updated.email = newEncryption ? null : updates.email; // null when encryption active (matches createUser)
       updated.emailHash = newHash;
       updated.emailEncrypted = newEncryption?.encrypted || null;
       updated.emailIv = newEncryption?.iv || null;
