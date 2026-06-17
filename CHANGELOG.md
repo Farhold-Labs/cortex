@@ -29,6 +29,14 @@ Admins can now designate specific waves as publicly readable via a new Public Po
 - Public endpoints (`/api/public/portal`) are covered by the existing API rate limiter
 - All add/remove/update actions are admin-only and logged to the activity log
 
+### Fixed
+
+- **Admin role check**: All five portal admin endpoints were passing `req.user` (JWT payload, contains only `userId`/`handle`) directly to `requireRole()` instead of a DB-fetched user object. The role field lives in the database, not the token — fixed to call `db.findUserById(req.user.userId)` first, matching the pattern used by every other admin endpoint.
+- **Admin panel format**: Public Portal section now matches all other admin sections — gradient background, teal border, `▶ SHOW / ▼ HIDE` toggle button, monospace all-caps labels.
+- **Wave selection list**: The add-wave dropdown was fetching `/api/waves` (user's own waves only). Replaced with a new `/api/admin/portal/waves` endpoint that queries all non-E2EE server waves regardless of admin participation.
+- **Wrong column names**: `waves` table has no `description` or `archived` columns. Queries now use `topic` (the actual column) and drop the `archived` filter.
+- **Wrong table name**: `getPortalMessages()` referenced a `messages` table that doesn't exist — the correct table name throughout this codebase is `pings`.
+
 ---
 
 ## [2.54.0] - 2026-06-16
