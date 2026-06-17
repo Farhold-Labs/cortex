@@ -19449,32 +19449,57 @@ function getAppBaseUrl() {
 async function sendEmailNotificationIfOffline(userId, type, emailData) {
   try {
     const emailService = getEmailService();
-    if (!emailService.isConfigured()) return;
+    if (!emailService.isConfigured()) {
+      console.log(`[email-notif] Skipping ${type} — email service not configured`);
+      return;
+    }
 
     const user = db.findUserById(userId);
     if (!user) return;
 
     const prefs = user.notificationPreferences || DEFAULT_NOTIF_PREFS;
     const emailPrefs = prefs.email || DEFAULT_EMAIL_NOTIF_PREFS;
-    if (!emailPrefs.enabled) return;
+    if (!emailPrefs.enabled) {
+      console.log(`[email-notif] Skipping ${type} for @${user.handle} — email notifications disabled`);
+      return;
+    }
 
     // Check the per-type toggle
-    if (type === 'mention' && !emailPrefs.mentions) return;
-    if (type === 'reply' && !emailPrefs.replies) return;
-    if (type === 'calendar' && !emailPrefs.calendarReminders) return;
+    if (type === 'mention' && !emailPrefs.mentions) {
+      console.log(`[email-notif] Skipping mention for @${user.handle} — mention emails disabled`);
+      return;
+    }
+    if (type === 'reply' && !emailPrefs.replies) {
+      console.log(`[email-notif] Skipping reply for @${user.handle} — reply emails disabled`);
+      return;
+    }
+    if (type === 'calendar' && !emailPrefs.calendarReminders) {
+      console.log(`[email-notif] Skipping calendar for @${user.handle} — calendar emails disabled`);
+      return;
+    }
 
     // Only email if user is currently offline
-    if (clients.has(userId) && clients.get(userId).size > 0) return;
+    if (clients.has(userId) && clients.get(userId).size > 0) {
+      console.log(`[email-notif] Skipping ${type} for @${user.handle} — user is online`);
+      return;
+    }
 
     // Respect offline threshold
     const thresholdMs = (emailPrefs.offlineThresholdMinutes ?? 15) * 60 * 1000;
     if (thresholdMs > 0) {
       const lastSeen = user.lastSeen ? new Date(user.lastSeen).getTime() : 0;
-      if ((Date.now() - lastSeen) < thresholdMs) return;
+      const offlineMs = Date.now() - lastSeen;
+      if (offlineMs < thresholdMs) {
+        console.log(`[email-notif] Skipping ${type} for @${user.handle} — offline only ${Math.round(offlineMs / 60000)}min, threshold is ${emailPrefs.offlineThresholdMinutes}min`);
+        return;
+      }
     }
 
     const recipientEmail = db.getDecryptedEmail ? db.getDecryptedEmail(userId) : user.email;
-    if (!recipientEmail || recipientEmail.startsWith('[protected:')) return;
+    if (!recipientEmail || recipientEmail.startsWith('[protected:')) {
+      console.warn(`[email-notif] Skipping ${type} for @${user.handle} — email address not available`);
+      return;
+    }
 
     // Safety net: if preview looks like raw ciphertext (no spaces, long, base64-only chars)
     // force isEncrypted so the template never leaks encrypted content into the email body.
@@ -19484,6 +19509,7 @@ async function sendEmailNotificationIfOffline(userId, type, emailData) {
       ? { ...emailData, isEncrypted: true }
       : emailData;
 
+    console.log(`[email-notif] Sending ${type} email to @${user.handle}`);
     if (type === 'mention') {
       await emailService.sendMentionEmail(recipientEmail, safeData);
     } else if (type === 'reply') {
