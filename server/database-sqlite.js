@@ -9461,7 +9461,7 @@ export class DatabaseSQLite {
   getPortalWaves() {
     return this.db.prepare(`
       SELECT pw.wave_id, pw.label, pw.display_order, pw.added_at,
-             w.title, w.description, w.privacy, w.encrypted
+             w.title, w.topic, w.privacy, w.encrypted
       FROM portal_waves pw
       JOIN waves w ON w.id = pw.wave_id
       ORDER BY pw.display_order ASC, pw.added_at ASC

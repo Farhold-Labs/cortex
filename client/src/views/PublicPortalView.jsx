@@ -265,9 +265,9 @@ const PublicPortalView = ({ onLogin }) => {
                 ○ {currentWave.title}
               </h1>
             )}
-            {!isEmbed && currentWave.description && (
+            {!isEmbed && currentWave.topic && (
               <p style={{ color: 'var(--text-secondary, #7aad7a)', fontSize: '0.85rem', margin: '0 0 20px 0' }}>
-                {currentWave.description}
+                {currentWave.topic}
               </p>
             )}
             <WavePane wave={currentWave} appUrl={appUrl} />

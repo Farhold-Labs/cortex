@@ -11995,7 +11995,7 @@ app.get('/api/public/portal', (req, res) => {
     res.json({ waves: waves.map(w => ({
       waveId: w.wave_id,
       title: w.label || w.title,
-      description: w.description || null,
+      topic: w.topic || null,
       displayOrder: w.display_order,
     }))});
   } catch (err) {
@@ -12053,11 +12053,10 @@ app.get('/api/admin/portal/waves', authenticateToken, (req, res) => {
     const admin = db.findUserById(req.user.userId);
     if (!requireRole(admin, ROLES.ADMIN, res)) return;
     const waves = db.db.prepare(`
-      SELECT id, title, description, privacy, encrypted
+      SELECT id, title, topic, privacy, encrypted
       FROM waves
       WHERE (encrypted = 0 OR encrypted IS NULL)
         AND (is_profile_wave IS NULL OR is_profile_wave = 0)
-        AND (archived = 0 OR archived IS NULL)
       ORDER BY title ASC
     `).all();
     res.json({ waves });
@@ -12077,7 +12076,7 @@ app.get('/api/admin/portal', authenticateToken, (req, res) => {
       waveId: w.wave_id,
       label: w.label,
       title: w.title,
-      description: w.description,
+      topic: w.topic || null,
       privacy: w.privacy,
       displayOrder: w.display_order,
       addedAt: w.added_at,
