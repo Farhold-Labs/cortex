@@ -9498,18 +9498,18 @@ export class DatabaseSQLite {
     const params = [waveId];
     let cursor = '';
     if (before) {
-      const ref = this.db.prepare(`SELECT created_at FROM messages WHERE id = ?`).get(before);
-      if (ref) { cursor = `AND m.created_at < ?`; params.push(ref.created_at); }
+      const ref = this.db.prepare(`SELECT created_at FROM pings WHERE id = ?`).get(before);
+      if (ref) { cursor = `AND p.created_at < ?`; params.push(ref.created_at); }
     }
     params.push(limit);
     return this.db.prepare(`
-      SELECT m.id, m.content, m.created_at, m.encrypted, m.nonce,
-             m.author_id, u.display_name, u.handle, u.avatar, u.avatar_url
-      FROM messages m
-      JOIN users u ON u.id = m.author_id
-      WHERE m.wave_id = ? AND m.deleted = 0 AND m.parent_id IS NULL
+      SELECT p.id, p.content, p.created_at, p.encrypted, p.nonce,
+             p.author_id, u.display_name, u.handle, u.avatar, u.avatar_url
+      FROM pings p
+      JOIN users u ON u.id = p.author_id
+      WHERE p.wave_id = ? AND p.deleted = 0 AND p.parent_id IS NULL
         ${cursor}
-      ORDER BY m.created_at DESC
+      ORDER BY p.created_at DESC
       LIMIT ?
     `).all(...params);
   }
