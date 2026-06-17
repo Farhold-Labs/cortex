@@ -5,6 +5,40 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.55.0] - 2026-06-17
+
+### Added
+
+#### Public Portal
+
+Admins can now designate specific waves as publicly readable via a new Public Portal. Anyone with the link can read posts without a Cortex account — no login required.
+
+**Standalone page** — `https://your-cortex/portal` lists all portal waves as tabs. Visitors can browse messages and click "Reply in Cortex" or "Open in Cortex →" to deep-link directly to the wave (prompts login/register if needed).
+
+**Embed** — each wave has an embed snippet in the admin panel: a one-liner `<iframe>` with `?embed=1` that strips the header to just the message list, suitable for embedding in any web page.
+
+**Admin controls** (Profile → Admin → Public Portal):
+- Add any non-E2EE wave to the portal, with an optional display label that overrides the wave title
+- Remove waves from the portal
+- Edit labels per wave
+- Copy the embed `<iframe>` snippet per wave with one click
+
+**Security:**
+- E2EE-encrypted waves are rejected server-side — the server can't decrypt them and they won't leak ciphertext
+- Encrypted messages within otherwise-public waves render as `[Encrypted message — open Cortex to read]`
+- Public endpoints (`/api/public/portal`) are covered by the existing API rate limiter
+- All add/remove/update actions are admin-only and logged to the activity log
+
+### Fixed
+
+- **Admin role check**: All five portal admin endpoints were passing `req.user` (JWT payload, contains only `userId`/`handle`) directly to `requireRole()` instead of a DB-fetched user object. The role field lives in the database, not the token — fixed to call `db.findUserById(req.user.userId)` first, matching the pattern used by every other admin endpoint.
+- **Admin panel format**: Public Portal section now matches all other admin sections — gradient background, teal border, `▶ SHOW / ▼ HIDE` toggle button, monospace all-caps labels.
+- **Wave selection list**: The add-wave dropdown was fetching `/api/waves` (user's own waves only). Replaced with a new `/api/admin/portal/waves` endpoint that queries all non-E2EE server waves regardless of admin participation.
+- **Wrong column names**: `waves` table has no `description` or `archived` columns. Queries now use `topic` (the actual column) and drop the `archived` filter.
+- **Wrong table name**: `getPortalMessages()` referenced a `messages` table that doesn't exist — the correct table name throughout this codebase is `pings`.
+
+---
+
 ## [2.54.0] - 2026-06-16
 
 ### Added
