@@ -12047,6 +12047,25 @@ app.get('/api/public/portal/:waveId/messages', (req, res) => {
   }
 });
 
+// GET /api/admin/portal/waves — all non-E2EE server waves for portal selection (admin only)
+app.get('/api/admin/portal/waves', authenticateToken, (req, res) => {
+  try {
+    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const waves = db.db.prepare(`
+      SELECT id, title, description, privacy, encrypted
+      FROM waves
+      WHERE (encrypted = 0 OR encrypted IS NULL)
+        AND (is_profile_wave IS NULL OR is_profile_wave = 0)
+        AND (archived = 0 OR archived IS NULL)
+      ORDER BY title ASC
+    `).all();
+    res.json({ waves });
+  } catch (err) {
+    console.error('Admin portal waves list error:', err);
+    res.status(500).json({ error: 'Failed to list waves' });
+  }
+});
+
 // GET /api/admin/portal — list portal waves with full wave metadata (admin only)
 app.get('/api/admin/portal', authenticateToken, (req, res) => {
   try {
