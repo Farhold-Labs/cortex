@@ -19439,9 +19439,12 @@ function extractMentions(content) {
 }
 
 // Compute absolute app URL for email links
+// Priority: APP_URL (explicit) → first ALLOWED_ORIGINS entry → CLIENT_URL → localhost fallback
 function getAppBaseUrl() {
-  const origins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()) : [];
-  return origins[0] || process.env.CLIENT_URL || 'http://localhost:3000';
+  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '');
+  const origins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean) : [];
+  if (origins.length > 0) return origins[0];
+  return process.env.CLIENT_URL || 'http://localhost:3000';
 }
 
 // Send an email notification if the user is offline long enough and has email enabled.
