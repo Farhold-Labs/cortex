@@ -6649,6 +6649,14 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
 });
 
 // Default notification preferences
+const DEFAULT_EMAIL_NOTIF_PREFS = {
+  enabled: false,               // opt-in
+  mentions: true,
+  replies: true,
+  calendarReminders: true,
+  offlineThresholdMinutes: 15,  // only email if offline longer than this (0 = always)
+};
+
 const DEFAULT_NOTIFICATION_PREFS = {
   enabled: true,
   directMentions: 'always',      // always | app_closed | never
@@ -6659,6 +6667,7 @@ const DEFAULT_NOTIFICATION_PREFS = {
   soundEnabled: false,
   suppressWhileFocused: true,
   pushDebounceMinutes: 5,        // 0 = no debounce (every message), up to 30 min
+  email: DEFAULT_EMAIL_NOTIF_PREFS,
 };
 
 // Get notification preferences
@@ -6705,6 +6714,19 @@ app.put('/api/notifications/preferences', authenticateToken, (req, res) => {
   }
   if (typeof req.body.pushDebounceMinutes === 'number') {
     updates.pushDebounceMinutes = Math.max(0, Math.min(30, Math.floor(req.body.pushDebounceMinutes)));
+  }
+  if (req.body.email && typeof req.body.email === 'object') {
+    const currentEmailPrefs = (user.notificationPreferences?.email) || DEFAULT_EMAIL_NOTIF_PREFS;
+    const ep = req.body.email;
+    const emailUpdates = { ...currentEmailPrefs };
+    if (typeof ep.enabled === 'boolean') emailUpdates.enabled = ep.enabled;
+    if (typeof ep.mentions === 'boolean') emailUpdates.mentions = ep.mentions;
+    if (typeof ep.replies === 'boolean') emailUpdates.replies = ep.replies;
+    if (typeof ep.calendarReminders === 'boolean') emailUpdates.calendarReminders = ep.calendarReminders;
+    if (typeof ep.offlineThresholdMinutes === 'number') {
+      emailUpdates.offlineThresholdMinutes = Math.max(0, Math.min(120, Math.floor(ep.offlineThresholdMinutes)));
+    }
+    updates.email = emailUpdates;
   }
 
   // Persist merged preferences to database
@@ -19369,6 +19391,7 @@ const DEFAULT_NOTIF_PREFS = {
   soundEnabled: false,
   suppressWhileFocused: true,
   pushDebounceMinutes: 5,
+  email: DEFAULT_EMAIL_NOTIF_PREFS,
 };
 
 // Check if a user should receive a notification based on their preferences
@@ -19413,6 +19436,93 @@ function extractMentions(content) {
     mentions.push(match[1].toLowerCase());
   }
   return [...new Set(mentions)]; // Remove duplicates
+}
+
+// Compute absolute app URL for email links
+// Priority: FEDERATION_NODE_NAME → first ALLOWED_ORIGINS entry → CLIENT_URL → localhost fallback
+function getAppBaseUrl() {
+  if (FEDERATION_NODE_NAME) return `https://${FEDERATION_NODE_NAME}`;
+  const origins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean) : [];
+  if (origins.length > 0) return origins[0];
+  return process.env.CLIENT_URL || 'http://localhost:3000';
+}
+
+// Send an email notification if the user is offline long enough and has email enabled.
+// Fire-and-forget — never throws, never blocks the caller.
+async function sendEmailNotificationIfOffline(userId, type, emailData) {
+  try {
+    const emailService = getEmailService();
+    if (!emailService.isConfigured()) {
+      console.log(`[email-notif] Skipping ${type} — email service not configured`);
+      return;
+    }
+
+    const user = db.findUserById(userId);
+    if (!user) return;
+
+    const prefs = user.notificationPreferences || DEFAULT_NOTIF_PREFS;
+    const emailPrefs = prefs.email || DEFAULT_EMAIL_NOTIF_PREFS;
+    if (!emailPrefs.enabled) {
+      console.log(`[email-notif] Skipping ${type} for @${user.handle} — email notifications disabled`);
+      return;
+    }
+
+    // Check the per-type toggle
+    if (type === 'mention' && !emailPrefs.mentions) {
+      console.log(`[email-notif] Skipping mention for @${user.handle} — mention emails disabled`);
+      return;
+    }
+    if (type === 'reply' && !emailPrefs.replies) {
+      console.log(`[email-notif] Skipping reply for @${user.handle} — reply emails disabled`);
+      return;
+    }
+    if (type === 'calendar' && !emailPrefs.calendarReminders) {
+      console.log(`[email-notif] Skipping calendar for @${user.handle} — calendar emails disabled`);
+      return;
+    }
+
+    // Only email if user is currently offline
+    if (clients.has(userId) && clients.get(userId).size > 0) {
+      console.log(`[email-notif] Skipping ${type} for @${user.handle} — user is online`);
+      return;
+    }
+
+    // Respect offline threshold
+    const thresholdMs = (emailPrefs.offlineThresholdMinutes ?? 15) * 60 * 1000;
+    if (thresholdMs > 0) {
+      const lastSeen = user.lastSeen ? new Date(user.lastSeen).getTime() : 0;
+      const offlineMs = Date.now() - lastSeen;
+      if (offlineMs < thresholdMs) {
+        console.log(`[email-notif] Skipping ${type} for @${user.handle} — offline only ${Math.round(offlineMs / 60000)}min, threshold is ${emailPrefs.offlineThresholdMinutes}min`);
+        return;
+      }
+    }
+
+    const recipientEmail = db.getDecryptedEmail ? db.getDecryptedEmail(userId) : user.email;
+    if (!recipientEmail || recipientEmail.startsWith('[protected:')) {
+      console.warn(`[email-notif] Skipping ${type} for @${user.handle} — email address not available`);
+      return;
+    }
+
+    // Safety net: if preview looks like raw ciphertext (no spaces, long, base64-only chars)
+    // force isEncrypted so the template never leaks encrypted content into the email body.
+    const preview = emailData.preview || '';
+    const looksLikeCiphertext = preview.length > 20 && !/\s/.test(preview) && /^[A-Za-z0-9+/=]+$/.test(preview);
+    const safeData = (looksLikeCiphertext && !emailData.isEncrypted)
+      ? { ...emailData, isEncrypted: true }
+      : emailData;
+
+    console.log(`[email-notif] Sending ${type} email to @${user.handle}`);
+    if (type === 'mention') {
+      await emailService.sendMentionEmail(recipientEmail, safeData);
+    } else if (type === 'reply') {
+      await emailService.sendReplyEmail(recipientEmail, safeData);
+    } else if (type === 'calendar') {
+      await emailService.sendCalendarReminderEmail(recipientEmail, safeData);
+    }
+  } catch (err) {
+    console.error(`[email-notif] Failed to send ${type} email to user ${userId}:`, err.message);
+  }
 }
 
 // Create notifications for a new ping
@@ -19508,6 +19618,14 @@ function createPingNotifications(ping, wave, author) {
         encrypted: !!isEncrypted,
       });
 
+      sendEmailNotificationIfOffline(mentionedUser.id, 'mention', {
+        mentionerName: author.displayName,
+        waveName: wave.title,
+        preview: contentPreview,
+        waveUrl: `${getAppBaseUrl()}/?wave=${wave.id}`,
+        isEncrypted: !!isEncrypted,
+      });
+
       notificationsToSend.push({ userId: mentionedUser.id, notification });
     }
   }
@@ -19542,6 +19660,14 @@ function createPingNotifications(ping, wave, author) {
           senderId: author.id,
           senderHandle: author.handle,
           encrypted: !!isEncrypted,
+        });
+
+        sendEmailNotificationIfOffline(parentPing.authorId, 'reply', {
+          replierName: author.displayName,
+          waveName: wave.title,
+          preview: contentPreview,
+          waveUrl: `${getAppBaseUrl()}/?wave=${wave.id}`,
+          isEncrypted: !!isEncrypted,
         });
 
         notificationsToSend.push({ userId: parentPing.authorId, notification });
@@ -20137,6 +20263,17 @@ server.listen(PORT, () => {
                 data: { type: 'calendar_reminder', eventId: event.id },
               });
             } catch (_) {}
+            // Email reminder — send for 1day and 1hour windows only
+            if (win.key === '1day' || win.key === '1hour') {
+              sendEmailNotificationIfOffline(participant.id, 'calendar', {
+                eventTitle: event.title,
+                eventDate: event.eventDate,
+                eventTime: event.eventTime || null,
+                location: event.location || null,
+                waveUrl: event.waveId ? `${getAppBaseUrl()}/?wave=${event.waveId}` : null,
+                window: win.key,
+              });
+            }
             db.markReminderSent(event.id, participant.id, win.key);
           }
         }
