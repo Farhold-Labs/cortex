@@ -12050,7 +12050,8 @@ app.get('/api/public/portal/:waveId/messages', (req, res) => {
 // GET /api/admin/portal/waves — all non-E2EE server waves for portal selection (admin only)
 app.get('/api/admin/portal/waves', authenticateToken, (req, res) => {
   try {
-    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
     const waves = db.db.prepare(`
       SELECT id, title, description, privacy, encrypted
       FROM waves
@@ -12069,7 +12070,8 @@ app.get('/api/admin/portal/waves', authenticateToken, (req, res) => {
 // GET /api/admin/portal — list portal waves with full wave metadata (admin only)
 app.get('/api/admin/portal', authenticateToken, (req, res) => {
   try {
-    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
     const waves = db.getPortalWaves();
     res.json({ waves: waves.map(w => ({
       waveId: w.wave_id,
@@ -12089,7 +12091,8 @@ app.get('/api/admin/portal', authenticateToken, (req, res) => {
 // POST /api/admin/portal — add a wave to the portal (admin only)
 app.post('/api/admin/portal', authenticateToken, async (req, res) => {
   try {
-    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
     const { waveId, label } = req.body;
     if (!waveId) return res.status(400).json({ error: 'waveId required' });
 
@@ -12111,7 +12114,8 @@ app.post('/api/admin/portal', authenticateToken, async (req, res) => {
 // PATCH /api/admin/portal/:waveId — update label or order (admin only)
 app.patch('/api/admin/portal/:waveId', authenticateToken, (req, res) => {
   try {
-    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
     const waveId = sanitizeInput(req.params.waveId);
     if (!db.getPortalWave(waveId)) return res.status(404).json({ error: 'Wave not in portal' });
     const { label, displayOrder } = req.body;
@@ -12129,7 +12133,8 @@ app.patch('/api/admin/portal/:waveId', authenticateToken, (req, res) => {
 // DELETE /api/admin/portal/:waveId — remove a wave from the portal (admin only)
 app.delete('/api/admin/portal/:waveId', authenticateToken, (req, res) => {
   try {
-    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const admin = db.findUserById(req.user.userId);
+    if (!requireRole(admin, ROLES.ADMIN, res)) return;
     const waveId = sanitizeInput(req.params.waveId);
     const removed = db.removeWaveFromPortal(waveId);
     if (!removed) return res.status(404).json({ error: 'Wave not in portal' });
