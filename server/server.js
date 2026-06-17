@@ -11986,6 +11986,142 @@ app.delete('/api/incoming-webhooks/:id', authenticateToken, (req, res) => {
   }
 });
 
+// ============ Public Portal Routes (v2.55.0) ============
+
+// GET /api/public/portal — list portal waves (no auth required)
+app.get('/api/public/portal', (req, res) => {
+  try {
+    const waves = db.getPortalWaves();
+    res.json({ waves: waves.map(w => ({
+      waveId: w.wave_id,
+      title: w.label || w.title,
+      description: w.description || null,
+      displayOrder: w.display_order,
+    }))});
+  } catch (err) {
+    console.error('Public portal list error:', err);
+    res.status(500).json({ error: 'Failed to load portal' });
+  }
+});
+
+// GET /api/public/portal/:waveId/messages — paginated messages (no auth required)
+app.get('/api/public/portal/:waveId/messages', (req, res) => {
+  try {
+    const waveId = sanitizeInput(req.params.waveId);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const before = req.query.before ? sanitizeInput(req.query.before) : null;
+
+    const entry = db.getPortalWave(waveId);
+    if (!entry) return res.status(404).json({ error: 'Wave not in portal' });
+
+    const wave = db.getWave(waveId);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+
+    const rows = db.getPortalMessages(waveId, { limit, before });
+
+    const messages = rows.map(m => {
+      const isEncrypted = !!(m.encrypted || m.nonce);
+      return {
+        id: m.id,
+        content: isEncrypted ? null : m.content,
+        isEncrypted,
+        createdAt: m.created_at,
+        author: {
+          displayName: m.display_name || 'Unknown',
+          handle: m.handle,
+          avatarUrl: m.avatar_url || null,
+          avatar: m.avatar || null,
+        },
+      };
+    });
+
+    res.json({
+      messages,
+      hasMore: rows.length === limit,
+      waveId,
+      waveTitle: entry.label || wave.title,
+    });
+  } catch (err) {
+    console.error('Public portal messages error:', err);
+    res.status(500).json({ error: 'Failed to load messages' });
+  }
+});
+
+// GET /api/admin/portal — list portal waves with full wave metadata (admin only)
+app.get('/api/admin/portal', authenticateToken, (req, res) => {
+  try {
+    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const waves = db.getPortalWaves();
+    res.json({ waves: waves.map(w => ({
+      waveId: w.wave_id,
+      label: w.label,
+      title: w.title,
+      description: w.description,
+      privacy: w.privacy,
+      displayOrder: w.display_order,
+      addedAt: w.added_at,
+    }))});
+  } catch (err) {
+    console.error('Admin portal list error:', err);
+    res.status(500).json({ error: 'Failed to load portal waves' });
+  }
+});
+
+// POST /api/admin/portal — add a wave to the portal (admin only)
+app.post('/api/admin/portal', authenticateToken, async (req, res) => {
+  try {
+    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const { waveId, label } = req.body;
+    if (!waveId) return res.status(400).json({ error: 'waveId required' });
+
+    const wave = db.getWave(sanitizeInput(waveId));
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+    if (wave.encrypted) return res.status(400).json({ error: 'Cannot add an E2EE-encrypted wave to the portal' });
+
+    if (db.getPortalWave(wave.id)) return res.status(409).json({ error: 'Wave already in portal' });
+
+    db.addWaveToPortal(wave.id, label ? sanitizeInput(label) : null, req.user.userId);
+    db.logActivity(req.user.userId, 'portal_wave_added', 'wave', wave.id, { label });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Add portal wave error:', err);
+    res.status(500).json({ error: 'Failed to add wave to portal' });
+  }
+});
+
+// PATCH /api/admin/portal/:waveId — update label or order (admin only)
+app.patch('/api/admin/portal/:waveId', authenticateToken, (req, res) => {
+  try {
+    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const waveId = sanitizeInput(req.params.waveId);
+    if (!db.getPortalWave(waveId)) return res.status(404).json({ error: 'Wave not in portal' });
+    const { label, displayOrder } = req.body;
+    db.updatePortalWave(waveId, {
+      label: label !== undefined ? sanitizeInput(label) : undefined,
+      displayOrder: displayOrder !== undefined ? parseInt(displayOrder) : undefined,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Update portal wave error:', err);
+    res.status(500).json({ error: 'Failed to update portal wave' });
+  }
+});
+
+// DELETE /api/admin/portal/:waveId — remove a wave from the portal (admin only)
+app.delete('/api/admin/portal/:waveId', authenticateToken, (req, res) => {
+  try {
+    if (!requireRole(req.user, ROLES.ADMIN, res)) return;
+    const waveId = sanitizeInput(req.params.waveId);
+    const removed = db.removeWaveFromPortal(waveId);
+    if (!removed) return res.status(404).json({ error: 'Wave not in portal' });
+    db.logActivity(req.user.userId, 'portal_wave_removed', 'wave', waveId, {});
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Remove portal wave error:', err);
+    res.status(500).json({ error: 'Failed to remove wave from portal' });
+  }
+});
+
 // ============ Share Routes (v1.17.0) ============
 
 // GET /share/:pingId - HTML page with Open Graph meta tags for social sharing

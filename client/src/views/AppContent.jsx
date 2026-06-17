@@ -6,6 +6,7 @@ import LoginScreen from './LoginScreen.jsx';
 import AboutServerPage from './AboutServerPage.jsx';
 import ResetPasswordPage from './ResetPasswordPage.jsx';
 import PublicMessageView from './PublicMessageView.jsx';
+import PublicPortalView from './PublicPortalView.jsx';
 import AuthProvider from './AuthProvider.jsx';
 import E2EEAuthenticatedApp from './E2EEAuthenticatedApp.jsx';
 
@@ -119,6 +120,16 @@ function AppContent() {
   };
 
   // Public routes (accessible without login)
+  if (currentPath === '/portal') {
+    return (
+      <PublicPortalView onLogin={() => {
+        window.history.pushState({}, '', '/');
+        setCurrentPath('/');
+        setShowLoginScreen(true);
+      }} />
+    );
+  }
+
   if (currentPath === '/about') {
     return <AboutServerPage onBack={() => navigate('/')} />;
   }

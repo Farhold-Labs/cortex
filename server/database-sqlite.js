@@ -2113,6 +2113,24 @@ export class DatabaseSQLite {
       `);
       console.log('✅ incoming_webhooks table created');
     }
+
+    // v2.55.0 — Public Portal
+    const portalWavesExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='portal_waves'`
+    ).get();
+    if (!portalWavesExists) {
+      console.log('📝 Adding portal_waves table (v2.55.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS portal_waves (
+          wave_id       TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+          label         TEXT,
+          display_order INTEGER NOT NULL DEFAULT 0,
+          added_at      TEXT NOT NULL,
+          added_by      TEXT REFERENCES users(id)
+        );
+      `);
+      console.log('✅ portal_waves table created');
+    }
   }
 
   prepareStatements() {
@@ -9436,6 +9454,64 @@ export class DatabaseSQLite {
   touchIncomingWebhook(id) {
     this.db.prepare(`UPDATE incoming_webhooks SET last_used_at = ? WHERE id = ?`)
       .run(new Date().toISOString(), id);
+  }
+
+  // ============ Public Portal Methods (v2.55.0) ============
+
+  getPortalWaves() {
+    return this.db.prepare(`
+      SELECT pw.wave_id, pw.label, pw.display_order, pw.added_at,
+             w.title, w.description, w.privacy, w.encrypted
+      FROM portal_waves pw
+      JOIN waves w ON w.id = pw.wave_id
+      ORDER BY pw.display_order ASC, pw.added_at ASC
+    `).all();
+  }
+
+  getPortalWave(waveId) {
+    return this.db.prepare(`SELECT * FROM portal_waves WHERE wave_id = ?`).get(waveId);
+  }
+
+  addWaveToPortal(waveId, label, addedBy) {
+    const maxOrder = this.db.prepare(`SELECT COALESCE(MAX(display_order), -1) as m FROM portal_waves`).get().m;
+    this.db.prepare(`
+      INSERT INTO portal_waves (wave_id, label, display_order, added_at, added_by)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(waveId, label || null, maxOrder + 1, new Date().toISOString(), addedBy);
+  }
+
+  removeWaveFromPortal(waveId) {
+    return this.db.prepare(`DELETE FROM portal_waves WHERE wave_id = ?`).run(waveId).changes > 0;
+  }
+
+  updatePortalWave(waveId, { label, displayOrder }) {
+    const updates = [];
+    const params = [];
+    if (label !== undefined) { updates.push('label = ?'); params.push(label || null); }
+    if (displayOrder !== undefined) { updates.push('display_order = ?'); params.push(displayOrder); }
+    if (!updates.length) return;
+    params.push(waveId);
+    this.db.prepare(`UPDATE portal_waves SET ${updates.join(', ')} WHERE wave_id = ?`).run(...params);
+  }
+
+  getPortalMessages(waveId, { limit = 50, before = null } = {}) {
+    const params = [waveId];
+    let cursor = '';
+    if (before) {
+      const ref = this.db.prepare(`SELECT created_at FROM messages WHERE id = ?`).get(before);
+      if (ref) { cursor = `AND m.created_at < ?`; params.push(ref.created_at); }
+    }
+    params.push(limit);
+    return this.db.prepare(`
+      SELECT m.id, m.content, m.created_at, m.encrypted, m.nonce,
+             m.author_id, u.display_name, u.handle, u.avatar, u.avatar_url
+      FROM messages m
+      JOIN users u ON u.id = m.author_id
+      WHERE m.wave_id = ? AND m.deleted = 0 AND m.parent_id IS NULL
+        ${cursor}
+      ORDER BY m.created_at DESC
+      LIMIT ?
+    `).all(...params);
   }
 
   // ============ Jellyfin Integration Methods (v2.14.0) ============
