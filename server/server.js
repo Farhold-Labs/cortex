@@ -11986,6 +11986,246 @@ app.delete('/api/incoming-webhooks/:id', authenticateToken, (req, res) => {
   }
 });
 
+// ============ Cross-Port Authentication Routes (v2.56.0) ============
+
+// POST /api/cross-port/initiate — Guest Server (B): start the cross-port login flow
+// Creates a pending request and returns the redirect URL for the home server
+app.post('/api/cross-port/initiate', async (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled on this server' });
+
+    const { homeServerUrl } = req.body;
+    if (!homeServerUrl) return res.status(400).json({ error: 'homeServerUrl required' });
+
+    // Normalise URL
+    let homeUrl;
+    try { homeUrl = new URL(homeServerUrl.startsWith('http') ? homeServerUrl : `https://${homeServerUrl}`); }
+    catch { return res.status(400).json({ error: 'Invalid homeServerUrl' }); }
+
+    const homeNode = homeUrl.host;
+
+    // Check the home server is a trusted federated node
+    const node = db.getFederationNodeByName(homeNode);
+    if (!node || node.status !== 'active') {
+      return res.status(403).json({ error: `${homeNode} is not a trusted federated server` });
+    }
+
+    const id = crypto.randomUUID();
+    const nonce = crypto.randomBytes(32).toString('hex');
+    const guestBaseUrl = getAppBaseUrl();
+
+    db.createCrossPortRequest({ id, guestNode: FEDERATION_NODE_NAME, guestBaseUrl, nonce });
+
+    const redirectUrl = `${homeUrl.origin}/cross-port-auth?` +
+      `from=${encodeURIComponent(FEDERATION_NODE_NAME)}` +
+      `&from_url=${encodeURIComponent(guestBaseUrl)}` +
+      `&request_id=${encodeURIComponent(id)}` +
+      `&nonce=${encodeURIComponent(nonce)}` +
+      `&callback=${encodeURIComponent(`${guestBaseUrl}/cross-port/callback`)}`;
+
+    res.json({ redirectUrl });
+  } catch (err) {
+    console.error('Cross-port initiate error:', err);
+    res.status(500).json({ error: 'Failed to initiate cross-port login' });
+  }
+});
+
+// GET /api/cross-port/request-info — Home Server (A): return info about the requesting guest server
+// Called by the CrossPortAuthView to display who is requesting access
+app.get('/api/cross-port/request-info', (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
+
+    const guestNode = sanitizeInput(req.query.from || '');
+    if (!guestNode) return res.status(400).json({ error: 'from parameter required' });
+
+    const node = db.getFederationNodeByName(guestNode);
+    if (!node || node.status !== 'active') {
+      return res.status(403).json({ error: `${guestNode} is not a trusted server`, trusted: false });
+    }
+
+    const identity = db.getServerIdentity();
+    res.json({
+      trusted: true,
+      guestNode,
+      guestBaseUrl: req.query.from_url || null,
+      homeNode: identity?.nodeName || FEDERATION_NODE_NAME,
+    });
+  } catch (err) {
+    console.error('Cross-port request-info error:', err);
+    res.status(500).json({ error: 'Failed to fetch request info' });
+  }
+});
+
+// POST /api/cross-port/approve — Home Server (A): authenticated user approves the request
+// Creates a short-lived auth code and returns the callback URL
+app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
+
+    const { guestNode, callbackUrl, nonce, requestId } = req.body;
+    if (!guestNode || !callbackUrl || !nonce || !requestId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Validate guest node is trusted
+    const node = db.getFederationNodeByName(sanitizeInput(guestNode));
+    if (!node || node.status !== 'active') {
+      return res.status(403).json({ error: 'Guest server is not trusted' });
+    }
+
+    // Cross-port users cannot grant cross-port access to other servers
+    const user = db.findUserById(req.user.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.is_cross_port) return res.status(403).json({ error: 'Cross-port users cannot grant cross-port access' });
+
+    const code = crypto.randomBytes(32).toString('hex');
+    db.createCrossPortCode({ code, userId: user.id, guestNode: sanitizeInput(guestNode), requestId, nonce });
+
+    const safeCallback = new URL(sanitizeInput(callbackUrl));
+    safeCallback.searchParams.set('code', code);
+    safeCallback.searchParams.set('state', nonce);
+
+    db.logActivity(user.id, 'cross_port_approved', 'federation', guestNode, { guestNode });
+    res.json({ callbackUrl: safeCallback.toString() });
+  } catch (err) {
+    console.error('Cross-port approve error:', err);
+    res.status(500).json({ error: 'Failed to approve cross-port request' });
+  }
+});
+
+// POST /api/cross-port/deny — Home Server (A): user denies the request
+app.post('/api/cross-port/deny', authenticateToken, (req, res) => {
+  try {
+    const { guestNode, callbackUrl, nonce } = req.body;
+    db.logActivity(req.user.userId, 'cross_port_denied', 'federation', guestNode || 'unknown', {});
+    if (callbackUrl) {
+      const safeCallback = new URL(sanitizeInput(callbackUrl));
+      safeCallback.searchParams.set('error', 'denied');
+      safeCallback.searchParams.set('state', nonce || '');
+      return res.json({ callbackUrl: safeCallback.toString() });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Cross-port deny error:', err);
+    res.status(500).json({ error: 'Failed to process denial' });
+  }
+});
+
+// POST /api/federation/cross-port/exchange — Home Server (A): Guest Server exchanges auth code for identity
+// Called server-to-server (signed with guest server's federation key)
+app.post('/api/federation/cross-port/exchange', createFederationAuthMiddleware(['active']), async (req, res) => {
+  try {
+    const { code, guestNode } = req.body;
+    if (!code || !guestNode) return res.status(400).json({ error: 'code and guestNode required' });
+
+    const record = db.getCrossPortCode(sanitizeInput(code));
+    if (!record) return res.status(404).json({ error: 'Invalid auth code' });
+    if (record.used) return res.status(410).json({ error: 'Auth code already used' });
+    if (new Date(record.expires_at) < new Date()) return res.status(410).json({ error: 'Auth code expired' });
+    if (record.guest_node !== sanitizeInput(guestNode)) return res.status(403).json({ error: 'Auth code not issued for this server' });
+
+    db.markCrossPortCodeUsed(code);
+
+    const user = db.findUserById(record.user_id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const identity = db.getServerIdentity();
+    res.json({
+      userId: user.id,
+      handle: user.handle,
+      displayName: user.displayName || user.display_name || user.handle,
+      avatar: user.avatar || null,
+      avatarUrl: user.avatarUrl || user.avatar_url || null,
+      homeNode: identity?.nodeName || FEDERATION_NODE_NAME,
+    });
+  } catch (err) {
+    console.error('Cross-port exchange error:', err);
+    res.status(500).json({ error: 'Failed to exchange auth code' });
+  }
+});
+
+// POST /api/cross-port/session — Guest Server (B): create a local session for the cross-port user
+// Called by the client after receiving the auth code in the callback URL
+app.post('/api/cross-port/session', async (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
+
+    const { code, state, homeServerUrl } = req.body;
+    if (!code || !state || !homeServerUrl) return res.status(400).json({ error: 'code, state, and homeServerUrl required' });
+
+    // Validate state against our pending request
+    const request = db.getCrossPortRequestByNonce(sanitizeInput(state));
+    if (!request) return res.status(400).json({ error: 'Invalid state — no matching pending request' });
+    if (request.status !== 'pending') return res.status(400).json({ error: 'Request already completed' });
+    if (new Date(request.expires_at) < new Date()) return res.status(410).json({ error: 'Request expired' });
+
+    // Look up home node
+    let homeUrl;
+    try { homeUrl = new URL(homeServerUrl.startsWith('http') ? homeServerUrl : `https://${homeServerUrl}`); }
+    catch { return res.status(400).json({ error: 'Invalid homeServerUrl' }); }
+
+    const homeNode = homeUrl.host;
+    const node = db.getFederationNodeByName(homeNode);
+    if (!node || node.status !== 'active') return res.status(403).json({ error: 'Home server is not trusted' });
+
+    // Exchange code with home server (server-to-server, signed)
+    const identity = db.getServerIdentity();
+    if (!identity) return res.status(500).json({ error: 'Server identity not configured' });
+
+    const exchangeUrl = `${homeUrl.origin}/api/federation/cross-port/exchange`;
+    const body = JSON.stringify({ code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME });
+    const headers = createHttpSignatureFromString('POST', exchangeUrl, body, identity.privateKey, FEDERATION_NODE_NAME);
+
+    const exchangeRes = await fetch(exchangeUrl, { method: 'POST', headers, body });
+    const exchangeData = await exchangeRes.json();
+
+    if (!exchangeRes.ok) {
+      return res.status(400).json({ error: exchangeData.error || 'Exchange failed on home server' });
+    }
+
+    // Create or update local stub user
+    const stubUser = db.upsertCrossPortUser({
+      homeUserId: exchangeData.userId,
+      homeNode: exchangeData.homeNode || homeNode,
+      handle: exchangeData.handle,
+      displayName: exchangeData.displayName,
+      avatar: exchangeData.avatar,
+      avatarUrl: exchangeData.avatarUrl,
+    });
+
+    if (!stubUser) return res.status(500).json({ error: 'Failed to create local user' });
+
+    db.updateCrossPortRequestStatus(request.id, 'completed');
+
+    // Issue a 24-hour session (non-renewable)
+    const token = jwt.sign(
+      { userId: stubUser.id, handle: stubUser.handle, isCrossPort: true, homeNode: exchangeData.homeNode || homeNode, jti: crypto.randomUUID() },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    createSession(stubUser.id, token, req);
+    db.logActivity(stubUser.id, 'cross_port_login', 'user', stubUser.id, { homeNode });
+
+    res.json({
+      token,
+      user: {
+        id: stubUser.id,
+        handle: stubUser.handle,
+        displayName: stubUser.displayName || stubUser.display_name,
+        avatar: stubUser.avatar,
+        avatarUrl: stubUser.avatarUrl || stubUser.avatar_url,
+        isCrossPort: true,
+        homeNode: exchangeData.homeNode || homeNode,
+      },
+    });
+  } catch (err) {
+    console.error('Cross-port session error:', err);
+    res.status(500).json({ error: 'Failed to create cross-port session' });
+  }
+});
+
 // ============ Public Portal Routes (v2.55.0) ============
 
 // GET /api/public/portal — list portal waves (no auth required)

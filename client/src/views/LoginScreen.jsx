@@ -6,6 +6,84 @@ import { useAuth } from '../hooks/useAPI.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
 import { LoadingSpinner, Toast, Avatar, GlowText, ScanLines } from '../components/ui/SimpleComponents.jsx';
 
+const CrossPortLoginSection = () => {
+  const [expanded, setExpanded] = useState(false);
+  const [homeNode, setHomeNode] = useState('');
+  const [initiating, setInitiating] = useState(false);
+  const [crossPortError, setCrossPortError] = useState('');
+
+  const handleInitiate = async () => {
+    let node = homeNode.trim();
+    if (!node) return;
+    if (!/^https?:\/\//i.test(node)) node = `https://${node}`;
+    node = node.replace(/\/+$/, '');
+    setInitiating(true);
+    setCrossPortError('');
+    try {
+      const res = await fetch(`${API_URL}/cross-port/initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ homeServerUrl: node }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to initiate cross-port login');
+      sessionStorage.setItem('crossPortHomeUrl', node);
+      window.location.href = data.redirectUrl;
+    } catch (err) {
+      setCrossPortError(err.message || 'Could not reach the home server.');
+      setInitiating(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
+      <button
+        onClick={() => { setExpanded(e => !e); setCrossPortError(''); }}
+        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem', width: '100%', textAlign: 'center' }}
+      >
+        Sign in from another Cortex {expanded ? '▲' : '▼'}
+      </button>
+      {expanded && (
+        <div style={{ marginTop: '12px' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginBottom: '8px' }}>HOME SERVER HOSTNAME</div>
+          <input
+            type="text"
+            value={homeNode}
+            onChange={e => { setHomeNode(e.target.value); setCrossPortError(''); }}
+            placeholder="e.g. cortex.example.com"
+            style={{
+              width: '100%', padding: '10px 12px', boxSizing: 'border-box',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+              color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'inherit',
+            }}
+            onKeyDown={e => e.key === 'Enter' && handleInitiate()}
+            autoComplete="off"
+          />
+          {crossPortError && (
+            <div style={{ color: 'var(--accent-orange)', fontSize: '0.8rem', marginTop: '8px', padding: '8px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)30' }}>
+              {crossPortError}
+            </div>
+          )}
+          <button
+            onClick={handleInitiate}
+            disabled={initiating || !homeNode.trim()}
+            style={{
+              width: '100%', padding: '10px', marginTop: '10px',
+              background: initiating ? 'var(--border-subtle)' : 'var(--accent-teal)15',
+              border: `1px solid ${initiating ? 'var(--border-primary)' : 'var(--accent-teal)'}`,
+              color: initiating ? 'var(--text-muted)' : 'var(--accent-teal)',
+              cursor: initiating || !homeNode.trim() ? 'not-allowed' : 'pointer',
+              fontFamily: 'monospace', fontSize: '0.8rem',
+            }}
+          >
+            {initiating ? 'CONNECTING...' : 'CONTINUE →'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const LoginScreen = ({ onAbout }) => {
   const { login, completeMfaLogin, register } = useAuth();
   const [isRegistering, setIsRegistering] = useState(false);
@@ -588,6 +666,8 @@ const LoginScreen = ({ onAbout }) => {
             {isRegistering ? '← BACK TO LOGIN' : 'NEW USER? CREATE ACCOUNT →'}
           </button>
         </div>
+
+        {!isRegistering && <CrossPortLoginSection />}
 
         {!isRegistering && (
           <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
