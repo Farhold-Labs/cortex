@@ -5,6 +5,45 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.56.0] - 2026-06-18
+
+### Added
+
+#### Cross-Port Authentication
+
+Users can now sign in to any trusted Cortex instance using their identity from another Cortex instance — no separate account needed on the guest server. Both servers must have federation enabled and must mutually trust each other (each listed as an active federation node on the other).
+
+**User flow:**
+1. On the guest Cortex, click "Sign in from another Cortex" on the login screen and enter your home server hostname (e.g. `cortex.example.com`)
+2. You're redirected to your home server's approval page — sign in if needed, then approve or deny the request
+3. Approving redirects back to the guest server, which creates a 24-hour local session using your home identity
+
+**Security:**
+- Server-to-server exchange uses existing federation RSA HTTP signatures — the guest server can only redeem an auth code if it's a trusted active federation node
+- Auth codes are single-use, expire in 10 minutes, and are bound to the issuing server
+- Cross-port users receive 24-hour non-renewable sessions (versus the standard 7-day renewable sessions for local accounts)
+- Cross-port users cannot themselves grant cross-port access to other servers
+- State/nonce validated end-to-end to prevent CSRF/replay attacks
+
+**Database changes:**
+- `users` table: `is_cross_port` flag, `home_node` (hostname of home server), `home_user_id` (UUID on home server)
+- New `cross_port_requests` table — tracks pending/completed initiation requests with nonce, expiry, guest node
+- New `cross_port_codes` table — single-use auth codes with 10-minute expiry, bound to issuing server
+
+**Server endpoints (6 new):**
+- `POST /api/cross-port/initiate` — Guest Server B: validates home server trust, creates a pending request, returns redirect URL for home server approval page
+- `GET /api/cross-port/request-info` — Home Server A: returns trust status of the requesting guest server (called by approval page on load)
+- `POST /api/cross-port/approve` (auth required) — Home Server A: user approves, creates single-use auth code, returns callback URL with code+state
+- `POST /api/cross-port/deny` (auth required) — Home Server A: user denies, returns callback URL with error=denied
+- `POST /api/federation/cross-port/exchange` (federation signed) — Home Server A: server-to-server code exchange, returns user identity
+- `POST /api/cross-port/session` — Guest Server B: exchanges code for local stub user session, issues 24h JWT
+
+**Client views (2 new):**
+- `CrossPortAuthView` — approval screen rendered on Home Server A at `/cross-port-auth`; shows login form if user isn't signed in, then displays requesting server info and Approve/Deny buttons
+- `CrossPortCallbackView` — callback handler on Guest Server B at `/cross-port/callback`; exchanges code for session and redirects to the main app
+
+---
+
 ## [2.55.0] - 2026-06-17
 
 ### Added

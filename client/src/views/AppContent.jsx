@@ -7,6 +7,8 @@ import AboutServerPage from './AboutServerPage.jsx';
 import ResetPasswordPage from './ResetPasswordPage.jsx';
 import PublicMessageView from './PublicMessageView.jsx';
 import PublicPortalView from './PublicPortalView.jsx';
+import CrossPortAuthView from './CrossPortAuthView.jsx';
+import CrossPortCallbackView from './CrossPortCallbackView.jsx';
 import AuthProvider from './AuthProvider.jsx';
 import E2EEAuthenticatedApp from './E2EEAuthenticatedApp.jsx';
 
@@ -120,6 +122,14 @@ function AppContent() {
   };
 
   // Public routes (accessible without login)
+  if (currentPath === '/cross-port-auth') {
+    return <CrossPortAuthView />;
+  }
+
+  if (currentPath === '/cross-port/callback') {
+    return <CrossPortCallbackView onLogin={() => window.location.replace('/')} />;
+  }
+
   if (currentPath === '/portal') {
     return (
       <PublicPortalView onLogin={() => {
