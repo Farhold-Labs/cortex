@@ -2114,6 +2114,49 @@ export class DatabaseSQLite {
       console.log('✅ incoming_webhooks table created');
     }
 
+    // v2.56.0 — Cross-Port Authentication
+    const cpCols = this.db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+    if (!cpCols.includes('is_cross_port')) {
+      console.log('📝 Adding cross-port columns to users (v2.56.0)...');
+      this.db.exec(`
+        ALTER TABLE users ADD COLUMN is_cross_port INTEGER DEFAULT 0;
+        ALTER TABLE users ADD COLUMN home_node TEXT;
+        ALTER TABLE users ADD COLUMN home_user_id TEXT;
+      `);
+      console.log('✅ Cross-port user columns added');
+    }
+
+    const crossPortRequestsExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='cross_port_requests'`
+    ).get();
+    if (!crossPortRequestsExists) {
+      console.log('📝 Adding cross_port_requests and cross_port_codes tables (v2.56.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS cross_port_requests (
+          id          TEXT PRIMARY KEY,
+          guest_node  TEXT NOT NULL,
+          guest_base_url TEXT NOT NULL,
+          nonce       TEXT NOT NULL UNIQUE,
+          status      TEXT NOT NULL DEFAULT 'pending',
+          created_at  TEXT NOT NULL,
+          expires_at  TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS cross_port_codes (
+          code        TEXT PRIMARY KEY,
+          user_id     TEXT NOT NULL,
+          guest_node  TEXT NOT NULL,
+          request_id  TEXT NOT NULL,
+          nonce       TEXT NOT NULL,
+          created_at  TEXT NOT NULL,
+          expires_at  TEXT NOT NULL,
+          used        INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_cp_requests_nonce ON cross_port_requests(nonce);
+        CREATE INDEX IF NOT EXISTS idx_cp_codes_code ON cross_port_codes(code);
+      `);
+      console.log('✅ cross_port_requests + cross_port_codes tables created');
+    }
+
     // v2.55.0 — Public Portal
     const portalWavesExists = this.db.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='portal_waves'`
@@ -9454,6 +9497,79 @@ export class DatabaseSQLite {
   touchIncomingWebhook(id) {
     this.db.prepare(`UPDATE incoming_webhooks SET last_used_at = ? WHERE id = ?`)
       .run(new Date().toISOString(), id);
+  }
+
+  // ============ Cross-Port Authentication Methods (v2.56.0) ============
+
+  createCrossPortRequest({ id, guestNode, guestBaseUrl, nonce }) {
+    const now = new Date().toISOString();
+    const expires = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    this.db.prepare(`
+      INSERT INTO cross_port_requests (id, guest_node, guest_base_url, nonce, status, created_at, expires_at)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?)
+    `).run(id, guestNode, guestBaseUrl, nonce, now, expires);
+  }
+
+  getCrossPortRequest(id) {
+    return this.db.prepare(`SELECT * FROM cross_port_requests WHERE id = ?`).get(id);
+  }
+
+  getCrossPortRequestByNonce(nonce) {
+    return this.db.prepare(`SELECT * FROM cross_port_requests WHERE nonce = ?`).get(nonce);
+  }
+
+  updateCrossPortRequestStatus(id, status) {
+    this.db.prepare(`UPDATE cross_port_requests SET status = ? WHERE id = ?`).run(status, id);
+  }
+
+  createCrossPortCode({ code, userId, guestNode, requestId, nonce }) {
+    const now = new Date().toISOString();
+    const expires = new Date(Date.now() + 60 * 1000).toISOString();
+    this.db.prepare(`
+      INSERT INTO cross_port_codes (code, user_id, guest_node, request_id, nonce, created_at, expires_at, used)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    `).run(code, userId, guestNode, requestId, nonce, now, expires);
+  }
+
+  getCrossPortCode(code) {
+    return this.db.prepare(`SELECT * FROM cross_port_codes WHERE code = ?`).get(code);
+  }
+
+  markCrossPortCodeUsed(code) {
+    this.db.prepare(`UPDATE cross_port_codes SET used = 1 WHERE code = ?`).run(code);
+  }
+
+  upsertCrossPortUser({ homeUserId, homeNode, handle, displayName, avatar, avatarUrl }) {
+    const existing = this.db.prepare(
+      `SELECT id FROM users WHERE home_node = ? AND home_user_id = ? AND is_cross_port = 1`
+    ).get(homeNode, homeUserId);
+
+    if (existing) {
+      this.db.prepare(`
+        UPDATE users SET display_name = ?, avatar = ?, avatar_url = ?, last_seen = ?
+        WHERE id = ?
+      `).run(displayName || null, avatar || null, avatarUrl || null, new Date().toISOString(), existing.id);
+      return this.findUserById(existing.id);
+    }
+
+    // Handle collision: append short home node to handle if taken
+    let localHandle = handle;
+    const collision = this.db.prepare(`SELECT id FROM users WHERE handle = ? COLLATE NOCASE`).get(localHandle);
+    if (collision) {
+      const shortNode = homeNode.split('.')[0];
+      localHandle = `${handle}_${shortNode}`;
+    }
+
+    const id = `user-cp-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO users (id, handle, display_name, avatar, avatar_url, password_hash, role,
+                         is_cross_port, home_node, home_user_id, created_at, last_seen, preferences)
+      VALUES (?, ?, ?, ?, ?, '', 'user', 1, ?, ?, ?, ?, '{}')
+    `).run(id, localHandle, displayName || handle, avatar || null, avatarUrl || null,
+           homeNode, homeUserId, now, now);
+
+    return this.findUserById(id);
   }
 
   // ============ Public Portal Methods (v2.55.0) ============
