@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.57.0] - 2026-06-25
+
+### Changed
+
+- **Public Portal message order**: Portal waves now list newest messages at the top (reverse of how a wave reads inside the Cortex app). The "Load earlier messages" button moved to the bottom of the list to match.
+
+### Fixed
+
+- **E2EE forced re-unlock after browser restart**: On first login, choosing a long session (e.g. 30 days) no longer dropped the encryption keys when the browser closed. The session-cache helper closed over a stale `token` (the E2EE provider mounts on the login screen with `token = null`), so the `"Until my session expires"` option always computed a zero lifetime and silently fell back to `sessionStorage`, which clears on browser close. The helper now reads the live token via a ref, so the persistent cache honors the chosen session length.
+- **E2EE expiry now tracks session extension**: When the session is silently renewed while the user stays active, the persistent E2EE cache expiry is extended to match (for the `"Until my session expires"` option), instead of expiring on its original, shorter schedule and forcing a mid-session unlock.
+
+### UI
+
+- **Wave list category headers**: Category, Pinned, and Uncategorized section headers in the wave list are slightly larger and easier to read, and now show a distinct colored unread badge (count, capped at `99+`) when the category contains unread waves — previously the unread total was buried in small muted text.
+
 ## [2.56.0] - 2026-06-18
 
 ### Added

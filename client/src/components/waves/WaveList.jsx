@@ -308,6 +308,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
           <CollapsibleSection
             title="PINNED"
             badge={groupedWaves.pinned.length.toString()}
+            unreadCount={getGroupUnreadCount(groupedWaves.pinned)}
             defaultOpen={true}
             titleColor="var(--accent-amber)"
             accentColor="var(--accent-amber)"
@@ -329,7 +330,8 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
           <div key={category.id} style={{ marginBottom: '1px' }}>
             <CollapsibleSection
               title={category.name.toUpperCase()}
-              badge={categoryWaves.length > 0 ? `${categoryWaves.length}${unreadCount > 0 ? ` (${unreadCount})` : ''}` : '0'}
+              badge={categoryWaves.length.toString()}
+              unreadCount={unreadCount}
               isOpen={!category.collapsed}
               onToggle={() => onCategoryToggle(category.id, !category.collapsed)}
               titleColor={category.color}
@@ -356,6 +358,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
           <CollapsibleSection
             title="UNCATEGORIZED"
             badge={groupedWaves.uncategorized.length.toString()}
+            unreadCount={getGroupUnreadCount(groupedWaves.uncategorized)}
             defaultOpen={true}
             titleColor="var(--text-dim)"
             accentColor="var(--border-primary)"
