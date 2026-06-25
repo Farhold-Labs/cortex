@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, compact = false }) => {
+const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
 
   const isOpen = onToggle ? controlledIsOpen : internalIsOpen;
@@ -16,25 +16,44 @@ const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: contr
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            padding: '3px 12px',
+            padding: '6px 12px',
             cursor: 'pointer',
             userSelect: 'none',
             borderTop: '1px solid var(--bg-hover)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ color: titleColor, fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.05em' }}>{title}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+            <span style={{ color: titleColor, fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
             {badge && (
               <span style={{
                 color: 'var(--text-muted)',
-                fontSize: '0.6rem',
+                fontSize: '0.65rem',
                 fontFamily: 'monospace',
               }}>{badge}</span>
             )}
           </div>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.6rem', fontFamily: 'monospace' }}>
-            {isOpen ? '▾' : '▸'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            {unreadCount > 0 && (
+              <span style={{
+                minWidth: '18px',
+                height: '18px',
+                padding: '0 5px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: accentColor || 'var(--accent-amber)',
+                color: 'var(--bg-base)',
+                fontSize: '0.65rem',
+                fontWeight: 700,
+                fontFamily: 'monospace',
+                borderRadius: '9px',
+                lineHeight: 1,
+              }}>{unreadCount > 99 ? '99+' : unreadCount}</span>
+            )}
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace' }}>
+              {isOpen ? '▾' : '▸'}
+            </span>
+          </div>
         </div>
         {isOpen && children}
       </div>

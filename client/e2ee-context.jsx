@@ -26,6 +26,7 @@ const PERSISTENT_KEY_STORAGE = 'farhold_e2ee_persistent_key';
 const PERSISTENT_DATA_STORAGE = 'farhold_e2ee_persistent_data';
 const PERSISTENT_PUBLIC_KEY = 'farhold_e2ee_persistent_public';
 const PERSISTENT_EXPIRY = 'farhold_e2ee_persistent_expiry';
+const PERSISTENT_DURATION = 'farhold_e2ee_persistent_duration';  // remembered duration mode (e.g. 'auto')
 
 // Remember duration options (in milliseconds)
 // 'auto' is handled separately — it reads the JWT expiry and matches session length
@@ -71,6 +72,14 @@ export function E2EEProvider({ children, token, API_URL }) {
   const waveKeyCacheRef = useRef(new Map());
   const sessionRestoreAttempted = useRef(false);
 
+  // Always-current token. saveToSessionCache reads this so the 'auto' duration
+  // computes against the live JWT — the provider mounts on the login screen with
+  // token=null, so closing over `token` directly would freeze it at null and
+  // silently downgrade every first-login unlock to sessionStorage (cleared on
+  // browser close), forcing a re-unlock no matter what session length was chosen.
+  const tokenRef = useRef(token);
+  useEffect(() => { tokenRef.current = token; }, [token]);
+
   // ============ Session Cache Helpers ============
   const saveToSessionCache = useCallback(async (privKey, pubKeyBase64, duration = 'auto') => {
     try {
@@ -81,7 +90,7 @@ export function E2EEProvider({ children, token, API_URL }) {
 
       // 'auto': match the JWT session lifetime so E2EE stays unlocked as long as the user is logged in
       const durationMs = duration === 'auto'
-        ? getJWTRemainingMs(token)
+        ? getJWTRemainingMs(tokenRef.current)
         : (REMEMBER_DURATIONS[duration] ?? 0);
 
       if (durationMs > 0) {
@@ -91,6 +100,7 @@ export function E2EEProvider({ children, token, API_URL }) {
         localStorage.setItem(PERSISTENT_DATA_STORAGE, encryptedData);
         localStorage.setItem(PERSISTENT_PUBLIC_KEY, pubKeyBase64);
         localStorage.setItem(PERSISTENT_EXPIRY, expiryTime.toString());
+        localStorage.setItem(PERSISTENT_DURATION, duration);
         // Clear sessionStorage to avoid confusion
         sessionStorage.removeItem(SESSION_KEY_STORAGE);
         sessionStorage.removeItem(SESSION_DATA_STORAGE);
@@ -106,6 +116,7 @@ export function E2EEProvider({ children, token, API_URL }) {
         localStorage.removeItem(PERSISTENT_DATA_STORAGE);
         localStorage.removeItem(PERSISTENT_PUBLIC_KEY);
         localStorage.removeItem(PERSISTENT_EXPIRY);
+        localStorage.removeItem(PERSISTENT_DURATION);
         console.log('E2EE: Saved to session cache');
       }
     } catch (err) {
@@ -176,7 +187,22 @@ export function E2EEProvider({ children, token, API_URL }) {
     localStorage.removeItem(PERSISTENT_DATA_STORAGE);
     localStorage.removeItem(PERSISTENT_PUBLIC_KEY);
     localStorage.removeItem(PERSISTENT_EXPIRY);
+    localStorage.removeItem(PERSISTENT_DURATION);
   }, []);
+
+  // Keep the persistent E2EE cache aligned with the live session when the user
+  // chose "Until my session expires" ('auto'). The JWT is silently renewed as the
+  // user stays active, extending the session — without this the E2EE cache keeps
+  // its original (shorter) expiry and forces a re-unlock while still logged in.
+  useEffect(() => {
+    if (!token) return;
+    if (localStorage.getItem(PERSISTENT_DURATION) !== 'auto') return;
+    if (!localStorage.getItem(PERSISTENT_KEY_STORAGE)) return;
+    const remaining = getJWTRemainingMs(token);
+    if (remaining > 0) {
+      localStorage.setItem(PERSISTENT_EXPIRY, (Date.now() + remaining).toString());
+    }
+  }, [token]);
 
   // Fetch helper
   const fetchAPI = useCallback(async (path, options = {}) => {

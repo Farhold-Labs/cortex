@@ -92,21 +92,22 @@ const WavePane = ({ wave, appUrl }) => {
 
   useEffect(() => {
     setLoading(true);
+    // Server returns newest-first (DESC). The portal shows newest at the top —
+    // the reverse of how a wave reads inside the Cortex app — so keep that order.
     loadMessages().then(data => {
-      const sorted = (data.messages || []).slice().reverse();
-      setMessages(sorted);
+      setMessages(data.messages || []);
       setHasMore(data.hasMore || false);
     }).catch(() => {}).finally(() => setLoading(false));
   }, [loadMessages]);
 
   const loadMore = async () => {
     if (!messages.length) return;
-    const oldest = messages[0];
+    const oldest = messages[messages.length - 1];
     setLoadingMore(true);
     try {
       const data = await loadMessages(oldest.id);
-      const sorted = (data.messages || []).slice().reverse();
-      setMessages(prev => [...sorted, ...prev]);
+      // Older messages (still newest-first) append below the current list.
+      setMessages(prev => [...prev, ...(data.messages || [])]);
       setHasMore(data.hasMore || false);
     } finally {
       setLoadingMore(false);
@@ -119,6 +120,13 @@ const WavePane = ({ wave, appUrl }) => {
 
   return (
     <div>
+      {messages.length === 0 ? (
+        <div style={{ color: 'var(--text-muted, #4a7a4a)', padding: '20px 0', textAlign: 'center', fontStyle: 'italic' }}>
+          No messages yet.
+        </div>
+      ) : (
+        messages.map(msg => <PortalMessage key={msg.id} msg={msg} waveId={wave.waveId} />)
+      )}
       {hasMore && (
         <div style={{ textAlign: 'center', padding: '12px 0' }}>
           <button
@@ -134,13 +142,6 @@ const WavePane = ({ wave, appUrl }) => {
             {loadingMore ? 'Loading...' : 'Load earlier messages'}
           </button>
         </div>
-      )}
-      {messages.length === 0 ? (
-        <div style={{ color: 'var(--text-muted, #4a7a4a)', padding: '20px 0', textAlign: 'center', fontStyle: 'italic' }}>
-          No messages yet.
-        </div>
-      ) : (
-        messages.map(msg => <PortalMessage key={msg.id} msg={msg} waveId={wave.waveId} />)
       )}
       <div style={{ textAlign: 'center', paddingTop: 20, borderTop: '1px solid var(--border-secondary, #1a2a1a)', marginTop: 8 }}>
         <a
