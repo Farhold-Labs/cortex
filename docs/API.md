@@ -1,6 +1,6 @@
 # Cortex REST API Documentation
 
-Version: 2.51.0
+Version: 2.57.0
 
 ## Overview
 
@@ -41,6 +41,8 @@ The Cortex API is a RESTful API that powers the Cortex federated communication p
    - [Reports](#reports-endpoints)
    - [Maintenance](#maintenance-endpoints)
    - [Federation](#federation-endpoints)
+   - [Cross-Port Authentication](#cross-port-authentication-endpoints)
+   - [Public Portal](#public-portal-endpoints)
    - [Crawl Bar](#crawl-bar-endpoints)
 5. [WebSocket API](#websocket-api)
 
@@ -3784,6 +3786,169 @@ curl -X POST https://other-server.com/api/federation/inbox \
 | `wave_federation` | Wave-to-node relationships |
 | `federation_queue` | Outbound message queue with retries |
 | `federation_inbox_log` | Inbound message deduplication |
+
+---
+
+## Cross-Port Authentication Endpoints
+
+*(v2.56.0)* Cross-Port Authentication lets a user sign in to a **guest** Cortex instance (Server B) using their identity from their **home** instance (Server A). Both servers must have federation enabled and mutually trust each other (each listed as an active federation node on the other). Approval happens in the browser on the home server; the server-to-server code exchange is authenticated with the existing federation HTTP signatures.
+
+**Flow:** initiate (guest) → user approves (home) → callback with code (guest) → server-to-server exchange (home) → local session issued (guest).
+
+**Security model:**
+- Auth codes are single-use, expire in 10 minutes, and are bound to the issuing server.
+- The guest server can only redeem a code if it is a trusted active federation node on the home server.
+- Cross-port users receive 24-hour, non-renewable sessions (vs. the standard 7-day renewable local sessions) and cannot themselves grant cross-port access to other servers.
+- `state`/`nonce` are validated end-to-end to prevent CSRF/replay.
+
+### POST /api/cross-port/initiate
+
+Guest server (B). Validates that the named home server is a trusted active federation node, creates a pending request (with a server-generated `nonce`), and returns the URL of the home server's approval page. No auth required.
+
+**Request Body:**
+```json
+{ "homeServerUrl": "cortex.example.com" }
+```
+
+**Response:** `200 OK`
+```json
+{ "redirectUrl": "https://cortex.example.com/cross-port-auth?from=...&from_url=...&request_id=...&nonce=...&callback=..." }
+```
+
+### GET /api/cross-port/request-info
+
+Home server (A). Returns the trust status of the requesting guest server, used by the approval page (`CrossPortAuthView`) on load. No auth required.
+
+**Query Parameters:**
+- `from` — guest node hostname (required)
+- `from_url` — guest base URL (optional)
+
+**Response:** `200 OK`
+```json
+{ "trusted": true, "guestNode": "guest.example.com", "guestBaseUrl": "https://guest.example.com", "homeNode": "cortex.example.com" }
+```
+
+### POST /api/cross-port/approve
+
+Home server (A). The signed-in user approves the request; issues a single-use auth code and returns the guest callback URL with `code` and `state` (the original nonce) appended. **Requires authentication.** Cross-port (`is_cross_port`) users are rejected with `403`.
+
+**Request Body:**
+```json
+{ "guestNode": "guest.example.com", "callbackUrl": "https://guest.example.com/cross-port/callback", "nonce": "...", "requestId": "..." }
+```
+
+**Response:** `200 OK`
+```json
+{ "callbackUrl": "https://guest.example.com/cross-port/callback?code=...&state=..." }
+```
+
+### POST /api/cross-port/deny
+
+Home server (A). The user denies the request; returns the guest callback URL with `error=denied`. **Requires authentication.**
+
+**Request Body:**
+```json
+{ "guestNode": "guest.example.com", "callbackUrl": "https://guest.example.com/cross-port/callback", "nonce": "..." }
+```
+
+**Response:** `200 OK`
+```json
+{ "callbackUrl": "https://guest.example.com/cross-port/callback?error=denied&state=..." }
+```
+
+### POST /api/federation/cross-port/exchange
+
+Home server (A). Server-to-server redemption of an auth code for the user's identity. Authenticated with a **federation HTTP signature** (`active` nodes only). The code must be unused, unexpired, and issued for the calling `guestNode`; it is marked used on success.
+
+**Request Body:**
+```json
+{ "code": "...", "guestNode": "guest.example.com" }
+```
+
+**Response:** `200 OK`
+```json
+{ "userId": "...", "handle": "...", "displayName": "...", "avatar": null, "avatarUrl": null, "homeNode": "cortex.example.com" }
+```
+
+### POST /api/cross-port/session
+
+Guest server (B). Validates `state` against the pending request, exchanges the code via the home server's exchange endpoint, creates a local stub user, and issues a 24-hour JWT. No prior auth required.
+
+**Request Body:**
+```json
+{ "code": "...", "state": "...", "homeServerUrl": "cortex.example.com" }
+```
+
+**Response:** `200 OK`
+```json
+{ "token": "<24h-jwt>", "user": { "...": "cross-port stub identity" } }
+```
+
+---
+
+## Public Portal Endpoints
+
+*(v2.55.0)* The Public Portal exposes admin-selected, non-E2EE waves to anonymous readers at `/portal`. Public read endpoints require no authentication and are covered by the global API rate limiter; management endpoints are admin-only. E2EE-encrypted waves cannot be added, and encrypted pings within a portal wave are returned with `isEncrypted: true` and `content: null` rather than leaking ciphertext.
+
+### GET /api/public/portal
+
+Lists portal waves (ordered by display order). No auth required.
+
+**Response:** `200 OK`
+```json
+{ "waves": [ { "waveId": "...", "title": "Announcements", "topic": null, "displayOrder": 0 } ] }
+```
+
+### GET /api/public/portal/:waveId/messages
+
+Returns a wave's pings **newest-first**, paginated. No auth required.
+
+**Query Parameters:**
+- `limit` — page size (default 50, max 100)
+- `before` — ping id cursor; returns messages older than it
+
+**Response:** `200 OK`
+```json
+{
+  "messages": [
+    {
+      "id": "ping-...",
+      "content": "<sanitized html or null if encrypted>",
+      "isEncrypted": false,
+      "createdAt": "2026-06-25T12:00:00.000Z",
+      "author": { "displayName": "...", "handle": "...", "avatarUrl": null, "avatar": null }
+    }
+  ],
+  "hasMore": true,
+  "waveId": "...",
+  "waveTitle": "Announcements"
+}
+```
+
+### GET /api/admin/portal/waves
+
+Lists all non-E2EE, non-profile server waves eligible to be added to the portal. **Admin only.**
+
+### GET /api/admin/portal
+
+Lists current portal waves with full metadata (`waveId`, `label`, `title`, `topic`, `privacy`, `displayOrder`, `addedAt`). **Admin only.**
+
+### POST /api/admin/portal
+
+Adds a wave to the portal. **Admin only.** Rejects E2EE-encrypted waves (`400`) and duplicates (`409`).
+
+**Request Body:**
+```json
+{ "waveId": "...", "label": "Optional display label" }
+```
+
+### PATCH /api/admin/portal/:waveId
+
+Updates a portal wave's `label` and/or `displayOrder`. **Admin only.**
+
+### DELETE /api/admin/portal/:waveId
+
+Removes a wave from the portal. **Admin only.**
 
 ---
 
