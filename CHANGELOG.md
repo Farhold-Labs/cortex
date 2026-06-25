@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Wave list category headers**: Category, Pinned, and Uncategorized section headers in the wave list are slightly larger and easier to read, and now show a distinct colored unread badge (count, capped at `99+`) when the category contains unread waves — previously the unread total was buried in small muted text.
 
+### Documentation
+
+- Brought `README.md` and `docs/API.md` current to v2.57.0 (both were stamped 2.51.0). Added README feature entries for Email Notifications, Public Portal, Cross-Port Authentication, and per-category unread badges; added full **Public Portal** and **Cross-Port Authentication** endpoint sections to the API reference.
+
 ## [2.56.0] - 2026-06-18
 
 ### Added

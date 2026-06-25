@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.51.0** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.57.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -52,7 +52,7 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Threading** — Isolate reply chains within a wave for focused conversations
 - **Untabbed navigation** — Wave list clicks open a preview; pin to promote to a persistent tab (max 10)
 - **Crews & Contacts** — Organize connections with request/invitation workflows
-- **Wave Categories** — User-defined categories with drag-and-drop organization
+- **Wave Categories** — User-defined categories with drag-and-drop organization and per-category unread badges
 - **Search** — Full-text search across all pings (SQLite FTS5)
 - **Inline emoji autocomplete** — Type `:shortcode:` to pick from 826 emoji; closing colon auto-inserts
 - **PWA** — Installable app with offline support and push notifications
@@ -60,6 +60,8 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Notification Preferences** — Per-type controls (mentions, replies, wave activity) with always/app-closed/never levels
 - **Collapsible Messages** — Collapse long messages to compact previews
 - **Support Tickets** — Unauthenticated ticket submission from the login screen; admin management panel
+- **Email Notifications** — Optional email alerts when you're offline, via the configured SMTP/SendGrid/Mailgun provider
+- **Public Portal** — Admins can publish selected non-E2EE waves to a public, login-free reader at `/portal` (newest pings first), with per-wave `<iframe>` embed snippets
 
 ### Calendar & Events
 - **Wave calendar** — Attach events to any wave with date, time, location, and description
@@ -93,6 +95,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 - **HTTP Signatures** — RSA-SHA256 signed requests for server authentication
 - **Cover traffic** — Decoy messages, message padding, and queue jitter resist traffic analysis
 - **Trust model** — Manual allowlist of trusted federation partners (Allied Ports)
+- **Cross-Port Authentication** — Sign in to any mutually-trusted Cortex instance using your home-server identity; browser-based approval with single-use, short-lived auth codes and 24-hour guest sessions
 
 ### Media
 - **Voice/Video messages** — Record and send audio (5 min) and video messages

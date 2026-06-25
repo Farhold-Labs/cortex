@@ -199,7 +199,7 @@ SQLite database with tables for:
 |------|-------|-------------|
 | **User** | 1 | Normal access to own data |
 | **Moderator** | 2 | Reports, warnings, user management, activity log |
-| **Admin** | 3 | All moderator permissions + handle requests, crawl bar, alerts, federation, role assignment |
+| **Admin** | 3 | All moderator permissions + handle requests, crawl bar, alerts, federation, public portal, role assignment |
 
 **Server-side usage**:
 ```javascript
