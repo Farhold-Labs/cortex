@@ -33,6 +33,12 @@ const isWithinGroupWindow = (a, b) =>
 const AVATAR_SIZE = 28;
 const AVATAR_COL = AVATAR_SIZE + 8; // avatar + gap
 
+// Touch devices have no real hover, so the action pill can't rely on :hover.
+// Detect touch capability (covers Android/iOS Capacitor and touch laptops) to
+// enable explicit tap-to-reveal instead.
+const isTouchDevice = typeof window !== 'undefined' &&
+  (('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0);
+
 const menuItemBase = {
   padding: '8px 12px',
   cursor: 'pointer',
@@ -90,22 +96,26 @@ const Message = ({
   const [lightboxImage, setLightboxImage] = useState(null);
   const [showReaderList, setShowReaderList] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  // Touch-only: explicit tap reveals the action pill (desktop uses CSS :hover).
+  const [actionsRevealed, setActionsRevealed] = useState(false);
 
   useEffect(() => {
-    if (!showMessageMenu && !showReactionPicker) return;
+    if (!showMessageMenu && !showReactionPicker && !actionsRevealed) return;
     const handleOutsideClick = () => {
       setShowMessageMenu(false);
       setShowReactionPicker(false);
+      setActionsRevealed(false);
     };
     document.addEventListener('click', handleOutsideClick);
     return () => document.removeEventListener('click', handleOutsideClick);
-  }, [showMessageMenu, showReactionPicker]);
+  }, [showMessageMenu, showReactionPicker, actionsRevealed]);
 
   useEffect(() => {
     const handleOtherMenuOpen = (e) => {
       if (e.detail !== message.id) {
         setShowMessageMenu(false);
         setShowReactionPicker(false);
+        setActionsRevealed(false);
       }
     };
     document.addEventListener('cortex:message-menu-open', handleOtherMenuOpen);
@@ -161,18 +171,30 @@ const Message = ({
     if (isMoveTarget && onCompleteMove) { onCompleteMove(message.id); return; }
     if (isUnread && onMessageClick) onMessageClick(message.id);
     if (autoFocusMessages && hasChildren && onOpenThread && !isDeleted) onOpenThread(message);
+    // On touch (no hover) a tap reveals the action pill so the user can react.
+    // Closing siblings keeps only one revealed at a time.
+    if (isTouchDevice && canShowActions && !(autoFocusMessages && hasChildren && onOpenThread && !isDeleted)) {
+      if (!actionsRevealed) {
+        document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id }));
+      }
+      setActionsRevealed(v => !v);
+    }
   };
 
   const ts = new Date(message.created_at);
   const timeStr = ts.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const dateStr = ts.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' });
 
-  const showHoverPill = isHovered && !isDeleted && !isEditing;
+  // Pill is always mounted (when allowed) and shown/hidden via CSS :hover so it
+  // works for messages auto-scrolled under a stationary cursor. isHovered (JS
+  // mouseenter) still drives cosmetic-only bits like the row background.
+  const canShowActions = !isDeleted && !isEditing;
 
   return (
     <div data-message-id={message.id}>
       {/* Message row */}
       <div
+        className="cortex-msg-row"
         onClickCapture={isMoveTarget ? (e) => { e.stopPropagation(); e.preventDefault(); onCompleteMove(message.id); } : undefined}
         onClick={handleMessageClick}
         onMouseEnter={() => setIsHovered(true)}
@@ -184,7 +206,7 @@ const Message = ({
           paddingTop: isFirstInGroup ? (isMobile ? '10px' : '7px') : '1px',
           paddingBottom: '1px',
           paddingLeft: '12px',
-          paddingRight: showHoverPill ? '90px' : '12px', // reserve space for pill
+          paddingRight: actionsRevealed ? '90px' : '12px', // touch-revealed; desktop hover reserves via CSS
           background: isMoving ? 'rgba(255, 210, 63, 0.08)'
             : isHighlighted ? `${config.color}15`
             : isUnread ? 'var(--accent-amber)08'
@@ -547,9 +569,10 @@ const Message = ({
           )}
         </div>
 
-        {/* Hover action pill */}
-        {showHoverPill && (
+        {/* Hover action pill (visibility controlled by CSS :hover) */}
+        {canShowActions && (
           <div
+            className={`cortex-msg-actions${(actionsRevealed || showMessageMenu || showReactionPicker) ? ' cortex-actions-open' : ''}`}
             onClick={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
