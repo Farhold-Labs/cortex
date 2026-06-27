@@ -5,6 +5,13 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.57.1] - 2026-06-26
+
+### Fixed
+
+- **Can't react to a newly arrived message until clicking another first**: The hover action pill (which holds the react button) was revealed only by a JS `mouseenter` handler. When a new ping arrived and the wave auto-scrolled it under a stationary cursor, `mouseenter` never fired — so the pill stayed hidden and the message couldn't be reacted to until the pointer moved (e.g. by clicking the message above and back). The pill is now driven by CSS `:hover`, which the browser re-evaluates on scroll, fixing it on web and the Electron desktop app.
+- **No way to reveal message actions on touch (Android/iOS)**: Touch devices have no hover, so the pill previously relied on fragile "sticky-hover" emulation — the reason a tap on a neighboring message was needed first. Touch devices are now detected explicitly (`ontouchstart` / `maxTouchPoints`, covering tablets that the width-based `isMobile` check missed), and a single tap deterministically reveals the action pill for that message (only one open at a time, dismissed by tapping elsewhere). Taps that open a thread are unaffected.
+
 ## [2.57.0] - 2026-06-25
 
 ### Changed

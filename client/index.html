@@ -617,6 +617,22 @@
         content: "";
         margin: 0.5em 0;
       }
+      /* Message hover action pill — driven by CSS :hover (not JS mouseenter) so
+         it appears even when a new message is auto-scrolled under a stationary
+         cursor, where mouseenter never fires without pointer movement. */
+      .cortex-msg-row .cortex-msg-actions {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.1s ease;
+      }
+      .cortex-msg-row:hover .cortex-msg-actions,
+      .cortex-msg-row .cortex-msg-actions.cortex-actions-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .cortex-msg-row:hover {
+        padding-right: 90px !important;
+      }
     </style>
   </head>
   <body>
