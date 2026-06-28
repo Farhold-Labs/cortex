@@ -1,8 +1,9 @@
-// Cortex Service Worker v2.13.0
+// Cortex Service Worker v2.57.2
 // Includes: Push notifications, offline caching, low-bandwidth API caching,
-//           pre-caching of hashed build assets at install time (v2.13.0)
-const CACHE_NAME = 'cortex-v2.13.0';
-const API_CACHE_NAME = 'cortex-api-v2.13.0';
+//           pre-caching of hashed build assets at install time (v2.13.0),
+//           stale-while-revalidate app shell for instant returning-user loads (v2.57.2)
+const CACHE_NAME = 'cortex-v2.57.2';
+const API_CACHE_NAME = 'cortex-api-v2.57.2';
 const API_CACHE_MAX_AGE = 30000; // 30 seconds for API cache
 const STATIC_ASSETS = [
   '/',
@@ -71,7 +72,7 @@ async function staleWhileRevalidate(request, cacheName, maxAge) {
 // Install: pre-cache static shell + all hashed build assets
 self.addEventListener('install', (event) => {
   const allAssets = [...STATIC_ASSETS, ...PRECACHE_ASSETS];
-  console.log(`[SW] Installing v2.13.0 — pre-caching ${allAssets.length} assets`);
+  console.log(`[SW] Installing ${CACHE_NAME} — pre-caching ${allAssets.length} assets`);
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(allAssets))
   );
@@ -151,26 +152,36 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation requests (HTML): Network-first, fall back to cache
-  // This ensures users always get the latest app version
+  // Navigation requests (HTML): Stale-while-revalidate (v2.57.2)
+  // Serve the cached app shell instantly so returning users never stare at a
+  // black screen on slow connections, then refresh the cache in the background.
+  // The hashed JS/CSS it references are served cache-first below, so the shell
+  // boots from cache with zero network round-trips. First-ever visit (no cache)
+  // falls through to the network.
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const networkFetch = fetch(request)
         .then((response) => {
-          // Cache the fresh HTML for offline use
-          if (response.ok) {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
-            });
-          }
+          if (response && response.ok) cache.put(request, response.clone());
           return response;
         })
-        .catch(() => {
-          // Offline: try to serve cached HTML
-          return caches.match(request).then((cached) => cached || caches.match('/'));
-        })
-    );
+        .catch(() => null);
+
+      const cached =
+        (await cache.match(request)) ||
+        (await cache.match('/index.html')) ||
+        (await cache.match('/'));
+
+      if (cached) {
+        // Keep the SW alive long enough to finish refreshing the cache.
+        event.waitUntil(networkFetch);
+        return cached;
+      }
+
+      // No cached shell yet (first visit): wait for the network.
+      return (await networkFetch) || (await cache.match('/')) || Response.error();
+    })());
     return;
   }
 

@@ -1,6 +1,6 @@
 # Cortex REST API Documentation
 
-Version: 2.57.1
+Version: 2.57.2
 
 ## Overview
 
