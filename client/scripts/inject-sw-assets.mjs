@@ -26,12 +26,18 @@ const assets = Object.values(manifest)
 const injection = `const PRECACHE_ASSETS = ${JSON.stringify(assets, null, 2)};`;
 
 let sw = readFileSync(swPath, 'utf8');
-if (!sw.includes('// __PRECACHE_ASSETS__')) {
-  console.warn('[inject-sw-assets] Placeholder not found in sw.js — skipping.');
+
+// Replace the placeholder comment AND the empty fallback declaration that
+// follows it in one shot. Replacing only the comment left the original
+// `const PRECACHE_ASSETS = [];` in place, producing two `const` declarations
+// (a SyntaxError that silently prevented the service worker from installing).
+const placeholder = /\/\/ __PRECACHE_ASSETS__\s*\r?\n\s*const PRECACHE_ASSETS = \[\];/;
+if (!placeholder.test(sw)) {
+  console.warn('[inject-sw-assets] Placeholder/declaration not found in sw.js — skipping.');
   process.exit(0);
 }
 
-sw = sw.replace('// __PRECACHE_ASSETS__', injection);
+sw = sw.replace(placeholder, injection);
 writeFileSync(swPath, sw, 'utf8');
 
 console.log(`[inject-sw-assets] Injected ${assets.length} assets into dist/sw.js`);
