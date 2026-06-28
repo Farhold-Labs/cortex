@@ -633,6 +633,48 @@
       .cortex-msg-row:hover {
         padding-right: 90px !important;
       }
+      /* Instant loading screen — painted from the HTML itself (no JS/network),
+         so users never see a black screen while the bundle downloads on slow
+         connections. React replaces #root's children on mount, removing it. */
+      #initial-loader {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        background: var(--bg-base, #050805);
+        font-family: 'Courier New', monospace;
+      }
+      #initial-loader .il-logo {
+        font-size: 2.2rem;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        color: var(--accent-amber, #ffd23f);
+        text-shadow: 0 0 24px var(--glow-amber, rgba(255, 210, 63, 0.45));
+        animation: ilPulse 1.5s ease-in-out infinite;
+      }
+      #initial-loader .il-sub {
+        color: var(--text-muted, #5a6a5a);
+        font-size: 0.7rem;
+        letter-spacing: 0.22em;
+      }
+      #initial-loader .il-track {
+        width: 160px;
+        height: 2px;
+        background: var(--overlay-amber, rgba(255, 210, 63, 0.15));
+        overflow: hidden;
+      }
+      #initial-loader .il-bar {
+        width: 35%;
+        height: 100%;
+        background: var(--accent-amber, #ffd23f);
+        animation: ilSlide 1.1s ease-in-out infinite;
+      }
+      @keyframes ilPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+      @keyframes ilSlide { 0% { transform: translateX(-120%); } 100% { transform: translateX(420%); } }
     </style>
   </head>
   <body>
@@ -802,7 +844,13 @@
       })();
     </script>
 
-    <div id="root"></div>
+    <div id="root">
+      <div id="initial-loader">
+        <div class="il-logo">CORTEX</div>
+        <div class="il-sub">ESTABLISHING SIGNAL…</div>
+        <div class="il-track"><div class="il-bar"></div></div>
+      </div>
+    </div>
     <script type="module" src="/capacitor-boot.js"></script>
     <script type="module" src="/main.jsx"></script>
   </body>

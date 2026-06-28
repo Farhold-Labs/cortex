@@ -5,6 +5,13 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.57.2] - 2026-06-28
+
+### Changed
+
+- **Instant loading screen (no more black screen on slow connections)**: The app HTML now paints a lightweight, theme-aware loading screen (the CORTEX wordmark with a progress shimmer) immediately, baked directly into `index.html` so it requires zero JavaScript or network round-trips. Previously `#root` was empty until the ~280 KB (brotli) main bundle finished downloading and React mounted — on a low-bandwidth LTE connection that meant 5+ seconds of black screen, which was losing users. React replaces the loader automatically on mount, so on fast connections it's barely a flash. This also benefits the native Android/iOS apps and the PWA, which don't run the service worker.
+- **Stale-while-revalidate app shell for instant returning-user loads**: The service worker now serves the cached app shell (`index.html`) immediately for navigation requests and refreshes it in the background, instead of blocking on a network-first fetch. Combined with the existing cache-first handling of hashed JS/CSS, a returning user's app boots from cache with no network round-trips, then quietly updates. First-ever visits still wait for the network. Service worker cache bumped to `cortex-v2.57.2`.
+
 ## [2.57.1] - 2026-06-26
 
 ### Fixed
