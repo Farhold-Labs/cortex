@@ -101,10 +101,11 @@ const SESSION_TRACKING_ENABLED = process.env.SESSION_TRACKING_ENABLED !== 'false
 // Require E2EE on all new waves. Client reads this flag from auth_success and sends keyDistribution.
 const FORCE_WAVE_ENCRYPTION = process.env.FORCE_WAVE_ENCRYPTION === 'true';
 
-// GIF API configuration (GIPHY and/or Tenor)
+// GIF API configuration (GIPHY, Klipy, and/or legacy Tenor)
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || null;
-const TENOR_API_KEY = process.env.TENOR_API_KEY || null;
-const GIF_PROVIDER = process.env.GIF_PROVIDER || 'giphy'; // 'giphy', 'tenor', or 'both'
+const TENOR_API_KEY = process.env.TENOR_API_KEY || null; // legacy — Tenor API shut down by Google (2026)
+const KLIPY_API_KEY = process.env.KLIPY_API_KEY || null;
+const GIF_PROVIDER = process.env.GIF_PROVIDER || 'giphy'; // 'giphy', 'klipy', 'tenor', or 'both' (both = giphy + klipy)
 
 // Crawl Bar API configuration (v1.15.0)
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || null;
@@ -856,6 +857,8 @@ function detectAndEmbedMedia(content) {
     'media[0-9]?\\.giphy\\.com|i\\.giphy\\.com|' +
     // Tenor CDN hosts
     'media[0-9]?\\.tenor\\.com|c\\.tenor\\.com|' +
+    // Klipy CDN hosts
+    'media[0-9]?\\.klipy\\.com|cdn\\.klipy\\.com|[a-z0-9-]+\\.klipy\\.co|' +
     // Imgur
     'i\\.imgur\\.com|' +
     // Discord CDN
@@ -7649,13 +7652,111 @@ async function trendingTenor(limit, pos = '') {
   };
 }
 
+// Helper: extract a URL from a Klipy file variant, which may be a plain
+// string or an object like { url, width, height }. Defensive against the
+// two response shapes seen across Klipy API versions.
+function klipyFileUrl(variant) {
+  if (!variant) return '';
+  if (typeof variant === 'string') return variant;
+  return variant.url || variant.hd?.url || variant.md?.url || variant.sm?.url || '';
+}
+
+function klipyVariantDim(variant, key) {
+  if (variant && typeof variant === 'object' && variant[key]) return parseInt(variant[key]);
+  return null;
+}
+
+// Normalize a Klipy item into Cortex's common GIF shape.
+// Klipy (klipy.com) is the go-forward Tenor replacement: near drop-in, built
+// by ex-Tenor engineers. Uses page-based pagination, so we present it to the
+// endpoint as offset-based (like GIPHY) by mapping offset -> page.
+function normalizeKlipyItems(items) {
+  return (items || []).map(item => {
+    const files = item.files || item.file || {};
+    const url = klipyFileUrl(files.gif);
+    const preview = klipyFileUrl(files.webp) || klipyFileUrl(files.gif) || item.preview || '';
+    return {
+      id: String(item.id ?? item.slug ?? ''),
+      title: item.title || item.caption || '',
+      url,
+      preview,
+      width: parseInt(item.width || klipyVariantDim(files.gif, 'width') || 100),
+      height: parseInt(item.height || klipyVariantDim(files.gif, 'height') || 100),
+      provider: 'klipy'
+    };
+  }).filter(gif => gif.url && gif.preview);
+}
+
+// Klipy pagination is page-based; the endpoint works in offsets, so convert.
+// per_page must be within Klipy's 8..50 bounds.
+function klipyPerPage(limit) {
+  return Math.min(Math.max(parseInt(limit) || 20, 8), 50);
+}
+
+// Helper: Search GIFs from Klipy. Returns an array (offset-based, like GIPHY).
+// NOTE: the API key is a path segment — never log the request URL.
+async function searchKlipy(query, limit, offset) {
+  if (!KLIPY_API_KEY) return null;
+
+  const perPage = klipyPerPage(limit);
+  const page = Math.floor((parseInt(offset) || 0) / perPage) + 1;
+  const searchUrl = new URL(`https://api.klipy.com/api/v1/${KLIPY_API_KEY}/gifs/search`);
+  searchUrl.searchParams.set('q', query);
+  searchUrl.searchParams.set('per_page', perPage.toString());
+  searchUrl.searchParams.set('page', page.toString());
+  searchUrl.searchParams.set('rating', 'pg-13'); // PG-13 equivalent
+
+  const response = await fetch(searchUrl.toString(), {
+    headers: { 'Accept': 'application/json' }
+  });
+
+  if (!response.ok) {
+    console.error('Klipy API error:', response.status); // status only — URL contains the key
+    return null;
+  }
+
+  const json = await response.json();
+  const d = json?.data;
+  const items = Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []);
+  return normalizeKlipyItems(items);
+}
+
+// Helper: Get trending GIFs from Klipy. Returns an array (offset-based).
+async function trendingKlipy(limit, offset) {
+  if (!KLIPY_API_KEY) return null;
+
+  const perPage = klipyPerPage(limit);
+  const page = Math.floor((parseInt(offset) || 0) / perPage) + 1;
+  const trendingUrl = new URL(`https://api.klipy.com/api/v1/${KLIPY_API_KEY}/gifs/trending`);
+  trendingUrl.searchParams.set('per_page', perPage.toString());
+  trendingUrl.searchParams.set('page', page.toString());
+  trendingUrl.searchParams.set('rating', 'pg-13');
+
+  const response = await fetch(trendingUrl.toString(), {
+    headers: { 'Accept': 'application/json' }
+  });
+
+  if (!response.ok) {
+    console.error('Klipy trending API error:', response.status);
+    return null;
+  }
+
+  const json = await response.json();
+  const d = json?.data;
+  const items = Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []);
+  return normalizeKlipyItems(items);
+}
+
 // Get GIF provider configuration
 app.get('/api/gifs/config', authenticateToken, (req, res) => {
   const providers = [];
   if (GIPHY_API_KEY && (GIF_PROVIDER === 'giphy' || GIF_PROVIDER === 'both')) {
     providers.push('giphy');
   }
-  if (TENOR_API_KEY && (GIF_PROVIDER === 'tenor' || GIF_PROVIDER === 'both')) {
+  if (KLIPY_API_KEY && (GIF_PROVIDER === 'klipy' || GIF_PROVIDER === 'both')) {
+    providers.push('klipy');
+  }
+  if (TENOR_API_KEY && GIF_PROVIDER === 'tenor') {
     providers.push('tenor');
   }
   res.json({
@@ -7681,11 +7782,12 @@ app.get('/api/gifs/search', authenticateToken, gifSearchLimiter, async (req, res
   // Determine which provider(s) to use
   const useProvider = provider || GIF_PROVIDER;
   const hasGiphy = GIPHY_API_KEY && (useProvider === 'giphy' || useProvider === 'both');
-  const hasTenor = TENOR_API_KEY && (useProvider === 'tenor' || useProvider === 'both');
+  const hasKlipy = KLIPY_API_KEY && (useProvider === 'klipy' || useProvider === 'both');
+  const hasTenor = TENOR_API_KEY && useProvider === 'tenor'; // legacy standalone only
 
-  if (!hasGiphy && !hasTenor) {
+  if (!hasGiphy && !hasKlipy && !hasTenor) {
     return res.status(503).json({
-      error: 'GIF search is not configured. Set GIPHY_API_KEY or TENOR_API_KEY environment variable.'
+      error: 'GIF search is not configured. Set GIPHY_API_KEY or KLIPY_API_KEY environment variable.'
     });
   }
 
@@ -7693,24 +7795,27 @@ app.get('/api/gifs/search', authenticateToken, gifSearchLimiter, async (req, res
     let gifs = [];
     let nextToken = null;
 
-    if (useProvider === 'both' && hasGiphy && hasTenor) {
-      // Fetch from both and interleave results
+    if (useProvider === 'both' && hasGiphy && hasKlipy) {
+      // Fetch from GIPHY + Klipy and interleave results (both offset-based)
       const halfLimit = Math.ceil(maxLimit / 2);
-      const [giphyGifs, tenorResult] = await Promise.all([
-        searchGiphy(query, halfLimit, Math.floor(startOffset / 2)),
-        searchTenor(query, halfLimit, tenorPos)
+      const halfOffset = Math.floor(startOffset / 2);
+      const [giphyGifs, klipyGifs] = await Promise.all([
+        searchGiphy(query, halfLimit, halfOffset),
+        searchKlipy(query, halfLimit, halfOffset)
       ]);
 
       // Interleave results
       const g = giphyGifs || [];
-      const t = tenorResult?.gifs || [];
-      for (let i = 0; i < Math.max(g.length, t.length); i++) {
+      const k = klipyGifs || [];
+      for (let i = 0; i < Math.max(g.length, k.length); i++) {
         if (i < g.length) gifs.push(g[i]);
-        if (i < t.length) gifs.push(t[i]);
+        if (i < k.length) gifs.push(k[i]);
       }
-      nextToken = tenorResult?.next || null;
+      // Both providers are offset-based; nextToken stays null.
     } else if (hasGiphy) {
       gifs = await searchGiphy(query, maxLimit, startOffset) || [];
+    } else if (hasKlipy) {
+      gifs = await searchKlipy(query, maxLimit, startOffset) || [];
     } else if (hasTenor) {
       const tenorResult = await searchTenor(query, maxLimit, tenorPos);
       gifs = tenorResult?.gifs || [];
@@ -7744,13 +7849,14 @@ app.get('/api/gifs/trending', authenticateToken, gifSearchLimiter, async (req, r
   // Determine which provider(s) to use
   const useProvider = provider || GIF_PROVIDER;
   const hasGiphy = GIPHY_API_KEY && (useProvider === 'giphy' || useProvider === 'both');
-  const hasTenor = TENOR_API_KEY && (useProvider === 'tenor' || useProvider === 'both');
+  const hasKlipy = KLIPY_API_KEY && (useProvider === 'klipy' || useProvider === 'both');
+  const hasTenor = TENOR_API_KEY && useProvider === 'tenor'; // legacy standalone only
 
-  console.log(`🎬 GIF trending: provider=${useProvider}, hasGiphy=${hasGiphy}, hasTenor=${hasTenor}, pos="${tenorPos}"`);
+  console.log(`🎬 GIF trending: provider=${useProvider}, hasGiphy=${hasGiphy}, hasKlipy=${hasKlipy}, hasTenor=${hasTenor}, pos="${tenorPos}"`);
 
-  if (!hasGiphy && !hasTenor) {
+  if (!hasGiphy && !hasKlipy && !hasTenor) {
     return res.status(503).json({
-      error: 'GIF search is not configured. Set GIPHY_API_KEY or TENOR_API_KEY environment variable.'
+      error: 'GIF search is not configured. Set GIPHY_API_KEY or KLIPY_API_KEY environment variable.'
     });
   }
 
@@ -7758,22 +7864,25 @@ app.get('/api/gifs/trending', authenticateToken, gifSearchLimiter, async (req, r
     let gifs = [];
     let nextToken = null;
 
-    if (useProvider === 'both' && hasGiphy && hasTenor) {
+    if (useProvider === 'both' && hasGiphy && hasKlipy) {
       const halfLimit = Math.ceil(maxLimit / 2);
-      const [giphyGifs, tenorResult] = await Promise.all([
-        trendingGiphy(halfLimit, Math.floor(startOffset / 2)),
-        trendingTenor(halfLimit, tenorPos)
+      const halfOffset = Math.floor(startOffset / 2);
+      const [giphyGifs, klipyGifs] = await Promise.all([
+        trendingGiphy(halfLimit, halfOffset),
+        trendingKlipy(halfLimit, halfOffset)
       ]);
 
       const g = giphyGifs || [];
-      const t = tenorResult?.gifs || [];
-      for (let i = 0; i < Math.max(g.length, t.length); i++) {
+      const k = klipyGifs || [];
+      for (let i = 0; i < Math.max(g.length, k.length); i++) {
         if (i < g.length) gifs.push(g[i]);
-        if (i < t.length) gifs.push(t[i]);
+        if (i < k.length) gifs.push(k[i]);
       }
-      nextToken = tenorResult?.next || null;
+      // Both providers are offset-based; nextToken stays null.
     } else if (hasGiphy) {
       gifs = await trendingGiphy(maxLimit, startOffset) || [];
+    } else if (hasKlipy) {
+      gifs = await trendingKlipy(maxLimit, startOffset) || [];
     } else if (hasTenor) {
       const tenorResult = await trendingTenor(maxLimit, tenorPos);
       gifs = tenorResult?.gifs || [];

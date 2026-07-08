@@ -239,10 +239,10 @@ ALLOWED_ORIGINS=https://your-domain.com
 FEDERATION_ENABLED=true
 FEDERATION_NODE_NAME=cortex.example.com
 
-# GIF Provider
-GIF_PROVIDER=tenor  # giphy, tenor, or both
-TENOR_API_KEY=your-key
+# GIF Provider (Tenor API shut down by Google in 2026 — use GIPHY and/or Klipy)
+GIF_PROVIDER=giphy  # giphy, klipy, both (giphy+klipy), or tenor (legacy)
 GIPHY_API_KEY=your-key
+KLIPY_API_KEY=your-key
 
 # Privacy Encryption (v2.17.0 - v2.24.0)
 EMAIL_ENCRYPTION_KEY=<32-byte-hex>       # openssl rand -hex 32
