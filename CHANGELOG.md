@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.58.0] - 2026-07-08
+
+### Added
+
+- **Klipy GIF provider (Tenor replacement)**: Added [Klipy](https://klipy.com/developers) as a first-class GIF search provider alongside GIPHY. Google shut down the Tenor API in 2026, so Klipy — a near drop-in built by ex-Tenor engineers — is the go-forward second source. Set `KLIPY_API_KEY` and choose `GIF_PROVIDER=klipy` (Klipy only) or `GIF_PROVIDER=both` (GIPHY + Klipy, interleaved). New server helpers `searchKlipy`/`trendingKlipy` proxy `/api/gifs/search` and `/api/gifs/trending`, normalizing Klipy's page-based responses into Cortex's common GIF shape and mapping the endpoint's offset pagination onto Klipy's `page`/`per_page`. Klipy CDN hosts were added to the message media-embed allow-list so posted Klipy GIFs render inline. The GIF picker attribution footer now credits Klipy.
+
+### Changed
+
+- **`GIF_PROVIDER=both` now means GIPHY + Klipy** (previously GIPHY + Tenor). Standalone `GIF_PROVIDER=tenor` still works for backward compatibility, but the Tenor API is deprecated and being retired by Google. The Klipy API key is passed as a URL path segment and is never logged.
+
 ## [2.57.2] - 2026-06-28
 
 ### Changed
