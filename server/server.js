@@ -857,8 +857,8 @@ function detectAndEmbedMedia(content) {
     'media[0-9]?\\.giphy\\.com|i\\.giphy\\.com|' +
     // Tenor CDN hosts
     'media[0-9]?\\.tenor\\.com|c\\.tenor\\.com|' +
-    // Klipy CDN hosts
-    'media[0-9]?\\.klipy\\.com|cdn\\.klipy\\.com|[a-z0-9-]+\\.klipy\\.co|' +
+    // Klipy CDN hosts (static.klipy.com and any other klipy.com subdomain)
+    '[a-z0-9-]+\\.klipy\\.com|' +
     // Imgur
     'i\\.imgur\\.com|' +
     // Discord CDN
@@ -7652,17 +7652,15 @@ async function trendingTenor(limit, pos = '') {
   };
 }
 
-// Helper: extract a URL from a Klipy file variant, which may be a plain
-// string or an object like { url, width, height }. Defensive against the
-// two response shapes seen across Klipy API versions.
-function klipyFileUrl(variant) {
-  if (!variant) return '';
-  if (typeof variant === 'string') return variant;
-  return variant.url || variant.hd?.url || variant.md?.url || variant.sm?.url || '';
-}
-
-function klipyVariantDim(variant, key) {
-  if (variant && typeof variant === 'object' && variant[key]) return parseInt(variant[key]);
+// Pick the first available { url, width, height } for a given format across
+// Klipy size tiers, in preference order. Klipy nests media as
+// item.file.<hd|md|sm|xs>.<gif|webp|mp4|...> = { url, width, height, size }.
+function klipyPick(file, tiers, fmt) {
+  if (!file) return null;
+  for (const tier of tiers) {
+    const v = file[tier]?.[fmt];
+    if (v && v.url) return v;
+  }
   return null;
 }
 
@@ -7670,18 +7668,21 @@ function klipyVariantDim(variant, key) {
 // Klipy (klipy.com) is the go-forward Tenor replacement: near drop-in, built
 // by ex-Tenor engineers. Uses page-based pagination, so we present it to the
 // endpoint as offset-based (like GIPHY) by mapping offset -> page.
+// url = largest gif (hd→xs) for posting; preview = small gif (sm→hd) for the grid.
 function normalizeKlipyItems(items) {
   return (items || []).map(item => {
-    const files = item.files || item.file || {};
-    const url = klipyFileUrl(files.gif);
-    const preview = klipyFileUrl(files.webp) || klipyFileUrl(files.gif) || item.preview || '';
+    const file = item.file || item.files || {};
+    const full = klipyPick(file, ['hd', 'md', 'sm', 'xs'], 'gif');
+    const prev = klipyPick(file, ['sm', 'xs', 'md', 'hd'], 'gif') || full;
+    const url = full?.url || '';
+    const preview = prev?.url || url;
     return {
       id: String(item.id ?? item.slug ?? ''),
-      title: item.title || item.caption || '',
+      title: item.title || item.slug || '',
       url,
       preview,
-      width: parseInt(item.width || klipyVariantDim(files.gif, 'width') || 100),
-      height: parseInt(item.height || klipyVariantDim(files.gif, 'height') || 100),
+      width: parseInt(prev?.width || full?.width || 100),
+      height: parseInt(prev?.height || full?.height || 100),
       provider: 'klipy'
     };
   }).filter(gif => gif.url && gif.preview);
