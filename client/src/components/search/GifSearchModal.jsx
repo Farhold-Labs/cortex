@@ -317,7 +317,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
           color: 'var(--text-muted)',
           fontSize: '0.6rem',
         }}>
-          Powered by {provider === 'tenor' ? 'Tenor' : provider === 'both' ? 'GIPHY & Tenor' : 'GIPHY'}
+          Powered by {provider === 'klipy' ? 'Klipy' : provider === 'tenor' ? 'Tenor' : provider === 'both' ? 'GIPHY & Klipy' : 'GIPHY'}
         </div>
       </div>
     </div>
