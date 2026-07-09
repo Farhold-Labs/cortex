@@ -7906,6 +7906,72 @@ app.get('/api/gifs/trending', authenticateToken, gifSearchLimiter, async (req, r
   }
 });
 
+// ============ GIF Favorites (v2.59.0) ============
+// Per-user, provider-agnostic favorite GIFs so they sync across devices.
+
+const GIF_PROVIDERS = ['giphy', 'klipy', 'tenor'];
+const MAX_GIF_FAVORITES = 500;
+const isHttpsUrl = (u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u);
+
+// List the current user's favorited GIFs (newest first)
+app.get('/api/gifs/favorites', authenticateToken, (req, res) => {
+  try {
+    const gifs = db.getGifFavorites(req.user.userId);
+    res.json({ gifs, provider: 'favorites' });
+  } catch (err) {
+    console.error('GIF favorites list error:', err);
+    res.status(500).json({ error: 'Failed to load favorites' });
+  }
+});
+
+// Add a GIF to favorites
+app.post('/api/gifs/favorites', authenticateToken, gifSearchLimiter, (req, res) => {
+  const { id, provider, url, preview, width, height, title } = req.body || {};
+
+  if (!id || !provider || !GIF_PROVIDERS.includes(provider) || !url || !preview) {
+    return res.status(400).json({ error: 'id, provider (giphy/klipy/tenor), url and preview are required' });
+  }
+  // url/preview are rendered as <img src> and posted into messages — require https
+  if (!isHttpsUrl(url) || !isHttpsUrl(preview)) {
+    return res.status(400).json({ error: 'url and preview must be https URLs' });
+  }
+
+  try {
+    if (db.countGifFavorites(req.user.userId) >= MAX_GIF_FAVORITES) {
+      return res.status(409).json({ error: `Favorite limit (${MAX_GIF_FAVORITES}) reached` });
+    }
+    db.addGifFavorite(req.user.userId, {
+      id: String(id),
+      provider,
+      url,
+      preview,
+      width: parseInt(width) || null,
+      height: parseInt(height) || null,
+      title: typeof title === 'string' ? title.slice(0, 300) : ''
+    });
+    res.json({ success: true, favorited: true });
+  } catch (err) {
+    console.error('GIF favorite add error:', err);
+    res.status(500).json({ error: 'Failed to favorite GIF' });
+  }
+});
+
+// Remove a GIF from favorites (provider + id via query string)
+app.delete('/api/gifs/favorites', authenticateToken, (req, res) => {
+  const provider = req.query.provider || req.body?.provider;
+  const id = req.query.id || req.body?.id;
+  if (!provider || !id) {
+    return res.status(400).json({ error: 'provider and id are required' });
+  }
+  try {
+    const removed = db.removeGifFavorite(req.user.userId, provider, String(id));
+    res.json({ success: true, favorited: false, removed });
+  } catch (err) {
+    console.error('GIF favorite remove error:', err);
+    res.status(500).json({ error: 'Failed to unfavorite GIF' });
+  }
+});
+
 // ============ Jellyfin Integration Endpoints (v2.14.0) ============
 
 // Helper: Encrypt Jellyfin token for storage

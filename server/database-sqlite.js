@@ -445,6 +445,31 @@ export class DatabaseSQLite {
       console.log('✅ Warnings table created');
     }
 
+    // Check if gif_favorites table exists (v2.59.0)
+    const gifFavoritesExists = this.db.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='gif_favorites'
+    `).get();
+
+    if (!gifFavoritesExists) {
+      console.log('📝 Creating gif_favorites table...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS gif_favorites (
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          gif_id TEXT NOT NULL,
+          url TEXT NOT NULL,
+          preview TEXT NOT NULL,
+          width INTEGER,
+          height INTEGER,
+          title TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, provider, gif_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_gif_favorites_user ON gif_favorites(user_id, created_at DESC);
+      `);
+      console.log('✅ gif_favorites table created');
+    }
+
     // Check if moderation_log table exists (v1.9.0)
     const modLogExists = this.db.prepare(`
       SELECT name FROM sqlite_master WHERE type='table' AND name='moderation_log'
@@ -3542,6 +3567,58 @@ export class DatabaseSQLite {
       nodeName: r.node_name || null,
       isRemote: !!r.node_name,
     }));
+  }
+
+  // === GIF Favorites (v2.59.0) ===
+  getGifFavorites(userId, limit = 100, offset = 0) {
+    const rows = this.db.prepare(`
+      SELECT provider, gif_id, url, preview, width, height, title
+      FROM gif_favorites
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(userId, limit, offset);
+    return rows.map(r => ({
+      id: r.gif_id,
+      provider: r.provider,
+      url: r.url,
+      preview: r.preview,
+      width: r.width || 100,
+      height: r.height || 100,
+      title: r.title || '',
+      favorited: true,
+    }));
+  }
+
+  addGifFavorite(userId, gif) {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO gif_favorites
+        (user_id, provider, gif_id, url, preview, width, height, title, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      userId,
+      gif.provider,
+      String(gif.id),
+      gif.url,
+      gif.preview,
+      gif.width || null,
+      gif.height || null,
+      gif.title || '',
+      new Date().toISOString()
+    );
+    return true;
+  }
+
+  removeGifFavorite(userId, provider, gifId) {
+    const result = this.db.prepare(
+      'DELETE FROM gif_favorites WHERE user_id = ? AND provider = ? AND gif_id = ?'
+    ).run(userId, provider, String(gifId));
+    return result.changes > 0;
+  }
+
+  countGifFavorites(userId) {
+    const row = this.db.prepare('SELECT COUNT(*) AS c FROM gif_favorites WHERE user_id = ?').get(userId);
+    return row.c;
   }
 
   addContact(userId, contactId) {
