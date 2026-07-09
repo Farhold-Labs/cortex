@@ -17,7 +17,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
 
   const keyOf = (gif) => `${gif.provider || provider}:${gif.id}`;
 
-  // Load trending GIFs + favorite state when the modal opens; reset everything.
+  // On open: show favorites first (if the user has any), else trending.
   useEffect(() => {
     if (isOpen) {
       offsetRef.current = 0;
@@ -25,21 +25,29 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       setGifs([]);
       setHasMore(true);
       setSearchQuery('');
-      setView('trending');
-      refreshFavoriteKeys();
-      loadTrending();
+      setError(null);
+      (async () => {
+        setLoading(true);
+        let favs = [];
+        try {
+          const data = await fetchAPI('/gifs/favorites');
+          favs = data.gifs || [];
+          setFavoriteKeys(new Set(favs.map(g => `${g.provider}:${g.id}`)));
+        } catch (err) {
+          // Non-fatal — fall back to trending
+        }
+        if (favs.length > 0) {
+          setView('favorites');
+          setGifs(favs);
+          setHasMore(false);
+          setLoading(false);
+        } else {
+          setView('trending');
+          loadTrending();
+        }
+      })();
     }
   }, [isOpen]);
-
-  // Fetch just the set of favorited keys so ★ state is correct on any view.
-  const refreshFavoriteKeys = async () => {
-    try {
-      const data = await fetchAPI('/gifs/favorites');
-      setFavoriteKeys(new Set((data.gifs || []).map(g => `${g.provider}:${g.id}`)));
-    } catch (err) {
-      // Non-fatal — stars just won't pre-fill
-    }
-  };
 
   const loadTrending = async (loadMore = false) => {
     if (loadMore) {
