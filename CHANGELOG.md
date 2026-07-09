@@ -5,6 +5,13 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.59.1] - 2026-07-09
+
+### Fixed
+
+- **"Refresh" (update available) button didn't actually update**: the button called `window.location.reload()`, but the service worker served the stale cached app shell, so users had to Ctrl+Shift+R to get the new build. The button now clears the SW caches first (via the existing `CLEAR_ALL_CACHES` message, with a safety timeout) and then reloads, so it fetches the fresh version.
+- **Service worker cache name is now version-aware**: `CACHE_NAME`/`API_CACHE_NAME` were hardcoded at `cortex-v2.57.2` and never changed between releases, so the SW's `activate` cleanup never purged the old cache and stale-while-revalidate kept serving the previous build. `scripts/inject-sw-assets.mjs` now rewrites the cache names to the current app version at build time, so each release gets a fresh cache and old ones are purged automatically.
+
 ## [2.59.0] - 2026-07-08
 
 ### Added
