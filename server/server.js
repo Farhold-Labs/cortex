@@ -20607,7 +20607,11 @@ function broadcastToWaveWithPush(waveId, message, pushPayload = null, excludeWs 
 
 // ============ Start Server ============
 const demoEnabled = process.env.SEED_DEMO_DATA === 'true';
-server.listen(PORT, () => {
+// Bind host. Defaults to all interfaces (0.0.0.0) so a reverse proxy on another
+// host can reach it (dev/QA). Set HOST=127.0.0.1 where nginx runs on the same
+// box (e.g. the prod VPS, via its pm2 ecosystem env) to keep the port private.
+const BIND_HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, BIND_HOST, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║   ██████╗ ██████╗ ██████╗ ████████╗███████╗██╗  ██╗        ║
