@@ -1,9 +1,11 @@
-// Cortex Service Worker v2.57.2
+// Cortex Service Worker
 // Includes: Push notifications, offline caching, low-bandwidth API caching,
 //           pre-caching of hashed build assets at install time (v2.13.0),
 //           stale-while-revalidate app shell for instant returning-user loads (v2.57.2)
-const CACHE_NAME = 'cortex-v2.57.2';
-const API_CACHE_NAME = 'cortex-api-v2.57.2';
+// NOTE: the cache-name versions below are rewritten to the current app version
+// at build time by scripts/inject-sw-assets.mjs (dev keeps the fallback value).
+const CACHE_NAME = 'cortex-v2.59.1';
+const API_CACHE_NAME = 'cortex-api-v2.59.1';
 const API_CACHE_MAX_AGE = 30000; // 30 seconds for API cache
 const STATIC_ASSETS = [
   '/',

@@ -38,7 +38,18 @@ if (!placeholder.test(sw)) {
 }
 
 sw = sw.replace(placeholder, injection);
+
+// Bump the cache names to the current app version so every release gets a
+// fresh cache. Without this the hardcoded name never changes, so the SW's
+// activate handler never purges the old cache and the stale-while-revalidate
+// app shell keeps serving the previous build (users had to Ctrl+Shift+R).
+const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+const version = pkg.version;
+sw = sw.replace(/const CACHE_NAME = 'cortex-v[^']+';/, `const CACHE_NAME = 'cortex-v${version}';`);
+sw = sw.replace(/const API_CACHE_NAME = 'cortex-api-v[^']+';/, `const API_CACHE_NAME = 'cortex-api-v${version}';`);
+
 writeFileSync(swPath, sw, 'utf8');
 
+console.log(`[inject-sw-assets] Cache name set to cortex-v${version}`);
 console.log(`[inject-sw-assets] Injected ${assets.length} assets into dist/sw.js`);
 assets.forEach(a => console.log(`  ${a}`));
