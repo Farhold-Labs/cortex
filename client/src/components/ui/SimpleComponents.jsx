@@ -194,12 +194,33 @@ export const VersionMismatchBanner = ({ serverVersion, clientVersion }) => {
     }}>
       <span>{VERSION_CHECK.outdated} (v{serverVersion})</span>
       <button
-        onClick={() => {
+        onClick={async () => {
           if (window.electronAPI?.clearCacheAndReload) {
             window.electronAPI.clearCacheAndReload();
-          } else {
-            window.location.reload();
+            return;
           }
+          // A plain reload is served the stale cached app shell by the service
+          // worker, so users had to Ctrl+Shift+R to actually get the new build.
+          // Clear the SW caches first, then reload so it fetches fresh.
+          try {
+            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+              await new Promise((resolve) => {
+                const channel = new MessageChannel();
+                channel.port1.onmessage = () => resolve();
+                setTimeout(resolve, 1500); // safety: never hang the button
+                navigator.serviceWorker.controller.postMessage(
+                  { type: 'CLEAR_ALL_CACHES' },
+                  [channel.port2]
+                );
+              });
+            } else if ('caches' in window) {
+              const keys = await caches.keys();
+              await Promise.all(keys.map((k) => caches.delete(k)));
+            }
+          } catch (e) {
+            // fall through to reload regardless
+          }
+          window.location.reload();
         }}
         style={{
           background: 'var(--bg-base)',
