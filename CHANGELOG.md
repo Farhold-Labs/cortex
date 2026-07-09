@@ -5,6 +5,12 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.59.2] - 2026-07-09
+
+### Changed
+
+- **Server/static-server bind host is now configurable via `HOST`**: both `server.js` (API + WebSocket) and the client's `serve.mjs` now honor a `HOST` env var, defaulting to `0.0.0.0` (unchanged behavior — a reverse proxy on another host can still reach them, as dev/QA require). Deployments where nginx runs on the same box (e.g. the production VPS) can set `HOST=127.0.0.1` to keep ports 3000/3001 off all external interfaces as defense-in-depth, without a local code patch that gets reverted on each deploy.
+
 ## [2.59.1] - 2026-07-09
 
 ### Fixed

@@ -9,6 +9,10 @@ import path from 'path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, 'dist');
 const PORT = process.env.PORT || 3000;
+// Bind host. Defaults to all interfaces (0.0.0.0) so a reverse proxy on
+// another host can reach it (dev/QA). Set HOST=127.0.0.1 where nginx runs on
+// the same box (e.g. the prod VPS, via its pm2 ecosystem env).
+const HOST = process.env.HOST || '0.0.0.0';
 
 const app = express();
 
@@ -38,6 +42,6 @@ app.get('/{*path}', (_req, res) => {
   res.sendFile(path.join(DIST, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`Cortex client serving on :${PORT} (pre-compressed static)`);
+app.listen(PORT, HOST, () => {
+  console.log(`Cortex client serving on ${HOST}:${PORT} (pre-compressed static)`);
 });
