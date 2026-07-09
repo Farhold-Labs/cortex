@@ -143,11 +143,20 @@ const MessageComposer = forwardRef(({
     gifSearchTimeoutRef.current = setTimeout(async () => {
       setGifLoading(true);
       try {
-        const url = gifSearch.trim()
-          ? `/gifs/search?q=${encodeURIComponent(gifSearch.trim())}&limit=12`
-          : `/gifs/trending?limit=12`;
-        const data = await fetchAPI(url);
-        setGifResults(data.gifs || []);
+        if (gifSearch.trim()) {
+          const data = await fetchAPI(`/gifs/search?q=${encodeURIComponent(gifSearch.trim())}&limit=12`);
+          setGifResults(data.gifs || []);
+        } else {
+          // No search term: show favorites first, then trending to fill.
+          const [favData, trendData] = await Promise.all([
+            fetchAPI('/gifs/favorites').catch(() => ({ gifs: [] })),
+            fetchAPI('/gifs/trending?limit=12').catch(() => ({ gifs: [] })),
+          ]);
+          const favs = favData.gifs || [];
+          const favKeys = new Set(favs.map(g => `${g.provider}:${g.id}`));
+          const trend = (trendData.gifs || []).filter(g => !favKeys.has(`${g.provider}:${g.id}`));
+          setGifResults([...favs, ...trend].slice(0, 12));
+        }
       } catch { setGifResults([]); }
       finally { setGifLoading(false); }
     }, delay);
@@ -395,9 +404,21 @@ const MessageComposer = forwardRef(({
               if (gifMatch) {
                 const gifText = gifMatch[2]; // "/gif" or "/gif searchterm"
                 const search = gifText.replace(/^\/gif\s*/, '');
-                setShowGifPicker(true);
-                setGifSearch(search);
-                setGifStartPos(cursorPos - gifText.length);
+                if (compact && onGifClick) {
+                  // In tight panels (threads/focus) the inline popup is clipped by
+                  // overflow:hidden ancestors, so /gif appeared to do nothing.
+                  // Strip the "/gif" text and open the full-screen GIF modal instead.
+                  const startPos = cursorPos - gifText.length;
+                  setNewMessage(v => v.slice(0, startPos) + v.slice(cursorPos));
+                  setShowGifPicker(false);
+                  setGifSearch('');
+                  setGifStartPos(null);
+                  onGifClick();
+                } else {
+                  setShowGifPicker(true);
+                  setGifSearch(search);
+                  setGifStartPos(cursorPos - gifText.length);
+                }
               } else {
                 setShowGifPicker(false);
                 setGifSearch('');
@@ -597,7 +618,7 @@ const MessageComposer = forwardRef(({
           }}>
             <div style={{ padding: '4px 8px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ color: 'var(--accent-teal)', fontFamily: 'monospace', fontSize: '0.65rem', fontWeight: 700 }}>GIF</span>
-              <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.65rem' }}>{gifSearch ? `"${gifSearch}"` : 'trending'}</span>
+              <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.65rem' }}>{gifSearch ? `"${gifSearch}"` : '★ favorites + trending'}</span>
               <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.6rem', marginLeft: 'auto' }}>esc to close</span>
             </div>
             {gifLoading ? (

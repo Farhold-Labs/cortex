@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.59.3] - 2026-07-09
+
+### Fixed
+
+- **`/gif` now works in the thread/focus reply inputs**: typing `/gif` in a thread did nothing because the inline GIF popup was clipped by the panel's `overflow:hidden` ancestors. In those compact composers, `/gif` now opens the full-screen GIF picker (which those inputs already had wired to their GIF button) instead of the clipped inline popup.
+
+### Changed
+
+- **GIF picker lists favorites first**: opening the GIF modal now shows your saved GIFs first (falling back to trending if you have none), and the inline `/gif` popup (main composer) lists favorites first, then trending.
+
 ## [2.59.2] - 2026-07-09
 
 ### Changed
