@@ -58,6 +58,21 @@ CREATE TABLE IF NOT EXISTS contacts (
     PRIMARY KEY (user_id, contact_id)
 );
 
+-- Per-user favorited GIFs (v2.59.0) — provider-agnostic (giphy/klipy/tenor)
+CREATE TABLE IF NOT EXISTS gif_favorites (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    gif_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    preview TEXT NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    title TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, provider, gif_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gif_favorites_user ON gif_favorites(user_id, created_at DESC);
+
 -- ============ Waves ============
 CREATE TABLE IF NOT EXISTS waves (
     id TEXT PRIMARY KEY,
