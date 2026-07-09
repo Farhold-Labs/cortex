@@ -7,25 +7,39 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
-  const [showTrending, setShowTrending] = useState(true);
+  const [view, setView] = useState('trending'); // 'trending' | 'search' | 'favorites'
   const [provider, setProvider] = useState('giphy'); // Track which provider returned results
   const [hasMore, setHasMore] = useState(true);
+  const [favoriteKeys, setFavoriteKeys] = useState(new Set()); // "provider:id" of favorited GIFs
   const searchTimeoutRef = useRef(null);
-  const offsetRef = useRef(0); // Use ref for synchronous offset tracking (GIPHY)
+  const offsetRef = useRef(0); // Use ref for synchronous offset tracking (GIPHY/Klipy)
   const nextTokenRef = useRef(''); // Tenor pagination token
 
-  // Load trending GIFs when modal opens and reset state
+  const keyOf = (gif) => `${gif.provider || provider}:${gif.id}`;
+
+  // Load trending GIFs + favorite state when the modal opens; reset everything.
   useEffect(() => {
     if (isOpen) {
       offsetRef.current = 0;
       nextTokenRef.current = '';
       setGifs([]);
       setHasMore(true);
-      if (showTrending) {
-        loadTrending();
-      }
+      setSearchQuery('');
+      setView('trending');
+      refreshFavoriteKeys();
+      loadTrending();
     }
   }, [isOpen]);
+
+  // Fetch just the set of favorited keys so ★ state is correct on any view.
+  const refreshFavoriteKeys = async () => {
+    try {
+      const data = await fetchAPI('/gifs/favorites');
+      setFavoriteKeys(new Set((data.gifs || []).map(g => `${g.provider}:${g.id}`)));
+    } catch (err) {
+      // Non-fatal — stars just won't pre-fill
+    }
+  };
 
   const loadTrending = async (loadMore = false) => {
     if (loadMore) {
@@ -46,7 +60,6 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
         url += `&pos=${encodeURIComponent(currentPos)}`;
       }
 
-      console.log(`Loading trending GIFs with offset: ${currentOffset}, pos: "${currentPos}"`);
       const data = await fetchAPI(url);
       const newGifs = data.gifs || [];
       if (loadMore) {
@@ -57,11 +70,10 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       setProvider(data.provider || 'giphy');
       offsetRef.current = currentOffset + newGifs.length;
 
-      // Store next token from Tenor API (null/undefined for GIPHY)
+      // Store next token from Tenor API (null/undefined for GIPHY/Klipy)
       nextTokenRef.current = data.pagination?.next || '';
-      console.log(`Loaded ${newGifs.length} GIFs, new offset: ${offsetRef.current}, next token: "${nextTokenRef.current}"`);
 
-      // Has more if: we got 20 GIFs AND (there's a next token OR we're using GIPHY)
+      // Has more if: we got a full page AND (there's a next token OR we're offset-based)
       setHasMore(newGifs.length === 20 && (nextTokenRef.current || !data.pagination?.next));
     } catch (err) {
       setError(err.message || 'Failed to load trending GIFs');
@@ -73,11 +85,11 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
 
   const searchGifs = async (query, loadMore = false) => {
     if (!query.trim()) {
-      setShowTrending(true);
+      setView('trending');
       loadTrending();
       return;
     }
-    setShowTrending(false);
+    setView('search');
     if (loadMore) {
       setLoadingMore(true);
     } else {
@@ -96,7 +108,6 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
         url += `&pos=${encodeURIComponent(currentPos)}`;
       }
 
-      console.log(`Searching GIFs for "${query}" with offset: ${currentOffset}, pos: "${currentPos}"`);
       const data = await fetchAPI(url);
       const newGifs = data.gifs || [];
       if (loadMore) {
@@ -107,17 +118,83 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       setProvider(data.provider || 'giphy');
       offsetRef.current = currentOffset + newGifs.length;
 
-      // Store next token from Tenor API (null/undefined for GIPHY)
+      // Store next token from Tenor API (null/undefined for GIPHY/Klipy)
       nextTokenRef.current = data.pagination?.next || '';
-      console.log(`Loaded ${newGifs.length} GIFs, new offset: ${offsetRef.current}, next token: "${nextTokenRef.current}"`);
 
-      // Has more if: we got 20 GIFs AND (there's a next token OR we're using GIPHY)
       setHasMore(newGifs.length === 20 && (nextTokenRef.current || !data.pagination?.next));
     } catch (err) {
       setError(err.message || 'Failed to search GIFs');
     } finally {
       setLoading(false);
       setLoadingMore(false);
+    }
+  };
+
+  const loadFavorites = async () => {
+    setView('favorites');
+    setSearchQuery('');
+    setLoading(true);
+    setError(null);
+    setHasMore(false); // favorites aren't paginated
+    try {
+      const data = await fetchAPI('/gifs/favorites');
+      const favs = data.gifs || [];
+      setGifs(favs);
+      setFavoriteKeys(new Set(favs.map(g => `${g.provider}:${g.id}`)));
+    } catch (err) {
+      setError(err.message || 'Failed to load favorites');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const showTrendingView = () => {
+    setSearchQuery('');
+    setView('trending');
+    loadTrending();
+  };
+
+  const toggleFavorite = async (gif, e) => {
+    e.stopPropagation();
+    const k = keyOf(gif);
+    const gifProvider = gif.provider || provider;
+    const isFav = favoriteKeys.has(k);
+
+    // Optimistic update
+    setFavoriteKeys(prev => {
+      const next = new Set(prev);
+      if (isFav) next.delete(k); else next.add(k);
+      return next;
+    });
+    if (isFav && view === 'favorites') {
+      setGifs(prev => prev.filter(g => `${g.provider || provider}:${g.id}` !== k));
+    }
+
+    try {
+      if (isFav) {
+        await fetchAPI(`/gifs/favorites?provider=${encodeURIComponent(gifProvider)}&id=${encodeURIComponent(gif.id)}`, { method: 'DELETE' });
+      } else {
+        await fetchAPI('/gifs/favorites', {
+          method: 'POST',
+          body: {
+            id: gif.id,
+            provider: gifProvider,
+            url: gif.url,
+            preview: gif.preview,
+            width: gif.width,
+            height: gif.height,
+            title: gif.title,
+          },
+        });
+      }
+    } catch (err) {
+      // Revert on failure
+      setFavoriteKeys(prev => {
+        const next = new Set(prev);
+        if (isFav) next.add(k); else next.delete(k);
+        return next;
+      });
+      setError(err.message || 'Failed to update favorite');
     }
   };
 
@@ -135,6 +212,31 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
   };
 
   if (!isOpen) return null;
+
+  const tabStyle = (active) => ({
+    flex: 1,
+    background: active ? 'var(--accent-teal)20' : 'transparent',
+    border: '1px solid ' + (active ? 'var(--accent-teal)60' : 'var(--border-subtle)'),
+    color: active ? 'var(--accent-teal)' : 'var(--text-dim)',
+    padding: isMobile ? '10px' : '7px',
+    cursor: 'pointer',
+    fontFamily: 'monospace',
+    fontSize: '0.72rem',
+    fontWeight: 'bold',
+    minHeight: isMobile ? '40px' : 'auto',
+  });
+
+  const statusText = view === 'favorites'
+    ? '⭐ FAVORITES'
+    : view === 'search'
+      ? `Searching for "${searchQuery}"`
+      : '🔥 TRENDING';
+
+  const emptyText = view === 'favorites'
+    ? 'No favorites yet — tap the ☆ on any GIF to save it'
+    : view === 'search'
+      ? 'No GIFs found'
+      : 'Search for GIFs above';
 
   return (
     <div style={{
@@ -179,7 +281,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
           }}>✕ CLOSE</button>
         </div>
 
-        {/* Search Input */}
+        {/* Search Input + Tabs */}
         <div style={{ padding: isMobile ? '14px 16px' : '12px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
           <input
             type="text"
@@ -198,13 +300,17 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
               boxSizing: 'border-box',
             }}
           />
+          <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+            <button onClick={showTrendingView} style={tabStyle(view !== 'favorites')}>🔥 TRENDING</button>
+            <button onClick={loadFavorites} style={tabStyle(view === 'favorites')}>⭐ FAVORITES</button>
+          </div>
           <div style={{
             color: 'var(--text-muted)',
             fontSize: '0.65rem',
-            marginTop: '6px',
+            marginTop: '8px',
             textAlign: 'center',
           }}>
-            {showTrending ? '🔥 TRENDING' : `Searching for "${searchQuery}"`}
+            {statusText}
           </div>
         </div>
 
@@ -235,7 +341,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
 
           {!loading && !error && gifs.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-dim)' }}>
-              {searchQuery ? 'No GIFs found' : 'Search for GIFs above'}
+              {emptyText}
             </div>
           )}
 
@@ -246,42 +352,71 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
                 gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)',
                 gap: '8px',
               }}>
-                {gifs.map((gif) => (
-                  <button
-                    key={gif.id}
-                    onClick={() => onSelect(gif.url)}
-                    style={{
-                      background: 'var(--bg-elevated)',
-                      border: '1px solid var(--border-subtle)',
-                      padding: 0,
-                      cursor: 'pointer',
-                      aspectRatio: '1',
-                      overflow: 'hidden',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                    title={gif.title}
-                  >
-                    <img
-                      src={gif.preview}
-                      alt={gif.title}
-                      loading="lazy"
+                {gifs.map((gif) => {
+                  const favorited = favoriteKeys.has(keyOf(gif));
+                  return (
+                    <div
+                      key={keyOf(gif)}
+                      onClick={() => onSelect(gif.url)}
+                      role="button"
                       style={{
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'cover',
+                        position: 'relative',
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border-subtle)',
+                        cursor: 'pointer',
+                        aspectRatio: '1',
+                        overflow: 'hidden',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                       }}
-                    />
-                  </button>
-                ))}
+                      title={gif.title}
+                    >
+                      <img
+                        src={gif.preview}
+                        alt={gif.title}
+                        loading="lazy"
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                        }}
+                      />
+                      <button
+                        onClick={(e) => toggleFavorite(gif, e)}
+                        title={favorited ? 'Remove from favorites' : 'Add to favorites'}
+                        aria-label={favorited ? 'Remove from favorites' : 'Add to favorites'}
+                        style={{
+                          position: 'absolute',
+                          top: '4px',
+                          right: '4px',
+                          width: isMobile ? '32px' : '26px',
+                          height: isMobile ? '32px' : '26px',
+                          borderRadius: '50%',
+                          border: 'none',
+                          background: 'rgba(0,0,0,0.55)',
+                          color: favorited ? 'var(--accent-amber)' : '#fff',
+                          cursor: 'pointer',
+                          fontSize: isMobile ? '1rem' : '0.85rem',
+                          lineHeight: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >
+                        {favorited ? '★' : '☆'}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Load More Button */}
               {hasMore && !loadingMore && (
                 <div style={{ textAlign: 'center', marginTop: '16px' }}>
                   <button
-                    onClick={() => showTrending ? loadTrending(true) : searchGifs(searchQuery, true)}
+                    onClick={() => view === 'search' ? searchGifs(searchQuery, true) : loadTrending(true)}
                     style={{
                       background: 'var(--bg-elevated)',
                       border: '1px solid var(--accent-teal)50',
@@ -317,7 +452,9 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
           color: 'var(--text-muted)',
           fontSize: '0.6rem',
         }}>
-          Powered by {provider === 'tenor' ? 'Tenor' : provider === 'both' ? 'GIPHY & Tenor' : 'GIPHY'}
+          {view === 'favorites'
+            ? 'Your favorite GIFs'
+            : `Powered by ${provider === 'klipy' ? 'Klipy' : provider === 'tenor' ? 'Tenor' : provider === 'both' ? 'GIPHY & Klipy' : 'GIPHY'}`}
         </div>
       </div>
     </div>
