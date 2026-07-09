@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.59.0] - 2026-07-08
+
+### Added
+
+- **Favorite GIFs**: Users can now save GIFs and reuse them quickly. A ★ toggle sits on every GIF in the picker, and a new **Favorites** tab shows saved GIFs (newest first). Favorites are **per-user and server-synced** (new `gif_favorites` table), so they follow you across devices, and are **provider-agnostic** — GIPHY and Klipy GIFs live side by side. New endpoints `GET/POST/DELETE /api/gifs/favorites` (auth-required; add is rate-limited and validates that `url`/`preview` are https; capped at 500 per user). Toggling is optimistic with revert-on-error.
+
+## [2.58.1] - 2026-07-08
+
+### Fixed
+
+- **Klipy GIF search/trending returned no results**: the response normalizer read `item.files.gif`, but Klipy nests media as `item.file.<hd|md|sm|xs>.<gif|webp|mp4>` (singular `file`, size-tiered), so every URL resolved empty and was filtered out. Rewrote the normalizer to pick the largest gif tier for the post URL and a small tier for the grid preview, and corrected the media-embed allow-list to the real Klipy CDN host (`static.klipy.com`).
+
 ## [2.58.0] - 2026-07-08
 
 ### Added
