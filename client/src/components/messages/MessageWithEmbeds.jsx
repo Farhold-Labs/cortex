@@ -544,6 +544,13 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
       '<img src="$1" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />'
     );
 
+    // Rescue mp4/webm URLs wrapped in <img> — messages posted before v2.60.1
+    // (or by old clients) stored clips as broken images; render them as <video>.
+    result = result.replace(
+      /<img\b[^>]*\bsrc="([^"]+\.(?:mp4|webm)(?:\?[^"]*)?)"[^>]*\/?>/gi,
+      '<video src="$1" controls playsinline preload="metadata" class="message-media"></video>'
+    );
+
     // Absolutize relative server paths so Electron (app:// origin) loads
     // images and file links from the remote server, not the local filesystem.
     if (BASE_URL) {
