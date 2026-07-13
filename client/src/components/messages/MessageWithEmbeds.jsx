@@ -527,12 +527,20 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
       }
     );
 
+    // Convert bare video CDN URLs (e.g. Klipy clips) to <video> tags.
+    // Must run before the <img> pass below so mp4/webm URLs on GIF CDN hosts
+    // become playable video instead of a broken image.
+    result = result.replace(
+      /(?<!['"=])(https?:\/\/(?:[a-z0-9-]+\.klipy\.com|media[0-9]?\.tenor\.com|c\.tenor\.com|media[0-9]?\.giphy\.com|i\.giphy\.com)[^\s<"']+\.(?:mp4|webm)(?:\?[^\s<"']*)?)/gi,
+      '<video src="$1" controls playsinline preload="metadata" class="message-media"></video>'
+    );
+
     // Convert bare GIF CDN URLs to <img> tags.
     // Server does this via detectAndEmbedMedia, but E2EE waves store encrypted
     // content so decrypted messages arrive with the raw CDN URL as plain text.
     // The negative lookbehind skips URLs already inside HTML attributes.
     result = result.replace(
-      /(?<!['"=])(https?:\/\/(?:media[0-9]?\.tenor\.com|c\.tenor\.com|media[0-9]?\.giphy\.com|i\.giphy\.com)[^\s<"']+)/gi,
+      /(?<!['"=])(https?:\/\/(?:media[0-9]?\.tenor\.com|c\.tenor\.com|media[0-9]?\.giphy\.com|i\.giphy\.com|[a-z0-9-]+\.klipy\.com)[^\s<"']+)/gi,
       '<img src="$1" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />'
     );
 

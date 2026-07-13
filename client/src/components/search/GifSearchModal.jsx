@@ -8,6 +8,8 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [view, setView] = useState('trending'); // 'trending' | 'search' | 'favorites'
+  const [mediaType, setMediaType] = useState('gifs'); // 'gifs' | 'stickers' | 'clips' (Klipy)
+  const [availableTypes, setAvailableTypes] = useState(['gifs']); // From /gifs/config
   const [provider, setProvider] = useState('giphy'); // Track which provider returned results
   const [hasMore, setHasMore] = useState(true);
   const [favoriteKeys, setFavoriteKeys] = useState(new Set()); // "provider:id" of favorited GIFs
@@ -16,6 +18,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
   const nextTokenRef = useRef(''); // Tenor pagination token
 
   const keyOf = (gif) => `${gif.provider || provider}:${gif.id}`;
+  const isClip = (gif) => gif.type === 'clip' || /\.(mp4|webm)(\?|$)/i.test(gif.url || '');
 
   // On open: show favorites first (if the user has any), else trending.
   useEffect(() => {
@@ -26,6 +29,11 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       setHasMore(true);
       setSearchQuery('');
       setError(null);
+      setMediaType('gifs');
+      // Stickers/clips tabs only when the server has Klipy configured
+      fetchAPI('/gifs/config')
+        .then(cfg => setAvailableTypes(cfg.types || ['gifs']))
+        .catch(() => setAvailableTypes(['gifs']));
       (async () => {
         setLoading(true);
         let favs = [];
@@ -49,7 +57,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
     }
   }, [isOpen]);
 
-  const loadTrending = async (loadMore = false) => {
+  const loadTrending = async (loadMore = false, type = mediaType) => {
     if (loadMore) {
       setLoadingMore(true);
     } else {
@@ -63,7 +71,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       const currentPos = loadMore ? nextTokenRef.current : '';
 
       // Build URL with pos parameter for Tenor token pagination
-      let url = `/gifs/trending?limit=20&offset=${currentOffset}`;
+      let url = `/gifs/trending?limit=20&offset=${currentOffset}&type=${type}`;
       if (currentPos) {
         url += `&pos=${encodeURIComponent(currentPos)}`;
       }
@@ -91,10 +99,10 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
     }
   };
 
-  const searchGifs = async (query, loadMore = false) => {
+  const searchGifs = async (query, loadMore = false, type = mediaType) => {
     if (!query.trim()) {
       setView('trending');
-      loadTrending();
+      loadTrending(false, type);
       return;
     }
     setView('search');
@@ -111,7 +119,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       const currentPos = loadMore ? nextTokenRef.current : '';
 
       // Build URL with pos parameter for Tenor token pagination
-      let url = `/gifs/search?q=${encodeURIComponent(query)}&limit=20&offset=${currentOffset}`;
+      let url = `/gifs/search?q=${encodeURIComponent(query)}&limit=20&offset=${currentOffset}&type=${type}`;
       if (currentPos) {
         url += `&pos=${encodeURIComponent(currentPos)}`;
       }
@@ -160,6 +168,19 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
     setSearchQuery('');
     setView('trending');
     loadTrending();
+  };
+
+  // Switch content type (GIFs / stickers / clips). Keeps the current search
+  // query if there is one, otherwise shows trending for the new type.
+  const selectMediaType = (type) => {
+    if (type === mediaType && view !== 'favorites') return;
+    setMediaType(type);
+    if (searchQuery.trim()) {
+      searchGifs(searchQuery, false, type);
+    } else {
+      setView('trending');
+      loadTrending(false, type);
+    }
   };
 
   const toggleFavorite = async (gif, e) => {
@@ -234,17 +255,20 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
     minHeight: isMobile ? '40px' : 'auto',
   });
 
+  const typeLabels = { gifs: 'GIFs', stickers: 'Stickers', clips: 'Clips' };
+  const typeLabel = typeLabels[mediaType] || 'GIFs';
+
   const statusText = view === 'favorites'
     ? '⭐ FAVORITES'
     : view === 'search'
-      ? `Searching for "${searchQuery}"`
-      : '🔥 TRENDING';
+      ? `Searching ${typeLabel.toLowerCase()} for "${searchQuery}"`
+      : `🔥 TRENDING ${typeLabel.toUpperCase()}`;
 
   const emptyText = view === 'favorites'
     ? 'No favorites yet — tap the ☆ on any GIF to save it'
     : view === 'search'
-      ? 'No GIFs found'
-      : 'Search for GIFs above';
+      ? `No ${typeLabel.toLowerCase()} found`
+      : `Search for ${typeLabel.toLowerCase()} above`;
 
   return (
     <div style={{
@@ -295,7 +319,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
             type="text"
             value={searchQuery}
             onChange={handleSearchChange}
-            placeholder="Search for GIFs..."
+            placeholder={`Search for ${typeLabel.toLowerCase()}...`}
             autoFocus
             style={{
               width: '100%',
@@ -309,8 +333,24 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
             }}
           />
           <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-            <button onClick={showTrendingView} style={tabStyle(view !== 'favorites')}>🔥 TRENDING</button>
-            <button onClick={loadFavorites} style={tabStyle(view === 'favorites')}>⭐ FAVORITES</button>
+            {availableTypes.includes('gifs') && (
+              <button onClick={() => selectMediaType('gifs')} style={tabStyle(view !== 'favorites' && mediaType === 'gifs')}>🎞️ GIFs</button>
+            )}
+            {availableTypes.includes('stickers') && (
+              <button onClick={() => selectMediaType('stickers')} style={tabStyle(view !== 'favorites' && mediaType === 'stickers')}>✨ STICKERS</button>
+            )}
+            {availableTypes.includes('clips') && (
+              <button onClick={() => selectMediaType('clips')} style={tabStyle(view !== 'favorites' && mediaType === 'clips')}>🎬 CLIPS</button>
+            )}
+            <button
+              onClick={loadFavorites}
+              title="Favorites"
+              style={availableTypes.length > 1
+                ? { ...tabStyle(view === 'favorites'), flex: '0 0 auto', padding: isMobile ? '10px 14px' : '7px 12px' }
+                : tabStyle(view === 'favorites')}
+            >
+              ⭐{availableTypes.length > 1 ? '' : ' FAVORITES'}
+            </button>
           </div>
           <div style={{
             color: 'var(--text-muted)',
@@ -390,6 +430,20 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
                           objectFit: 'cover',
                         }}
                       />
+                      {isClip(gif) && (
+                        <span style={{
+                          position: 'absolute',
+                          bottom: '4px',
+                          left: '4px',
+                          background: 'rgba(0,0,0,0.65)',
+                          color: '#fff',
+                          borderRadius: '3px',
+                          padding: '2px 6px',
+                          fontSize: '0.65rem',
+                          fontFamily: 'monospace',
+                          pointerEvents: 'none',
+                        }}>▶ CLIP</span>
+                      )}
                       <button
                         onClick={(e) => toggleFavorite(gif, e)}
                         title={favorited ? 'Remove from favorites' : 'Add to favorites'}
@@ -438,7 +492,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
                       width: isMobile ? '100%' : 'auto',
                     }}
                   >
-                    LOAD MORE GIFs
+                    LOAD MORE {typeLabel.toUpperCase()}
                   </button>
                 </div>
               )}
