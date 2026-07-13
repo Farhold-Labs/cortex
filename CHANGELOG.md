@@ -5,6 +5,12 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.60.2] - 2026-07-13
+
+### Added
+
+- **Clip preview in the picker**: the ▶ CLIP badge on clip cells is now a play button — tapping it plays the mp4 inline (with sound, since it's user-initiated) in place of the thumbnail, showing ⏹ STOP while playing. Playback auto-reverts when the clip ends, only one clip previews at a time, and switching tabs/searches stops it. Clicking the cell still posts the clip (the preview video is `pointer-events: none`, so it doesn't swallow the select click).
+
 ## [2.60.1] - 2026-07-13
 
 ### Fixed

@@ -13,6 +13,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
   const [provider, setProvider] = useState('giphy'); // Track which provider returned results
   const [hasMore, setHasMore] = useState(true);
   const [favoriteKeys, setFavoriteKeys] = useState(new Set()); // "provider:id" of favorited GIFs
+  const [previewKey, setPreviewKey] = useState(null); // clip currently playing inline (one at a time)
   const searchTimeoutRef = useRef(null);
   const offsetRef = useRef(0); // Use ref for synchronous offset tracking (GIPHY/Klipy)
   const nextTokenRef = useRef(''); // Tenor pagination token
@@ -30,6 +31,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       setSearchQuery('');
       setError(null);
       setMediaType('gifs');
+      setPreviewKey(null);
       // Stickers/clips tabs only when the server has Klipy configured
       fetchAPI('/gifs/config')
         .then(cfg => setAvailableTypes(cfg.types || ['gifs']))
@@ -64,6 +66,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       setLoading(true);
       offsetRef.current = 0;
       nextTokenRef.current = '';
+      setPreviewKey(null);
     }
     setError(null);
     try {
@@ -112,6 +115,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
       setLoading(true);
       offsetRef.current = 0;
       nextTokenRef.current = '';
+      setPreviewKey(null);
     }
     setError(null);
     try {
@@ -151,6 +155,7 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
     setSearchQuery('');
     setLoading(true);
     setError(null);
+    setPreviewKey(null);
     setHasMore(false); // favorites aren't paginated
     try {
       const data = await fetchAPI('/gifs/favorites');
@@ -420,29 +425,58 @@ const GifSearchModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile }) => {
                       }}
                       title={gif.title}
                     >
-                      <img
-                        src={gif.preview}
-                        alt={gif.title}
-                        loading="lazy"
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'cover',
-                        }}
-                      />
+                      {previewKey === keyOf(gif) ? (
+                        // Inline clip preview with sound (user-initiated). pointerEvents
+                        // none so clicking the cell still selects the clip; the badge
+                        // button below stops playback, and it auto-reverts on end.
+                        <video
+                          src={gif.url}
+                          autoPlay
+                          playsInline
+                          onEnded={() => setPreviewKey(null)}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            pointerEvents: 'none',
+                          }}
+                        />
+                      ) : (
+                        <img
+                          src={gif.preview}
+                          alt={gif.title}
+                          loading="lazy"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                          }}
+                        />
+                      )}
                       {isClip(gif) && (
-                        <span style={{
-                          position: 'absolute',
-                          bottom: '4px',
-                          left: '4px',
-                          background: 'rgba(0,0,0,0.65)',
-                          color: '#fff',
-                          borderRadius: '3px',
-                          padding: '2px 6px',
-                          fontSize: '0.65rem',
-                          fontFamily: 'monospace',
-                          pointerEvents: 'none',
-                        }}>▶ CLIP</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPreviewKey(prev => prev === keyOf(gif) ? null : keyOf(gif));
+                          }}
+                          title={previewKey === keyOf(gif) ? 'Stop preview' : 'Preview clip'}
+                          aria-label={previewKey === keyOf(gif) ? 'Stop preview' : 'Preview clip'}
+                          style={{
+                            position: 'absolute',
+                            bottom: '4px',
+                            left: '4px',
+                            background: 'rgba(0,0,0,0.65)',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '3px',
+                            padding: isMobile ? '6px 10px' : '4px 8px',
+                            fontSize: isMobile ? '0.75rem' : '0.65rem',
+                            fontFamily: 'monospace',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {previewKey === keyOf(gif) ? '⏹ STOP' : '▶ CLIP'}
+                        </button>
                       )}
                       <button
                         onClick={(e) => toggleFavorite(gif, e)}
