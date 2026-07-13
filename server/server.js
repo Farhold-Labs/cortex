@@ -593,14 +593,17 @@ function sanitizeInput(input) {
 }
 
 const sanitizeMessageOptions = {
-  allowedTags: ['img', 'a', 'br', 'p', 'strong', 'em', 'code', 'pre'],
+  allowedTags: ['img', 'a', 'br', 'p', 'strong', 'em', 'code', 'pre', 'video'],
   allowedAttributes: {
     'img': ['src', 'alt', 'width', 'height', 'class'],
     'a': ['href', 'target', 'rel', 'class', 'data-filename', 'data-size', 'download'],
+    // Klipy clips and other embedded videos (v2.60.0) — no autoplay
+    'video': ['src', 'controls', 'playsinline', 'preload', 'loop', 'width', 'height', 'class', 'poster'],
   },
   allowedSchemes: ['http', 'https', 'data'], // Allow data URIs for emojis
   allowedSchemesByTag: {
-    img: ['http', 'https', 'data']
+    img: ['http', 'https', 'data'],
+    video: ['http', 'https']
   },
   transformTags: {
     'a': (tagName, attribs) => ({
@@ -873,6 +876,9 @@ function detectAndEmbedMedia(content) {
   // Shared image style - thumbnails by default, click to view full size
   const imgStyle = 'max-width:200px;max-height:150px;border-radius:4px;cursor:pointer;object-fit:cover;display:block;border:1px solid #3a4a3a;';
 
+  // Video URLs (e.g. Klipy clips) embed as playable <video>, not <img>
+  const videoExtensions = /\.(mp4|webm)(\?[^\s]*)?$/i;
+
   // Non-CDN hosts that use image extensions but aren't direct image URLs (redirect pages)
   const nonImageHosts = /(^https?:\/\/)(www\.)?(tenor\.com|giphy\.com|gfycat\.com)\/(?!media)/i;
 
@@ -883,6 +889,11 @@ function detectAndEmbedMedia(content) {
     // Skip non-CDN hosts even if they have image extensions (they're redirect pages, not images)
     if (nonImageHosts.test(cleanUrl)) {
       return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer">${cleanUrl}</a>`;
+    }
+
+    // Videos first (mp4/webm would otherwise match imageExtensions as <img> and never play)
+    if (videoExtensions.test(cleanUrl)) {
+      return `<video src="${cleanUrl}" controls playsinline preload="metadata" class="message-media"></video>`;
     }
 
     // Check if this URL should be embedded as an image
@@ -7664,12 +7675,36 @@ function klipyPick(file, tiers, fmt) {
   return null;
 }
 
+// Klipy content types served through the GIF endpoints (v2.60.0).
+// GIFs and stickers share the size-tiered file shape; clips are flat.
+const KLIPY_TYPES = ['gifs', 'stickers', 'clips'];
+
 // Normalize a Klipy item into Cortex's common GIF shape.
 // Klipy (klipy.com) is the go-forward Tenor replacement: near drop-in, built
 // by ex-Tenor engineers. Uses page-based pagination, so we present it to the
 // endpoint as offset-based (like GIPHY) by mapping offset -> page.
 // url = largest gif (hd→xs) for posting; preview = small gif (sm→hd) for the grid.
-function normalizeKlipyItems(items) {
+// Clips (v2.60.0) use a different shape: file.<mp4|gif|webp> is a flat URL
+// string with dimensions in file_meta, there is no numeric id (slug only), and
+// the posted url is the mp4 so the message pipeline embeds a <video>.
+function normalizeKlipyItems(items, type = 'gifs') {
+  if (type === 'clips') {
+    return (items || []).map(item => {
+      const file = item.file || {};
+      const meta = item.file_meta || {};
+      const prev = meta.gif || meta.webp || meta.mp4 || {};
+      return {
+        id: String(item.id ?? item.slug ?? ''),
+        title: item.title || item.slug || '',
+        url: file.mp4 || '',
+        preview: file.gif || file.webp || '',
+        width: parseInt(prev.width) || 100,
+        height: parseInt(prev.height) || 100,
+        provider: 'klipy',
+        type: 'clip'
+      };
+    }).filter(clip => clip.url && clip.preview);
+  }
   return (items || []).map(item => {
     const file = item.file || item.files || {};
     const full = klipyPick(file, ['hd', 'md', 'sm', 'xs'], 'gif');
@@ -7683,7 +7718,8 @@ function normalizeKlipyItems(items) {
       preview,
       width: parseInt(prev?.width || full?.width || 100),
       height: parseInt(prev?.height || full?.height || 100),
-      provider: 'klipy'
+      provider: 'klipy',
+      type: type === 'stickers' ? 'sticker' : 'gif'
     };
   }).filter(gif => gif.url && gif.preview);
 }
@@ -7694,14 +7730,15 @@ function klipyPerPage(limit) {
   return Math.min(Math.max(parseInt(limit) || 20, 8), 50);
 }
 
-// Helper: Search GIFs from Klipy. Returns an array (offset-based, like GIPHY).
+// Helper: Search GIFs/stickers/clips from Klipy. Returns an array
+// (offset-based, like GIPHY).
 // NOTE: the API key is a path segment — never log the request URL.
-async function searchKlipy(query, limit, offset) {
+async function searchKlipy(query, limit, offset, type = 'gifs') {
   if (!KLIPY_API_KEY) return null;
 
   const perPage = klipyPerPage(limit);
   const page = Math.floor((parseInt(offset) || 0) / perPage) + 1;
-  const searchUrl = new URL(`https://api.klipy.com/api/v1/${KLIPY_API_KEY}/gifs/search`);
+  const searchUrl = new URL(`https://api.klipy.com/api/v1/${KLIPY_API_KEY}/${type}/search`);
   searchUrl.searchParams.set('q', query);
   searchUrl.searchParams.set('per_page', perPage.toString());
   searchUrl.searchParams.set('page', page.toString());
@@ -7719,16 +7756,16 @@ async function searchKlipy(query, limit, offset) {
   const json = await response.json();
   const d = json?.data;
   const items = Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []);
-  return normalizeKlipyItems(items);
+  return normalizeKlipyItems(items, type);
 }
 
-// Helper: Get trending GIFs from Klipy. Returns an array (offset-based).
-async function trendingKlipy(limit, offset) {
+// Helper: Get trending GIFs/stickers/clips from Klipy. Returns an array (offset-based).
+async function trendingKlipy(limit, offset, type = 'gifs') {
   if (!KLIPY_API_KEY) return null;
 
   const perPage = klipyPerPage(limit);
   const page = Math.floor((parseInt(offset) || 0) / perPage) + 1;
-  const trendingUrl = new URL(`https://api.klipy.com/api/v1/${KLIPY_API_KEY}/gifs/trending`);
+  const trendingUrl = new URL(`https://api.klipy.com/api/v1/${KLIPY_API_KEY}/${type}/trending`);
   trendingUrl.searchParams.set('per_page', perPage.toString());
   trendingUrl.searchParams.set('page', page.toString());
   trendingUrl.searchParams.set('rating', 'pg-13');
@@ -7745,7 +7782,7 @@ async function trendingKlipy(limit, offset) {
   const json = await response.json();
   const d = json?.data;
   const items = Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []);
-  return normalizeKlipyItems(items);
+  return normalizeKlipyItems(items, type);
 }
 
 // Get GIF provider configuration
@@ -7763,16 +7800,23 @@ app.get('/api/gifs/config', authenticateToken, (req, res) => {
   res.json({
     providers,
     defaultProvider: GIF_PROVIDER,
-    enabled: providers.length > 0
+    enabled: providers.length > 0,
+    // Stickers and clips are Klipy-only (v2.60.0)
+    types: providers.includes('klipy') ? KLIPY_TYPES : ['gifs']
   });
 });
 
-// Search GIFs
+// Search GIFs (also stickers and clips via ?type=, Klipy only — v2.60.0)
 app.get('/api/gifs/search', authenticateToken, gifSearchLimiter, async (req, res) => {
-  const { q, limit = 20, offset = 0, pos, provider } = req.query;
+  const { q, limit = 20, offset = 0, pos, provider, type = 'gifs' } = req.query;
 
   if (!q || typeof q !== 'string' || q.trim().length === 0) {
     return res.status(400).json({ error: 'Search query is required' });
+  }
+
+  // type becomes a Klipy URL path segment — reject anything off the allow-list
+  if (!KLIPY_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'Invalid type. Use gifs, stickers, or clips.' });
   }
 
   const maxLimit = Math.min(parseInt(limit) || 20, 50);
@@ -7792,11 +7836,20 @@ app.get('/api/gifs/search', authenticateToken, gifSearchLimiter, async (req, res
     });
   }
 
+  // Stickers and clips are Klipy-only
+  if (type !== 'gifs' && !hasKlipy) {
+    return res.status(503).json({
+      error: `${type === 'clips' ? 'Clip' : 'Sticker'} search requires the Klipy provider. Set KLIPY_API_KEY.`
+    });
+  }
+
   try {
     let gifs = [];
     let nextToken = null;
 
-    if (useProvider === 'both' && hasGiphy && hasKlipy) {
+    if (type !== 'gifs') {
+      gifs = await searchKlipy(query, maxLimit, startOffset, type) || [];
+    } else if (useProvider === 'both' && hasGiphy && hasKlipy) {
       // Fetch from GIPHY + Klipy and interleave results (both offset-based)
       const halfLimit = Math.ceil(maxLimit / 2);
       const halfOffset = Math.floor(startOffset / 2);
@@ -7831,7 +7884,7 @@ app.get('/api/gifs/search', authenticateToken, gifSearchLimiter, async (req, res
         offset: startOffset,
         next: nextToken // Tenor pagination token (null for GIPHY)
       },
-      provider: useProvider
+      provider: type !== 'gifs' ? 'klipy' : useProvider
     });
   } catch (err) {
     console.error('GIF search error:', err);
@@ -7839,9 +7892,14 @@ app.get('/api/gifs/search', authenticateToken, gifSearchLimiter, async (req, res
   }
 });
 
-// Get trending GIFs
+// Get trending GIFs (also stickers and clips via ?type=, Klipy only — v2.60.0)
 app.get('/api/gifs/trending', authenticateToken, gifSearchLimiter, async (req, res) => {
-  const { limit = 20, offset = 0, pos, provider } = req.query;
+  const { limit = 20, offset = 0, pos, provider, type = 'gifs' } = req.query;
+
+  // type becomes a Klipy URL path segment — reject anything off the allow-list
+  if (!KLIPY_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'Invalid type. Use gifs, stickers, or clips.' });
+  }
 
   const maxLimit = Math.min(parseInt(limit) || 20, 50);
   const startOffset = parseInt(offset) || 0;
@@ -7853,7 +7911,7 @@ app.get('/api/gifs/trending', authenticateToken, gifSearchLimiter, async (req, r
   const hasKlipy = KLIPY_API_KEY && (useProvider === 'klipy' || useProvider === 'both');
   const hasTenor = TENOR_API_KEY && useProvider === 'tenor'; // legacy standalone only
 
-  console.log(`🎬 GIF trending: provider=${useProvider}, hasGiphy=${hasGiphy}, hasKlipy=${hasKlipy}, hasTenor=${hasTenor}, pos="${tenorPos}"`);
+  console.log(`🎬 GIF trending: provider=${useProvider}, type=${type}, hasGiphy=${hasGiphy}, hasKlipy=${hasKlipy}, hasTenor=${hasTenor}, pos="${tenorPos}"`);
 
   if (!hasGiphy && !hasKlipy && !hasTenor) {
     return res.status(503).json({
@@ -7861,11 +7919,20 @@ app.get('/api/gifs/trending', authenticateToken, gifSearchLimiter, async (req, r
     });
   }
 
+  // Stickers and clips are Klipy-only
+  if (type !== 'gifs' && !hasKlipy) {
+    return res.status(503).json({
+      error: `${type === 'clips' ? 'Clip' : 'Sticker'} search requires the Klipy provider. Set KLIPY_API_KEY.`
+    });
+  }
+
   try {
     let gifs = [];
     let nextToken = null;
 
-    if (useProvider === 'both' && hasGiphy && hasKlipy) {
+    if (type !== 'gifs') {
+      gifs = await trendingKlipy(maxLimit, startOffset, type) || [];
+    } else if (useProvider === 'both' && hasGiphy && hasKlipy) {
       const halfLimit = Math.ceil(maxLimit / 2);
       const halfOffset = Math.floor(startOffset / 2);
       const [giphyGifs, klipyGifs] = await Promise.all([
@@ -7898,7 +7965,7 @@ app.get('/api/gifs/trending', authenticateToken, gifSearchLimiter, async (req, r
         offset: startOffset,
         next: nextToken // Tenor pagination token (null for GIPHY)
       },
-      provider: useProvider
+      provider: type !== 'gifs' ? 'klipy' : useProvider
     });
   } catch (err) {
     console.error('Trending GIFs error:', err);
