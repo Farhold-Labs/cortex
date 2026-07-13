@@ -2141,11 +2141,12 @@ curl "http://localhost:3001/api/search?q=mission" \
 
 ### GIFs Endpoints
 
-Requires `GIPHY_API_KEY` environment variable to be set.
+Requires `GIPHY_API_KEY` and/or `KLIPY_API_KEY` environment variables to be set
+(see `GIF_PROVIDER`). Stickers and clips (v2.60.0) are Klipy-only.
 
 #### GET /api/gifs/search
 
-Search for GIFs via GIPHY API.
+Search for GIFs, stickers, or clips.
 
 **Authentication:** Required
 
@@ -2156,6 +2157,7 @@ Search for GIFs via GIPHY API.
 - `q` (string, required): Search query
 - `limit` (integer): Number of results (default: 20, max: 50)
 - `offset` (integer): Pagination offset (default: 0)
+- `type` (string): `gifs` (default), `stickers`, or `clips` — stickers/clips require Klipy (503 otherwise). Clip results carry `"type": "clip"` and an `.mp4` `url` that embeds as `<video>` when posted.
 
 **Example:**
 
@@ -2195,7 +2197,7 @@ curl "http://localhost:3001/api/gifs/search?q=excited&limit=10" \
 
 #### GET /api/gifs/trending
 
-Get trending GIFs from GIPHY.
+Get trending GIFs, stickers, or clips.
 
 **Authentication:** Required
 
@@ -2205,6 +2207,7 @@ Get trending GIFs from GIPHY.
 
 - `limit` (integer): Number of results (default: 20, max: 50)
 - `offset` (integer): Pagination offset (default: 0)
+- `type` (string): `gifs` (default), `stickers`, or `clips` (Klipy-only)
 
 **Response (200 OK):**
 

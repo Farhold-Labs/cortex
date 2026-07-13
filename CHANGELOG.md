@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.60.0] - 2026-07-13
+
+### Added
+
+- **Klipy stickers and clips**: the GIF picker now has **GIFs / Stickers / Clips** tabs (Klipy-only — the tabs appear only when Klipy is configured; `GET /api/gifs/config` reports the available `types`). `GET /api/gifs/search` and `/api/gifs/trending` accept `type=gifs|stickers|clips` (validated against an allow-list since it becomes a Klipy URL path segment; default `gifs`, so existing clients are unaffected). Klipy clip responses have a different shape than GIFs/stickers (`file.mp4` is a flat URL string, no numeric id — slug only, dimensions in `file_meta`), normalized into the common GIF shape with `type: 'clip'` and the mp4 as the post URL. Clips show a ▶ CLIP badge in the picker grid; stickers and clips can be ★ favorited like GIFs (no schema change — clips are recognized by their `.mp4` URL).
+- **Playable `<video>` embeds**: posted mp4/webm URLs (e.g. Klipy clips) now embed as `<video controls playsinline preload="metadata">` instead of a broken `<img>` (server `detectAndEmbedMedia`) or a bare link (the SQLite copy, which didn't handle video at all). The message sanitizer allow-list now permits `video` with a fixed attribute set (no autoplay), `http/https` sources only.
+
+### Fixed
+
+- **Klipy media didn't render in E2EE waves**: the client-side embed pass in `MessageWithEmbeds.jsx` (used for decrypted E2EE content, which skips server-side embedding) never got the Klipy CDN hosts when Klipy was added in v2.58.x, so Klipy GIFs posted in encrypted waves rendered as plain-text URLs. Klipy hosts are now in the client img pass, and a new client video pass converts mp4/webm CDN URLs to `<video>` (running before the img pass so clips don't get wrapped as images).
+- **SQLite `detectAndEmbedMedia` drift**: the duplicated copy in `database-sqlite.js` (the one actually used in production) was missing the Klipy CDN hosts and the numbered GIPHY/Tenor subdomains (`media1.giphy.com` etc.) that the `server.js` copy already had; the host lists are realigned.
+
 ## [2.59.3] - 2026-07-09
 
 ### Fixed
