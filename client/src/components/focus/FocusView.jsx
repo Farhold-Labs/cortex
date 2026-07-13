@@ -5,6 +5,7 @@ import { SUCCESS, EMPTY, formatError, CONFIRM_DIALOG } from '../../../messages.j
 import { PRIVACY_LEVELS, API_URL, BASE_URL } from '../../config/constants.js';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { storage } from '../../utils/storage.js';
+import { mediaEmbedHtml } from '../../utils/embed.js';
 import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import GifSearchModal from '../search/GifSearchModal.jsx';
@@ -652,7 +653,7 @@ const FocusView = ({
           isOpen={showGifSearch}
           onClose={() => setShowGifSearch(false)}
           onSelect={(gifUrl) => {
-            const gifHtml = `<img src="${gifUrl}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
+            const gifHtml = mediaEmbedHtml(gifUrl);
             composerRef.current?.appendMessage(gifHtml);
             setShowGifSearch(false);
           }}

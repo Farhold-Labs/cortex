@@ -112,14 +112,17 @@ function roundTimestamp(date, minutes = 15) {
 
 // ============ Security: Input Sanitization ============
 const sanitizeMessageOptions = {
-  allowedTags: ['img', 'a', 'br', 'p', 'strong', 'em', 'code', 'pre'],
+  allowedTags: ['img', 'a', 'br', 'p', 'strong', 'em', 'code', 'pre', 'video'],
   allowedAttributes: {
     'img': ['src', 'alt', 'width', 'height', 'class', 'style'],
     'a': ['href', 'target', 'rel', 'class', 'data-filename', 'data-size', 'download'],
+    // Klipy clips and other embedded videos (v2.60.0) — no autoplay
+    'video': ['src', 'controls', 'playsinline', 'preload', 'loop', 'width', 'height', 'class', 'poster'],
   },
   allowedSchemes: ['http', 'https', 'data'],
   allowedSchemesByTag: {
-    img: ['http', 'https', 'data']
+    img: ['http', 'https', 'data'],
+    video: ['http', 'https']
   },
   transformTags: {
     'a': (tagName, attribs) => ({
@@ -151,10 +154,15 @@ function sanitizeMessage(content) {
 function detectAndEmbedMedia(content) {
   const urlRegex = /(?<!["'>])(https?:\/\/[^\s<]+)(?![^<]*>|[^<>]*<\/)/gi;
   const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg)(\?[^\s]*)?$/i;
-  const imageHosts = /(media\.giphy\.com|i\.giphy\.com|media\.tenor\.com|c\.tenor\.com)/i;
+  // Video URLs (e.g. Klipy clips) embed as playable <video>, not <img>
+  const videoExtensions = /\.(mp4|webm)(\?[^\s]*)?$/i;
+  const imageHosts = /(media[0-9]?\.giphy\.com|i\.giphy\.com|media[0-9]?\.tenor\.com|c\.tenor\.com|[a-z0-9-]+\.klipy\.com)/i;
   const imgStyle = 'max-width:200px;max-height:150px;border-radius:4px;cursor:pointer;object-fit:cover;display:block;border:1px solid #3a4a3a;';
 
   content = content.replace(urlRegex, (match) => {
+    if (videoExtensions.test(match)) {
+      return `<video src="${match}" controls playsinline preload="metadata" class="message-media"></video>`;
+    }
     if (imageExtensions.test(match) || imageHosts.test(match)) {
       return `<img src="${match}" alt="Embedded media" style="${imgStyle}" class="zoomable-image" />`;
     }

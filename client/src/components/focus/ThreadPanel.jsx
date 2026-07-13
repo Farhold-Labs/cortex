@@ -4,6 +4,7 @@ import { SUCCESS, formatError, CONFIRM_DIALOG } from '../../../messages.js';
 import { PRIVACY_LEVELS, API_URL, THREAD_DEPTH_LIMIT } from '../../config/constants.js';
 import { Avatar } from '../ui/SimpleComponents.jsx';
 import { storage } from '../../utils/storage.js';
+import { mediaEmbedHtml } from '../../utils/embed.js';
 import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import GifSearchModal from '../search/GifSearchModal.jsx';
@@ -596,7 +597,7 @@ const ThreadPanel = ({
           isOpen={showGifSearch}
           onClose={() => setShowGifSearch(false)}
           onSelect={(gifUrl) => {
-            const gifHtml = `<img src="${gifUrl}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
+            const gifHtml = mediaEmbedHtml(gifUrl);
             composerRef.current?.appendMessage(gifHtml);
             setShowGifSearch(false);
           }}
