@@ -5,6 +5,13 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.60.1] - 2026-07-13
+
+### Fixed
+
+- **Clips posted from the picker showed as a broken image**: all four composer insert paths (WaveView, FocusView, ThreadPanel, and the inline `/gif` popup in MessageComposer) wrapped the selected URL in an `<img>` tag before sending, so a clip's `.mp4` never reached the server as a bare URL and the v2.60.0 `<video>` embedding never fired. The four duplicated snippets are replaced by a shared `mediaEmbedHtml(url)` helper (`client/src/utils/embed.js`) that emits `<video controls playsinline preload="metadata">` for mp4/webm and the usual `<img>` otherwise.
+- **Existing broken clip messages are rescued at render time**: `MessageWithEmbeds.jsx` now rewrites stored `<img src="….mp4|webm">` to `<video>`, so clips posted before this fix (or by old clients) play instead of showing a broken image.
+
 ## [2.60.0] - 2026-07-13
 
 ### Added

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { Avatar } from '../ui/SimpleComponents.jsx';
 import { searchEmoji, resolveEmojiShortcodes, EMOJI_MAP } from '../../config/emojiData.js';
+import { mediaEmbedHtml } from '../../utils/embed.js';
 
 const MessageComposer = forwardRef(({
   participants = [],
@@ -164,7 +165,7 @@ const MessageComposer = forwardRef(({
   }, [gifSearch, showGifPicker]);
 
   const insertGif = (gifUrl) => {
-    const gifHtml = `<img src="${gifUrl}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
+    const gifHtml = mediaEmbedHtml(gifUrl);
     const before = newMessage.slice(0, gifStartPos ?? 0);
     const after = newMessage.slice(textareaRef.current?.selectionStart ?? (gifStartPos ?? 0));
     setNewMessage(before + gifHtml + after);

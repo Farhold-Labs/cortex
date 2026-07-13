@@ -171,3 +171,14 @@ export function detectEmbedUrls(text) {
 
   return embeds;
 }
+
+// Build the HTML snippet the composers insert for a picked GIF/sticker/clip.
+// Klipy clips post an .mp4 URL, which must become a <video> — wrapping it in
+// <img> renders a broken image (v2.60.1). The server sanitizer allows both
+// tags with these exact attributes.
+export function mediaEmbedHtml(url) {
+  if (/\.(mp4|webm)(\?|$)/i.test(url)) {
+    return `<video src="${url}" controls playsinline preload="metadata" class="message-media"></video>`;
+  }
+  return `<img src="${url}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
+}

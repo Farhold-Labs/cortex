@@ -22,6 +22,7 @@ import PlexBrowserModal from '../media/PlexBrowserModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import { storage } from '../../utils/storage.js';
+import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 
 const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove }) => {
@@ -2751,7 +2752,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           isOpen={showGifSearch}
           onClose={() => setShowGifSearch(false)}
           onSelect={(gifUrl) => {
-            const gifHtml = `<img src="${gifUrl}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
+            const gifHtml = mediaEmbedHtml(gifUrl);
             if (composerRef.current) {
               composerRef.current.appendMessage(gifHtml);
             } else {
