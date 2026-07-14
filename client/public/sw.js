@@ -71,12 +71,36 @@ async function staleWhileRevalidate(request, cacheName, maxAge) {
   return fetchPromise;
 }
 
-// Install: pre-cache static shell + all hashed build assets
+// A response is "poison" for an asset request when the server answered with
+// HTML instead of the asset — e.g. an SPA fallback returning 200 index.html
+// for a hashed bundle that was deleted by a deploy. Caching it bricks the app
+// on the next cold start (v2.60.3).
+function isHtmlForAsset(request, response) {
+  if (!response || !response.ok) return false;
+  const pathname = new URL(request.url).pathname;
+  // Only file-like, non-HTML paths can be poisoned
+  if (!/\.[a-z0-9]{2,5}$/i.test(pathname) || pathname.endsWith('.html')) return false;
+  const type = response.headers.get('content-type') || '';
+  return type.includes('text/html');
+}
+
+// Install: pre-cache static shell + all hashed build assets.
+// Each asset is fetched and validated individually (instead of cache.addAll,
+// which happily caches a 200 HTML fallback) — a poisoned or failed asset
+// aborts the install so the previous working SW stays active (v2.60.3).
 self.addEventListener('install', (event) => {
   const allAssets = [...STATIC_ASSETS, ...PRECACHE_ASSETS];
   console.log(`[SW] Installing ${CACHE_NAME} — pre-caching ${allAssets.length} assets`);
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(allAssets))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.all(allAssets.map(async (asset) => {
+        const request = new Request(asset, { cache: 'no-cache' });
+        const response = await fetch(request);
+        if (!response.ok) throw new Error(`[SW] Pre-cache failed: ${asset} → ${response.status}`);
+        if (isHtmlForAsset(request, response)) throw new Error(`[SW] Pre-cache got HTML for asset: ${asset}`);
+        await cache.put(asset, response);
+      }))
+    )
   );
   self.skipWaiting();
 });
@@ -187,25 +211,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Hashed assets (JS/CSS with hash in filename): Cache-first (immutable)
-  // These files have unique hashes so cached versions are always valid
-  if (url.pathname.match(/\.[a-f0-9]{8,}\.(js|css)$/i)) {
-    event.respondWith(
-      caches.match(request).then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        return fetch(request).then((response) => {
-          if (response.ok) {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
-            });
-          }
-          return response;
-        });
-      })
-    );
+  // Hashed build assets: Cache-first (immutable — Vite hashes the filenames).
+  // NOTE (v2.60.3): the previous pattern /\.[a-f0-9]{8,}\.(js|css)$/ never
+  // matched Vite's `name-Hash.ext` naming, so bundles silently took the
+  // network-first path below. Match the whole /assets/ dir instead, and
+  // self-heal by purging any poisoned (HTML-as-JS) entry before serving.
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(request);
+      if (cached && !isHtmlForAsset(request, cached)) return cached;
+      if (cached) await cache.delete(request); // poisoned — drop and refetch
+      const response = await fetch(request);
+      if (response.ok && !isHtmlForAsset(request, response)) {
+        cache.put(request, response.clone());
+      }
+      return response;
+    })());
     return;
   }
 
@@ -213,7 +235,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        if (response.ok && response.type === 'basic') {
+        if (response.ok && response.type === 'basic' && !isHtmlForAsset(request, response)) {
           const responseClone = response.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(request, responseClone);
@@ -221,8 +243,11 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       })
-      .catch(() => {
-        return caches.match(request);
+      .catch(async () => {
+        const cached = await caches.match(request);
+        // Never serve a poisoned cache entry as an offline fallback
+        if (cached && isHtmlForAsset(request, cached)) return Response.error();
+        return cached;
       })
   );
 });
