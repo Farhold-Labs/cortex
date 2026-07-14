@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.60.3] - 2026-07-14
+
+### Fixed
+
+- **Service-worker cache poisoning bricked clients after deploys** (root cause of the Android app freezing at the splash screen): `serve.mjs`'s SPA fallback answered **any** unmatched path with `200 index.html` — including requests for hashed bundles deleted by a deploy. A client whose cached shell still referenced the previous build would fetch the old bundle, receive HTML with a 200, and the service worker would cache that HTML *as the bundle*. The next cold start then booted entirely from the poisoned cache (zero network) and died on a JS parse error, leaving the app on the splash-colored background indefinitely. Three-layer fix:
+  - **`serve.mjs`**: file-like paths (last segment has an extension) that miss now return **404**; only extensionless routes get the SPA fallback. Also `sw.js`/`manifest.json` are now `no-cache` (they were getting the 1-year immutable header, which can delay SW updates up to 24h).
+  - **`sw.js` install**: pre-caching validates each asset individually (status + content-type) instead of `cache.addAll`, which happily cached the HTML fallback; a bad asset now aborts the install so the previous working SW stays active.
+  - **`sw.js` runtime**: new `isHtmlForAsset` guard blocks caching HTML under asset URLs in every code path, and **self-heals** existing poisoned caches — a poisoned entry found on read is deleted and refetched. Also fixed the "hashed assets cache-first" pattern, which expected `name.hash.js` and never matched Vite's `name-Hash.js` output, so bundles were unintentionally taking the network-first path since the pattern was introduced.
+
 ## [2.60.2] - 2026-07-13
 
 ### Added
