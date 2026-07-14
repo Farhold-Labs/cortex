@@ -24,8 +24,10 @@ app.use(
       etag: true,
       lastModified: true,
       setHeaders(res, filePath) {
-        if (filePath.endsWith('.html')) {
-          // HTML must never be cached — it references hashed asset filenames
+        if (filePath.endsWith('.html') || /(?:^|\/)(sw\.js|manifest\.json)(?:\.gz|\.br)?$/.test(filePath)) {
+          // HTML must never be cached — it references hashed asset filenames.
+          // sw.js/manifest.json likewise: an immutable-cached service worker
+          // can stay stale for up to 24h after a deploy (v2.60.3).
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         } else {
           // Hashed assets (JS, CSS) are immutable — cache for 1 year
@@ -36,8 +38,16 @@ app.use(
   })
 );
 
-// SPA fallback: all unmatched routes serve index.html (Express 5 wildcard syntax)
-app.get('/{*path}', (_req, res) => {
+// SPA fallback: unmatched ROUTES serve index.html (Express 5 wildcard syntax).
+// File-like paths (last segment has an extension) must 404 instead: answering
+// a missing /assets/*.js with 200 index.html lets the service worker cache
+// HTML as if it were the bundle, permanently bricking clients whose shell
+// still references a previous build's hashed assets (v2.60.3).
+app.get('/{*path}', (req, res) => {
+  const lastSegment = req.path.split('/').pop() || '';
+  if (lastSegment.includes('.')) {
+    return res.status(404).type('text/plain').send('Not found');
+  }
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.sendFile(path.join(DIST, 'index.html'));
 });
