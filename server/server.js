@@ -16906,9 +16906,10 @@ app.get('/api/admin/livekit/rooms', authenticateToken, async (req, res) => {
   try {
     const rooms = await livekitRoomService.listRooms();
 
-    // Enrich with wave info
+    // Enrich with wave info (batch-load all waves in one query, not per-room)
+    const wavesById = db.getWavesByIds(rooms.map(r => r.name)); // room.name is waveId
     const enrichedRooms = rooms.map(room => {
-      const wave = db.getWave(room.name); // room.name is waveId
+      const wave = wavesById.get(room.name);
       return {
         roomName: room.name,
         waveTitle: wave?.title || 'Unknown Wave',
@@ -20178,6 +20179,9 @@ function createPingNotifications(ping, wave, author) {
   // Get wave participants
   const participants = db.getWaveParticipants(wave.id);
   const participantIds = new Set(participants.map(p => p.id));
+  // Prefetch full participant user records once (avoids a findUserById per
+  // participant in the wave_activity fan-out below).
+  const participantUsers = db.findUsersByIds(participants.map(p => p.id));
 
   // 1. Check for @mentions
   const mentionedHandles = extractMentions(ping.content);
@@ -20330,7 +20334,7 @@ function createPingNotifications(ping, wave, author) {
     if (!db.shouldNotifyForWave(participant.id, wave.id, 'wave_activity')) continue;
 
     // Skip wave_activity if user is currently viewing this wave (focus awareness)
-    const participantUser = db.findUserById(participant.id);
+    const participantUser = participantUsers.get(participant.id);
     const participantPrefs = participantUser?.notificationPreferences || DEFAULT_NOTIF_PREFS;
     if (participantPrefs.suppressWhileFocused) {
       const viewingState = userViewingState.get(participant.id);
