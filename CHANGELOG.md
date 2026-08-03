@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.60.4] - 2026-08-03
+
+### Performance
+
+- **Eliminated N+1 queries in the two hottest read paths.** Opening a wave and loading the wave list each issued one query per row; both are now set-based.
+  - **`getPingsForWave`** (every wave open) fired two `ping_read_by` queries per ping (`hasRead` + `readBy`). Read receipts for the whole wave are now loaded in a single `WHERE ping_id IN (...)` and grouped into a `Map<pingId, Set<userId>>`, so read state is O(1) per ping. A 200-ping wave drops from ~400 extra queries to 1.
+  - **`getWavesForUser` / `getWavesForUserMinimal`** (every wave-list load) fired participants + unread-count + category-name (+2 plaintext-fallback metadata) queries per wave. Both are restructured into two passes: resolve metadata and apply the visibility filter, then batch participants, unread counts (`GROUP BY wave_id`), and category names across the surviving waves. ~5 queries/wave collapses to a small constant, and filtered-out waves no longer trigger any of that work.
+  - Output shape and filtering semantics are unchanged in both the participation-cache and plaintext-fallback paths.
+
 ## [2.60.3] - 2026-07-14
 
 ### Fixed
