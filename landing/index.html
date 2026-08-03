@@ -588,9 +588,27 @@
         <a href="https://github.com/Farhold-Labs/cortex/releases" target="_blank" rel="noopener">Releases</a>
       </div>
       <p class="copyright">
-        Cortex v2.60.5 &middot; Open Source &middot; MIT License
+        Cortex <span id="version">v2.60.5</span> &middot; Open Source &middot; MIT License
       </p>
     </div>
   </footer>
+  <script>
+    // Keep the footer version current without a redeploy: pull the latest
+    // published release tag from GitHub. The hardcoded value above is the
+    // graceful fallback if the request fails or JS is disabled.
+    (function () {
+      var el = document.getElementById('version');
+      if (!el || !window.fetch) return;
+      fetch('https://api.github.com/repos/Farhold-Labs/cortex/releases/latest', {
+        headers: { 'Accept': 'application/vnd.github+json' }
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          var tag = data && data.tag_name;
+          if (tag) el.textContent = /^v/i.test(tag) ? tag : 'v' + tag;
+        })
+        .catch(function () { /* keep the fallback version */ });
+    })();
+  </script>
 </body>
 </html>
