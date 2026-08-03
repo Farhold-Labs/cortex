@@ -4631,89 +4631,133 @@ export class DatabaseSQLite {
       ORDER BY w.updated_at DESC
     `).all(...waveIds);
 
-    return rows.map(r => {
-      // Get metadata from cache or DB
-      let archived = 0, pinned = 0, hidden = 0, categoryId = null, categoryName = null, lastRead = null;
+    // Pass 1: resolve per-wave metadata and apply the visibility filter.
+    // Metadata comes from the participation cache when present; otherwise
+    // batch-load the plaintext fallback tables (one query each, not per-wave).
+    const wpMap = new Map();
+    const wcaMap = new Map();
+    if (!participation && rows.length > 0) {
+      const ids = rows.map(r => r.id);
+      const ph = ids.map(() => '?').join(',');
+      for (const wp of this.db.prepare(
+        `SELECT wave_id, archived, last_read, pinned FROM wave_participants WHERE user_id = ? AND wave_id IN (${ph})`
+      ).all(userId, ...ids)) {
+        wpMap.set(wp.wave_id, wp);
+      }
+      for (const wca of this.db.prepare(
+        `SELECT wave_id, category_id FROM wave_category_assignments WHERE user_id = ? AND wave_id IN (${ph})`
+      ).all(userId, ...ids)) {
+        wcaMap.set(wca.wave_id, wca.category_id);
+      }
+    }
+
+    const visible = [];
+    for (const r of rows) {
+      let archived = 0, pinned = 0, hidden = 0, categoryId = null;
       if (participation) {
         const meta = participation.getMetadata(r.id, userId);
         archived = meta.archived || 0;
         pinned = meta.pinned || 0;
         hidden = meta.hidden || 0;
         categoryId = meta.categoryId || null;
-        lastRead = meta.lastRead || null;
       } else {
-        // Fallback to plaintext tables
-        const wp = this.db.prepare('SELECT archived, last_read, pinned FROM wave_participants WHERE wave_id = ? AND user_id = ?').get(r.id, userId);
+        const wp = wpMap.get(r.id);
         if (wp) {
           archived = wp.archived || 0;
           pinned = wp.pinned || 0;
-          lastRead = wp.last_read;
         }
-        const wca = this.db.prepare('SELECT category_id FROM wave_category_assignments WHERE wave_id = ? AND user_id = ?').get(r.id, userId);
-        if (wca) categoryId = wca.category_id;
-      }
-
-      // Look up category name if we have a categoryId
-      if (categoryId) {
-        const cat = this.db.prepare('SELECT name FROM wave_categories WHERE id = ?').get(categoryId);
-        categoryName = cat ? cat.name : null;
+        const cid = wcaMap.get(r.id);
+        if (cid) categoryId = cid;
       }
 
       // Filter based on mode
       if (showHidden) {
-        if (hidden !== 1) return null; // Only show hidden waves in ghost mode
+        if (hidden !== 1) continue; // Only show hidden waves in ghost mode
       } else if (showArchived) {
-        if (archived !== 1) return null; // Only show archived
+        if (archived !== 1) continue; // Only show archived
       } else {
-        if (archived === 1 || hidden === 1) return null; // Exclude both
+        if (archived === 1 || hidden === 1) continue; // Exclude both
       }
 
-      // Get participants for this wave
-      const participants = this.getWaveParticipants(r.id);
+      visible.push({ r, archived, pinned, hidden, categoryId });
+    }
 
-      // Calculate unread count
+    // Pass 2: batch-load participants, unread counts, and category names for
+    // the surviving waves (each is a single set-based query, not per-wave).
+    const partMap = new Map();
+    const unreadMap = new Map();
+    const catNameMap = new Map();
+    if (visible.length > 0) {
+      const visibleIds = visible.map(v => v.r.id);
+      const ph = visibleIds.map(() => '?').join(',');
+
+      // Participants, grouped by wave
+      for (const p of this.db.prepare(`
+        SELECT wp.wave_id, u.id, u.display_name, u.avatar, u.status, u.handle
+        FROM wave_participants wp
+        JOIN users u ON wp.user_id = u.id
+        WHERE wp.wave_id IN (${ph})
+      `).all(...visibleIds)) {
+        let list = partMap.get(p.wave_id);
+        if (!list) { list = []; partMap.set(p.wave_id, list); }
+        list.push({ id: p.id, name: p.display_name, avatar: p.avatar, status: p.status, handle: p.handle });
+      }
+
+      // Unread counts in a single aggregate query
       const blockedClause = blockedIds.length > 0
         ? `AND p.author_id NOT IN (${blockedIds.map(() => '?').join(',')})`
         : '';
       const mutedClause = mutedIds.length > 0
         ? `AND p.author_id NOT IN (${mutedIds.map(() => '?').join(',')})`
         : '';
-      const unreadCount = this.db.prepare(`
-        SELECT COUNT(*) as count FROM pings p
-        WHERE p.wave_id = ?
+      for (const uc of this.db.prepare(`
+        SELECT p.wave_id, COUNT(*) as count FROM pings p
+        WHERE p.wave_id IN (${ph})
           AND p.deleted = 0
           AND p.author_id != ?
           ${blockedClause}
           ${mutedClause}
           AND NOT EXISTS (SELECT 1 FROM ping_read_by prb WHERE prb.ping_id = p.id AND prb.user_id = ?)
-      `).get(r.id, userId, ...blockedIds, ...mutedIds, userId).count;
+        GROUP BY p.wave_id
+      `).all(...visibleIds, userId, ...blockedIds, ...mutedIds, userId)) {
+        unreadMap.set(uc.wave_id, uc.count);
+      }
 
-      return {
-        id: r.id,
-        title: r.title,
-        privacy: r.privacy,
-        crewId: r.crew_id,
-        createdBy: r.created_by,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-        creator_name: r.creator_name || 'Unknown',
-        creator_avatar: r.creator_avatar || '?',
-        creator_handle: r.creator_handle || 'unknown',
-        participants,
-        ping_count: r.ping_count,
-        unread_count: unreadCount,
-        is_participant: participation ? participation.isParticipant(r.id, userId) : (archived !== null),
-        is_archived: archived === 1,
-        is_hidden: hidden === 1,
-        crew_name: r.crew_name,
-        federationState: r.federation_state || 'local',
-        originNode: r.origin_node || null,
-        originWaveId: r.origin_wave_id || null,
-        category_id: categoryId,
-        category_name: categoryName,
-        pinned: pinned === 1,
-      };
-    }).filter(Boolean); // Remove nulls from filtering
+      // Category names for the distinct category ids in play
+      const catIds = [...new Set(visible.map(v => v.categoryId).filter(Boolean))];
+      if (catIds.length > 0) {
+        const cph = catIds.map(() => '?').join(',');
+        for (const c of this.db.prepare(`SELECT id, name FROM wave_categories WHERE id IN (${cph})`).all(...catIds)) {
+          catNameMap.set(c.id, c.name);
+        }
+      }
+    }
+
+    return visible.map(({ r, archived, pinned, hidden, categoryId }) => ({
+      id: r.id,
+      title: r.title,
+      privacy: r.privacy,
+      crewId: r.crew_id,
+      createdBy: r.created_by,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      creator_name: r.creator_name || 'Unknown',
+      creator_avatar: r.creator_avatar || '?',
+      creator_handle: r.creator_handle || 'unknown',
+      participants: partMap.get(r.id) || [],
+      ping_count: r.ping_count,
+      unread_count: unreadMap.get(r.id) || 0,
+      is_participant: participation ? participation.isParticipant(r.id, userId) : true,
+      is_archived: archived === 1,
+      is_hidden: hidden === 1,
+      crew_name: r.crew_name,
+      federationState: r.federation_state || 'local',
+      originNode: r.origin_node || null,
+      originWaveId: r.origin_wave_id || null,
+      category_id: categoryId,
+      category_name: categoryId ? (catNameMap.get(categoryId) || null) : null,
+      pinned: pinned === 1,
+    }));
   }
 
   // Low-Bandwidth Mode: Minimal wave list (v2.10.0)
@@ -4767,7 +4811,26 @@ export class DatabaseSQLite {
       ORDER BY w.updated_at DESC
     `).all(...waveIds);
 
-    return rows.map(r => {
+    // Pass 1: resolve per-wave metadata and apply the visibility filter.
+    // Fallback metadata (no participation cache) is batch-loaded, not per-wave.
+    const wpMap = new Map();
+    const wcaMap = new Map();
+    if (!participation) {
+      const ph = waveIds.map(() => '?').join(',');
+      for (const wp of this.db.prepare(
+        `SELECT wave_id, archived, pinned FROM wave_participants WHERE user_id = ? AND wave_id IN (${ph})`
+      ).all(userId, ...waveIds)) {
+        wpMap.set(wp.wave_id, wp);
+      }
+      for (const wca of this.db.prepare(
+        `SELECT wave_id, category_id FROM wave_category_assignments WHERE user_id = ? AND wave_id IN (${ph})`
+      ).all(userId, ...waveIds)) {
+        wcaMap.set(wca.wave_id, wca.category_id);
+      }
+    }
+
+    const visible = [];
+    for (const r of rows) {
       let archived = 0, pinned = 0, hidden = 0, categoryId = null;
       if (participation) {
         const meta = participation.getMetadata(r.id, userId);
@@ -4776,53 +4839,63 @@ export class DatabaseSQLite {
         hidden = meta.hidden || 0;
         categoryId = meta.categoryId || null;
       } else {
-        const wp = this.db.prepare('SELECT archived, pinned FROM wave_participants WHERE wave_id = ? AND user_id = ?').get(r.id, userId);
+        const wp = wpMap.get(r.id);
         if (wp) { archived = wp.archived || 0; pinned = wp.pinned || 0; }
-        const wca = this.db.prepare('SELECT category_id FROM wave_category_assignments WHERE wave_id = ? AND user_id = ?').get(r.id, userId);
-        if (wca) categoryId = wca.category_id;
+        const cid = wcaMap.get(r.id);
+        if (cid) categoryId = cid;
       }
 
       // Filter based on mode
       if (showHidden) {
-        if (hidden !== 1) return null;
+        if (hidden !== 1) continue;
       } else if (showArchived) {
-        if (archived !== 1) return null;
+        if (archived !== 1) continue;
       } else {
-        if (archived === 1 || hidden === 1) return null;
+        if (archived === 1 || hidden === 1) continue;
       }
 
-      // Calculate unread count
+      visible.push({ r, archived, pinned, hidden, categoryId });
+    }
+
+    // Pass 2: batch unread counts for surviving waves in one aggregate query.
+    const unreadMap = new Map();
+    if (visible.length > 0) {
+      const visibleIds = visible.map(v => v.r.id);
+      const ph = visibleIds.map(() => '?').join(',');
       const blockedClause = blockedIds.length > 0
         ? `AND p.author_id NOT IN (${blockedIds.map(() => '?').join(',')})`
         : '';
       const mutedClause = mutedIds.length > 0
         ? `AND p.author_id NOT IN (${mutedIds.map(() => '?').join(',')})`
         : '';
-      const unreadCount = this.db.prepare(`
-        SELECT COUNT(*) as count FROM pings p
-        WHERE p.wave_id = ?
+      for (const uc of this.db.prepare(`
+        SELECT p.wave_id, COUNT(*) as count FROM pings p
+        WHERE p.wave_id IN (${ph})
           AND p.deleted = 0
           AND p.author_id != ?
           ${blockedClause}
           ${mutedClause}
           AND NOT EXISTS (SELECT 1 FROM ping_read_by prb WHERE prb.ping_id = p.id AND prb.user_id = ?)
-      `).get(r.id, userId, ...blockedIds, ...mutedIds, userId).count;
+        GROUP BY p.wave_id
+      `).all(...visibleIds, userId, ...blockedIds, ...mutedIds, userId)) {
+        unreadMap.set(uc.wave_id, uc.count);
+      }
+    }
 
-      return {
-        id: r.id,
-        title: r.title,
-        privacy: r.privacy,
-        updatedAt: r.updated_at,
-        encrypted: r.encrypted === 1,
-        ping_count: r.ping_count,
-        unread_count: unreadCount,
-        pinned: pinned === 1,
-        is_archived: archived === 1,
-        is_hidden: hidden === 1,
-        category_id: categoryId,
-        participant_count: r.participant_count,
-      };
-    }).filter(Boolean);
+    return visible.map(({ r, archived, pinned, hidden, categoryId }) => ({
+      id: r.id,
+      title: r.title,
+      privacy: r.privacy,
+      updatedAt: r.updated_at,
+      encrypted: r.encrypted === 1,
+      ping_count: r.ping_count,
+      unread_count: unreadMap.get(r.id) || 0,
+      pinned: pinned === 1,
+      is_archived: archived === 1,
+      is_hidden: hidden === 1,
+      category_id: categoryId,
+      participant_count: r.participant_count,
+    }));
   }
 
   // Helper to convert wave row to object
@@ -6046,13 +6119,30 @@ export class DatabaseSQLite {
 
     const rows = this.db.prepare(sql).all(...params);
 
+    // Batch-load read receipts for all pings in one query (avoids N+1: was 2
+    // queries per ping). Group into a Map<pingId, Set<userId>> for O(1) lookup.
+    const readByMap = new Map();
+    if (rows.length > 0) {
+      const pingIds = rows.map(d => d.id);
+      const placeholders = pingIds.map(() => '?').join(',');
+      const receipts = this.db.prepare(
+        `SELECT ping_id, user_id FROM ping_read_by WHERE ping_id IN (${placeholders})`
+      ).all(...pingIds);
+      for (const rb of receipts) {
+        let set = readByMap.get(rb.ping_id);
+        if (!set) { set = new Set(); readByMap.set(rb.ping_id, set); }
+        set.add(rb.user_id);
+      }
+    }
+
     const localPings = rows.map(d => {
-      // Check if user has read this ping
-      const hasRead = userId ? !!this.db.prepare('SELECT 1 FROM ping_read_by WHERE ping_id = ? AND user_id = ?').get(d.id, userId) : false;
+      // Read state derived from the batched map (no per-ping query)
+      const readSet = readByMap.get(d.id);
+      const hasRead = userId ? !!(readSet && readSet.has(userId)) : false;
       const isUnread = d.deleted ? false : (userId ? !hasRead && d.author_id !== userId : false);
 
       // Get read by users
-      const readBy = this.db.prepare('SELECT user_id FROM ping_read_by WHERE ping_id = ?').all(d.id).map(r => r.user_id);
+      const readBy = readSet ? [...readSet] : [];
 
       // Use bot information if this is a bot ping
       const isBot = !!d.bot_id;
