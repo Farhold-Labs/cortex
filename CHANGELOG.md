@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.60.5] - 2026-08-03
+
+### Performance
+
+- **Removed two more N+1 query patterns** (follow-up to v2.60.4):
+  - **Notification fan-out** (`createPingNotifications`, runs on every ping posted): the `wave_activity` loop called `db.findUserById` once per wave participant to read notification preferences. Participant user records are now prefetched in a single query via the new `findUsersByIds(ids)` helper (returns a `Map<id, user>`, reusing `rowToUser` for identical semantics) and looked up from the map inside the loop.
+  - **Admin LiveKit rooms** (`GET /api/admin/livekit/rooms`): enrichment called `db.getWave` once per active room. Now batch-loaded in one query via the new `getWavesByIds(ids)` helper.
+  - Both helpers dedupe ids, tolerate missing/nullish ids, and return the same objects as their single-fetch counterparts. Behavior unchanged.
+
 ## [2.60.4] - 2026-08-03
 
 ### Performance
