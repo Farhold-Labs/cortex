@@ -2420,6 +2420,22 @@ export class DatabaseSQLite {
     return this.rowToUser(row);
   }
 
+  // Batch equivalent of findUserById: fetch many users in one query and return
+  // a Map<id, user>. Avoids N+1 lookups when iterating a set of user ids.
+  findUsersByIds(ids) {
+    const map = new Map();
+    if (!ids || ids.length === 0) return map;
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return map;
+    const placeholders = unique.map(() => '?').join(',');
+    const rows = this.db.prepare(`SELECT * FROM users WHERE id IN (${placeholders})`).all(...unique);
+    for (const row of rows) {
+      const user = this.rowToUser(row);
+      if (user) map.set(user.id, user);
+    }
+    return map;
+  }
+
   getAllUsers() {
     const rows = this.db.prepare('SELECT * FROM users ORDER BY created_at ASC').all();
     return rows.map(r => this.rowToUser(r));
@@ -4931,6 +4947,22 @@ export class DatabaseSQLite {
   getWave(waveId) {
     const row = this.db.prepare('SELECT * FROM waves WHERE id = ?').get(waveId);
     return this.rowToWave(row);
+  }
+
+  // Batch equivalent of getWave: fetch many waves in one query and return a
+  // Map<id, wave>. Avoids N+1 lookups when enriching a list of wave ids.
+  getWavesByIds(ids) {
+    const map = new Map();
+    if (!ids || ids.length === 0) return map;
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return map;
+    const placeholders = unique.map(() => '?').join(',');
+    const rows = this.db.prepare(`SELECT * FROM waves WHERE id IN (${placeholders})`).all(...unique);
+    for (const row of rows) {
+      const wave = this.rowToWave(row);
+      if (wave) map.set(wave.id, wave);
+    }
+    return map;
   }
 
   getWaveParticipants(waveId) {
