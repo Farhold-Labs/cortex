@@ -555,6 +555,19 @@
         font-family: 'Courier New', Monaco, 'Lucida Console', monospace;
       }
 
+      /* Accessibility: honor the OS "reduce motion" setting (WCAG 2.3.3).
+         Neutralizes CSS animations/transitions (seasonal effects, spinners,
+         pulses). The crawl ticker uses the Web Animations API and is handled
+         separately in CrawlBar.jsx. */
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.001ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+
       /* Custom scrollbar styling */
       * {
         scrollbar-width: thin;

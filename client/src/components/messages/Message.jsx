@@ -676,6 +676,9 @@ const Message = ({
                   setShowMessageMenu(!showMessageMenu);
                 }}
                 title="More"
+                aria-label="Message actions"
+                aria-haspopup="true"
+                aria-expanded={showMessageMenu}
                 style={{ padding: '3px 5px', background: showMessageMenu ? 'var(--bg-hover)' : 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.75rem' }}
               >⋮</button>
               {showMessageMenu && (

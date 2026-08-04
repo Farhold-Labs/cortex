@@ -86,16 +86,20 @@ export const Toast = ({ message, type = 'info', duration = 4000, dismissible, on
   const colors = { success: 'var(--accent-green)', error: 'var(--accent-orange)', info: 'var(--accent-amber)' };
   useEffect(() => { const t = setTimeout(onClose, duration); return () => clearTimeout(t); }, [onClose, duration]);
   return (
-    <div style={{
-      position: 'fixed', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
-      padding: dismissible ? '12px 32px 12px 24px' : '12px 24px', background: 'var(--bg-surface)',
-      border: `1px solid ${colors[type]}`, color: colors[type],
-      fontFamily: 'monospace', fontSize: '0.85rem', zIndex: 200,
-      maxWidth: '90vw', textAlign: 'center',
-    }}>
+    <div
+      role="status"
+      aria-live={type === 'error' ? 'assertive' : 'polite'}
+      style={{
+        position: 'fixed', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
+        padding: dismissible ? '12px 32px 12px 24px' : '12px 24px', background: 'var(--bg-surface)',
+        border: `1px solid ${colors[type]}`, color: colors[type],
+        fontFamily: 'monospace', fontSize: '0.85rem', zIndex: 200,
+        maxWidth: '90vw', textAlign: 'center',
+      }}
+    >
       {message}
       {dismissible && (
-        <button onClick={onClose} style={{
+        <button onClick={onClose} aria-label="Dismiss notification" style={{
           position: 'absolute', top: '4px', right: '6px',
           background: 'none', border: 'none', color: colors[type],
           cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.8rem',

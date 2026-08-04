@@ -6,6 +6,13 @@ const CRAWL_SCROLL_SPEEDS = {
   fast: 30,     // quicker but still readable
 };
 
+// WCAG 2.3.3: don't auto-scroll the ticker if the user prefers reduced motion.
+// (The Web Animations API isn't covered by the global reduced-motion CSS reset.)
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' && window.matchMedia
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
+
 const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, onAlertClick }) => {
   const [data, setData] = useState({ stocks: { data: [] }, weather: { data: null }, news: { data: [] }, alerts: { data: [] } });
   const [loading, setLoading] = useState(true);
@@ -42,20 +49,23 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
           if (animationRef.current) {
             animationRef.current.cancel();
           }
-          // Create new animation and restore position
-          const anim = scrollRef.current.animate(
-            [
-              { transform: 'translateX(0px)' },
-              { transform: `translateX(-${newContentWidth}px)` }
-            ],
-            {
-              duration: scrollSpeed * 1000,
-              iterations: Infinity,
-              easing: 'linear'
-            }
-          );
-          anim.currentTime = savedTime;
-          animationRef.current = anim;
+          // Create new animation and restore position (skipped entirely when
+          // the user prefers reduced motion — the crawl stays static)
+          if (!prefersReducedMotion()) {
+            const anim = scrollRef.current.animate(
+              [
+                { transform: 'translateX(0px)' },
+                { transform: `translateX(-${newContentWidth}px)` }
+              ],
+              {
+                duration: scrollSpeed * 1000,
+                iterations: Infinity,
+                easing: 'linear'
+              }
+            );
+            anim.currentTime = savedTime;
+            animationRef.current = anim;
+          }
           setContentWidth(newContentWidth);
         }
       });
@@ -98,7 +108,7 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
     if (!scrollRef.current || loading || contentWidth === 0) return;
 
     // Create animation using pixel-based translation for seamless loop
-    if (!animationRef.current) {
+    if (!animationRef.current && !prefersReducedMotion()) {
       const anim = scrollRef.current.animate(
         [
           { transform: 'translateX(0px)' },

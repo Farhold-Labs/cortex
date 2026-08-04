@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ping ⋮ menu now flips to fit.** The three-dot actions menu was hardcoded to open upward, so on the first ping in a wave it appeared above the ping and was clipped under the wave header. It now measures available space when opened and dodges **down** near the top of the wave (little room above) and **up** near the bottom.
 - **Verse-wide waves are now shareable like public waves.** The `/share/:pingId` preview page and `/api/share/:pingId` data endpoint gated content on `privacy === 'public'`, so a shared ping from a Verse-Wide (`crossServer`) wave showed "Join Cortex to view" instead of its content — even though Verse-Wide waves are federation-public. Both endpoints now treat `crossServer`/`cross-server` as public, with an encryption guard so E2EE content is never exposed (public waves are always plaintext, so their behavior is unchanged). The curated public portal already displayed Verse-Wide waves; this closes the matching gap in share links.
 
+### Accessibility
+
+First batch of WCAG improvements (more to follow):
+
+- **Reduced motion (WCAG 2.3.3).** Added a global `@media (prefers-reduced-motion: reduce)` reset that neutralizes CSS animations/transitions (seasonal effects, spinners, pulses), and a matching guard in the crawl bar (Web Animations API) so the news/stock ticker no longer auto-scrolls when the OS "reduce motion" setting is on.
+- **Status announcements (WCAG 4.1.3).** Toast notifications now render with `role="status"` and `aria-live` (`assertive` for errors, `polite` otherwise), so screen readers announce them.
+- **Icon-button labels (WCAG 1.1.1/4.1.2).** Added `aria-label`s (and `aria-haspopup`/`aria-expanded` on the message ⋮ menu) to high-traffic icon-only controls — the message actions menu, composer action buttons, and the toast dismiss button.
+
 ## [2.61.0] - 2026-08-04
 
 ### Added
