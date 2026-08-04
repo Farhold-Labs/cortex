@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { useWindowSize } from '../../hooks/useWindowSize.js';
 import { SUCCESS, CONFIRM, CONFIRM_DIALOG, EMPTY, UI_LABELS, formatError } from '../../../messages.js';
-import { API_URL, canAccess, FONT_SIZES } from '../../config/constants.js';
+import { API_URL, canAccess, FONT_SIZES, WAVE_DENSITY, DEFAULT_WAVE_DENSITY } from '../../config/constants.js';
 import { THEMES } from '../../config/themes.js';
 import { storage } from '../../utils/storage.js';
 import { applyCustomTheme, removeCustomTheme } from '../../hooks/useTheme.js';
@@ -1525,6 +1525,36 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                 {config.name.toUpperCase()}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>WAVE LIST DENSITY</label>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {Object.entries(WAVE_DENSITY).map(([key, config]) => {
+              const active = (user?.preferences?.waveDensity || DEFAULT_WAVE_DENSITY) === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => handleUpdatePreferences({ waveDensity: key })}
+                  style={{
+                    padding: isMobile ? '10px 16px' : '8px 16px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: active ? 'var(--accent-amber)20' : 'transparent',
+                    border: `1px solid ${active ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                    color: active ? 'var(--accent-amber)' : 'var(--text-dim)',
+                    cursor: 'pointer',
+                    fontFamily: 'monospace',
+                    fontSize: '0.85rem',
+                  }}
+                >
+                  {config.name.toUpperCase()}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+            Row spacing for the wave list — Compact fits more, Spacious is easier to tap.
           </div>
         </div>
 

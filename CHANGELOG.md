@@ -5,6 +5,14 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.61.0] - 2026-08-04
+
+### Added
+
+- **Adjustable wave list density.** The wave list now has three row-size options — **Compact**, **Comfy**, and **Spacious** — selectable under Settings → Display Preferences (next to Font Size). Compact fits more waves on screen; Spacious gives larger, easier-to-tap rows. The setting is a per-user preference (`waveDensity`) stored server-side, so it follows you across devices. **Comfy** is the default and matches the previous look, so existing users see no change until they pick another option.
+  - Client: new `WAVE_DENSITY` map in `constants.js` (row padding + title font size per tier), threaded `density` prop through `WaveList` → both render paths (categorized and uncategorized), and a segmented selector in `ProfileSettings`.
+  - Server: `waveDensity` validated against `['compact','comfy','spacious']` in `PUT /api/profile/preferences` (mirrors the existing `fontSize` handling); unknown values are ignored.
+
 ## [2.60.5] - 2026-08-03
 
 ### Performance
