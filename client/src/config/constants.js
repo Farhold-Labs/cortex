@@ -1,6 +1,6 @@
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.60.5';
+export const VERSION = '2.61.0';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
@@ -62,6 +62,16 @@ export const FONT_SIZES = {
   large: { name: 'Large', multiplier: 1.15 },
   xlarge: { name: 'X-Large', multiplier: 1.3 },
 };
+
+// ============ WAVE LIST DENSITY (v2.61.0) ============
+// Row spacing/size for the wave list. `comfy` matches the historical default,
+// so existing users see no change until they pick another option.
+export const WAVE_DENSITY = {
+  compact: { name: 'Compact', padding: '3px 12px', fontSize: '0.8rem' },
+  comfy: { name: 'Comfy', padding: '6px 12px', fontSize: '0.85rem' },
+  spacious: { name: 'Spacious', padding: '10px 12px', fontSize: '0.95rem' },
+};
+export const DEFAULT_WAVE_DENSITY = 'comfy';
 
 // ============ NOTIFICATION BADGE COLORS ============
 export const NOTIFICATION_BADGE_COLORS = {

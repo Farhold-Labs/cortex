@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PRIVACY_LEVELS, NOTIFICATION_BADGE_COLORS } from '../../config/constants.js';
+import { PRIVACY_LEVELS, NOTIFICATION_BADGE_COLORS, WAVE_DENSITY, DEFAULT_WAVE_DENSITY } from '../../config/constants.js';
 import { EMPTY, GHOST_PROTOCOL } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
-const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, isMobile, waveNotifications = {}, activeCalls = {} }) => {
+const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY }) => {
+  const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
   const [moveMenuOpen, setMoveMenuOpen] = useState(null); // Track which wave's move menu is open
@@ -88,7 +89,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
           if (!isSelected) e.currentTarget.style.background = 'transparent';
         }}
         style={{
-          padding: '6px 12px',
+          padding: densityStyle.padding,
           cursor: isMobile ? 'pointer' : 'move',
           background: isSelected ? 'var(--accent-amber)10' : (showNotificationBadge ? `${badgeStyle.bg}08` : 'transparent'),
           borderBottom: '1px solid var(--bg-hover)',
@@ -97,7 +98,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: '8px' }}>
+          <div style={{ color: 'var(--text-primary)', fontSize: densityStyle.fontSize, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: '8px' }}>
             {wave.is_archived && '📦 '}
             {showPinButton && wave.pinned && '📌 '}
             {wave.title}
@@ -381,7 +382,8 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
   );
 };
 
-const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol }) => {
+const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY }) => {
+  const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [showWaveMenu, setShowWaveMenu] = React.useState(false);
   return (
   <div style={{
@@ -446,6 +448,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
         isMobile={isMobile}
         waveNotifications={waveNotifications}
         activeCalls={activeCalls}
+        density={density}
       />
     ) : (
       <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -492,14 +495,14 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
               }
             }}
             style={{
-            padding: '6px 12px', cursor: 'pointer',
+            padding: densityStyle.padding, cursor: 'pointer',
             background: isSelected ? 'var(--accent-amber)10' : (showNotificationBadge ? `${badgeStyle.bg}08` : 'transparent'),
             borderBottom: '1px solid var(--bg-hover)',
             borderLeft: `3px solid ${showNotificationBadge ? badgeStyle.bg : (isSelected ? config.color : 'transparent')}`,
             transition: 'background 0.2s ease',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: '8px' }}>
+              <div style={{ color: 'var(--text-primary)', fontSize: densityStyle.fontSize, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: '8px' }}>
                 {wave.is_archived && '📦 '}{wave.title}
               </div>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
