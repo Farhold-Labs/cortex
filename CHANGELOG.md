@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Ping ⋮ menu now flips to fit.** The three-dot actions menu was hardcoded to open upward, so on the first ping in a wave it appeared above the ping and was clipped under the wave header. It now measures available space when opened and dodges **down** near the top of the wave (little room above) and **up** near the bottom.
+- **Verse-wide waves are now shareable like public waves.** The `/share/:pingId` preview page and `/api/share/:pingId` data endpoint gated content on `privacy === 'public'`, so a shared ping from a Verse-Wide (`crossServer`) wave showed "Join Cortex to view" instead of its content — even though Verse-Wide waves are federation-public. Both endpoints now treat `crossServer`/`cross-server` as public, with an encryption guard so E2EE content is never exposed (public waves are always plaintext, so their behavior is unchanged). The curated public portal already displayed Verse-Wide waves; this closes the matching gap in share links.
 
 ## [2.61.0] - 2026-08-04
 

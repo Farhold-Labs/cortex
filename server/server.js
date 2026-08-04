@@ -12657,7 +12657,10 @@ app.get('/share/:pingId', async (req, res) => {
   const ping = db.getPing(pingId);
   const wave = ping ? db.getWave(ping.wave_id) : null;
   const author = ping ? db.findUserById(ping.author_id) : null;
-  const isPublic = wave?.privacy === 'public';
+  // Verse-wide (crossServer) waves are federation-public, so share them like
+  // public waves — but never expose E2EE content the server can't read/vouch for.
+  const isEncrypted = !!(ping?.encrypted || ping?.nonce);
+  const isPublic = ['public', 'crossServer', 'cross-server'].includes(wave?.privacy) && !isEncrypted;
 
   // Strip HTML tags from content for meta description
   const plainContent = (ping?.content || '')
@@ -12750,8 +12753,10 @@ app.get('/api/share/:pingId', async (req, res) => {
     return res.status(404).json({ error: 'Wave not found' });
   }
 
-  // Check if wave is public
-  const isPublic = wave.privacy === 'public';
+  // Verse-wide (crossServer) waves are federation-public, so share them like
+  // public waves — but never expose E2EE content the server can't read/vouch for.
+  const isEncrypted = !!(ping.encrypted || ping.nonce);
+  const isPublic = ['public', 'crossServer', 'cross-server'].includes(wave.privacy) && !isEncrypted;
 
   // Get author info (use author_id from database)
   const author = db.findUserById(ping.author_id);
