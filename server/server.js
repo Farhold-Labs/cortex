@@ -6615,6 +6615,10 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
   if (req.body.fontSize && validFontSizes.includes(req.body.fontSize)) {
     updates.fontSize = req.body.fontSize;
   }
+  const validWaveDensities = ['compact', 'comfy', 'spacious'];
+  if (req.body.waveDensity && validWaveDensities.includes(req.body.waveDensity)) {
+    updates.waveDensity = req.body.waveDensity;
+  }
   if (typeof req.body.scanLines === 'boolean') {
     updates.scanLines = req.body.scanLines;
   }

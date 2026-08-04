@@ -1586,6 +1586,7 @@ function MainApp({ sharePingId }) {
                   onManageCategories={() => setCategoryManagementOpen(true)}
                   ghostMode={ghostMode}
                   onToggleGhostProtocol={handleToggleGhostProtocol}
+                  density={user?.preferences?.waveDensity}
                 />
               </div>
             )}
