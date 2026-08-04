@@ -159,6 +159,21 @@ function detectAndEmbedMedia(content) {
   const imageHosts = /(media[0-9]?\.giphy\.com|i\.giphy\.com|media[0-9]?\.tenor\.com|c\.tenor\.com|[a-z0-9-]+\.klipy\.com)/i;
   const imgStyle = 'max-width:200px;max-height:150px;border-radius:4px;cursor:pointer;object-fit:cover;display:block;border:1px solid #3a4a3a;';
 
+  // Labeled links: render custom text for a link (v2.62.0). Two forms:
+  //   "URL|Buy Tickets|"  → multi-word label (closing pipe; excludes :// so it
+  //                          can't swallow a following URL)
+  //   "URL|cortex"        → single-word label (no closing pipe)
+  // Must run BEFORE the bare-URL pass so the greedy urlRegex doesn't swallow the
+  // "|label" into the href. Labels exclude <>"'| so they can't break out of the
+  // tag; sanitizeMessage runs after this.
+  const mkLabeledLink = (url, label) =>
+    `<a href="${url}" target="_blank" rel="noopener noreferrer">${label.trim()}</a>`;
+  content = content
+    .replace(/(?<!["'>=/])(https?:\/\/[^\s<>"'|]+)\|((?:(?!https?:\/\/)[^<>"'|\n])+?)\|/gi,
+      (m, url, label) => mkLabeledLink(url, label))
+    .replace(/(?<!["'>=/])(https?:\/\/[^\s<>"'|]+)\|([^\s<>"'|]+)/gi,
+      (m, url, label) => mkLabeledLink(url, label));
+
   content = content.replace(urlRegex, (match) => {
     if (videoExtensions.test(match)) {
       return `<video src="${match}" controls playsinline preload="metadata" class="message-media"></video>`;

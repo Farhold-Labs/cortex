@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.62.0] - 2026-08-04
+
+### Added
+
+- **Labeled links in pings** — post a link with custom display text instead of a raw URL:
+  - `https://farhold.com|cortex` → the word **cortex** links to farhold.com (single-word label).
+  - `https://www.zeffy.com/…|Buy Tickets|` → **Buy Tickets** links to the campaign (multi-word label, closed with a trailing `|`).
+
+  Works in both plaintext and end-to-end-encrypted waves. The transform lives in all three message-processing paths (`server.js`, `database-sqlite.js`, and the client `MessageWithEmbeds.jsx`) so it applies whether the server processes the message (plaintext waves) or the client renders it after decryption (E2EE waves). Bare URLs continue to auto-link, and — as part of this — bare URLs now also auto-link in E2EE waves on the client (previously they rendered as plain text). Labels exclude `<>"'|` and the URL scheme is restricted to http/https, so the syntax can't be used to inject markup; server output is still run through the HTML sanitizer.
+
 ## [2.61.0] - 2026-08-04
 
 ### Added

@@ -882,6 +882,21 @@ function detectAndEmbedMedia(content) {
   // Non-CDN hosts that use image extensions but aren't direct image URLs (redirect pages)
   const nonImageHosts = /(^https?:\/\/)(www\.)?(tenor\.com|giphy\.com|gfycat\.com)\/(?!media)/i;
 
+  // Labeled links: render custom text for a link (v2.62.0). Two forms:
+  //   "URL|Buy Tickets|"  → multi-word label (closing pipe; excludes :// so it
+  //                          can't swallow a following URL)
+  //   "URL|cortex"        → single-word label (no closing pipe)
+  // Must run BEFORE the bare-URL pass so the greedy urlRegex doesn't swallow the
+  // "|label" into the href. Labels exclude <>"'| so they can't break out of the
+  // tag; sanitizeMessage runs after this.
+  const mkLabeledLink = (url, label) =>
+    `<a href="${url}" target="_blank" rel="noopener noreferrer">${label.trim()}</a>`;
+  content = content
+    .replace(/(?<!["'>=/])(https?:\/\/[^\s<>"'|]+)\|((?:(?!https?:\/\/)[^<>"'|\n])+?)\|/gi,
+      (m, url, label) => mkLabeledLink(url, label))
+    .replace(/(?<!["'>=/])(https?:\/\/[^\s<>"'|]+)\|([^\s<>"'|]+)/gi,
+      (m, url, label) => mkLabeledLink(url, label));
+
   content = content.replace(urlRegex, (match) => {
     // Clean up URL (remove trailing punctuation that might have been included)
     let cleanUrl = match.replace(/[.,;:!?)\]]+$/, '');
