@@ -6634,6 +6634,10 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
   if (req.body.waveDensity && validWaveDensities.includes(req.body.waveDensity)) {
     updates.waveDensity = req.body.waveDensity;
   }
+  const validMessageFonts = ['terminal', 'sans', 'serif', 'system'];
+  if (req.body.messageFont && validMessageFonts.includes(req.body.messageFont)) {
+    updates.messageFont = req.body.messageFont;
+  }
   if (typeof req.body.scanLines === 'boolean') {
     updates.scanLines = req.body.scanLines;
   }

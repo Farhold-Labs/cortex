@@ -546,6 +546,15 @@
         -webkit-tap-highlight-color: var(--overlay-amber);
       }
 
+      /* Message font (v2.62.0): default terminal stack; MainApp overrides from
+         the user's preference. Scoped to ping text + composer only. */
+      :root { --message-font: 'Courier New', Monaco, 'Lucida Console', monospace; }
+      /* Code/preformatted blocks in messages always stay monospace, whatever
+         message font is chosen. */
+      .cortex-msg-body code, .cortex-msg-body pre {
+        font-family: 'Courier New', Monaco, 'Lucida Console', monospace;
+      }
+
       /* Custom scrollbar styling */
       * {
         scrollbar-width: thin;

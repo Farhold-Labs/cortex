@@ -3,7 +3,7 @@ import { useAuth, useAPI } from '../hooks/useAPI.js';
 import { useE2EE } from '../../e2ee-context.jsx';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
-import { VERSION, API_URL, BASE_URL, canAccess, FONT_SIZES } from '../config/constants.js';
+import { VERSION, API_URL, BASE_URL, canAccess, FONT_SIZES, MESSAGE_FONTS, DEFAULT_MESSAGE_FONT } from '../config/constants.js';
 import { getRandomTagline, SUCCESS, NOTIFICATION, formatError, GHOST_PROTOCOL } from '../../messages.js';
 import { storage } from '../utils/storage.js';
 import { updateAppBadge, subscribeToPush } from '../utils/pwa.js';
@@ -159,6 +159,17 @@ function MainApp({ sharePingId }) {
       document.documentElement.style.fontSize = '100%';
     };
   }, [fontScale]);
+
+  // Message font: applied to ping text + composer via the --message-font var
+  // (message-content scope only; the terminal UI chrome is unaffected).
+  const messageFont = user?.preferences?.messageFont || DEFAULT_MESSAGE_FONT;
+  useEffect(() => {
+    const stack = (MESSAGE_FONTS[messageFont] || MESSAGE_FONTS[DEFAULT_MESSAGE_FONT]).stack;
+    document.documentElement.style.setProperty('--message-font', stack);
+    return () => {
+      document.documentElement.style.setProperty('--message-font', MESSAGE_FONTS[DEFAULT_MESSAGE_FONT].stack);
+    };
+  }, [messageFont]);
 
   // Apply theme to document root and persist to localStorage
   // v2.11.0: Added custom theme support

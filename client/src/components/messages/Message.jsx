@@ -472,6 +472,7 @@ const Message = ({
             </div>
           ) : (
             <div
+              className="cortex-msg-body"
               onClick={(e) => {
                 if (e.target.tagName === 'IMG' && e.target.classList.contains('zoomable-image')) {
                   e.stopPropagation();
@@ -480,6 +481,7 @@ const Message = ({
               }}
               style={{
                 color: 'var(--text-primary)', fontSize: isMobile ? '0.95rem' : '0.85rem',
+                fontFamily: 'var(--message-font)',
                 lineHeight: 1.5, marginBottom: '2px',
                 wordBreak: 'break-word', whiteSpace: 'pre-wrap', overflow: 'hidden',
               }}
