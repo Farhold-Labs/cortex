@@ -278,7 +278,7 @@ const MessageComposer = forwardRef(({
           <input type="file" ref={fileAttachInputRef} onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFileAttach(file); }} style={{ display: 'none' }} />
           <button
             onClick={() => setShowAttachMenu(!showAttachMenu)}
-            title="Attach media or file"
+            title="Attach media or file" aria-label="Attach media or file"
             style={{
               padding: isMobile ? '8px 10px' : '5px 8px',
               minHeight: isMobile ? '36px' : '28px',
@@ -512,7 +512,7 @@ const MessageComposer = forwardRef(({
             border: '1px solid var(--border-subtle)',
             color: 'var(--text-primary)',
             fontSize: isMobile ? '1rem' : (compact ? '0.85rem' : '0.9rem'),
-            fontFamily: 'inherit',
+            fontFamily: 'var(--message-font, inherit)',
             resize: compact ? 'vertical' : 'none',
             overflowY: 'auto',
             boxSizing: 'border-box',
@@ -682,7 +682,7 @@ const MessageComposer = forwardRef(({
                 fontWeight: 700,
                 whiteSpace: 'nowrap',
               }}
-              title="Insert GIF"
+              title="Insert GIF" aria-label="Insert GIF"
             >
               GIF
             </button>
@@ -716,7 +716,7 @@ const MessageComposer = forwardRef(({
                   fontWeight: 700,
                   opacity: uploading ? 0.7 : 1,
                 }}
-                title="Photo options"
+                title="Photo options" aria-label="Photo options"
               >
                 {uploading ? '...' : '📷'}
               </button>
@@ -789,7 +789,7 @@ const MessageComposer = forwardRef(({
                   fontWeight: 700,
                   opacity: uploading ? 0.7 : 1,
                 }}
-                title="Attach file"
+                title="Attach file" aria-label="Attach file"
               >
                 {uploading ? '...' : '📎'}
               </button>
@@ -812,7 +812,7 @@ const MessageComposer = forwardRef(({
                   fontSize: isMobile ? '1rem' : '0.85rem',
                   fontWeight: 700,
                 }}
-                title="More actions"
+                title="More actions" aria-label="More actions"
               >
                 ⋮
               </button>

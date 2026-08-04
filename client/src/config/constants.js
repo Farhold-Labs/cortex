@@ -1,6 +1,6 @@
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.61.1';
+export const VERSION = '2.62.0';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
@@ -72,6 +72,19 @@ export const WAVE_DENSITY = {
   spacious: { name: 'Spacious', padding: '10px 12px', fontSize: '0.95rem' },
 };
 export const DEFAULT_WAVE_DENSITY = 'comfy';
+
+// ============ MESSAGE FONT (v2.62.0) ============
+// Font for ping text + the composer only (not the terminal UI chrome). Each
+// stack ends in a generic family so it resolves on every OS with no bundled
+// font files (keeps the strict self-only CSP intact). `terminal` is the default
+// and matches the historical monospace look, so existing users see no change.
+export const MESSAGE_FONTS = {
+  terminal: { name: 'Terminal', stack: "'Courier New', Monaco, 'Lucida Console', monospace" },
+  sans: { name: 'Sans-Serif', stack: "system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" },
+  serif: { name: 'Serif', stack: "Georgia, 'Times New Roman', serif" },
+  system: { name: 'System', stack: "system-ui, sans-serif" },
+};
+export const DEFAULT_MESSAGE_FONT = 'terminal';
 
 // ============ NOTIFICATION BADGE COLORS ============
 export const NOTIFICATION_BADGE_COLORS = {

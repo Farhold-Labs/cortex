@@ -559,6 +559,31 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
         .replace(/(<a\b[^>]*\shref=")(\/(uploads|api\/media)\/)/g, `$1${BASE_URL}$2`);
     }
 
+    // Labeled links: render custom text for a link (v2.62.0). Client-side
+    // equivalent of the server's detectAndEmbedMedia (E2EE waves decrypt to
+    // plain text here, so the server never processed them). Two forms:
+    //   "URL|Buy Tickets|" → multi-word label (closing pipe; excludes :// so it
+    //                         can't swallow a following URL)
+    //   "URL|cortex"       → single-word label
+    // Must run before the bare-URL autolink below.
+    result = result
+      .replace(
+        /(?<!["'>=/])(https?:\/\/[^\s<>"'|]+)\|((?:(?!https?:\/\/)[^<>"'|\n])+?)\|/gi,
+        (m, url, label) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${label.trim()}</a>`
+      )
+      .replace(
+        /(?<!["'>=/])(https?:\/\/[^\s<>"'|]+)\|([^\s<>"'|]+)/gi,
+        '<a href="$1" target="_blank" rel="noopener noreferrer">$2</a>'
+      );
+
+    // Autolink remaining bare URLs (skip any already inside a tag or as an
+    // anchor's text). Mirrors the server's bare-URL linkification so plain links
+    // are clickable in E2EE waves too.
+    result = result.replace(
+      /(?<!["'>=/])(https?:\/\/[^\s<]+)(?![^<]*>|[^<>]*<\/)/gi,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
+
     return result;
   }, [content, embedUrls, embeds.length, allUsers]);
 
