@@ -5,6 +5,39 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.62.0] - 2026-08-04
+
+### Added
+
+- **Labeled links in pings** — post a link with custom display text instead of a raw URL:
+  - `https://farhold.com|cortex` → the word **cortex** links to farhold.com (single-word label).
+  - `https://www.zeffy.com/…|Buy Tickets|` → **Buy Tickets** links to the campaign (multi-word label, closed with a trailing `|`).
+
+  Works in both plaintext and end-to-end-encrypted waves. The transform lives in all three message-processing paths (`server.js`, `database-sqlite.js`, and the client `MessageWithEmbeds.jsx`) so it applies whether the server processes the message (plaintext waves) or the client renders it after decryption (E2EE waves). Bare URLs continue to auto-link, and — as part of this — bare URLs now also auto-link in E2EE waves on the client (previously they rendered as plain text). Labels exclude `<>"'|` and the URL scheme is restricted to http/https, so the syntax can't be used to inject markup; server output is still run through the HTML sanitizer.
+
+- **Message font selection.** A new per-user `messageFont` preference (Settings → Display Preferences) sets the font for **message text and the composer** — **Terminal** (default, the classic monospace look), **Sans-Serif**, **Serif**, or **System**. Applied via a `--message-font` CSS variable scoped to ping content and the composer, so the terminal UI chrome is unchanged. Each option is a cross-platform font *stack* ending in a generic family (`monospace`/`sans-serif`/`serif`/`system-ui`), so it resolves natively on Linux/Windows/macOS with no bundled font files (keeps the strict self-only CSP intact). Code/preformatted blocks stay monospace regardless of the chosen font. Terminal is the default, so existing users see no change.
+
+### Fixed
+
+- **Ping ⋮ menu now flips to fit.** The three-dot actions menu was hardcoded to open upward, so on the first ping in a wave it appeared above the ping and was clipped under the wave header. It now measures available space when opened and dodges **down** near the top of the wave (little room above) and **up** near the bottom.
+- **Verse-wide waves are now shareable like public waves.** The `/share/:pingId` preview page and `/api/share/:pingId` data endpoint gated content on `privacy === 'public'`, so a shared ping from a Verse-Wide (`crossServer`) wave showed "Join Cortex to view" instead of its content — even though Verse-Wide waves are federation-public. Both endpoints now treat `crossServer`/`cross-server` as public, with an encryption guard so E2EE content is never exposed (public waves are always plaintext, so their behavior is unchanged). The curated public portal already displayed Verse-Wide waves; this closes the matching gap in share links.
+
+### Accessibility
+
+First batch of WCAG improvements (more to follow):
+
+- **Reduced motion (WCAG 2.3.3).** Added a global `@media (prefers-reduced-motion: reduce)` reset that neutralizes CSS animations/transitions (seasonal effects, spinners, pulses), and a matching guard in the crawl bar (Web Animations API) so the news/stock ticker no longer auto-scrolls when the OS "reduce motion" setting is on.
+- **Status announcements (WCAG 4.1.3).** Toast notifications now render with `role="status"` and `aria-live` (`assertive` for errors, `polite` otherwise), so screen readers announce them.
+- **Icon-button labels (WCAG 1.1.1/4.1.2).** Added `aria-label`s (and `aria-haspopup`/`aria-expanded` on the message ⋮ menu) to high-traffic icon-only controls — the message actions menu, composer action buttons, and the toast dismiss button.
+
+## [2.61.1] - 2026-08-04
+
+### Fixed
+
+- **Fresh SQLite installs were broken** — `schema.sql` alone does not produce a complete, working database. Two problems, both surfaced while standing up a new federated node from an empty DB (existing dev/QA/prod DBs pre-dated all of this, so none ever hit it):
+  - **Crash on boot** (`SqliteError: no such column: user_key_id`): `schema.sql` creates `idx_wave_encryption_keys_user_key` on `wave_encryption_keys(user_key_id)`, but that column was only added by a runtime `ALTER TABLE` migration. Added `user_key_id TEXT` to the `wave_encryption_keys` CREATE TABLE so the index is valid on fresh DBs.
+  - **Missing tables at runtime** (`no such table: custom_themes`, and others): many tables/columns (`custom_themes`, `portal_waves`, …) exist *only* in `applySchemaUpdates()`, which `init()` previously ran for existing DBs only — never for fresh ones. `init()` now runs `applySchemaUpdates()` on fresh DBs too (after `schema.sql`), so a new install matches a fully-migrated one. The migrations are all guarded (`IF NOT EXISTS` / column-existence checks), so this is safe and idempotent; existing DBs are unaffected.
+
 ## [2.61.0] - 2026-08-04
 
 ### Added

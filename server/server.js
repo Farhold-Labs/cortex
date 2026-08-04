@@ -882,6 +882,21 @@ function detectAndEmbedMedia(content) {
   // Non-CDN hosts that use image extensions but aren't direct image URLs (redirect pages)
   const nonImageHosts = /(^https?:\/\/)(www\.)?(tenor\.com|giphy\.com|gfycat\.com)\/(?!media)/i;
 
+  // Labeled links: render custom text for a link (v2.62.0). Two forms:
+  //   "URL|Buy Tickets|"  → multi-word label (closing pipe; excludes :// so it
+  //                          can't swallow a following URL)
+  //   "URL|cortex"        → single-word label (no closing pipe)
+  // Must run BEFORE the bare-URL pass so the greedy urlRegex doesn't swallow the
+  // "|label" into the href. Labels exclude <>"'| so they can't break out of the
+  // tag; sanitizeMessage runs after this.
+  const mkLabeledLink = (url, label) =>
+    `<a href="${url}" target="_blank" rel="noopener noreferrer">${label.trim()}</a>`;
+  content = content
+    .replace(/(?<!["'>=/])(https?:\/\/[^\s<>"'|]+)\|((?:(?!https?:\/\/)[^<>"'|\n])+?)\|/gi,
+      (m, url, label) => mkLabeledLink(url, label))
+    .replace(/(?<!["'>=/])(https?:\/\/[^\s<>"'|]+)\|([^\s<>"'|]+)/gi,
+      (m, url, label) => mkLabeledLink(url, label));
+
   content = content.replace(urlRegex, (match) => {
     // Clean up URL (remove trailing punctuation that might have been included)
     let cleanUrl = match.replace(/[.,;:!?)\]]+$/, '');
@@ -6618,6 +6633,10 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
   const validWaveDensities = ['compact', 'comfy', 'spacious'];
   if (req.body.waveDensity && validWaveDensities.includes(req.body.waveDensity)) {
     updates.waveDensity = req.body.waveDensity;
+  }
+  const validMessageFonts = ['terminal', 'sans', 'serif', 'system'];
+  if (req.body.messageFont && validMessageFonts.includes(req.body.messageFont)) {
+    updates.messageFont = req.body.messageFont;
   }
   if (typeof req.body.scanLines === 'boolean') {
     updates.scanLines = req.body.scanLines;
@@ -12642,7 +12661,10 @@ app.get('/share/:pingId', async (req, res) => {
   const ping = db.getPing(pingId);
   const wave = ping ? db.getWave(ping.wave_id) : null;
   const author = ping ? db.findUserById(ping.author_id) : null;
-  const isPublic = wave?.privacy === 'public';
+  // Verse-wide (crossServer) waves are federation-public, so share them like
+  // public waves — but never expose E2EE content the server can't read/vouch for.
+  const isEncrypted = !!(ping?.encrypted || ping?.nonce);
+  const isPublic = ['public', 'crossServer', 'cross-server'].includes(wave?.privacy) && !isEncrypted;
 
   // Strip HTML tags from content for meta description
   const plainContent = (ping?.content || '')
@@ -12735,8 +12757,10 @@ app.get('/api/share/:pingId', async (req, res) => {
     return res.status(404).json({ error: 'Wave not found' });
   }
 
-  // Check if wave is public
-  const isPublic = wave.privacy === 'public';
+  // Verse-wide (crossServer) waves are federation-public, so share them like
+  // public waves — but never expose E2EE content the server can't read/vouch for.
+  const isEncrypted = !!(ping.encrypted || ping.nonce);
+  const isPublic = ['public', 'crossServer', 'cross-server'].includes(wave.privacy) && !isEncrypted;
 
   // Get author info (use author_id from database)
   const author = db.findUserById(ping.author_id);
