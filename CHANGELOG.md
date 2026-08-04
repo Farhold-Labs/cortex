@@ -5,6 +5,14 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.61.1] - 2026-08-04
+
+### Fixed
+
+- **Fresh SQLite installs were broken** — `schema.sql` alone does not produce a complete, working database. Two problems, both surfaced while standing up a new federated node from an empty DB (existing dev/QA/prod DBs pre-dated all of this, so none ever hit it):
+  - **Crash on boot** (`SqliteError: no such column: user_key_id`): `schema.sql` creates `idx_wave_encryption_keys_user_key` on `wave_encryption_keys(user_key_id)`, but that column was only added by a runtime `ALTER TABLE` migration. Added `user_key_id TEXT` to the `wave_encryption_keys` CREATE TABLE so the index is valid on fresh DBs.
+  - **Missing tables at runtime** (`no such table: custom_themes`, and others): many tables/columns (`custom_themes`, `portal_waves`, …) exist *only* in `applySchemaUpdates()`, which `init()` previously ran for existing DBs only — never for fresh ones. `init()` now runs `applySchemaUpdates()` on fresh DBs too (after `schema.sql`), so a new install matches a fully-migrated one. The migrations are all guarded (`IF NOT EXISTS` / column-existence checks), so this is safe and idempotent; existing DBs are unaffected.
+
 ## [2.61.0] - 2026-08-04
 
 ### Added
