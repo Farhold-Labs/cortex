@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT, canAccess, BASE_URL } from '../../config/constants.js';
 
 const resolveMediaUrl = (url) => {
@@ -93,6 +93,8 @@ const Message = ({
 
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showMessageMenu, setShowMessageMenu] = useState(false);
+  const [menuDropUp, setMenuDropUp] = useState(true); // flip the ⋮ menu up/down to fit
+  const menuBtnRef = useRef(null);
   const [lightboxImage, setLightboxImage] = useState(null);
   const [showReaderList, setShowReaderList] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -470,6 +472,7 @@ const Message = ({
             </div>
           ) : (
             <div
+              className="cortex-msg-body"
               onClick={(e) => {
                 if (e.target.tagName === 'IMG' && e.target.classList.contains('zoomable-image')) {
                   e.stopPropagation();
@@ -478,6 +481,7 @@ const Message = ({
               }}
               style={{
                 color: 'var(--text-primary)', fontSize: isMobile ? '0.95rem' : '0.85rem',
+                fontFamily: 'var(--message-font)',
                 lineHeight: 1.5, marginBottom: '2px',
                 wordBreak: 'break-word', whiteSpace: 'pre-wrap', overflow: 'hidden',
               }}
@@ -654,18 +658,36 @@ const Message = ({
             {/* Three-dot menu */}
             <div style={{ position: 'relative' }}>
               <button
+                ref={menuBtnRef}
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (!showMessageMenu) document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id }));
+                  if (!showMessageMenu) {
+                    // Flip the menu to fit: dodge down near the top of the wave
+                    // (little room above / more room below), else dodge up.
+                    const rect = menuBtnRef.current?.getBoundingClientRect();
+                    if (rect) {
+                      const MENU_EST = 240; // generous estimate of menu height (px)
+                      const spaceAbove = rect.top;
+                      const spaceBelow = window.innerHeight - rect.bottom;
+                      setMenuDropUp(spaceAbove >= MENU_EST || spaceAbove >= spaceBelow);
+                    }
+                    document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id }));
+                  }
                   setShowMessageMenu(!showMessageMenu);
                 }}
                 title="More"
+                aria-label="Message actions"
+                aria-haspopup="true"
+                aria-expanded={showMessageMenu}
                 style={{ padding: '3px 5px', background: showMessageMenu ? 'var(--bg-hover)' : 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.75rem' }}
               >⋮</button>
               {showMessageMenu && (
                 <div
                   style={{
-                    position: 'absolute', right: 0, bottom: '100%', marginBottom: '4px',
+                    position: 'absolute', right: 0,
+                    ...(menuDropUp
+                      ? { bottom: '100%', marginBottom: '4px' }
+                      : { top: '100%', marginTop: '4px' }),
                     background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
                     borderRadius: '4px', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
                     minWidth: '150px', zIndex: 1000,
