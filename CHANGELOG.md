@@ -5,6 +5,12 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.61.1] - 2026-08-04
+
+### Fixed
+
+- **Fresh SQLite installs failed to boot** (`SqliteError: no such column: user_key_id`). `schema.sql` creates `idx_wave_encryption_keys_user_key` on `wave_encryption_keys(user_key_id)`, but that column was only added by a runtime migration (`ALTER TABLE`) that runs for *existing* databases — so a brand-new DB hit the index before the column existed and the server crash-looped on startup. Added `user_key_id TEXT` to the `wave_encryption_keys` CREATE TABLE so the index is valid on fresh DBs; the existing-DB migration stays idempotent (it only ALTERs when the column is absent). Surfaced while standing up a new federated node from scratch (existing dev/QA/prod DBs pre-dated the column, so none of them ever hit this path).
+
 ## [2.61.0] - 2026-08-04
 
 ### Added

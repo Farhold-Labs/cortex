@@ -424,6 +424,7 @@ CREATE TABLE IF NOT EXISTS wave_encryption_keys (
     sender_public_key TEXT NOT NULL,       -- Base64 SPKI of key used to encrypt
     key_version INTEGER DEFAULT 1,         -- Version of wave key
     created_at TEXT NOT NULL,
+    user_key_id TEXT,                      -- Blinded user key id (v2.27.0); also added via migration for pre-existing DBs
     UNIQUE(wave_id, user_id, key_version)
 );
 
