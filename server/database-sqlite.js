@@ -253,6 +253,13 @@ export class DatabaseSQLite {
       this.db.exec(schema);
       console.log('✅ SQLite database created');
 
+      // schema.sql is NOT kept fully in sync with the live schema — many tables
+      // and columns (e.g. custom_themes, portal_waves, wave_encryption_keys.user_key_id)
+      // exist only in applySchemaUpdates(). Run the migrations on fresh DBs too so
+      // a brand-new install matches a migrated one; the migrations are all guarded
+      // (IF NOT EXISTS / column-existence checks), so they're safe to run here.
+      this.applySchemaUpdates();
+
       // Seed demo data if configured
       if (process.env.SEED_DEMO_DATA === 'true') {
         this.seedDemoData();
