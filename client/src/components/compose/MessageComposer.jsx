@@ -512,7 +512,7 @@ const MessageComposer = forwardRef(({
             border: '1px solid var(--border-subtle)',
             color: 'var(--text-primary)',
             fontSize: isMobile ? '1rem' : (compact ? '0.85rem' : '0.9rem'),
-            fontFamily: 'var(--message-font, inherit)',
+            fontFamily: 'var(--app-font, inherit)',
             resize: compact ? 'vertical' : 'none',
             overflowY: 'auto',
             boxSizing: 'border-box',
