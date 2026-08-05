@@ -7761,6 +7761,45 @@ export class DatabaseSQLite {
     }));
   }
 
+  // Paginated ping history for federation backfill (origin side). Newest-first;
+  // pass `before` (a created_at ISO string) to page backwards. Author is
+  // pre-formatted (bot-aware) to match the wave-broadcast payload shape.
+  getWavePingsForFederation(waveId, { before = null, limit = 100 } = {}) {
+    let sql = `
+      SELECT d.id, d.parent_id, d.author_id, d.content, d.created_at, d.edited_at, d.reactions, d.bot_id,
+             u.display_name AS user_display_name, u.avatar AS user_avatar, u.avatar_url AS user_avatar_url, u.handle AS user_handle,
+             b.name AS bot_name
+      FROM pings d
+      JOIN users u ON d.author_id = u.id
+      LEFT JOIN bots b ON d.bot_id = b.id
+      WHERE d.wave_id = ? AND d.deleted = 0`;
+    const params = [waveId];
+    if (before) { sql += ' AND d.created_at < ?'; params.push(before); }
+    sql += ' ORDER BY d.created_at DESC LIMIT ?';
+    params.push(limit);
+    const rows = this.db.prepare(sql).all(...params);
+    return rows.map(d => {
+      const isBot = !!d.bot_id;
+      let reactions = {};
+      if (d.reactions) { try { reactions = JSON.parse(d.reactions); } catch { reactions = {}; } }
+      return {
+        id: d.id,
+        parentId: d.parent_id,
+        content: d.content,
+        createdAt: d.created_at,
+        editedAt: d.edited_at,
+        reactions,
+        author: {
+          id: d.author_id,
+          handle: isBot ? String(d.bot_name || 'bot').toLowerCase().replace(/\s+/g, '-') : d.user_handle,
+          displayName: isBot ? `[Bot] ${d.bot_name}` : d.user_display_name,
+          avatar: isBot ? '🤖' : d.user_avatar,
+          avatarUrl: isBot ? null : d.user_avatar_url,
+        },
+      };
+    });
+  }
+
   cacheRemotePing({ id, waveId, originWaveId, originNode, authorId, authorNode, parentId, content, createdAt, editedAt, reactions }) {
     const now = new Date().toISOString();
 
