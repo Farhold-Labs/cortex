@@ -33,6 +33,7 @@ import PlexConnectionManager from '../media/PlexConnectionManager.jsx';
 
 const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, federationRequestsRefresh, onNotifPrefsChange }) => {
   const [displayName, setDisplayName] = useState(user?.displayName || '');
+  const [fontPreview, setFontPreview] = useState(null); // hovered font key for live preview
   const [email, setEmail] = useState(user?.email || '');
   const [avatar, setAvatar] = useState(user?.avatar || '');
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || null);
@@ -1559,7 +1560,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>MESSAGE FONT</label>
+          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>INTERFACE FONT</label>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             {Object.entries(MESSAGE_FONTS).map(([key, config]) => {
               const active = (user?.preferences?.messageFont || DEFAULT_MESSAGE_FONT) === key;
@@ -1567,6 +1568,10 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                 <button
                   key={key}
                   onClick={() => handleUpdatePreferences({ messageFont: key })}
+                  onMouseEnter={() => setFontPreview(key)}
+                  onMouseLeave={() => setFontPreview(null)}
+                  onFocus={() => setFontPreview(key)}
+                  onBlur={() => setFontPreview(null)}
                   style={{
                     padding: isMobile ? '10px 16px' : '8px 16px',
                     minHeight: isMobile ? '44px' : 'auto',
@@ -1583,8 +1588,31 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
               );
             })}
           </div>
+          {/* Live preview: shows the hovered/focused font, else the current one. */}
+          {(() => {
+            const previewKey = MESSAGE_FONTS[fontPreview] ? fontPreview
+              : (MESSAGE_FONTS[user?.preferences?.messageFont] ? user.preferences.messageFont : DEFAULT_MESSAGE_FONT);
+            const stack = MESSAGE_FONTS[previewKey].stack;
+            return (
+              <div style={{
+                marginTop: '10px', padding: '10px 12px',
+                background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                borderRadius: '4px', fontFamily: stack,
+              }}>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', letterSpacing: '1px', marginBottom: '4px', fontFamily: "'Courier New', monospace" }}>
+                  PREVIEW · {MESSAGE_FONTS[previewKey].name.toUpperCase()}
+                </div>
+                <div style={{ color: 'var(--text-primary)', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                  The quick brown fox jumps over the lazy dog.
+                </div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '3px' }}>
+                  Pings, Waves, Crews — 0123456789 · !?@#
+                </div>
+              </div>
+            );
+          })()}
           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Font for message text and the composer. Terminal is the classic monospace look.
+            Font for the whole interface (hover an option to preview). Terminal is the classic monospace look; code blocks always stay monospace.
           </div>
         </div>
 

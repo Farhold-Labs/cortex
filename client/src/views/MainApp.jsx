@@ -160,14 +160,18 @@ function MainApp({ sharePingId }) {
     };
   }, [fontScale]);
 
-  // Message font: applied to ping text + composer via the --message-font var
-  // (message-content scope only; the terminal UI chrome is unaffected).
+  // App font (v2.63.0): the chosen font applies across the whole UI. Sets
+  // --app-font (used by ping text + composer directly) and data-app-font on the
+  // root, which drives the whole-UI override rule in index.html. Terminal is the
+  // default and leaves the interface untouched.
   const messageFont = user?.preferences?.messageFont || DEFAULT_MESSAGE_FONT;
   useEffect(() => {
-    const stack = (MESSAGE_FONTS[messageFont] || MESSAGE_FONTS[DEFAULT_MESSAGE_FONT]).stack;
-    document.documentElement.style.setProperty('--message-font', stack);
+    const key = MESSAGE_FONTS[messageFont] ? messageFont : DEFAULT_MESSAGE_FONT;
+    document.documentElement.style.setProperty('--app-font', MESSAGE_FONTS[key].stack);
+    document.documentElement.setAttribute('data-app-font', key);
     return () => {
-      document.documentElement.style.setProperty('--message-font', MESSAGE_FONTS[DEFAULT_MESSAGE_FONT].stack);
+      document.documentElement.style.setProperty('--app-font', MESSAGE_FONTS[DEFAULT_MESSAGE_FONT].stack);
+      document.documentElement.setAttribute('data-app-font', DEFAULT_MESSAGE_FONT);
     };
   }, [messageFont]);
 

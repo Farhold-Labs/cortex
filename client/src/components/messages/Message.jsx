@@ -481,7 +481,7 @@ const Message = ({
               }}
               style={{
                 color: 'var(--text-primary)', fontSize: isMobile ? '0.95rem' : '0.85rem',
-                fontFamily: 'var(--message-font)',
+                fontFamily: 'var(--app-font)',
                 lineHeight: 1.5, marginBottom: '2px',
                 wordBreak: 'break-word', whiteSpace: 'pre-wrap', overflow: 'hidden',
               }}

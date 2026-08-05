@@ -546,13 +546,25 @@
         -webkit-tap-highlight-color: var(--overlay-amber);
       }
 
-      /* Message font (v2.62.0): default terminal stack; MainApp overrides from
-         the user's preference. Scoped to ping text + composer only. */
-      :root { --message-font: 'Courier New', Monaco, 'Lucida Console', monospace; }
-      /* Code/preformatted blocks in messages always stay monospace, whatever
-         message font is chosen. */
-      .cortex-msg-body code, .cortex-msg-body pre {
+      /* App font (v2.62.0 messages → v2.63.0 whole UI): default terminal stack;
+         MainApp overrides --app-font and sets data-app-font from the user's
+         preference. Ping text + composer use var(--app-font) directly. */
+      :root { --app-font: 'Courier New', Monaco, 'Lucida Console', monospace; }
+
+      /* Whole-UI font (v2.63.0): when a non-terminal font is chosen, apply it
+         across the interface. The ~600 inline `monospace` styles otherwise win,
+         so !important is required. The terminal default leaves everything
+         untouched (rule inactive), so existing users see no change. */
+      :root[data-app-font]:not([data-app-font="terminal"]) body *:not(code):not(pre) {
+        font-family: var(--app-font) !important;
+      }
+      /* Code/preformatted blocks always stay monospace, whatever font is chosen. */
+      code, pre, .cortex-msg-body code, .cortex-msg-body pre {
         font-family: 'Courier New', Monaco, 'Lucida Console', monospace;
+      }
+      :root[data-app-font]:not([data-app-font="terminal"]) code,
+      :root[data-app-font]:not([data-app-font="terminal"]) pre {
+        font-family: 'Courier New', Monaco, 'Lucida Console', monospace !important;
       }
 
       /* Accessibility: honor the OS "reduce motion" setting (WCAG 2.3.3).

@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.63.0] - 2026-08-05
+
+### Added
+
+- **Interface font now applies to the whole UI, with a live preview.** The font preference (Settings → Display Preferences) previously affected only message text and the composer; it now applies across the entire interface — Terminal (default), Sans-Serif, Serif, or System. Implemented with an `--app-font` CSS variable plus a `data-app-font` root attribute that drives a whole-UI override rule (needed because ~600 inline `monospace` styles otherwise win). The terminal default leaves everything untouched, so existing users see no change, and **code/preformatted blocks always stay monospace**. The settings panel now shows a **live preview box** (sample sentence + glyphs) that updates as you hover/focus each option, so you can try a font before committing.
+- **Federation catch-up / wave resync** (implements the former `// TODO`). Two endpoints repair a federated wave whose history synced only partially (or drifted during downtime) — previously the one-time wave broadcast was the only bulk transfer, so a failed sync needed direct DB surgery:
+  - `POST /api/federation/wave-backfill` (origin, federation-authenticated) — serves a paginated page of a wave's ping history (newest-first, `before` cursor), only to nodes actually federated on that wave, sized to stay under the inbox body limit.
+  - `POST /api/admin/federation/waves/:waveId/resync` (participant, admin) — pages the origin's backfill and re-caches the full history through the resilient/idempotent cache path.
+
 ## [2.62.1] - 2026-08-04
 
 ### Fixed
