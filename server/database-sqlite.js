@@ -7585,17 +7585,34 @@ export class DatabaseSQLite {
   cacheRemoteUser({ id, nodeName, handle, displayName, avatar, avatarUrl, bio }) {
     const now = new Date().toISOString();
 
-    this.db.prepare(`
-      INSERT INTO remote_users (id, node_name, handle, display_name, avatar, avatar_url, bio, cached_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (node_name, handle) DO UPDATE SET
-        id = excluded.id,
-        display_name = excluded.display_name,
-        avatar = excluded.avatar,
-        avatar_url = excluded.avatar_url,
-        bio = excluded.bio,
-        updated_at = excluded.updated_at
-    `).run(id, nodeName, handle, displayName || null, avatar || null, avatarUrl || null, bio || null, now, now);
+    try {
+      this.db.prepare(`
+        INSERT INTO remote_users (id, node_name, handle, display_name, avatar, avatar_url, bio, cached_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (node_name, handle) DO UPDATE SET
+          id = excluded.id,
+          display_name = excluded.display_name,
+          avatar = excluded.avatar,
+          avatar_url = excluded.avatar_url,
+          bio = excluded.bio,
+          updated_at = excluded.updated_at
+      `).run(id, nodeName, handle, displayName || null, avatar || null, avatarUrl || null, bio || null, now, now);
+    } catch (err) {
+      // The upsert only resolves the (node_name, handle) unique constraint. A
+      // different (node_name, handle) can still map to an already-cached primary
+      // key `id` (e.g. a handle change on the origin), which raises a UNIQUE
+      // constraint on remote_users.id. Fall back to updating the existing row by
+      // id so a single author never aborts a whole wave-broadcast sync.
+      if (/remote_users\.id/.test(String(err && err.message))) {
+        this.db.prepare(`
+          UPDATE remote_users
+          SET node_name = ?, handle = ?, display_name = ?, avatar = ?, avatar_url = ?, bio = ?, updated_at = ?
+          WHERE id = ?
+        `).run(nodeName, handle, displayName || null, avatar || null, avatarUrl || null, bio || null, now, id);
+      } else {
+        throw err;
+      }
+    }
 
     return this.getRemoteUser(id);
   }

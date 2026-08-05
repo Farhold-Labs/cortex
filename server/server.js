@@ -11360,6 +11360,46 @@ app.post('/api/bot/ping', authenticateBotToken, botLimiter, (req, res) => {
     // Trigger outgoing webhooks (async, non-blocking)
     triggerWaveWebhooks(waveId, { ...ping, isBot: true }, wave);
 
+    // Federation: bot pings must federate too. Previously this endpoint only
+    // broadcast to local WS clients, so bot-only waves (e.g. Cortex Updates)
+    // never propagated to participant nodes. Mirrors the /api/pings path.
+    if (FEDERATION_ENABLED && (wave.federationState === 'origin' || wave.federationState === 'participant')) {
+      const ourIdentity = db.getServerIdentity();
+      const pingPayload = {
+        ping: {
+          id: ping.id,
+          parentId: ping.parentId || ping.parent_id || null,
+          content: ping.content,
+          createdAt: ping.createdAt || ping.created_at,
+          editedAt: ping.editedAt || ping.edited_at || null,
+          reactions: ping.reactions || {},
+        },
+        originWaveId: wave.federationState === 'origin' ? waveId : wave.originWaveId,
+        author: {
+          id: ping.author_id || req.bot.owner_user_id,
+          handle: ping.sender_handle || req.bot.name,
+          displayName: ping.sender_name || `[Bot] ${req.bot.name}`,
+          avatar: ping.sender_avatar || '🤖',
+          avatarUrl: ping.sender_avatar_url || null,
+          nodeName: ourIdentity?.nodeName,
+        },
+      };
+      if (wave.federationState === 'origin') {
+        sendPingToFederatedNodes(waveId, 'new_ping', pingPayload).catch(err => {
+          console.error('Federation bot-ping delivery error:', err.message);
+        });
+      } else if (wave.federationState === 'participant' && wave.originNode) {
+        const originNode = db.getFederationNodeByName(wave.originNode);
+        if (originNode && originNode.status === 'active') {
+          const messageId = `new_ping-${ping.id}-${Date.now()}`;
+          const envelope = createFederationEnvelope(messageId, 'new_ping', pingPayload);
+          sendSignedFederationRequest(originNode, 'POST', '/api/federation/inbox', envelope).catch(err => {
+            console.error('Federation bot-ping delivery error:', err.message);
+          });
+        }
+      }
+    }
+
     // Log activity (use bot owner's user ID to satisfy FK constraint)
     if (db.logActivity) {
       db.logActivity(req.bot.owner_user_id, 'bot_create_ping', 'ping', ping.id, {
@@ -15544,40 +15584,50 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           // Cache existing pings from the broadcast
           if (broadcastMessages && Array.isArray(broadcastMessages)) {
             console.log(`📥 Caching ${broadcastMessages.length} existing pings from wave broadcast`);
+            let cachedCount = 0, failedCount = 0;
             for (const d of broadcastMessages) {
-              // Cache the ping author if remote
-              if (d.author && d.author.nodeName) {
-                db.cacheRemoteUser({
-                  id: d.author.id,
-                  nodeName: d.author.nodeName,
-                  handle: d.author.handle,
-                  displayName: d.author.displayName,
-                  avatar: d.author.avatar,
-                  avatarUrl: d.author.avatarUrl,
+              // Per-ping guard: a single bad author/ping must not abort the whole
+              // history sync (previously one throw left the wave partially synced).
+              try {
+                // Cache the ping author if remote
+                if (d.author && d.author.nodeName) {
+                  db.cacheRemoteUser({
+                    id: d.author.id,
+                    nodeName: d.author.nodeName,
+                    handle: d.author.handle,
+                    displayName: d.author.displayName,
+                    avatar: d.author.avatar,
+                    avatarUrl: d.author.avatarUrl,
+                  });
+                }
+
+                // Ensure reactions is an object (may be string if corrupted)
+                let reactions = d.reactions || {};
+                if (typeof reactions === 'string') {
+                  try { reactions = JSON.parse(reactions); } catch { reactions = {}; }
+                }
+
+                // Cache the ping
+                db.cacheRemotePing({
+                  id: d.id,
+                  waveId: localWave.id,
+                  originWaveId: wave.id,
+                  originNode: d.author?.nodeName || sourceNode.nodeName,
+                  authorId: d.author?.id || d.authorId,
+                  authorNode: d.author?.nodeName || sourceNode.nodeName,
+                  parentId: d.parentId,
+                  content: d.content,
+                  createdAt: d.createdAt,
+                  editedAt: d.editedAt,
+                  reactions,
                 });
+                cachedCount++;
+              } catch (pingErr) {
+                failedCount++;
+                console.error(`⚠️ Skipped broadcast ping ${d.id}: ${pingErr.message}`);
               }
-
-              // Ensure reactions is an object (may be string if corrupted)
-              let reactions = d.reactions || {};
-              if (typeof reactions === 'string') {
-                try { reactions = JSON.parse(reactions); } catch { reactions = {}; }
-              }
-
-              // Cache the ping
-              db.cacheRemotePing({
-                id: d.id,
-                waveId: localWave.id,
-                originWaveId: wave.id,
-                originNode: d.author?.nodeName || sourceNode.nodeName,
-                authorId: d.author?.id || d.authorId,
-                authorNode: d.author?.nodeName || sourceNode.nodeName,
-                parentId: d.parentId,
-                content: d.content,
-                createdAt: d.createdAt,
-                editedAt: d.editedAt,
-                reactions,
-              });
             }
+            if (failedCount > 0) console.warn(`⚠️ Wave broadcast: cached ${cachedCount}, skipped ${failedCount}`);
           }
 
           // Broadcast to all connected local users
