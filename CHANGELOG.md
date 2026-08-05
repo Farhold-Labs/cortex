@@ -5,6 +5,14 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.62.1] - 2026-08-04
+
+### Fixed
+
+- **Federated waves could sync only partially and then go stale** (found on the Cortex Updates wave federated to a partner node — it stopped at 1/13/26). Three federation bugs:
+  - **Wave-history broadcast aborted on the first bad author.** When a wave is federated, the receiver caches every existing ping's author. `cacheRemoteUser`'s upsert only resolved the `(node_name, handle)` unique constraint, so an author whose primary-key `id` was already cached under a different handle raised `UNIQUE constraint failed: remote_users.id` and threw — and the caching loop had no per-ping guard, so that one throw aborted the entire history sync (91 of 334 pings cached, rest lost). `cacheRemoteUser` now falls back to an update-by-id on that conflict, and the loop caches each ping in its own try/catch so a single bad record can't abort the sync.
+  - **Bot pings never federated.** `POST /api/bot/ping` broadcast only to local WebSocket clients and skipped `sendPingToFederatedNodes`, so waves posted to exclusively by bots (release-announcement waves, etc.) never propagated new pings to participant nodes. It now federates like `POST /api/pings`.
+
 ## [2.62.0] - 2026-08-04
 
 ### Added
