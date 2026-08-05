@@ -15185,6 +15185,82 @@ app.post('/api/federation/inbox/request', federationRequestLimiter, async (req, 
   res.json({ success: true, message: 'Federation request received', requestId: request.id });
 });
 
+// Resync a federated (participant) wave's full history from its origin (admin).
+// Pages the origin's /api/federation/wave-backfill and caches everything, so a
+// partial/failed initial sync can be repaired without touching the DB directly.
+app.post('/api/admin/federation/waves/:waveId/resync', authenticateToken, async (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+  const waveId = sanitizeInput(req.params.waveId);
+  const wave = db.getWave(waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+  if (wave.federationState !== 'participant' || !wave.originNode || !wave.originWaveId) {
+    return res.status(400).json({ error: 'Wave is not a federated participant wave' });
+  }
+  const originNode = db.getFederationNodeByName(wave.originNode);
+  if (!originNode || originNode.status !== 'active') {
+    return res.status(400).json({ error: 'Origin node is not an active federation partner' });
+  }
+
+  let before = null, cached = 0, failed = 0, pages = 0;
+  const MAX_PAGES = 500; // safety bound (~100k pings)
+  try {
+    while (pages < MAX_PAGES) {
+      pages++;
+      const resp = await sendSignedFederationRequest(originNode, 'POST', '/api/federation/wave-backfill', {
+        originWaveId: wave.originWaveId, before, limit: 100,
+      });
+      if (!resp.ok) {
+        const t = await resp.text();
+        return res.status(502).json({ error: `Origin returned ${resp.status}`, detail: t.slice(0, 200) });
+      }
+      const data = await resp.json();
+      const pings = data.pings || [];
+      if (pings.length === 0) break;
+
+      for (const d of pings) {
+        try {
+          if (d.author && d.author.id) {
+            db.cacheRemoteUser({
+              id: d.author.id,
+              nodeName: wave.originNode,
+              handle: d.author.handle,
+              displayName: d.author.displayName,
+              avatar: d.author.avatar,
+              avatarUrl: d.author.avatarUrl,
+            });
+          }
+          db.cacheRemotePing({
+            id: d.id,
+            waveId: wave.id,
+            originWaveId: wave.originWaveId,
+            originNode: wave.originNode,
+            authorId: d.author?.id,
+            authorNode: wave.originNode,
+            parentId: d.parentId,
+            content: d.content,
+            createdAt: d.createdAt,
+            editedAt: d.editedAt,
+            reactions: d.reactions,
+          });
+          cached++;
+        } catch (e) {
+          failed++;
+          console.error(`⚠️ resync: skipped ping ${d.id}: ${e.message}`);
+        }
+      }
+      before = pings[pings.length - 1].createdAt; // oldest in this page
+      if (!data.hasMore) break;
+    }
+    console.log(`🔄 Wave ${waveId} resync from ${wave.originNode}: cached ${cached}, failed ${failed}, pages ${pages}`);
+    res.json({ ok: true, cached, failed, pages });
+  } catch (err) {
+    console.error('Wave resync error:', err);
+    res.status(500).json({ error: 'Resync failed', message: err.message });
+  }
+});
+
 // Get pending federation requests (admin only)
 app.get('/api/admin/federation/requests', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
@@ -15376,13 +15452,12 @@ app.post('/api/federation/inbox/accept', federationRequestLimiter, authenticateF
   });
   db.recordFederationContact(node.id, true);
 
-  // TODO: Federation catch-up/backfill mechanism
-  // When federation is re-established after a disconnection, pings created during
-  // the downtime are not synced. For robustness (e.g., server failure recovery), consider:
-  // 1. Sync on reconnection - request pings newer than last sync point for shared waves
-  // 2. Admin resync button - manual option to request full wave resync
-  // 3. Version vectors - track last-seen ping timestamps per wave per node
-  // This would require a new endpoint like GET /api/federation/waves/:id/sync?since=timestamp
+  // Federation catch-up/backfill (v2.63.0): implemented as an admin-triggered
+  // resync — POST /api/admin/federation/waves/:waveId/resync pages the origin's
+  // POST /api/federation/wave-backfill and re-caches the full history. This
+  // repairs partial/failed initial syncs and downtime gaps.
+  // Possible future enhancement: auto-trigger the resync here on (re)accept, and
+  // per-wave last-seen version vectors for incremental (since-timestamp) catch-up.
 
   console.log(`✅ Federation request to ${sourceNode.nodeName} was accepted`);
   res.json({ success: true, message: 'Acceptance acknowledged' });
@@ -15996,6 +16071,41 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
   } catch (error) {
     console.error(`Federation inbox error processing ${type}:`, error.message);
     res.status(500).json({ error: 'Failed to process message' });
+  }
+});
+
+// Federation catch-up/backfill (origin side): serve a page of a wave's ping
+// history to a participant node that's re-syncing. Newest-first; the caller
+// pages backwards with `before`. Only the origin serves, and only to nodes
+// actually federated on this wave. Paginated to stay under the inbox body limit.
+app.post('/api/federation/wave-backfill', federationInboxLimiter, authenticateFederationRequest, (req, res) => {
+  try {
+    const sourceNode = req.federationNode;
+    const originWaveId = sanitizeInput(req.body.originWaveId || '');
+    const before = req.body.before ? sanitizeInput(String(req.body.before)) : null;
+    const limit = Math.min(parseInt(req.body.limit, 10) || 100, 200);
+    if (!originWaveId) return res.status(400).json({ error: 'originWaveId required' });
+
+    const wave = db.getWave(originWaveId);
+    if (!wave) return res.status(404).json({ error: 'Wave not found' });
+    if (wave.federationState !== 'origin') {
+      return res.status(400).json({ error: 'This node is not the origin for the wave' });
+    }
+    // Only serve history to nodes that are actually federated on this wave
+    const partners = db.getWaveFederationNodes(originWaveId).map(n => n.nodeName);
+    if (!partners.includes(sourceNode.nodeName)) {
+      return res.status(403).json({ error: 'Node is not a participant of this wave' });
+    }
+
+    const ourIdentity = db.getServerIdentity();
+    const page = db.getWavePingsForFederation(originWaveId, { before, limit });
+    res.json({
+      pings: page.map(p => ({ ...p, author: { ...p.author, nodeName: ourIdentity?.nodeName } })),
+      hasMore: page.length === limit,
+    });
+  } catch (err) {
+    console.error('Wave backfill error:', err);
+    res.status(500).json({ error: 'Failed to serve wave backfill' });
   }
 });
 
