@@ -5,6 +5,12 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.63.2] - 2026-08-05
+
+### Added
+
+- **Edit an existing federation identity name in the admin panel.** The federation admin panel could only *set* the node identity name when it was unconfigured — once configured it showed the name read-only, with no way to change it (the `POST /api/admin/federation/identity` endpoint existed but wasn't wired to any control for an already-configured node). Added an **EDIT** control that lets an admin change the identity hostname (keypair kept, no regeneration), with a warning that it breaks trust with existing partners and federation must be re-established.
+
 ## [2.63.1] - 2026-08-05
 
 ### Fixed
