@@ -7,6 +7,7 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [nodeName, setNodeName] = useState('');
+  const [editingIdentity, setEditingIdentity] = useState(false); // edit an already-configured identity name
   const [showAddNode, setShowAddNode] = useState(false);
   const [newNodeName, setNewNodeName] = useState('');
   const [newNodeUrl, setNewNodeUrl] = useState('');
@@ -57,6 +58,7 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
         body: { nodeName: nodeName.trim() }
       });
       showToast(FEDERATION.identityConfigured, 'success');
+      setEditingIdentity(false);
       loadFederationData();
     } catch (err) {
       showToast(err.message || formatError(FEDERATION.failedToConfigureIdentity), 'error');
@@ -280,19 +282,62 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
           </div>
 
           {status?.configured ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-              <span style={{ color: 'var(--accent-teal)', fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.85rem' }}>
-                {status.nodeName}
-              </span>
-              <span style={{
-                padding: '2px 8px',
-                background: 'var(--accent-green)20',
-                color: 'var(--accent-green)',
-                fontSize: '0.7rem',
-              }}>
-                {status.hasKeypair ? 'KEYPAIR OK' : 'NO KEYPAIR'}
-              </span>
-            </div>
+            editingIdentity ? (
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={nodeName}
+                  onChange={(e) => setNodeName(e.target.value)}
+                  placeholder="cortex.example.com"
+                  style={{
+                    flex: 1, minWidth: '200px', padding: isMobile ? '12px' : '10px',
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
+                    color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.85rem',
+                  }}
+                />
+                <button
+                  onClick={handleSetupIdentity}
+                  style={{
+                    padding: isMobile ? '12px 20px' : '10px 20px', minHeight: isMobile ? '44px' : 'auto',
+                    background: 'var(--accent-teal)20', border: '1px solid var(--accent-teal)',
+                    color: 'var(--accent-teal)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.8rem',
+                  }}
+                >SAVE</button>
+                <button
+                  onClick={() => { setEditingIdentity(false); setNodeName(status.nodeName || ''); }}
+                  style={{
+                    padding: isMobile ? '12px 20px' : '10px 20px', minHeight: isMobile ? '44px' : 'auto',
+                    background: 'transparent', border: '1px solid var(--border-primary)',
+                    color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.8rem',
+                  }}
+                >CANCEL</button>
+                <div style={{ width: '100%', color: 'var(--accent-orange)', fontSize: '0.65rem', marginTop: '2px' }}>
+                  ⚠ Changing the identity name breaks trust with existing partners — you'll need to re-establish federation with them afterward. The keypair is kept (no key change).
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--accent-teal)', fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.85rem' }}>
+                  {status.nodeName}
+                </span>
+                <span style={{
+                  padding: '2px 8px',
+                  background: 'var(--accent-green)20',
+                  color: 'var(--accent-green)',
+                  fontSize: '0.7rem',
+                }}>
+                  {status.hasKeypair ? 'KEYPAIR OK' : 'NO KEYPAIR'}
+                </span>
+                <button
+                  onClick={() => { setNodeName(status.nodeName || ''); setEditingIdentity(true); }}
+                  style={{
+                    padding: '4px 12px', background: 'transparent',
+                    border: '1px solid var(--border-primary)', color: 'var(--text-dim)',
+                    cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem',
+                  }}
+                >EDIT</button>
+              </div>
+            )
           ) : (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <input
