@@ -567,6 +567,29 @@
         font-family: 'Courier New', Monaco, 'Lucida Console', monospace !important;
       }
 
+      /* Markdown formatting in messages (v2.64.0). Compact, terminal-flavored. */
+      .cortex-msg-body h1, .cortex-msg-body h2, .cortex-msg-body h3 {
+        margin: 0.4em 0 0.2em; line-height: 1.2; font-weight: 700; color: var(--text-primary);
+      }
+      .cortex-msg-body h1 { font-size: 1.35em; }
+      .cortex-msg-body h2 { font-size: 1.2em; }
+      .cortex-msg-body h3 { font-size: 1.05em; }
+      .cortex-msg-body ul, .cortex-msg-body ol { margin: 0.3em 0; padding-left: 1.4em; }
+      .cortex-msg-body li { margin: 0.1em 0; }
+      .cortex-msg-body blockquote {
+        margin: 0.3em 0; padding: 0.1em 0.8em;
+        border-left: 3px solid var(--accent-teal); color: var(--text-secondary);
+      }
+      .cortex-msg-body pre {
+        margin: 0.4em 0; padding: 8px 10px; background: var(--bg-elevated);
+        border: 1px solid var(--border-subtle); border-radius: 4px; overflow-x: auto;
+      }
+      .cortex-msg-body code {
+        background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; font-size: 0.9em;
+      }
+      .cortex-msg-body pre code { background: none; padding: 0; }
+      .cortex-msg-body del { opacity: 0.7; }
+
       /* Accessibility: honor the OS "reduce motion" setting (WCAG 2.3.3).
          Neutralizes CSS animations/transitions (seasonal effects, spinners,
          pulses). The crawl ticker uses the Web Animations API and is handled

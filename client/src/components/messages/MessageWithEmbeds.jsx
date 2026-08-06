@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { API_URL, BASE_URL } from '../../config/constants.js';
 import { detectEmbedUrls, EMBED_PLATFORMS } from '../../utils/embed.js';
+import { renderMarkdown } from '../../utils/markdown.js';
 import JellyfinEmbed from '../media/JellyfinEmbed.jsx';
 import PlexEmbed from '../media/PlexEmbed.jsx';
 
@@ -463,7 +464,11 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
 
   // Strip embed URLs from displayed content if we're showing the embed
   const displayContent = useMemo(() => {
-    let result = content;
+    // Render markdown first (client-side, at display time) so the stored content
+    // stays raw source. The renderer preserves any existing HTML (media/links)
+    // and only emits a safe tag subset; the passes below (mentions, media,
+    // auto-links) then run on the result.
+    let result = renderMarkdown(content);
     if (embeds.length > 0) {
       for (const url of embedUrls) {
         // Only hide the URL if it's on its own line or at the end
