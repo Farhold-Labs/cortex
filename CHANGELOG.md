@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.64.0] - 2026-08-06
+
+### Added
+
+- **Markdown formatting in messages, with a pop-out editor.** You can now format pings with markdown — **bold** (`**`), *italic* (`*`/`_`), ~~strikethrough~~ (`~~`), `inline code`, ```code blocks```, `#`/`##`/`###` headings, `-`/`1.` lists, and `>` blockquotes, plus `[label](url)` links (the existing `URL|label` still works too). Markdown is rendered **client-side at display time**, so the stored content stays the raw source (nice for editing) and the server sanitizer / allow-list is unchanged — no new HTML tags are accepted from the wire.
+  - The composer stays a clean textarea you type markdown into. A new **format button** (`Aa`) toggles a formatting toolbar (off by default) whose buttons wrap the selection in markdown.
+  - A new **pop-out** button (`⛶`) opens a large editor with a **live rendered preview** side-by-side — handy for longer posts.
+  - Works in plaintext and E2EE waves (the renderer preserves existing embedded HTML like media/links, and escapes code-block contents). Code/preformatted blocks always stay monospace.
+
 ## [2.63.2] - 2026-08-05
 
 ### Added
