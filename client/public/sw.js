@@ -178,35 +178,33 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation requests (HTML): Stale-while-revalidate (v2.57.2)
-  // Serve the cached app shell instantly so returning users never stare at a
-  // black screen on slow connections, then refresh the cache in the background.
-  // The hashed JS/CSS it references are served cache-first below, so the shell
-  // boots from cache with zero network round-trips. First-ever visit (no cache)
-  // falls through to the network.
+  // Navigation requests (HTML): Network-first (v2.63.1)
+  // ALWAYS boot from the current shell when online. The previous cache-first
+  // strategy served a stale index.html after a deploy — which references the
+  // old hashed bundle that the deploy just deleted → 404 on the main bundle and
+  // a broken app until a manual reload/cache-clear (especially painful in the
+  // native app, which can't just refresh). index.html is small and served
+  // no-cache, so a network round-trip here is cheap. Fall back to the cached
+  // shell only when the network fails (offline).
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);
-      const networkFetch = fetch(request)
-        .then((response) => {
-          if (response && response.ok) cache.put(request, response.clone());
-          return response;
-        })
-        .catch(() => null);
-
-      const cached =
+      const cachedShell = async () =>
         (await cache.match(request)) ||
         (await cache.match('/index.html')) ||
         (await cache.match('/'));
-
-      if (cached) {
-        // Keep the SW alive long enough to finish refreshing the cache.
-        event.waitUntil(networkFetch);
-        return cached;
+      try {
+        const response = await fetch(request);
+        if (response && response.ok) {
+          cache.put(request, response.clone());
+          return response;
+        }
+        // Server returned non-OK (e.g. 5xx): prefer a working cached shell.
+        return (await cachedShell()) || response;
+      } catch {
+        // Offline: serve the cached shell.
+        return (await cachedShell()) || Response.error();
       }
-
-      // No cached shell yet (first visit): wait for the network.
-      return (await networkFetch) || (await cache.match('/')) || Response.error();
     })());
     return;
   }
