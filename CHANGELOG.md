@@ -5,6 +5,12 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.63.1] - 2026-08-05
+
+### Fixed
+
+- **Stale app shell / 404 on the main bundle after a deploy.** The service worker served navigations **cache-first** (stale-while-revalidate): it returned the previously cached `index.html` instantly and only refreshed the cache in the background. After a deploy — which replaces the content-hashed bundles and deletes the old ones — that stale `index.html` pointed at a bundle that no longer existed, so the app 404'd on its main script and failed to boot until a manual reload (browser) or cache clear (native app, which can't just refresh). Navigation is now **network-first**: it always boots from the current shell when online (index.html is tiny and served `no-cache`), falling back to the cached shell only when offline. Hashed assets remain cache-first/immutable. The SW already used `skipWaiting` + `clients.claim`, so the fix takes over promptly.
+
 ## [2.63.0] - 2026-08-05
 
 ### Added
