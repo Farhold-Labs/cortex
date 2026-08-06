@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } f
 import { Avatar } from '../ui/SimpleComponents.jsx';
 import { searchEmoji, resolveEmojiShortcodes, EMOJI_MAP } from '../../config/emojiData.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
+import { renderMarkdown } from '../../utils/markdown.js';
 
 const MessageComposer = forwardRef(({
   participants = [],
@@ -43,12 +44,15 @@ const MessageComposer = forwardRef(({
   const [emojiStartPos, setEmojiStartPos] = useState(null);
   const [serverMentionResults, setServerMentionResults] = useState([]);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showFormatBar, setShowFormatBar] = useState(false); // markdown toolbar (off by default)
+  const [poppedOut, setPoppedOut] = useState(false); // large pop-out editor with preview
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [gifSearch, setGifSearch] = useState('');
   const [gifResults, setGifResults] = useState([]);
   const [gifLoading, setGifLoading] = useState(false);
   const [gifStartPos, setGifStartPos] = useState(null);
   const textareaRef = useRef(null);
+  const popoutRef = useRef(null); // textarea inside the pop-out editor
   const fileInputRef = useRef(null);
   const fileAttachInputRef = useRef(null);
   const emojiPickerRef = useRef(null);
@@ -67,7 +71,46 @@ const MessageComposer = forwardRef(({
     if (!newMessage.trim()) return;
     onSend(resolveEmojiShortcodes(newMessage));
     setNewMessage('');
+    setPoppedOut(false);
   };
+
+  // The textarea currently in use (pop-out editor when open, else the inline one).
+  const activeTextarea = () => (poppedOut ? popoutRef.current : textareaRef.current);
+
+  // Wrap the current selection in markdown (or insert a placeholder if empty).
+  const applyFormat = (before, after = before, placeholder = '') => {
+    const ta = activeTextarea();
+    const start = ta?.selectionStart ?? newMessage.length;
+    const end = ta?.selectionEnd ?? start;
+    const sel = newMessage.slice(start, end) || placeholder;
+    setNewMessage(newMessage.slice(0, start) + before + sel + after + newMessage.slice(end));
+    setTimeout(() => {
+      ta?.focus();
+      const c = start + before.length;
+      ta?.setSelectionRange(c, c + sel.length);
+    }, 0);
+  };
+
+  // Prefix the start of the current line (headings / lists / quotes).
+  const applyLinePrefix = (prefix) => {
+    const ta = activeTextarea();
+    const pos = ta?.selectionStart ?? 0;
+    const lineStart = newMessage.lastIndexOf('\n', pos - 1) + 1;
+    setNewMessage(newMessage.slice(0, lineStart) + prefix + newMessage.slice(lineStart));
+    setTimeout(() => { ta?.focus(); const c = pos + prefix.length; ta?.setSelectionRange(c, c); }, 0);
+  };
+
+  const FORMAT_ACTIONS = [
+    { label: 'B', title: 'Bold', style: { fontWeight: 700 }, run: () => applyFormat('**', '**', 'bold') },
+    { label: 'I', title: 'Italic', style: { fontStyle: 'italic' }, run: () => applyFormat('*', '*', 'italic') },
+    { label: 'S', title: 'Strikethrough', style: { textDecoration: 'line-through' }, run: () => applyFormat('~~', '~~', 'text') },
+    { label: '<>', title: 'Inline code', run: () => applyFormat('`', '`', 'code') },
+    { label: '{ }', title: 'Code block', run: () => applyFormat('\n```\n', '\n```\n', 'code') },
+    { label: 'H', title: 'Heading', run: () => applyLinePrefix('## ') },
+    { label: '•', title: 'List', run: () => applyLinePrefix('- ') },
+    { label: '"', title: 'Quote', run: () => applyLinePrefix('> ') },
+    { label: '🔗', title: 'Link', run: () => applyFormat('[', '](https://)', 'text') },
+  ];
 
   const handleImageFile = (file) => {
     if (file && onImageUpload) {
@@ -271,7 +314,27 @@ const MessageComposer = forwardRef(({
         </div>
       )}
 
-      {/* Input row: [+] [textarea] [SEND] */}
+      {/* Markdown formatting toolbar (toggled by the format button; off by default) */}
+      {showFormatBar && (
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '6px' }}>
+          {FORMAT_ACTIONS.map((a) => (
+            <button
+              key={a.title}
+              onClick={(e) => { e.preventDefault(); a.run(); }}
+              title={a.title}
+              aria-label={a.title}
+              style={{
+                minWidth: isMobile ? '34px' : '28px', minHeight: isMobile ? '34px' : 'auto',
+                padding: '4px 8px', background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-subtle)', color: 'var(--text-dim)',
+                cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.8rem', ...(a.style || {}),
+              }}
+            >{a.label}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Input row: [+] [textarea] [Aa] [pop-out] [SEND] */}
       <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
         <div style={{ position: 'relative', flexShrink: 0, alignSelf: 'flex-end' }}>
           <input type="file" ref={fileInputRef} onChange={(e) => { const file = e.target.files?.[0]; if (file) handleImageFile(file); }} accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" style={{ display: 'none' }} />
@@ -645,6 +708,32 @@ const MessageComposer = forwardRef(({
         </div>
 
         <button
+          onClick={() => setShowFormatBar((v) => !v)}
+          title="Formatting"
+          aria-label="Toggle formatting toolbar"
+          aria-pressed={showFormatBar}
+          style={{
+            padding: isMobile ? '8px 10px' : '5px 8px', minHeight: isMobile ? '36px' : '28px',
+            background: showFormatBar ? 'var(--accent-amber)20' : 'transparent',
+            border: `1px solid ${showFormatBar ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
+            color: showFormatBar ? 'var(--accent-amber)' : 'var(--text-dim)',
+            cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.75rem',
+            flexShrink: 0, alignSelf: 'flex-end',
+          }}
+        >Aa</button>
+        <button
+          onClick={() => setPoppedOut(true)}
+          title="Expand editor"
+          aria-label="Expand editor"
+          style={{
+            padding: isMobile ? '8px 10px' : '5px 8px', minHeight: isMobile ? '36px' : '28px',
+            background: 'transparent', border: '1px solid var(--border-primary)',
+            color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace',
+            fontSize: isMobile ? '0.85rem' : '0.75rem', flexShrink: 0, alignSelf: 'flex-end',
+          }}
+        >⛶</button>
+
+        <button
           onClick={handleSend}
           disabled={!newMessage.trim() || uploading}
           style={{
@@ -663,6 +752,53 @@ const MessageComposer = forwardRef(({
           SEND
         </button>
       </div>
+
+      {/* Pop-out editor: larger textarea + live markdown preview */}
+      {poppedOut && (
+        <div
+          onClick={() => setPoppedOut(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 0 : '24px' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--bg-surface)', border: '1px solid var(--border-primary)',
+              borderRadius: isMobile ? 0 : '6px', width: isMobile ? '100%' : 'min(900px, 92vw)',
+              height: isMobile ? '100%' : 'min(80vh, 700px)', display: 'flex', flexDirection: 'column',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <span style={{ color: 'var(--accent-amber)', fontFamily: 'monospace', fontSize: '0.85rem', letterSpacing: '1px' }}>COMPOSE</span>
+              <button onClick={() => setPoppedOut(false)} aria-label="Close editor" style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '1rem' }}>✕</button>
+            </div>
+            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+              {FORMAT_ACTIONS.map((a) => (
+                <button key={a.title} onClick={(e) => { e.preventDefault(); a.run(); }} title={a.title} aria-label={a.title}
+                  style={{ minWidth: '30px', padding: '4px 8px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.8rem', ...(a.style || {}) }}
+                >{a.label}</button>
+              ))}
+            </div>
+            <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', minHeight: 0 }}>
+              <textarea
+                ref={popoutRef}
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder={placeholder || 'Write your post in markdown…'}
+                style={{ flex: 1, resize: 'none', padding: '12px', background: 'var(--bg-base)', border: 'none', borderRight: isMobile ? 'none' : '1px solid var(--border-subtle)', borderBottom: isMobile ? '1px solid var(--border-subtle)' : 'none', color: 'var(--text-primary)', fontFamily: 'var(--app-font, monospace)', fontSize: '0.9rem', lineHeight: 1.5, outline: 'none', minHeight: isMobile ? '40%' : 'auto' }}
+              />
+              <div className="cortex-msg-body" style={{ flex: 1, padding: '12px', overflowY: 'auto', color: 'var(--text-primary)', fontFamily: 'var(--app-font, monospace)', fontSize: '0.9rem', lineHeight: 1.5, wordBreak: 'break-word' }}
+                dangerouslySetInnerHTML={{ __html: newMessage.trim() ? renderMarkdown(resolveEmojiShortcodes(newMessage)) : '<span style="opacity:0.4">Live preview…</span>' }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', padding: '10px 14px', borderTop: '1px solid var(--border-subtle)' }}>
+              <button onClick={() => setPoppedOut(false)} style={{ padding: '6px 14px', background: 'transparent', border: '1px solid var(--border-primary)', color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.8rem' }}>CLOSE</button>
+              <button onClick={handleSend} disabled={!newMessage.trim() || uploading}
+                style={{ padding: '6px 16px', background: newMessage.trim() ? 'var(--accent-amber)20' : 'transparent', border: `1px solid ${newMessage.trim() ? 'var(--accent-amber)' : 'var(--border-primary)'}`, color: newMessage.trim() ? 'var(--accent-amber)' : 'var(--text-muted)', cursor: newMessage.trim() ? 'pointer' : 'not-allowed', fontFamily: 'monospace', fontSize: '0.8rem' }}
+              >SEND</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* (toolbar removed — all attach options in ⋮ menu) */}
       {false && <div>
