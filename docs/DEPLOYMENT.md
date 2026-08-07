@@ -8,6 +8,7 @@ Hardened deployment of Cortex on a fresh VPS with LUKS disk encryption, SQLCiphe
 
 ## Table of Contents
 
+0. [Hardware Requirements](#0-hardware-requirements)
 1. [Initial Server Setup](#1-initial-server-setup)
 2. [LUKS Encrypted Partition](#2-luks-encrypted-partition)
 3. [Install Dependencies](#3-install-dependencies)
@@ -19,6 +20,31 @@ Hardened deployment of Cortex on a fresh VPS with LUKS disk encryption, SQLCiphe
 9. [Automated Encrypted Backups](#9-automated-encrypted-backups)
 10. [Firewall](#10-firewall)
 11. [Maintenance](#11-maintenance)
+
+---
+
+## 0. Hardware Requirements
+
+**The runtime fits in ~512 MB, but building the client does not** — `vite build` needs a ~500 MB–1 GB working set. A box can run Cortex fine yet fail to build it. Size for the build, or build off-box (see below).
+
+| | Minimum (build off-box) | Recommended (build on-box) |
+|---|---|---|
+| **vCPU** | 1 | 1–2 |
+| **RAM** | 512 MB **+ 2 GB swap** | 2 GB |
+| **Disk** | 15 GB | 25 GB+ |
+| **OS** | Ubuntu 22.04+ | Ubuntu 22.04+ |
+| **Node** | 20 LTS+ (24 in prod) | 20 LTS+ |
+
+**Measured footprint (production reference node, 458 MB / 1 vCPU):**
+- **Runtime:** `cortex-api` ~106 MB + `cortex-web` ~22 MB RSS, plus nginx + OS. Idle system use ~270 MB.
+- **Dependencies on disk:** `server/node_modules` ~183 MB + `client/node_modules` ~488 MB (~670 MB), before build output, the SQLite/SQLCipher DB, and encrypted backups.
+- **Build:** `vite build` peaks well above the available RAM on a 512 MB box, so it **requires swap plus a raised V8 heap limit** (`client/package.json` already launches vite with `--max-old-space-size=768`). On such a box the build works but is **slow (~2–3 min) and thrashes swap**, briefly degrading a co-hosted live site.
+
+**Building on a small box (≤1 GB RAM):**
+1. Ensure ≥2 GB swap exists (`swapon --show`; create with `fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`, then add to `/etc/fstab`).
+2. The build script already sets the V8 heap ceiling — swap alone is not enough, because V8 auto-caps its heap ~256 MB on low-RAM hosts regardless of swap.
+
+**Preferred alternative — build off-box:** build the client on a workstation/CI (`cd client && npm run build`) and ship the prebuilt `client/dist` to the server (e.g. `tar -C client/dist -czf - . | ssh <deploy>@<host> 'extract into a temp dir, then atomically swap it over ~/cortex/client/dist'`). This avoids swap-thrash on the live host entirely and finishes in seconds. The server still needs the source (for `server/`), typically via the `git archive` deploy.
 
 ---
 
