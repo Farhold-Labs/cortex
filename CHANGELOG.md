@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.64.1] - 2026-08-18
+
+### Fixed
+
+- **Notifications were completely broken on fresh installs** (`SqliteError: table notifications has no column named group_key`). The v2.0.0 nomenclature overhaul (`12b7db5`) blanket-renamed group→crew in `schema.sql` and caught `notifications.group_key`, which is the notification *collapse key* and has nothing to do with crews — the server code has always used `group_key`. Because `applySchemaUpdates()` only creates the notifications table `if (!notificationsExists)`, DBs born from `schema.sql` got `crew_key`, skipped the migration block, and never gained `group_key`.
+  - Impact: every `db.createNotification()` call threw, which happens *before* `sendPushNotification()` at all five call sites — so affected nodes had no in-app notifications, no push, and 500s on the reaction/mention/reply routes. Nodes upgraded from ≤v1.11.0 (e.g. cortex.farhold.com) were unaffected; fresh installs since v2.0.0 (e.g. cortex.pottermckeanplayers.org) were fully broken.
+  - `schema.sql`: `crew_key` → `group_key`, and `idx_notifications_crew_key` → `idx_notifications_group_key`.
+  - `database-sqlite.js`: added a guarded `ALTER TABLE notifications ADD COLUMN group_key TEXT` so existing broken DBs self-heal on restart — no manual SQL needed.
+  - Audited both directions for siblings of this bug: `crew_key` was the only column in `schema.sql` unreferenced by server code, and `group_key` the only migration-block column missing from fresh installs. The `crews`/`crew_members`/`crew_id` rename was correctly applied to the code.
+
 ## [2.64.0] - 2026-08-06
 
 ### Added

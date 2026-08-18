@@ -610,6 +610,21 @@ export class DatabaseSQLite {
       console.log('✅ Notifications tables created');
     }
 
+    // Repair notifications.group_key on DBs born from schema.sql (v2.64.1)
+    // The v2.0.0 nomenclature overhaul renamed this column to crew_key in
+    // schema.sql only — the code has always used group_key. Fresh installs got
+    // the table from schema.sql, so the block above was skipped and group_key
+    // never existed, making every createNotification() throw.
+    const notifCols = this.db.prepare(`PRAGMA table_info(notifications)`).all();
+    if (!notifCols.some(c => c.name === 'group_key')) {
+      console.log('📝 Adding missing notifications.group_key column (v2.64.1)...');
+      this.db.exec(`
+        ALTER TABLE notifications ADD COLUMN group_key TEXT;
+        CREATE INDEX IF NOT EXISTS idx_notifications_group_key ON notifications(group_key);
+      `);
+      console.log('✅ notifications.group_key added');
+    }
+
     // Check if push_subscriptions table exists and has correct schema (v1.12.0 fix)
     const pushSubsExists = this.db.prepare(`
       SELECT name FROM sqlite_master WHERE type='table' AND name='push_subscriptions'
