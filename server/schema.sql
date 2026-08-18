@@ -625,7 +625,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     push_sent INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
     read_at TEXT,
-    crew_key TEXT  -- For collapsing similar notifications
+    group_key TEXT  -- For collapsing similar notifications (code uses group_key; NOT part of the v2.0.0 crews rename)
 );
 
 -- Notification preferences per wave
@@ -672,7 +672,7 @@ CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
 CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_wave ON notifications(wave_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_ping ON notifications(ping_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_crew_key ON notifications(crew_key);
+CREATE INDEX IF NOT EXISTS idx_notifications_group_key ON notifications(group_key);
 
 -- Wave notification settings lookups
 CREATE INDEX IF NOT EXISTS idx_wave_notification_settings_user ON wave_notification_settings(user_id);
