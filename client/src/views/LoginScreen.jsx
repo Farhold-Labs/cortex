@@ -87,6 +87,12 @@ const CrossPortLoginSection = () => {
 const LoginScreen = ({ onAbout }) => {
   const { login, completeMfaLogin, register } = useAuth();
   const [isRegistering, setIsRegistering] = useState(false);
+  // Invite links (v2.67.0): ?invite=<token> lands here. Validated up front so a bad or
+  // spent link says so immediately instead of after the form is filled in.
+  const [inviteToken, setInviteToken] = useState(null);
+  const [inviteInfo, setInviteInfo] = useState(null);
+  const [inviteError, setInviteError] = useState('');
+
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [handle, setHandle] = useState('');
   const [email, setEmail] = useState('');
@@ -97,6 +103,26 @@ const LoginScreen = ({ onAbout }) => {
   const [loading, setLoading] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotStatus, setForgotStatus] = useState({ loading: false, message: '', error: '' });
+
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get('invite');
+    if (!token) return;
+    setInviteToken(token);
+    setIsRegistering(true);
+    fetch(`${API_URL}/invites/${encodeURIComponent(token)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.valid) {
+          setInviteInfo(data);
+          if (data.email) setEmail(data.email);
+        } else {
+          setInviteError(data.error || 'This invitation is not valid');
+          setInviteToken(null);
+        }
+      })
+      .catch(() => setInviteError('Could not check that invitation — try again'));
+  }, []);
+
   // MFA state
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaChallenge, setMfaChallenge] = useState(null);
@@ -188,7 +214,7 @@ const LoginScreen = ({ onAbout }) => {
     setLoading(true);
     try {
       if (isRegistering) {
-        await register(handle, email, password, displayName, sessionDuration);
+        await register(handle, email, password, displayName, sessionDuration, inviteToken);
       } else {
         const result = await login(handle, password, sessionDuration);
         if (result?.mfaRequired) {
@@ -646,6 +672,17 @@ const LoginScreen = ({ onAbout }) => {
             </div>
           )}
 
+          {inviteInfo && (
+            <div style={{ color: 'var(--accent-green)', fontSize: '0.85rem', marginBottom: '16px', padding: '10px', background: 'var(--accent-green)10', border: '1px solid var(--accent-green)30' }}>
+              ✉️ You've been invited{inviteInfo.invitedBy ? ` by @${inviteInfo.invitedBy}` : ''}
+              {inviteInfo.instanceName ? ` to ${inviteInfo.instanceName}` : ''}. Create your account below.
+            </div>
+          )}
+          {inviteError && (
+            <div style={{ color: 'var(--accent-orange)', fontSize: '0.85rem', marginBottom: '16px', padding: '10px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)30' }}>
+              {inviteError}
+            </div>
+          )}
           {error && <div style={{ color: 'var(--accent-orange)', fontSize: '0.85rem', marginBottom: '16px', padding: '10px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)30' }}>{error}</div>}
 
           <button type="submit" disabled={loading} style={{

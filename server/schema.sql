@@ -1079,6 +1079,22 @@ CREATE TABLE IF NOT EXISTS instance_config (
           updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
         );
 
+CREATE TABLE IF NOT EXISTS user_invitations (
+          id         TEXT PRIMARY KEY,
+          token_hash TEXT UNIQUE NOT NULL,
+          email      TEXT,
+          role       TEXT NOT NULL DEFAULT 'user',
+          note       TEXT,
+          created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          used_at    TEXT,
+          used_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          revoked_at TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_user_invitations_token ON user_invitations(token_hash);
+CREATE INDEX IF NOT EXISTS idx_user_invitations_created_by ON user_invitations(created_by);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
