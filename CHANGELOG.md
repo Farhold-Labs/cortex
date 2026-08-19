@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.65.1] - 2026-08-19
+
+### Added
+
+- **"↺ SERVER DEFAULT" reset control on personal settings.** Completes the instance-defaults feature from v2.65.0: the API accepted `null` to clear an override, but the settings screen had no way to send it. Available on all eight settings an admin can set a default for — theme, font size, wave list density, interface font, CRT scan lines, holiday effects, auto-focus pings and auto-collapse long messages.
+  - The control only appears when you actually have an override to clear. If you're already following the server default there's nothing to reset, so nothing is shown.
+  - Clearing falls back through the same chain the server resolves: your override → the admin's instance default → the built-in default.
+
+### Changed
+
+- Auth payloads and the preferences endpoint now return **`preferenceOverrides`** (the raw keys you explicitly set) alongside the resolved `preferences`. The client previously received only resolved values, so it could not distinguish "I chose this" from "I'm inheriting this" — which is exactly what the reset control needs to know. `false` remains a real override rather than a clear; only `null` clears.
+
 ## [2.65.0] - 2026-08-18
 
 ### Added
