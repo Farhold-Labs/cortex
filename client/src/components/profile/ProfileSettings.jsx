@@ -12,6 +12,36 @@ import { E2EEStatusIndicator } from '../../../e2ee-components.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import MyReportsPanel from '../reports/MyReportsPanel.jsx';
 
+// ============ PREFERENCE LABEL WITH RESET (v2.65.1) ============
+// Settings can be given a server-wide default by an admin. A user who has explicitly
+// chosen gets a control to clear that choice and go back to following the server. The
+// control is hidden when there's no override, because there'd be nothing to reset.
+const PREF_LABEL_STYLE = { color: 'var(--text-dim)', fontSize: '0.75rem' };
+
+const PrefLabel = ({ prefKey, overrides, onReset, children }) => {
+  const hasOverride = overrides && overrides[prefKey] !== undefined;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
+      <label style={PREF_LABEL_STYLE}>{children}</label>
+      {hasOverride && (
+        <button
+          onClick={() => onReset(prefKey)}
+          title="Clear your choice and follow this server's default"
+          style={{
+            padding: '2px 8px', background: 'transparent',
+            border: '1px solid var(--border-subtle)', color: 'var(--text-muted)',
+            cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.62rem',
+            borderRadius: '2px', lineHeight: 1.6,
+          }}
+        >
+          ↺ SERVER DEFAULT
+        </button>
+      )}
+    </div>
+  );
+};
+
+
 // Admin panel imports
 import UserManagementPanel from '../admin/UserManagementPanel.jsx';
 import AdminReportsPanel from '../admin/AdminReportsPanel.jsx';
@@ -624,16 +654,24 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
     }
   };
 
-  const handleUpdatePreferences = async (updates) => {
+  const handleUpdatePreferences = async (updates, successMessage = 'Preferences updated') => {
     try {
       const result = await fetchAPI('/profile/preferences', { method: 'PUT', body: updates });
-      showToast('Preferences updated', 'success');
-      // Update user with new preferences
-      onUserUpdate?.({ ...user, preferences: result.preferences });
+      showToast(successMessage, 'success');
+      // Update user with the resolved preferences AND the raw overrides, so the reset
+      // controls appear/disappear immediately without a reload
+      onUserUpdate?.({
+        ...user,
+        preferences: result.preferences,
+        preferenceOverrides: result.preferenceOverrides ?? user?.preferenceOverrides,
+      });
     } catch (err) {
       showToast(err.message || formatError('Failed to update preferences'), 'error');
     }
   };
+
+  // null clears the stored override so the user follows the server default again
+  const handleResetPreference = (prefKey) => handleUpdatePreferences({ [prefKey]: null }, 'Now following the server default');
 
   const inputStyle = {
     width: '100%', padding: '10px 12px', boxSizing: 'border-box',
@@ -1440,7 +1478,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
       <CollapsibleSection title="DISPLAY PREFERENCES" isOpen={openSection === 'display'} onToggle={() => toggleSection('display')} isMobile={isMobile}>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>THEME</label>
+          <PrefLabel prefKey="theme" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>THEME</PrefLabel>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <select
               value={user?.preferences?.theme || 'serenity'}
@@ -1507,7 +1545,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>FONT SIZE</label>
+          <PrefLabel prefKey="fontSize" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>FONT SIZE</PrefLabel>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             {Object.entries(FONT_SIZES).map(([key, config]) => (
               <button
@@ -1531,7 +1569,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>WAVE LIST DENSITY</label>
+          <PrefLabel prefKey="waveDensity" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>WAVE LIST DENSITY</PrefLabel>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             {Object.entries(WAVE_DENSITY).map(([key, config]) => {
               const active = (user?.preferences?.waveDensity || DEFAULT_WAVE_DENSITY) === key;
@@ -1561,7 +1599,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>INTERFACE FONT</label>
+          <PrefLabel prefKey="messageFont" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>INTERFACE FONT</PrefLabel>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             {Object.entries(MESSAGE_FONTS).map(([key, config]) => {
               const active = (user?.preferences?.messageFont || DEFAULT_MESSAGE_FONT) === key;
@@ -1618,7 +1656,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>CRT SCAN LINES</label>
+          <PrefLabel prefKey="scanLines" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>CRT SCAN LINES</PrefLabel>
           <button
             onClick={() => handleUpdatePreferences({ scanLines: !(user?.preferences?.scanLines !== false) })}
             style={{
@@ -1640,7 +1678,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>HOLIDAY EFFECTS</label>
+          <PrefLabel prefKey="holidayEffects" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>HOLIDAY EFFECTS</PrefLabel>
           <button
             onClick={() => handleUpdatePreferences({ holidayEffects: !(user?.preferences?.holidayEffects !== false) })}
             style={{
@@ -1662,7 +1700,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>AUTO-FOCUS PINGS</label>
+          <PrefLabel prefKey="autoFocusMessages" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>AUTO-FOCUS PINGS</PrefLabel>
           <button
             onClick={() => handleUpdatePreferences({ autoFocusMessages: !(user?.preferences?.autoFocusMessages === true) })}
             style={{
@@ -1684,7 +1722,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>AUTO-COLLAPSE LONG MESSAGES</label>
+          <PrefLabel prefKey="autoCollapseMessages" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>AUTO-COLLAPSE LONG MESSAGES</PrefLabel>
           <button
             onClick={() => handleUpdatePreferences({ autoCollapseMessages: !(user?.preferences?.autoCollapseMessages === true) })}
             style={{
