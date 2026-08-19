@@ -2255,15 +2255,58 @@ export class DatabaseSQLite {
         -- Server-wide instance configuration (singleton, mirrors crawl_config pattern)
         CREATE TABLE IF NOT EXISTS instance_config (
           id         INTEGER PRIMARY KEY CHECK (id = 1),
-          defaults   TEXT NOT NULL DEFAULT '{}',
-          features   TEXT NOT NULL DEFAULT '{}',
-          branding   TEXT NOT NULL DEFAULT '{}',
+          defaults              TEXT NOT NULL DEFAULT '{}',
+          notification_defaults TEXT NOT NULL DEFAULT '{}',
+          features              TEXT NOT NULL DEFAULT '{}',
+          branding              TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
         );
       `);
       console.log('✅ instance_config table created');
+    }
+
+    // v2.66.0 — notification defaults namespace on instance_config
+    const instCols = this.db.prepare(`PRAGMA table_info(instance_config)`).all();
+    if (instCols.length > 0 && !instCols.some(c => c.name === 'notification_defaults')) {
+      console.log('📝 Adding instance_config.notification_defaults (v2.66.0)...');
+      this.db.exec(`ALTER TABLE instance_config ADD COLUMN notification_defaults TEXT NOT NULL DEFAULT '{}';`);
+      console.log('✅ instance_config.notification_defaults added');
+
+      // One-time: strip notification preference keys that still hold the built-in value.
+      // Saving any notification setting used to stamp EVERY key, so a user who once
+      // toggled one thing became a permanent override for all of them and could never
+      // pick up an instance default. Only values identical to the built-in default are
+      // removed; anything the user actually changed survives.
+      const CODE_NOTIF = {
+        enabled: true, directMentions: 'always', replies: 'always', reactions: 'always',
+        waveActivity: 'app_closed', burstEvents: 'app_closed', soundEnabled: false,
+        suppressWhileFocused: true, pushDebounceMinutes: 5,
+      };
+      const CODE_EMAIL_NOTIF = {
+        enabled: false, mentions: true, replies: true, calendarReminders: true, offlineThresholdMinutes: 15,
+      };
+      const notifRows = this.db.prepare('SELECT id, notification_preferences FROM users WHERE notification_preferences IS NOT NULL').all();
+      const notifUpdate = this.db.prepare('UPDATE users SET notification_preferences = ? WHERE id = ?');
+      let notifCleaned = 0;
+      for (const row of notifRows) {
+        let prefs;
+        try { prefs = JSON.parse(row.notification_preferences); } catch { continue; }
+        if (!prefs || typeof prefs !== 'object') continue;
+        let changed = false;
+        for (const [key, codeValue] of Object.entries(CODE_NOTIF)) {
+          if (prefs[key] === codeValue) { delete prefs[key]; changed = true; }
+        }
+        if (prefs.email && typeof prefs.email === 'object') {
+          for (const [key, codeValue] of Object.entries(CODE_EMAIL_NOTIF)) {
+            if (prefs.email[key] === codeValue) { delete prefs.email[key]; changed = true; }
+          }
+          if (Object.keys(prefs.email).length === 0) delete prefs.email;
+        }
+        if (changed) { notifUpdate.run(JSON.stringify(prefs), row.id); notifCleaned++; }
+      }
+      if (notifCleaned > 0) console.log(`✅ Cleared built-in notification values on ${notifCleaned} user(s) — they now follow instance notification defaults`);
     }
 
     // v2.65.0 — One-time: strip legacy hardcoded preference values so they read as "unset".
@@ -2668,24 +2711,21 @@ export class DatabaseSQLite {
     return updatedPrefs;
   }
 
+  // v2.66.0: stores ONLY what the user explicitly changed. This used to merge updates
+  // into a full copy of the defaults, which stamped every key on first save and made the
+  // user a permanent override for settings they never touched — instance notification
+  // defaults could then never reach them. (That local copy had also drifted: it was
+  // missing `reactions`.) Resolution now happens on read in server.js.
   updateNotificationPreferences(userId, updates) {
     const user = this.findUserById(userId);
     if (!user) return null;
 
-    const DEFAULT_NOTIFICATION_PREFS = {
-      enabled: true,
-      directMentions: 'always',
-      replies: 'always',
-      waveActivity: 'app_closed',
-      burstEvents: 'app_closed',
-      soundEnabled: false,
-      suppressWhileFocused: true,
-      pushDebounceMinutes: 5,
-      email: { enabled: false, mentions: true, replies: true, calendarReminders: true, offlineThresholdMinutes: 15 },
-    };
-
-    const currentPrefs = user.notificationPreferences || DEFAULT_NOTIFICATION_PREFS;
+    const currentPrefs = user.notificationPreferences || {};
     const updatedPrefs = { ...currentPrefs, ...updates };
+    // `email` is nested — merge it rather than replacing the whole object
+    if (updates.email && typeof updates.email === 'object') {
+      updatedPrefs.email = { ...(currentPrefs.email || {}), ...updates.email };
+    }
     this.db.prepare('UPDATE users SET notification_preferences = ? WHERE id = ?').run(
       JSON.stringify(updatedPrefs),
       userId
@@ -8034,6 +8074,7 @@ export class DatabaseSQLite {
 
     return {
       defaults: parse(config.defaults),
+      notificationDefaults: parse(config.notification_defaults),
       features: parse(config.features),
       branding: parse(config.branding),
       createdAt: config.created_at,
@@ -8048,7 +8089,7 @@ export class DatabaseSQLite {
     const current = this.getInstanceConfig();
     const merged = {};
 
-    for (const ns of ['defaults', 'features', 'branding']) {
+    for (const ns of ['defaults', 'notificationDefaults', 'features', 'branding']) {
       if (patch[ns] === undefined) {
         merged[ns] = current[ns];
         continue;
@@ -8063,10 +8104,11 @@ export class DatabaseSQLite {
 
     this.db.prepare(`
       UPDATE instance_config
-      SET defaults = ?, features = ?, branding = ?, updated_at = ?, updated_by = ?
+      SET defaults = ?, notification_defaults = ?, features = ?, branding = ?, updated_at = ?, updated_by = ?
       WHERE id = 1
     `).run(
       JSON.stringify(merged.defaults),
+      JSON.stringify(merged.notificationDefaults),
       JSON.stringify(merged.features),
       JSON.stringify(merged.branding),
       new Date().toISOString(),
