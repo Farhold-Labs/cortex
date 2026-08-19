@@ -5,6 +5,22 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.66.1] - 2026-08-19
+
+### Added
+
+- **Notification frequency is now settable as an instance default.** v2.66.0 accepted both frequency values in the API but never drew controls for them, so they were unreachable from the admin panel:
+  - **PUSH FREQUENCY** (`pushDebounceMinutes`) — at most one push per user per window; None / 1 / 5 / 15 / 30 min.
+  - **EMAIL AFTER OFFLINE FOR** (`email.offlineThresholdMinutes`) — how long a user must be offline before email notifications start; Immediately / 15 / 30 min / 1 hour.
+  - Option values mirror the user-facing controls exactly, so an admin default and a user's own choice always mean the same thing.
+
+### Fixed
+
+- **`schema.sql` now matches the live schema, and stays that way.** It had drifted badly: **11 tables** (`custom_themes`, `portal_waves`, `instance_config`, `watch_parties`, `incoming_webhooks`, the Plex/Jellyfin and cross-port tables) and assorted columns existed *only* in `applySchemaUpdates()`, so a database built from `schema.sql` alone was incomplete. This is the root cause behind every fresh-install failure we've hit — `user_key_id` and `custom_themes` (v2.61.1) and `notifications.group_key` (v2.64.1), the last of which killed all notifications and 500'd the reaction/mention/reply routes on every fresh install since v2.0.0.
+  - `schema.sql` is now generated from the schema a fully-migrated database actually has: 77 tables, 159 indexes, 3 triggers. Verified that `schema.sql` alone and `schema.sql` + every migration produce **identical** schemas (239 objects, zero differences), and that the migrations remain a no-op on top of it.
+  - New `tools/generate-schema.mjs` regenerates and self-verifies. `--check` mode verifies without writing and exits non-zero when out of date, so it can gate CI.
+  - Workflow going forward: put schema changes in `applySchemaUpdates()` so existing databases migrate, then regenerate `schema.sql` and commit both.
+
 ## [2.66.0] - 2026-08-19
 
 ### Added
