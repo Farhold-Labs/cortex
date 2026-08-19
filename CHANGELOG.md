@@ -5,6 +5,25 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.65.0] - 2026-08-18
+
+### Added
+
+- **Server-wide instance settings.** Admins can now set defaults every user inherits, switch features off for the whole instance, and brand the login screen. New `instance_config` singleton table with three namespaces (`defaults`, `features`, `branding`), edited from a new **INSTANCE DEFAULTS** panel in the admin section.
+  - **Preference defaults** — theme, font size, message font, wave density, CRT scan lines, holiday effects, auto-collapse and auto-focus. These are *defaults*, not policy: any user who has explicitly chosen keeps their choice.
+  - **Feature switches** — video feed, crawl bar, calendar, public portal and open registration. Switching one off hides it in the UI **and** refuses the matching API calls (`403`), so it can't be re-enabled client-side. Closing registration always lets the very first account through, so a fresh instance can't lock out its own admin.
+  - **Branding** — instance name and login tagline, served from a new public `GET /api/instance-config` (no auth) so they can render before login. That endpoint deliberately exposes only branding and feature flags.
+  - New endpoints: `GET /api/instance-config` (public), `GET|PUT /api/admin/instance-config` (admin). Writes are whitelisted per key and type-checked; unknown keys are ignored rather than stored.
+- **Preferences can be cleared.** `PUT /api/profile/preferences` now accepts `null` for a preference key, removing the override so the user follows the instance default again. Previously every value written was a permanent override with no way back.
+
+### Changed
+
+- **Three-layer preference resolution** — code defaults ← instance defaults ← user overrides, via a single `resolvePreferences()` helper. This replaces the hardcoded default objects that were duplicated across the schema, two DB methods and six API payloads, which had already drifted apart (`{theme:'firefly'}` in the database layer vs `{theme:'serenity'}` in `server.js`).
+  - A user's stored preferences now hold **only keys they explicitly set**, so changing an instance default reaches existing users who never chose — not just new signups.
+  - One-time migration clears `theme`/`fontSize` from existing rows where they still hold the old stamped values, so those users read as "never chose". Note `firefly` was never a real theme key — the client had been silently falling back to `serenity` — so nothing visually changes for them.
+- **`PROFILE` is now `SETTINGS`.** The nav item and bottom-nav tab are relabelled, with profile editing as the first section inside. The screen was always ~90% settings (MFA, themes, notifications, fonts, density); the label was the only thing saying otherwise. Internal view key renamed `profile` → `settings`.
+- The **Feed** tab is hidden from both navs when the video feed feature is disabled.
+
 ## [2.64.1] - 2026-08-18
 
 ### Fixed

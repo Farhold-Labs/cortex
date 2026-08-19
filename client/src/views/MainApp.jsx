@@ -58,6 +58,9 @@ function MainApp({ sharePingId }) {
   const popoutCallWaveId = urlParams.get('call');
 
   const [activeView, setActiveView] = useState('waves');
+  // Instance feature flags (v2.65.0) — public endpoint, no auth needed. Defaults to
+  // everything enabled so a fetch failure never hides working features.
+  const [instanceFeatures, setInstanceFeatures] = useState({});
   const [apiConnected, setApiConnected] = useState(false);
   const [waves, setWaves] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -1343,8 +1346,23 @@ function MainApp({ sharePingId }) {
     }
   };
 
-  const navItems = ['waves', 'feed', 'people', 'calendar', 'profile'];
-  const navLabels = { waves: 'WAVES', feed: 'FEED', people: 'PEOPLE', calendar: 'CALENDAR', profile: 'PROFILE' };
+  // Instance feature flags (v2.65.0)
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_URL}/instance-config`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data && !cancelled) setInstanceFeatures(data.features || {}); })
+      .catch(() => { /* keep defaults — every feature stays available */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // v2.65.0: the 'settings' view is the former 'profile' view — it was always mostly
+  // settings, with profile editing as its first section. Feed is hidden when the admin
+  // has switched the instance feature off.
+  const navItems = ['waves', 'feed', 'people', 'calendar', 'settings'].filter(
+    view => view !== 'feed' || instanceFeatures.videoFeed !== false
+  );
+  const navLabels = { waves: 'WAVES', feed: 'FEED', people: 'PEOPLE', calendar: 'CALENDAR', settings: 'SETTINGS' };
 
   const scanLinesEnabled = user?.preferences?.scanLines !== false; // Default to true
 
@@ -1853,7 +1871,7 @@ function MainApp({ sharePingId }) {
           </>
         )}
 
-        {activeView === 'feed' && (
+        {activeView === 'feed' && instanceFeatures.videoFeed !== false && (
           <VideoFeedView
             fetchAPI={fetchAPI}
             showToast={showToastMsg}
@@ -1894,7 +1912,7 @@ function MainApp({ sharePingId }) {
           />
         )}
 
-        {activeView === 'profile' && (
+        {activeView === 'settings' && (
           <ProfileSettings user={user} fetchAPI={fetchAPI} showToast={showToastMsg} onUserUpdate={updateUser} onLogout={logout} federationRequestsRefresh={federationRequestsRefresh} onNotifPrefsChange={updateNotifPrefs} />
         )}
       </main>
@@ -1918,6 +1936,7 @@ function MainApp({ sharePingId }) {
       {/* Bottom Navigation - mobile only */}
       {isMobile && (
         <BottomNav
+          features={instanceFeatures}
           activeView={activeView}
           onNavigate={(view) => {
             if (view === 'search') {
