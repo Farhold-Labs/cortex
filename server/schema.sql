@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS users (
     -- Security flags
     require_password_change INTEGER DEFAULT 0,
     -- Preferences stored as JSON
-    preferences TEXT DEFAULT '{"theme":"firefly","fontSize":"medium"}',
+    preferences TEXT DEFAULT '{}',
     notification_preferences TEXT DEFAULT NULL,
     -- Account moderation (v2.37.0)
     account_status TEXT DEFAULT 'active',        -- active, disabled, banned

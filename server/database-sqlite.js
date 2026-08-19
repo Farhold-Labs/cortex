@@ -1770,7 +1770,7 @@ export class DatabaseSQLite {
           last_seen TEXT,
           last_handle_change TEXT,
           require_password_change INTEGER DEFAULT 0,
-          preferences TEXT DEFAULT '{"theme":"firefly","fontSize":"medium"}'
+          preferences TEXT DEFAULT '{}'
         );
         INSERT INTO users_migrate SELECT
           id, handle, email, email_hash, email_encrypted, email_iv,
@@ -1778,7 +1778,7 @@ export class DatabaseSQLite {
           avatar_url, bio, COALESCE(node_name, 'Local'), COALESCE(status, 'offline'),
           COALESCE(is_admin, 0), COALESCE(role, 'user'), created_at, last_seen,
           last_handle_change, COALESCE(require_password_change, 0),
-          COALESCE(preferences, '{"theme":"firefly","fontSize":"medium"}')
+          COALESCE(preferences, '{}')
         FROM users;
         DROP TABLE users;
         ALTER TABLE users_migrate RENAME TO users;
@@ -2244,6 +2244,51 @@ export class DatabaseSQLite {
       `);
       console.log('✅ portal_waves table created');
     }
+
+    // v2.65.0 — Instance configuration (server-wide defaults, feature flags, branding)
+    const instanceConfigExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='instance_config'`
+    ).get();
+    if (!instanceConfigExists) {
+      console.log('📝 Adding instance_config table (v2.65.0)...');
+      this.db.exec(`
+        -- Server-wide instance configuration (singleton, mirrors crawl_config pattern)
+        CREATE TABLE IF NOT EXISTS instance_config (
+          id         INTEGER PRIMARY KEY CHECK (id = 1),
+          defaults   TEXT NOT NULL DEFAULT '{}',
+          features   TEXT NOT NULL DEFAULT '{}',
+          branding   TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
+        );
+      `);
+      console.log('✅ instance_config table created');
+    }
+
+    // v2.65.0 — One-time: strip legacy hardcoded preference values so they read as "unset".
+    // Instance defaults resolve at read time, which requires distinguishing "the user never
+    // chose" from "the user chose the value that used to be hardcoded". Every row created
+    // before v2.65.0 was stamped with {"theme":"firefly","fontSize":"medium"} at creation
+    // regardless of intent, so those two keys (and only those, and only at those exact
+    // values) are cleared. Anything the user actually changed is left untouched.
+    if (!instanceConfigExists) {
+      const LEGACY = { theme: 'firefly', fontSize: 'medium' };
+      const rows = this.db.prepare('SELECT id, preferences FROM users WHERE preferences IS NOT NULL').all();
+      const update = this.db.prepare('UPDATE users SET preferences = ? WHERE id = ?');
+      let cleaned = 0;
+      for (const row of rows) {
+        let prefs;
+        try { prefs = JSON.parse(row.preferences); } catch { continue; }
+        if (!prefs || typeof prefs !== 'object') continue;
+        let changed = false;
+        for (const [key, legacyValue] of Object.entries(LEGACY)) {
+          if (prefs[key] === legacyValue) { delete prefs[key]; changed = true; }
+        }
+        if (changed) { update.run(JSON.stringify(prefs), row.id); cleaned++; }
+      }
+      if (cleaned > 0) console.log(`✅ Cleared legacy default preferences on ${cleaned} user(s) — they now follow instance defaults`);
+    }
   }
 
   prepareStatements() {
@@ -2292,7 +2337,7 @@ export class DatabaseSQLite {
 
     const insertUser = this.db.prepare(`
       INSERT INTO users (id, handle, email, password_hash, display_name, avatar, node_name, status, is_admin, created_at, last_seen, preferences)
-      VALUES (?, ?, ?, ?, ?, ?, 'Serenity', 'offline', ?, ?, ?, '{"theme":"firefly","fontSize":"medium"}')
+      VALUES (?, ?, ?, ?, ?, ?, 'Serenity', 'offline', ?, ?, ?, '{}')
     `);
 
     for (const u of demoUsers) {
@@ -2407,7 +2452,7 @@ export class DatabaseSQLite {
       createdAt: row.created_at,
       lastSeen: row.last_seen,
       lastHandleChange: row.last_handle_change,
-      preferences: row.preferences ? JSON.parse(row.preferences) : { theme: 'firefly', fontSize: 'medium' },
+      preferences: row.preferences ? JSON.parse(row.preferences) : {},  // raw overrides only; instance defaults merge in server.js
       notificationPreferences: row.notification_preferences ? JSON.parse(row.notification_preferences) : null,
       accountStatus: row.account_status || 'active',
       moderationReason: row.moderation_reason || null,
@@ -2517,7 +2562,7 @@ export class DatabaseSQLite {
       createdAt: now,
       lastSeen: now,
       lastHandleChange: null,
-      preferences: userData.preferences || { theme: 'firefly', fontSize: 'medium' },
+      preferences: userData.preferences || {},  // empty = follow instance defaults (v2.65.0)
       handleHistory: [],
     };
 
@@ -2608,11 +2653,14 @@ export class DatabaseSQLite {
     return { success: true, user: this.findUserById(userId) };
   }
 
-  updateUserPreferences(userId, preferences) {
+  // `clearKeys` removes preferences entirely (v2.65.0) so the user falls back to the
+  // instance default — storing a value would make it a permanent override instead.
+  updateUserPreferences(userId, preferences, clearKeys = []) {
     const user = this.findUserById(userId);
     if (!user) return null;
 
     const updatedPrefs = { ...user.preferences, ...preferences };
+    for (const key of clearKeys) delete updatedPrefs[key];
     this.db.prepare('UPDATE users SET preferences = ? WHERE id = ?').run(
       JSON.stringify(updatedPrefs),
       userId
@@ -7957,6 +8005,75 @@ export class DatabaseSQLite {
     `).run(cutoff);
 
     return result.changes;
+  }
+
+  // ============ Instance Config Methods (v2.65.0) ============
+
+  // Server-wide configuration: preference defaults, feature flags and branding.
+  // Singleton row (id = 1), created lazily on first read — same pattern as crawl_config.
+  getInstanceConfig() {
+    let config = this.db.prepare('SELECT * FROM instance_config WHERE id = 1').get();
+
+    if (!config) {
+      const now = new Date().toISOString();
+      this.db.prepare(`
+        INSERT INTO instance_config (id, defaults, features, branding, created_at, updated_at)
+        VALUES (1, '{}', '{}', '{}', ?, ?)
+      `).run(now, now);
+      config = this.db.prepare('SELECT * FROM instance_config WHERE id = 1').get();
+    }
+
+    const parse = (raw) => {
+      try {
+        const value = JSON.parse(raw || '{}');
+        return (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+      } catch {
+        return {};
+      }
+    };
+
+    return {
+      defaults: parse(config.defaults),
+      features: parse(config.features),
+      branding: parse(config.branding),
+      createdAt: config.created_at,
+      updatedAt: config.updated_at,
+      updatedBy: config.updated_by || null,
+    };
+  }
+
+  // Merge-update one or more namespaces. Only the namespaces present in `patch` are
+  // touched; within a namespace, keys are merged (set a key to null to clear it).
+  updateInstanceConfig(patch = {}, updatedBy = null) {
+    const current = this.getInstanceConfig();
+    const merged = {};
+
+    for (const ns of ['defaults', 'features', 'branding']) {
+      if (patch[ns] === undefined) {
+        merged[ns] = current[ns];
+        continue;
+      }
+      const next = { ...current[ns], ...patch[ns] };
+      // null clears a key, so an admin can fall back to the code default
+      for (const [key, value] of Object.entries(next)) {
+        if (value === null) delete next[key];
+      }
+      merged[ns] = next;
+    }
+
+    this.db.prepare(`
+      UPDATE instance_config
+      SET defaults = ?, features = ?, branding = ?, updated_at = ?, updated_by = ?
+      WHERE id = 1
+    `).run(
+      JSON.stringify(merged.defaults),
+      JSON.stringify(merged.features),
+      JSON.stringify(merged.branding),
+      new Date().toISOString(),
+      updatedBy
+    );
+
+    return this.getInstanceConfig();
   }
 
   // ============ Crawl Bar Config Methods ============
