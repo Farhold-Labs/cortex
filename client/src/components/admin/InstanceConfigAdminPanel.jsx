@@ -47,6 +47,11 @@ const NOTIF_TOGGLE_DEFAULTS = [
   { key: 'soundEnabled', label: 'NOTIFICATION SOUND' },
   { key: 'suppressWhileFocused', label: 'SUPPRESS WHILE FOCUSED' },
 ];
+// Frequency settings. Values mirror the user-facing controls exactly so the admin
+// default and the user's own choice always speak the same language.
+const PUSH_FREQUENCY_OPTIONS = [[0, 'None'], [1, '1 min'], [5, '5 min'], [15, '15 min'], [30, '30 min']];
+const EMAIL_THRESHOLD_OPTIONS = [[0, 'Immediately'], [15, '15 min'], [30, '30 min'], [60, '1 hour']];
+
 const EMAIL_TOGGLE_DEFAULTS = [
   { key: 'enabled', label: 'EMAIL NOTIFICATIONS ON' },
   { key: 'mentions', label: 'EMAIL ON MENTIONS' },
@@ -225,6 +230,24 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
               </div>
             ))}
 
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>
+                PUSH FREQUENCY
+                {isNotifOverridden('pushDebounceMinutes') && <span style={{ color: 'var(--accent-amber)', marginLeft: '8px' }}>• set by admin</span>}
+              </label>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem', marginBottom: '6px' }}>
+                At most one push notification per user in this window. "None" sends every one.
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {PUSH_FREQUENCY_OPTIONS.map(([value, name]) => (
+                  <button key={value} disabled={saving} onClick={() => save({ notificationDefaults: { pushDebounceMinutes: value } }, `Default push frequency set to ${name}`)} style={pillStyle(effectiveNotif('pushDebounceMinutes') === value)}>{name}</button>
+                ))}
+                {isNotifOverridden('pushDebounceMinutes') && (
+                  <button disabled={saving} onClick={() => save({ notificationDefaults: { pushDebounceMinutes: null } }, 'Push frequency default cleared')} style={{ ...pillStyle(false), color: 'var(--text-muted)' }}>✕ clear</button>
+                )}
+              </div>
+            </div>
+
             <div style={{ color: 'var(--accent-teal)', fontSize: '0.75rem', margin: '18px 0 10px' }}>▹ EMAIL</div>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '12px', lineHeight: 1.5 }}>
               Email notifications only send when a user is offline past their threshold, and
@@ -245,6 +268,24 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
                 </div>
               </div>
             ))}
+
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>
+                EMAIL AFTER OFFLINE FOR
+                {isEmailNotifOverridden('offlineThresholdMinutes') && <span style={{ color: 'var(--accent-amber)', marginLeft: '8px' }}>• set by admin</span>}
+              </label>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem', marginBottom: '6px' }}>
+                How long a user must be offline before email notifications start.
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {EMAIL_THRESHOLD_OPTIONS.map(([value, name]) => (
+                  <button key={value} disabled={saving} onClick={() => save({ notificationDefaults: { email: { offlineThresholdMinutes: value } } }, `Default email threshold set to ${name}`)} style={pillStyle(effectiveEmailNotif('offlineThresholdMinutes') === value)}>{name}</button>
+                ))}
+                {isEmailNotifOverridden('offlineThresholdMinutes') && (
+                  <button disabled={saving} onClick={() => save({ notificationDefaults: { email: { offlineThresholdMinutes: null } } }, 'Email threshold default cleared')} style={{ ...pillStyle(false), color: 'var(--text-muted)' }}>✕ clear</button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* ---- Feature switches ---- */}

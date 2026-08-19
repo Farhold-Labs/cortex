@@ -1,12 +1,20 @@
 -- Cortex SQLite Database Schema
--- Version 2.0.0
 --
 -- Terminology:
 --   pings (formerly droplets) - individual messages
 --   crews (formerly groups) - user groups
 --   burst (formerly ripple) - break-out threads
+--
+-- ⚠️  GENERATED FILE — do not add tables here by hand.
+--
+-- This is a dump of the schema a fully-migrated database actually has. Historically
+-- this file drifted from the live schema: tables and columns were added only to
+-- applySchemaUpdates(), so fresh installs came up incomplete and crashed at runtime
+-- (see CHANGELOG v2.61.1 and v2.64.1).
+--
+-- To add schema: put the change in applySchemaUpdates() so existing databases migrate,
+-- then run `node tools/generate-schema.mjs` and commit both.
 
--- ============ Users ============
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     handle TEXT UNIQUE NOT NULL COLLATE NOCASE,
@@ -39,26 +47,31 @@ CREATE TABLE IF NOT EXISTS users (
     -- Birthday & calendar (v2.40.0)
     birthday TEXT,                               -- MM-DD format (no year for privacy)
     birthday_visibility TEXT DEFAULT 'contacts'  -- everyone, contacts, hidden
-);
+, is_cross_port INTEGER DEFAULT 0, home_node TEXT, home_user_id TEXT);
+CREATE INDEX IF NOT EXISTS idx_users_handle ON users(handle);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_hash ON users(email_hash);
+CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_users_birthday ON users(birthday) WHERE birthday IS NOT NULL;
 
--- Handle history for tracking username changes
 CREATE TABLE IF NOT EXISTS handle_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     old_handle TEXT NOT NULL,
     changed_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_handle_history_user ON handle_history(user_id);
 
--- Contacts relationship (one-directional, need two rows for mutual)
--- Note: contact_id has no FK to allow federated user follows
 CREATE TABLE IF NOT EXISTS contacts (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     contact_id TEXT NOT NULL,
     added_at TEXT NOT NULL,
     PRIMARY KEY (user_id, contact_id)
 );
+CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_contact ON contacts(contact_id);
 
--- Per-user favorited GIFs (v2.59.0) — provider-agnostic (giphy/klipy/tenor)
 CREATE TABLE IF NOT EXISTS gif_favorites (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     provider TEXT NOT NULL,
@@ -73,7 +86,6 @@ CREATE TABLE IF NOT EXISTS gif_favorites (
 );
 CREATE INDEX IF NOT EXISTS idx_gif_favorites_user ON gif_favorites(user_id, created_at DESC);
 
--- ============ Waves ============
 CREATE TABLE IF NOT EXISTS waves (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -96,9 +108,15 @@ CREATE TABLE IF NOT EXISTS waves (
     -- Profile Wave fields (v2.9.0)
     is_profile_wave INTEGER DEFAULT 0,      -- 1 if this is a user's profile video wave
     profile_owner_id TEXT REFERENCES users(id) -- Owner of the profile wave
-);
+, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL);
+CREATE INDEX IF NOT EXISTS idx_waves_created_by ON waves(created_by);
+CREATE INDEX IF NOT EXISTS idx_waves_privacy ON waves(privacy);
+CREATE INDEX IF NOT EXISTS idx_waves_crew ON waves(crew_id);
+CREATE INDEX IF NOT EXISTS idx_waves_updated ON waves(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_waves_root_ping ON waves(root_ping_id);
+CREATE INDEX IF NOT EXISTS idx_waves_broken_out_from ON waves(broken_out_from);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_waves_profile_owner ON waves(profile_owner_id) WHERE is_profile_wave = 1;
 
--- Wave participants
 CREATE TABLE IF NOT EXISTS wave_participants (
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -108,10 +126,11 @@ CREATE TABLE IF NOT EXISTS wave_participants (
     pinned INTEGER DEFAULT 0,  -- v2.2.0: Pin wave to top of list
     PRIMARY KEY (wave_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_wave_participants_user ON wave_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_wave_participants_wave ON wave_participants(wave_id);
+CREATE INDEX IF NOT EXISTS idx_wave_participants_archived ON wave_participants(user_id, archived);
+CREATE INDEX IF NOT EXISTS idx_wave_participants_pinned ON wave_participants(user_id, pinned) WHERE pinned = 1;
 
--- ============ Wave Organization (v2.2.0) ============
-
--- User-defined wave categories for organizing wave list
 CREATE TABLE IF NOT EXISTS wave_categories (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -123,8 +142,9 @@ CREATE TABLE IF NOT EXISTS wave_categories (
     updated_at TEXT NOT NULL,
     UNIQUE(user_id, name)
 );
+CREATE INDEX IF NOT EXISTS idx_wave_categories_user ON wave_categories(user_id);
+CREATE INDEX IF NOT EXISTS idx_wave_categories_sort ON wave_categories(user_id, sort_order);
 
--- Wave category assignments (which wave belongs to which category for each user)
 CREATE TABLE IF NOT EXISTS wave_category_assignments (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -132,8 +152,10 @@ CREATE TABLE IF NOT EXISTS wave_category_assignments (
     assigned_at TEXT NOT NULL,
     PRIMARY KEY (user_id, wave_id)
 );
+CREATE INDEX IF NOT EXISTS idx_wave_category_assignments_user ON wave_category_assignments(user_id);
+CREATE INDEX IF NOT EXISTS idx_wave_category_assignments_category ON wave_category_assignments(category_id);
+CREATE INDEX IF NOT EXISTS idx_wave_category_assignments_wave ON wave_category_assignments(wave_id);
 
--- ============ Pings (formerly Droplets/Messages) ============
 CREATE TABLE IF NOT EXISTS pings (
     id TEXT PRIMARY KEY,
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -158,17 +180,28 @@ CREATE TABLE IF NOT EXISTS pings (
     -- Threading fields (v2.38.0)
     threaded INTEGER DEFAULT 0,            -- 1 if message has been burst/threaded
     is_thread_reply INTEGER DEFAULT 0      -- 1 if reply was made within thread panel
-);
+, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0);
+CREATE INDEX IF NOT EXISTS idx_pings_wave ON pings(wave_id);
+CREATE INDEX IF NOT EXISTS idx_pings_author ON pings(author_id);
+CREATE INDEX IF NOT EXISTS idx_pings_parent ON pings(parent_id);
+CREATE INDEX IF NOT EXISTS idx_pings_created ON pings(wave_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pings_deleted ON pings(deleted);
+CREATE INDEX IF NOT EXISTS idx_pings_broken_out ON pings(broken_out_to);
+CREATE INDEX IF NOT EXISTS idx_pings_original_wave ON pings(original_wave_id);
+CREATE INDEX IF NOT EXISTS idx_pings_bot_id ON pings(bot_id);
+CREATE INDEX IF NOT EXISTS idx_pings_video_feed
+        ON pings(media_type, created_at DESC)
+        WHERE media_type = 'video' AND deleted = 0;
 
--- Ping read tracking (many-to-many)
 CREATE TABLE IF NOT EXISTS ping_read_by (
     ping_id TEXT NOT NULL REFERENCES pings(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     read_at TEXT NOT NULL,
     PRIMARY KEY (ping_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_ping_read_user ON ping_read_by(user_id);
+CREATE INDEX IF NOT EXISTS idx_ping_read_ping ON ping_read_by(ping_id);
 
--- Ping edit history
 CREATE TABLE IF NOT EXISTS ping_history (
     id TEXT PRIMARY KEY,
     ping_id TEXT NOT NULL REFERENCES pings(id) ON DELETE CASCADE,
@@ -176,8 +209,8 @@ CREATE TABLE IF NOT EXISTS ping_history (
     version INTEGER NOT NULL,
     edited_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_ping_history_ping ON ping_history(ping_id);
 
--- ============ Crews (formerly Groups) ============
 CREATE TABLE IF NOT EXISTS crews (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -185,8 +218,8 @@ CREATE TABLE IF NOT EXISTS crews (
     created_by TEXT NOT NULL REFERENCES users(id),
     created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_crews_created_by ON crews(created_by);
 
--- Crew members (formerly group_members)
 CREATE TABLE IF NOT EXISTS crew_members (
     crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -194,10 +227,9 @@ CREATE TABLE IF NOT EXISTS crew_members (
     joined_at TEXT NOT NULL,
     PRIMARY KEY (crew_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_crew_members_user ON crew_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_crew_members_crew ON crew_members(crew_id);
 
--- ============ Requests & Invitations ============
-
--- Handle change requests
 CREATE TABLE IF NOT EXISTS handle_requests (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -209,8 +241,9 @@ CREATE TABLE IF NOT EXISTS handle_requests (
     processed_at TEXT,
     processed_by TEXT REFERENCES users(id)
 );
+CREATE INDEX IF NOT EXISTS idx_handle_requests_user ON handle_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_handle_requests_status ON handle_requests(status);
 
--- Contact requests
 CREATE TABLE IF NOT EXISTS contact_requests (
     id TEXT PRIMARY KEY,
     from_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -220,8 +253,10 @@ CREATE TABLE IF NOT EXISTS contact_requests (
     created_at TEXT NOT NULL,
     responded_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_contact_requests_from ON contact_requests(from_user_id);
+CREATE INDEX IF NOT EXISTS idx_contact_requests_to ON contact_requests(to_user_id);
+CREATE INDEX IF NOT EXISTS idx_contact_requests_status ON contact_requests(status);
 
--- Crew invitations (formerly group_invitations)
 CREATE TABLE IF NOT EXISTS crew_invitations (
     id TEXT PRIMARY KEY,
     crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
@@ -232,10 +267,11 @@ CREATE TABLE IF NOT EXISTS crew_invitations (
     created_at TEXT NOT NULL,
     responded_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_crew_invitations_crew ON crew_invitations(crew_id);
+CREATE INDEX IF NOT EXISTS idx_crew_invitations_inviter ON crew_invitations(invited_by);
+CREATE INDEX IF NOT EXISTS idx_crew_invitations_invitee ON crew_invitations(invited_user_id);
+CREATE INDEX IF NOT EXISTS idx_crew_invitations_status ON crew_invitations(status);
 
--- ============ Moderation ============
-
--- User blocks
 CREATE TABLE IF NOT EXISTS blocks (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -243,8 +279,9 @@ CREATE TABLE IF NOT EXISTS blocks (
     blocked_at TEXT NOT NULL,
     UNIQUE (user_id, blocked_user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_blocks_user ON blocks(user_id);
+CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_user_id);
 
--- User mutes
 CREATE TABLE IF NOT EXISTS mutes (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -252,8 +289,9 @@ CREATE TABLE IF NOT EXISTS mutes (
     muted_at TEXT NOT NULL,
     UNIQUE (user_id, muted_user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_mutes_user ON mutes(user_id);
+CREATE INDEX IF NOT EXISTS idx_mutes_muted ON mutes(muted_user_id);
 
--- Content reports
 CREATE TABLE IF NOT EXISTS reports (
     id TEXT PRIMARY KEY,
     reporter_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -268,8 +306,10 @@ CREATE TABLE IF NOT EXISTS reports (
     resolved_at TEXT,
     resolved_by TEXT REFERENCES users(id)
 );
+CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_id);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
+CREATE INDEX IF NOT EXISTS idx_reports_type ON reports(type);
 
--- User warnings (issued by moderators)
 CREATE TABLE IF NOT EXISTS warnings (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -278,8 +318,10 @@ CREATE TABLE IF NOT EXISTS warnings (
     report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_warnings_user ON warnings(user_id);
+CREATE INDEX IF NOT EXISTS idx_warnings_issued_by ON warnings(issued_by);
+CREATE INDEX IF NOT EXISTS idx_warnings_report ON warnings(report_id);
 
--- Moderation appeals (v2.37.0)
 CREATE TABLE IF NOT EXISTS moderation_appeals (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -290,11 +332,9 @@ CREATE TABLE IF NOT EXISTS moderation_appeals (
     reviewed_at TEXT,
     created_at TEXT NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_moderation_appeals_user ON moderation_appeals(user_id);
 CREATE INDEX IF NOT EXISTS idx_moderation_appeals_status ON moderation_appeals(status);
 
--- Moderation audit log
 CREATE TABLE IF NOT EXISTS moderation_log (
     id TEXT PRIMARY KEY,
     admin_id TEXT NOT NULL REFERENCES users(id),
@@ -305,10 +345,10 @@ CREATE TABLE IF NOT EXISTS moderation_log (
     details TEXT,
     created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_moderation_log_admin ON moderation_log(admin_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_log_target ON moderation_log(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_log_created ON moderation_log(created_at DESC);
 
--- ============ Account Security ============
-
--- Account lockouts (persisted across restarts)
 CREATE TABLE IF NOT EXISTS account_lockouts (
     handle TEXT PRIMARY KEY COLLATE NOCASE,
     failed_attempts INTEGER DEFAULT 0,
@@ -316,7 +356,6 @@ CREATE TABLE IF NOT EXISTS account_lockouts (
     last_attempt TEXT
 );
 
--- Password reset tokens
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -325,13 +364,9 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
     used_at TEXT,
     created_at TEXT NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_reset_tokens_expires ON password_reset_tokens(expires_at);
 
--- ============ Multi-Factor Authentication ============
-
--- User MFA settings
 CREATE TABLE IF NOT EXISTS user_mfa (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     totp_secret TEXT,                    -- Encrypted TOTP secret
@@ -343,7 +378,6 @@ CREATE TABLE IF NOT EXISTS user_mfa (
     updated_at TEXT
 );
 
--- MFA challenge tokens (for login flow)
 CREATE TABLE IF NOT EXISTS mfa_challenges (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -354,13 +388,9 @@ CREATE TABLE IF NOT EXISTS mfa_challenges (
     created_at TEXT NOT NULL,
     session_duration TEXT DEFAULT '24h'  -- Session duration for post-MFA token (v2.0.5)
 );
-
 CREATE INDEX IF NOT EXISTS idx_mfa_challenges_user ON mfa_challenges(user_id);
 CREATE INDEX IF NOT EXISTS idx_mfa_challenges_expires ON mfa_challenges(expires_at);
 
--- ============ Activity Log (v1.14.0) ============
-
--- Activity log for security auditing
 CREATE TABLE IF NOT EXISTS activity_log (
     id TEXT PRIMARY KEY,
     user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -372,15 +402,11 @@ CREATE TABLE IF NOT EXISTS activity_log (
     metadata TEXT,                       -- JSON for additional context
     created_at TEXT NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_log(user_id);
 CREATE INDEX IF NOT EXISTS idx_activity_action ON activity_log(action_type);
 CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_activity_resource ON activity_log(resource_type, resource_id);
 
--- ============ Session Management (v1.18.0) ============
-
--- Server-side session tracking for token revocation
 CREATE TABLE IF NOT EXISTS user_sessions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -394,16 +420,11 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     revoked_at TEXT,
     UNIQUE(token_hash)
 );
-
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON user_sessions(revoked);
 
--- ============ End-to-End Encryption (v1.19.0) ============
-
--- User encryption keypairs (ECDH P-384)
--- Private key is encrypted with user's passphrase-derived key (PBKDF2)
 CREATE TABLE IF NOT EXISTS user_encryption_keys (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     public_key TEXT NOT NULL,              -- Base64 SPKI-encoded ECDH public key
@@ -414,8 +435,6 @@ CREATE TABLE IF NOT EXISTS user_encryption_keys (
     updated_at TEXT
 );
 
--- Wave encryption keys (per-participant)
--- Each participant has the wave key encrypted with their public key
 CREATE TABLE IF NOT EXISTS wave_encryption_keys (
     id TEXT PRIMARY KEY,
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -427,9 +446,11 @@ CREATE TABLE IF NOT EXISTS wave_encryption_keys (
     user_key_id TEXT,                      -- Blinded user key id (v2.27.0); also added via migration for pre-existing DBs
     UNIQUE(wave_id, user_id, key_version)
 );
+CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_wave ON wave_encryption_keys(wave_id);
+CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_user ON wave_encryption_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_version ON wave_encryption_keys(wave_id, key_version);
+CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_user_key ON wave_encryption_keys(user_key_id) WHERE user_key_id IS NOT NULL;
 
--- Wave key metadata
--- Tracks current key version and rotation history
 CREATE TABLE IF NOT EXISTS wave_key_metadata (
     wave_id TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
     current_key_version INTEGER DEFAULT 1,
@@ -437,9 +458,6 @@ CREATE TABLE IF NOT EXISTS wave_key_metadata (
     last_rotated_at TEXT
 );
 
--- Wave key redistribution requests (v2.47.3)
--- Created when a participant loses their wave key (e.g. after E2EE reset).
--- Other participants receive a WebSocket event and can re-encrypt the key.
 CREATE TABLE IF NOT EXISTS wave_key_requests (
     id TEXT PRIMARY KEY,
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -454,7 +472,6 @@ CREATE TABLE IF NOT EXISTS wave_key_requests (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_wave_key_requests_wave_user ON wave_key_requests(wave_id, requester_id);
 CREATE INDEX IF NOT EXISTS idx_wave_key_requests_status ON wave_key_requests(status);
 
--- E2EE Recovery (optional passphrase recovery)
 CREATE TABLE IF NOT EXISTS user_recovery_keys (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     encrypted_private_key TEXT NOT NULL,   -- Private key encrypted with recovery passphrase
@@ -463,8 +480,6 @@ CREATE TABLE IF NOT EXISTS user_recovery_keys (
     created_at TEXT NOT NULL
 );
 
--- Encrypted contact lists (v2.18.0 - Phase 2 Privacy Hardening)
--- User's contact list stored as encrypted blob, only they can decrypt
 CREATE TABLE IF NOT EXISTS encrypted_contacts (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     encrypted_data TEXT NOT NULL,          -- Base64 AES-256-GCM encrypted JSON contact list
@@ -474,8 +489,6 @@ CREATE TABLE IF NOT EXISTS encrypted_contacts (
     updated_at TEXT NOT NULL
 );
 
--- Encrypted wave participation (v2.21.0 - Privacy Hardening)
--- Participant lists encrypted so DB dump cannot reveal social graph
 CREATE TABLE IF NOT EXISTS wave_participants_encrypted (
     wave_id TEXT PRIMARY KEY,
     participant_blob TEXT NOT NULL,        -- AES-256-GCM encrypted JSON array of user IDs
@@ -483,8 +496,6 @@ CREATE TABLE IF NOT EXISTS wave_participants_encrypted (
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
--- Encrypted crew membership (v2.24.0 - Privacy Hardening Phase 4)
--- Crew member lists encrypted so DB dump cannot reveal group associations
 CREATE TABLE IF NOT EXISTS crew_members_encrypted (
     crew_id TEXT PRIMARY KEY,
     member_blob TEXT NOT NULL,             -- AES-256-GCM encrypted JSON array of user IDs
@@ -492,9 +503,6 @@ CREATE TABLE IF NOT EXISTS crew_members_encrypted (
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
--- Encrypted wave user metadata (v2.27.0 - Privacy Hardening Phase 5)
--- Per-user wave settings (archived, pinned, hidden, category) stored encrypted
--- lookup_key is HMAC-SHA256(waveId|userId, WAVE_PARTICIPATION_KEY) — no plaintext user/wave IDs
 CREATE TABLE IF NOT EXISTS wave_user_metadata (
     lookup_key TEXT PRIMARY KEY,              -- HMAC-SHA256(waveId|userId, key)
     encrypted_data TEXT NOT NULL,             -- AES-256-GCM encrypted JSON blob
@@ -502,114 +510,6 @@ CREATE TABLE IF NOT EXISTS wave_user_metadata (
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
--- E2EE indexes
-CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_wave ON wave_encryption_keys(wave_id);
-CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_user ON wave_encryption_keys(user_id);
-CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_version ON wave_encryption_keys(wave_id, key_version);
--- v2.27.0: Blinded user key ID for wave encryption keys (HMAC of user_id)
--- user_key_id column added via migration in database-sqlite.js initializeDatabase()
-CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_user_key ON wave_encryption_keys(user_key_id) WHERE user_key_id IS NOT NULL;
-
--- ============ Indexes ============
-
--- User lookups
-CREATE INDEX IF NOT EXISTS idx_users_handle ON users(handle);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_hash ON users(email_hash);
-CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
-CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
-
--- Handle history lookup
-CREATE INDEX IF NOT EXISTS idx_handle_history_user ON handle_history(user_id);
-
--- Contact lookups
-CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id);
-CREATE INDEX IF NOT EXISTS idx_contacts_contact ON contacts(contact_id);
-
--- Wave lookups
-CREATE INDEX IF NOT EXISTS idx_waves_created_by ON waves(created_by);
-CREATE INDEX IF NOT EXISTS idx_waves_privacy ON waves(privacy);
-CREATE INDEX IF NOT EXISTS idx_waves_crew ON waves(crew_id);
-CREATE INDEX IF NOT EXISTS idx_waves_updated ON waves(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_waves_root_ping ON waves(root_ping_id);
-CREATE INDEX IF NOT EXISTS idx_waves_broken_out_from ON waves(broken_out_from);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_waves_profile_owner ON waves(profile_owner_id) WHERE is_profile_wave = 1;
-
--- Wave participant lookups
-CREATE INDEX IF NOT EXISTS idx_wave_participants_user ON wave_participants(user_id);
-CREATE INDEX IF NOT EXISTS idx_wave_participants_wave ON wave_participants(wave_id);
-CREATE INDEX IF NOT EXISTS idx_wave_participants_archived ON wave_participants(user_id, archived);
-CREATE INDEX IF NOT EXISTS idx_wave_participants_pinned ON wave_participants(user_id, pinned) WHERE pinned = 1;
-
--- Wave category lookups (v2.2.0)
-CREATE INDEX IF NOT EXISTS idx_wave_categories_user ON wave_categories(user_id);
-CREATE INDEX IF NOT EXISTS idx_wave_categories_sort ON wave_categories(user_id, sort_order);
-CREATE INDEX IF NOT EXISTS idx_wave_category_assignments_user ON wave_category_assignments(user_id);
-CREATE INDEX IF NOT EXISTS idx_wave_category_assignments_category ON wave_category_assignments(category_id);
-CREATE INDEX IF NOT EXISTS idx_wave_category_assignments_wave ON wave_category_assignments(wave_id);
-
--- Ping lookups (formerly droplet lookups)
-CREATE INDEX IF NOT EXISTS idx_pings_wave ON pings(wave_id);
-CREATE INDEX IF NOT EXISTS idx_pings_author ON pings(author_id);
-CREATE INDEX IF NOT EXISTS idx_pings_parent ON pings(parent_id);
-CREATE INDEX IF NOT EXISTS idx_pings_created ON pings(wave_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_pings_deleted ON pings(deleted);
-CREATE INDEX IF NOT EXISTS idx_pings_broken_out ON pings(broken_out_to);
-CREATE INDEX IF NOT EXISTS idx_pings_original_wave ON pings(original_wave_id);
-
--- Ping read tracking (formerly droplet read tracking)
-CREATE INDEX IF NOT EXISTS idx_ping_read_user ON ping_read_by(user_id);
-CREATE INDEX IF NOT EXISTS idx_ping_read_ping ON ping_read_by(ping_id);
-
--- Ping history (formerly droplet history)
-CREATE INDEX IF NOT EXISTS idx_ping_history_ping ON ping_history(ping_id);
-
--- Crew lookups (formerly group lookups)
-CREATE INDEX IF NOT EXISTS idx_crews_created_by ON crews(created_by);
-
--- Crew member lookups (formerly group member lookups)
-CREATE INDEX IF NOT EXISTS idx_crew_members_user ON crew_members(user_id);
-CREATE INDEX IF NOT EXISTS idx_crew_members_crew ON crew_members(crew_id);
-
--- Handle request lookups
-CREATE INDEX IF NOT EXISTS idx_handle_requests_user ON handle_requests(user_id);
-CREATE INDEX IF NOT EXISTS idx_handle_requests_status ON handle_requests(status);
-
--- Contact request lookups
-CREATE INDEX IF NOT EXISTS idx_contact_requests_from ON contact_requests(from_user_id);
-CREATE INDEX IF NOT EXISTS idx_contact_requests_to ON contact_requests(to_user_id);
-CREATE INDEX IF NOT EXISTS idx_contact_requests_status ON contact_requests(status);
-
--- Crew invitation lookups (formerly group invitation lookups)
-CREATE INDEX IF NOT EXISTS idx_crew_invitations_crew ON crew_invitations(crew_id);
-CREATE INDEX IF NOT EXISTS idx_crew_invitations_inviter ON crew_invitations(invited_by);
-CREATE INDEX IF NOT EXISTS idx_crew_invitations_invitee ON crew_invitations(invited_user_id);
-CREATE INDEX IF NOT EXISTS idx_crew_invitations_status ON crew_invitations(status);
-
--- Moderation lookups
-CREATE INDEX IF NOT EXISTS idx_blocks_user ON blocks(user_id);
-CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_user_id);
-CREATE INDEX IF NOT EXISTS idx_mutes_user ON mutes(user_id);
-CREATE INDEX IF NOT EXISTS idx_mutes_muted ON mutes(muted_user_id);
-
--- Report lookups
-CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_id);
-CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
-CREATE INDEX IF NOT EXISTS idx_reports_type ON reports(type);
-
--- Warning lookups
-CREATE INDEX IF NOT EXISTS idx_warnings_user ON warnings(user_id);
-CREATE INDEX IF NOT EXISTS idx_warnings_issued_by ON warnings(issued_by);
-CREATE INDEX IF NOT EXISTS idx_warnings_report ON warnings(report_id);
-
--- Moderation log lookups
-CREATE INDEX IF NOT EXISTS idx_moderation_log_admin ON moderation_log(admin_id);
-CREATE INDEX IF NOT EXISTS idx_moderation_log_target ON moderation_log(target_type, target_id);
-CREATE INDEX IF NOT EXISTS idx_moderation_log_created ON moderation_log(created_at DESC);
-
--- ============ Notifications ============
-
--- User notifications
 CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -627,8 +527,14 @@ CREATE TABLE IF NOT EXISTS notifications (
     read_at TEXT,
     group_key TEXT  -- For collapsing similar notifications (code uses group_key; NOT part of the v2.0.0 crews rename)
 );
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id, read) WHERE read = 0;
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_wave ON notifications(wave_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_ping ON notifications(ping_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_group_key ON notifications(group_key);
 
--- Notification preferences per wave
 CREATE TABLE IF NOT EXISTS wave_notification_settings (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -638,10 +544,9 @@ CREATE TABLE IF NOT EXISTS wave_notification_settings (
     push INTEGER DEFAULT 1,
     PRIMARY KEY (user_id, wave_id)
 );
+CREATE INDEX IF NOT EXISTS idx_wave_notification_settings_user ON wave_notification_settings(user_id);
+CREATE INDEX IF NOT EXISTS idx_wave_notification_settings_wave ON wave_notification_settings(wave_id);
 
--- ============ Push Subscriptions ============
-
--- Web Push API subscriptions
 CREATE TABLE IF NOT EXISTS push_subscriptions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -651,13 +556,9 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     created_at TEXT NOT NULL,
     UNIQUE (user_id, endpoint)
 );
-
--- Push subscription lookups
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_endpoint ON push_subscriptions(endpoint);
 
--- Encrypted push subscriptions (v2.22.0 - Privacy Hardening)
--- User's push subscriptions stored as encrypted blob
 CREATE TABLE IF NOT EXISTS push_subscriptions_encrypted (
     user_hash TEXT PRIMARY KEY,           -- SHA-256 of user_id (for deduplication)
     subscriptions_blob TEXT NOT NULL,     -- AES-256-GCM encrypted JSON array
@@ -665,22 +566,6 @@ CREATE TABLE IF NOT EXISTS push_subscriptions_encrypted (
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
--- Notification lookups
-CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id, read) WHERE read = 0;
-CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
-CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_notifications_wave ON notifications(wave_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_ping ON notifications(ping_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_group_key ON notifications(group_key);
-
--- Wave notification settings lookups
-CREATE INDEX IF NOT EXISTS idx_wave_notification_settings_user ON wave_notification_settings(user_id);
-CREATE INDEX IF NOT EXISTS idx_wave_notification_settings_wave ON wave_notification_settings(wave_id);
-
--- ============ Federation ============
-
--- Server's own identity and keypair (singleton table)
 CREATE TABLE IF NOT EXISTS server_identity (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     node_name TEXT NOT NULL,
@@ -690,7 +575,6 @@ CREATE TABLE IF NOT EXISTS server_identity (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- Trusted federation partners (allowlist)
 CREATE TABLE IF NOT EXISTS federation_nodes (
     id TEXT PRIMARY KEY,
     node_name TEXT NOT NULL UNIQUE,
@@ -704,8 +588,9 @@ CREATE TABLE IF NOT EXISTS federation_nodes (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_federation_nodes_status ON federation_nodes(status);
+CREATE INDEX IF NOT EXISTS idx_federation_nodes_name ON federation_nodes(node_name);
 
--- Incoming federation requests from other servers
 CREATE TABLE IF NOT EXISTS federation_requests (
     id TEXT PRIMARY KEY,
     from_node_name TEXT NOT NULL,
@@ -717,11 +602,9 @@ CREATE TABLE IF NOT EXISTS federation_requests (
     created_at TEXT NOT NULL,
     responded_at TEXT
 );
-
 CREATE INDEX IF NOT EXISTS idx_federation_requests_status ON federation_requests(status);
 CREATE INDEX IF NOT EXISTS idx_federation_requests_to_node ON federation_requests(to_node_name);
 
--- Cached profiles from federated servers
 CREATE TABLE IF NOT EXISTS remote_users (
     id TEXT PRIMARY KEY,
     node_name TEXT NOT NULL,
@@ -734,8 +617,9 @@ CREATE TABLE IF NOT EXISTS remote_users (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(node_name, handle)
 );
+CREATE INDEX IF NOT EXISTS idx_remote_users_node ON remote_users(node_name);
+CREATE INDEX IF NOT EXISTS idx_remote_users_handle ON remote_users(node_name, handle);
 
--- Track which nodes are participating in our waves
 CREATE TABLE IF NOT EXISTS wave_federation (
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
     node_name TEXT NOT NULL,
@@ -743,8 +627,9 @@ CREATE TABLE IF NOT EXISTS wave_federation (
     added_at TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (wave_id, node_name)
 );
+CREATE INDEX IF NOT EXISTS idx_wave_federation_wave ON wave_federation(wave_id);
+CREATE INDEX IF NOT EXISTS idx_wave_federation_node ON wave_federation(node_name);
 
--- Cached pings from federated servers (formerly remote_droplets)
 CREATE TABLE IF NOT EXISTS remote_pings (
     id TEXT PRIMARY KEY,
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -761,8 +646,10 @@ CREATE TABLE IF NOT EXISTS remote_pings (
     cached_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_remote_pings_wave ON remote_pings(wave_id);
+CREATE INDEX IF NOT EXISTS idx_remote_pings_origin ON remote_pings(origin_node, origin_wave_id);
+CREATE INDEX IF NOT EXISTS idx_remote_pings_author ON remote_pings(author_node, author_id);
 
--- Outbound federation message queue
 CREATE TABLE IF NOT EXISTS federation_queue (
     id TEXT PRIMARY KEY,
     target_node TEXT NOT NULL,
@@ -776,8 +663,9 @@ CREATE TABLE IF NOT EXISTS federation_queue (
     delivered_at TEXT,
     last_error TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_federation_queue_status ON federation_queue(status, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_federation_queue_node ON federation_queue(target_node);
 
--- Inbound message log (for idempotency)
 CREATE TABLE IF NOT EXISTS federation_inbox_log (
     id TEXT PRIMARY KEY,
     source_node TEXT NOT NULL,
@@ -786,25 +674,9 @@ CREATE TABLE IF NOT EXISTS federation_inbox_log (
     processed_at TEXT,
     status TEXT DEFAULT 'received'  -- received, processed, rejected
 );
-
--- Federation indexes
-CREATE INDEX IF NOT EXISTS idx_federation_nodes_status ON federation_nodes(status);
-CREATE INDEX IF NOT EXISTS idx_federation_nodes_name ON federation_nodes(node_name);
-CREATE INDEX IF NOT EXISTS idx_remote_users_node ON remote_users(node_name);
-CREATE INDEX IF NOT EXISTS idx_remote_users_handle ON remote_users(node_name, handle);
-CREATE INDEX IF NOT EXISTS idx_wave_federation_wave ON wave_federation(wave_id);
-CREATE INDEX IF NOT EXISTS idx_wave_federation_node ON wave_federation(node_name);
-CREATE INDEX IF NOT EXISTS idx_remote_pings_wave ON remote_pings(wave_id);
-CREATE INDEX IF NOT EXISTS idx_remote_pings_origin ON remote_pings(origin_node, origin_wave_id);
-CREATE INDEX IF NOT EXISTS idx_remote_pings_author ON remote_pings(author_node, author_id);
-CREATE INDEX IF NOT EXISTS idx_federation_queue_status ON federation_queue(status, next_retry_at);
-CREATE INDEX IF NOT EXISTS idx_federation_queue_node ON federation_queue(target_node);
 CREATE INDEX IF NOT EXISTS idx_federation_inbox_source ON federation_inbox_log(source_node);
 CREATE INDEX IF NOT EXISTS idx_federation_inbox_status ON federation_inbox_log(status);
 
--- ============ Crawl Bar (v1.15.0) ============
-
--- Server-wide crawl bar configuration (singleton)
 CREATE TABLE IF NOT EXISTS crawl_config (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     -- Stock symbols to display (JSON array)
@@ -825,7 +697,6 @@ CREATE TABLE IF NOT EXISTS crawl_config (
     updated_at TEXT NOT NULL
 );
 
--- Cache for external API responses
 CREATE TABLE IF NOT EXISTS crawl_cache (
     id TEXT PRIMARY KEY,
     cache_type TEXT NOT NULL,  -- 'stocks', 'weather', 'news'
@@ -835,13 +706,9 @@ CREATE TABLE IF NOT EXISTS crawl_cache (
     created_at TEXT NOT NULL,
     UNIQUE (cache_type, cache_key)
 );
-
 CREATE INDEX IF NOT EXISTS idx_crawl_cache_type ON crawl_cache(cache_type);
 CREATE INDEX IF NOT EXISTS idx_crawl_cache_expires ON crawl_cache(expires_at);
 
--- ============ Alert Droplets (v1.16.0) ============
-
--- Admin-created alerts that display in crawl bar
 CREATE TABLE IF NOT EXISTS alerts (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -859,8 +726,12 @@ CREATE TABLE IF NOT EXISTS alerts (
     origin_alert_id TEXT,
     UNIQUE (origin_node, origin_alert_id)
 );
+CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_alerts_priority ON alerts(priority);
+CREATE INDEX IF NOT EXISTS idx_alerts_category ON alerts(category);
+CREATE INDEX IF NOT EXISTS idx_alerts_scope ON alerts(scope);
+CREATE INDEX IF NOT EXISTS idx_alerts_origin ON alerts(origin_node);
 
--- Subscriptions: what alert categories we subscribe to from other servers
 CREATE TABLE IF NOT EXISTS alert_subscriptions (
     id TEXT PRIMARY KEY,
     source_node TEXT NOT NULL UNIQUE,         -- Node we're subscribing to
@@ -870,8 +741,9 @@ CREATE TABLE IF NOT EXISTS alert_subscriptions (
     created_at TEXT NOT NULL,
     updated_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_alert_subscriptions_source ON alert_subscriptions(source_node);
+CREATE INDEX IF NOT EXISTS idx_alert_subscriptions_status ON alert_subscriptions(status);
 
--- Subscribers: who subscribes to our alerts (populated by federation inbox)
 CREATE TABLE IF NOT EXISTS alert_subscribers (
     id TEXT PRIMARY KEY,
     subscriber_node TEXT NOT NULL UNIQUE,     -- Node subscribing to us
@@ -879,29 +751,16 @@ CREATE TABLE IF NOT EXISTS alert_subscribers (
     created_at TEXT NOT NULL,
     updated_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_alert_subscribers_node ON alert_subscribers(subscriber_node);
 
--- Per-user alert dismissals
 CREATE TABLE IF NOT EXISTS alert_dismissals (
     alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     dismissed_at TEXT NOT NULL,
     PRIMARY KEY (alert_id, user_id)
 );
-
--- Alert indexes
-CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(start_time, end_time);
-CREATE INDEX IF NOT EXISTS idx_alerts_priority ON alerts(priority);
-CREATE INDEX IF NOT EXISTS idx_alerts_category ON alerts(category);
-CREATE INDEX IF NOT EXISTS idx_alerts_scope ON alerts(scope);
-CREATE INDEX IF NOT EXISTS idx_alerts_origin ON alerts(origin_node);
-CREATE INDEX IF NOT EXISTS idx_alert_subscriptions_source ON alert_subscriptions(source_node);
-CREATE INDEX IF NOT EXISTS idx_alert_subscriptions_status ON alert_subscriptions(status);
-CREATE INDEX IF NOT EXISTS idx_alert_subscribers_node ON alert_subscribers(subscriber_node);
 CREATE INDEX IF NOT EXISTS idx_alert_dismissals_user ON alert_dismissals(user_id);
 
--- ============ Bots & Webhooks (v2.1.0) ============
-
--- Bots: Automated systems that can post to waves via API
 CREATE TABLE IF NOT EXISTS bots (
     id TEXT PRIMARY KEY,                      -- bot-{uuid}
     name TEXT NOT NULL,                       -- Display name (e.g., "GitHub Notifier")
@@ -922,12 +781,10 @@ CREATE TABLE IF NOT EXISTS bots (
     can_create_waves INTEGER DEFAULT 0,       -- Permission flag (future feature)
     webhook_secret TEXT                       -- Optional webhook validation secret
 );
-
 CREATE INDEX IF NOT EXISTS idx_bots_owner ON bots(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_bots_status ON bots(status);
 CREATE INDEX IF NOT EXISTS idx_bots_api_key_hash ON bots(api_key_hash);
 
--- Bot Permissions: Wave-level access control for bots
 CREATE TABLE IF NOT EXISTS bot_permissions (
     id TEXT PRIMARY KEY,                      -- perm-{uuid}
     bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
@@ -938,11 +795,9 @@ CREATE TABLE IF NOT EXISTS bot_permissions (
     granted_by TEXT NOT NULL REFERENCES users(id),
     UNIQUE(bot_id, wave_id)
 );
-
 CREATE INDEX IF NOT EXISTS idx_bot_permissions_bot ON bot_permissions(bot_id);
 CREATE INDEX IF NOT EXISTS idx_bot_permissions_wave ON bot_permissions(wave_id);
 
--- Bot Wave Keys: Encrypted wave keys for bots (E2EE support)
 CREATE TABLE IF NOT EXISTS bot_wave_keys (
     id TEXT PRIMARY KEY,
     bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
@@ -953,13 +808,9 @@ CREATE TABLE IF NOT EXISTS bot_wave_keys (
     created_at TEXT NOT NULL,
     UNIQUE(bot_id, wave_id, key_version)
 );
-
 CREATE INDEX IF NOT EXISTS idx_bot_wave_keys_bot ON bot_wave_keys(bot_id);
 CREATE INDEX IF NOT EXISTS idx_bot_wave_keys_wave ON bot_wave_keys(wave_id);
 
--- ============ Outgoing Webhooks (v2.15.5) ============
-
--- Wave webhooks: Auto-forward messages to external services (Discord, Slack, etc.)
 CREATE TABLE IF NOT EXISTS wave_webhooks (
     id TEXT PRIMARY KEY,                      -- webhook-{uuid}
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -987,15 +838,9 @@ CREATE TABLE IF NOT EXISTS wave_webhooks (
     created_at TEXT NOT NULL,
     updated_at TEXT
 );
-
 CREATE INDEX IF NOT EXISTS idx_wave_webhooks_wave ON wave_webhooks(wave_id);
 CREATE INDEX IF NOT EXISTS idx_wave_webhooks_enabled ON wave_webhooks(enabled);
 
--- ============ Wave Posting Tokens (v2.43.0) ============
-
--- User-created tokens for posting to a specific wave without a session.
--- Token cannot exceed the permissions of the user who created it.
--- Messages post under the token's display name (bot-style rendering).
 CREATE TABLE IF NOT EXISTS wave_tokens (
     id TEXT PRIMARY KEY,                      -- token-{uuid}
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -1006,14 +851,10 @@ CREATE TABLE IF NOT EXISTS wave_tokens (
     created_at TEXT NOT NULL,
     last_used_at TEXT
 );
-
 CREATE INDEX IF NOT EXISTS idx_wave_tokens_wave ON wave_tokens(wave_id);
 CREATE INDEX IF NOT EXISTS idx_wave_tokens_created_by ON wave_tokens(created_by);
 CREATE INDEX IF NOT EXISTS idx_wave_tokens_hash ON wave_tokens(token_hash);
 
--- ============ Full-Text Search ============
-
--- FTS5 virtual table for ping content search (formerly droplets_fts)
 CREATE VIRTUAL TABLE IF NOT EXISTS pings_fts USING fts5(
     id UNINDEXED,
     content,
@@ -1021,26 +862,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pings_fts USING fts5(
     content_rowid='rowid'
 );
 
--- Triggers to keep FTS table in sync with pings table
--- Note: These triggers use external content table, so we need to handle inserts/updates/deletes
-
--- After INSERT trigger
-CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
-    INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
-END;
-
--- After DELETE trigger
-CREATE TRIGGER IF NOT EXISTS pings_fts_delete AFTER DELETE ON pings BEGIN
-    INSERT INTO pings_fts(pings_fts, rowid, id, content) VALUES ('delete', OLD.rowid, OLD.id, OLD.content);
-END;
-
--- After UPDATE trigger
-CREATE TRIGGER IF NOT EXISTS pings_fts_update AFTER UPDATE ON pings BEGIN
-    INSERT INTO pings_fts(pings_fts, rowid, id, content) VALUES ('delete', OLD.rowid, OLD.id, OLD.content);
-    INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
-END;
-
--- ============ Events Calendar (v2.40.0) ============
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -1051,8 +872,223 @@ CREATE TABLE IF NOT EXISTS events (
     created_by TEXT REFERENCES users(id),
     created_at TEXT NOT NULL,
     updated_at TEXT
-);
-
+, event_time TEXT, event_end_time TEXT, timezone TEXT, location TEXT, scope TEXT NOT NULL DEFAULT 'server', wave_id TEXT REFERENCES waves(id) ON DELETE CASCADE, rsvp_enabled INTEGER DEFAULT 0, recurrence TEXT, recurrence_end_date TEXT);
 CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);
 CREATE INDEX IF NOT EXISTS idx_events_recurring ON events(recurring);
-CREATE INDEX IF NOT EXISTS idx_users_birthday ON users(birthday) WHERE birthday IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_scope ON events(scope);
+CREATE INDEX IF NOT EXISTS idx_events_wave_id ON events(wave_id);
+CREATE INDEX IF NOT EXISTS idx_events_created_by ON events(created_by);
+
+CREATE TABLE IF NOT EXISTS custom_themes (
+          id TEXT PRIMARY KEY,
+          creator_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          description TEXT,
+          variables TEXT NOT NULL,
+          is_public INTEGER DEFAULT 0,
+          install_count INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+CREATE INDEX IF NOT EXISTS idx_custom_themes_creator
+        ON custom_themes(creator_id);
+CREATE INDEX IF NOT EXISTS idx_custom_themes_public
+        ON custom_themes(is_public) WHERE is_public = 1;
+
+CREATE TABLE IF NOT EXISTS custom_theme_installs (
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          theme_id TEXT NOT NULL REFERENCES custom_themes(id) ON DELETE CASCADE,
+          installed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id, theme_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_custom_theme_installs_user
+        ON custom_theme_installs(user_id);
+CREATE INDEX IF NOT EXISTS idx_custom_theme_installs_theme
+        ON custom_theme_installs(theme_id);
+
+CREATE TABLE IF NOT EXISTS jellyfin_connections (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          server_url TEXT NOT NULL,
+          access_token TEXT,
+          jellyfin_user_id TEXT,
+          server_name TEXT,
+          status TEXT DEFAULT 'active',
+          last_connected TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(user_id, server_url)
+        );
+CREATE INDEX IF NOT EXISTS idx_jellyfin_connections_user
+        ON jellyfin_connections(user_id);
+CREATE INDEX IF NOT EXISTS idx_jellyfin_connections_status
+        ON jellyfin_connections(status);
+
+CREATE TABLE IF NOT EXISTS watch_parties (
+          id TEXT PRIMARY KEY,
+          wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          host_user_id TEXT NOT NULL REFERENCES users(id),
+          jellyfin_connection_id TEXT NOT NULL REFERENCES jellyfin_connections(id),
+          jellyfin_item_id TEXT NOT NULL,
+          media_title TEXT,
+          media_type TEXT,
+          status TEXT DEFAULT 'active',
+          playback_position INTEGER DEFAULT 0,
+          is_playing INTEGER DEFAULT 0,
+          last_sync_at TEXT,
+          created_at TEXT NOT NULL,
+          ended_at TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_watch_parties_wave
+        ON watch_parties(wave_id);
+CREATE INDEX IF NOT EXISTS idx_watch_parties_status
+        ON watch_parties(status);
+CREATE INDEX IF NOT EXISTS idx_watch_parties_host
+        ON watch_parties(host_user_id);
+
+CREATE TABLE IF NOT EXISTS jellyfin_feed_imports (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          connection_id TEXT NOT NULL REFERENCES jellyfin_connections(id) ON DELETE CASCADE,
+          jellyfin_item_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          thumbnail_url TEXT,
+          duration_ticks INTEGER,
+          media_type TEXT DEFAULT 'Video',
+          imported_at TEXT NOT NULL,
+          UNIQUE(user_id, jellyfin_item_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_jellyfin_feed_imports_user
+        ON jellyfin_feed_imports(user_id);
+CREATE INDEX IF NOT EXISTS idx_jellyfin_feed_imports_connection
+        ON jellyfin_feed_imports(connection_id);
+
+CREATE TABLE IF NOT EXISTS plex_connections (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          server_url TEXT NOT NULL,
+          access_token TEXT,
+          plex_user_id TEXT,
+          server_name TEXT,
+          machine_identifier TEXT,
+          status TEXT DEFAULT 'active',
+          last_connected TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(user_id, server_url)
+        );
+CREATE INDEX IF NOT EXISTS idx_plex_connections_user
+        ON plex_connections(user_id);
+CREATE INDEX IF NOT EXISTS idx_plex_connections_status
+        ON plex_connections(status);
+
+CREATE TABLE IF NOT EXISTS event_rsvp (
+          id         TEXT PRIMARY KEY,
+          event_id   TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          status     TEXT NOT NULL CHECK(status IN ('going','maybe','not_going')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT,
+          UNIQUE(event_id, user_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_event_rsvp_event ON event_rsvp(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_rsvp_user  ON event_rsvp(user_id);
+
+CREATE TABLE IF NOT EXISTS event_reminder_sent (
+          id       TEXT PRIMARY KEY,
+          event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          window   TEXT NOT NULL,
+          sent_at  TEXT NOT NULL,
+          UNIQUE(event_id, user_id, window)
+        );
+CREATE INDEX IF NOT EXISTS idx_reminder_sent_event ON event_reminder_sent(event_id);
+CREATE INDEX IF NOT EXISTS idx_reminder_sent_user  ON event_reminder_sent(user_id);
+
+CREATE TABLE IF NOT EXISTS calendar_feed_tokens (
+          id         TEXT PRIMARY KEY,
+          user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash TEXT UNIQUE NOT NULL,
+          created_at TEXT NOT NULL,
+          last_used_at TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_cal_feed_user ON calendar_feed_tokens(user_id);
+
+CREATE TABLE IF NOT EXISTS support_tickets (
+          id          TEXT PRIMARY KEY,
+          email       TEXT,
+          handle      TEXT,
+          message     TEXT NOT NULL,
+          user_agent  TEXT,
+          status      TEXT NOT NULL DEFAULT 'open',
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          resolved_at TEXT,
+          resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL
+        );
+CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS incoming_webhooks (
+          id          TEXT PRIMARY KEY,
+          token       TEXT UNIQUE NOT NULL,
+          wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          name        TEXT NOT NULL,
+          bot_id      TEXT REFERENCES bots(id),
+          created_by  TEXT REFERENCES users(id),
+          created_at  TEXT NOT NULL,
+          last_used_at TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_incoming_webhooks_wave ON incoming_webhooks(wave_id);
+
+CREATE TABLE IF NOT EXISTS cross_port_requests (
+          id          TEXT PRIMARY KEY,
+          guest_node  TEXT NOT NULL,
+          guest_base_url TEXT NOT NULL,
+          nonce       TEXT NOT NULL UNIQUE,
+          status      TEXT NOT NULL DEFAULT 'pending',
+          created_at  TEXT NOT NULL,
+          expires_at  TEXT NOT NULL
+        );
+CREATE INDEX IF NOT EXISTS idx_cp_requests_nonce ON cross_port_requests(nonce);
+
+CREATE TABLE IF NOT EXISTS cross_port_codes (
+          code        TEXT PRIMARY KEY,
+          user_id     TEXT NOT NULL,
+          guest_node  TEXT NOT NULL,
+          request_id  TEXT NOT NULL,
+          nonce       TEXT NOT NULL,
+          created_at  TEXT NOT NULL,
+          expires_at  TEXT NOT NULL,
+          used        INTEGER NOT NULL DEFAULT 0
+        );
+CREATE INDEX IF NOT EXISTS idx_cp_codes_code ON cross_port_codes(code);
+
+CREATE TABLE IF NOT EXISTS portal_waves (
+          wave_id       TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+          label         TEXT,
+          display_order INTEGER NOT NULL DEFAULT 0,
+          added_at      TEXT NOT NULL,
+          added_by      TEXT REFERENCES users(id)
+        );
+
+CREATE TABLE IF NOT EXISTS instance_config (
+          id         INTEGER PRIMARY KEY CHECK (id = 1),
+          defaults              TEXT NOT NULL DEFAULT '{}',
+          notification_defaults TEXT NOT NULL DEFAULT '{}',
+          features              TEXT NOT NULL DEFAULT '{}',
+          branding              TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
+        );
+
+-- ============ Full-text search triggers ============
+CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
+    INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pings_fts_delete AFTER DELETE ON pings BEGIN
+    INSERT INTO pings_fts(pings_fts, rowid, id, content) VALUES ('delete', OLD.rowid, OLD.id, OLD.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pings_fts_update AFTER UPDATE ON pings BEGIN
+    INSERT INTO pings_fts(pings_fts, rowid, id, content) VALUES ('delete', OLD.rowid, OLD.id, OLD.content);
+    INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+END;
