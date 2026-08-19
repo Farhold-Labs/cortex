@@ -6665,6 +6665,37 @@ function requireFeature(feature, res) {
   return false;
 }
 
+// Notification defaults an admin may set instance-wide. `email` is nested, so it gets
+// its own list and a deep merge — an admin turning email notifications on by default
+// must not wipe a user's per-type choices underneath it.
+const INSTANCE_NOTIF_DEFAULT_KEYS = ['enabled', 'directMentions', 'replies', 'reactions', 'waveActivity', 'burstEvents', 'soundEnabled', 'suppressWhileFocused', 'pushDebounceMinutes'];
+const INSTANCE_EMAIL_NOTIF_DEFAULT_KEYS = ['enabled', 'mentions', 'replies', 'calendarReminders', 'offlineThresholdMinutes'];
+
+function getInstanceNotificationDefaults() {
+  try {
+    return db.getInstanceConfig ? (db.getInstanceConfig().notificationDefaults || {}) : {};
+  } catch (err) {
+    console.error('[instance-config] Failed to read notification defaults:', err.message);
+    return {};
+  }
+}
+
+// Same three layers as preferences: code defaults <- instance defaults <- user overrides.
+// A user with no stored notification preferences at all (the common case — the column is
+// NULL until they touch the settings) simply inherits the instance defaults.
+function resolveNotificationPreferences(user) {
+  const overrides = (user && user.notificationPreferences && typeof user.notificationPreferences === 'object') ? user.notificationPreferences : {};
+  const instanceDefaults = getInstanceNotificationDefaults();
+
+  const resolved = { ...CODE_DEFAULT_NOTIF_PREFS, ...instanceDefaults, ...overrides };
+  resolved.email = {
+    ...CODE_DEFAULT_EMAIL_NOTIF_PREFS,
+    ...(instanceDefaults.email || {}),
+    ...(overrides.email || {}),
+  };
+  return resolved;
+}
+
 // Resolve the preferences a client should actually apply.
 function resolvePreferences(user) {
   const overrides = (user && user.preferences && typeof user.preferences === 'object') ? user.preferences : {};
@@ -6777,7 +6808,7 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
 });
 
 // Default notification preferences
-const DEFAULT_EMAIL_NOTIF_PREFS = {
+const CODE_DEFAULT_EMAIL_NOTIF_PREFS = {
   enabled: false,               // opt-in
   mentions: true,
   replies: true,
@@ -6785,7 +6816,7 @@ const DEFAULT_EMAIL_NOTIF_PREFS = {
   offlineThresholdMinutes: 15,  // only email if offline longer than this (0 = always)
 };
 
-const DEFAULT_NOTIFICATION_PREFS = {
+const CODE_DEFAULT_NOTIF_PREFS = {
   enabled: true,
   directMentions: 'always',      // always | app_closed | never
   replies: 'always',
@@ -6795,7 +6826,7 @@ const DEFAULT_NOTIFICATION_PREFS = {
   soundEnabled: false,
   suppressWhileFocused: true,
   pushDebounceMinutes: 5,        // 0 = no debounce (every message), up to 30 min
-  email: DEFAULT_EMAIL_NOTIF_PREFS,
+  email: CODE_DEFAULT_EMAIL_NOTIF_PREFS,
 };
 
 // Get notification preferences
@@ -6803,7 +6834,7 @@ app.get('/api/notifications/preferences', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const notificationPrefs = user.notificationPreferences || DEFAULT_NOTIFICATION_PREFS;
+  const notificationPrefs = resolveNotificationPreferences(user);
   res.json({ preferences: notificationPrefs });
 });
 
@@ -6844,7 +6875,11 @@ app.put('/api/notifications/preferences', authenticateToken, (req, res) => {
     updates.pushDebounceMinutes = Math.max(0, Math.min(30, Math.floor(req.body.pushDebounceMinutes)));
   }
   if (req.body.email && typeof req.body.email === 'object') {
-    const currentEmailPrefs = (user.notificationPreferences?.email) || DEFAULT_EMAIL_NOTIF_PREFS;
+    // Merge onto the user's STORED overrides, not their resolved values (v2.66.0).
+    // Seeding from resolved would stamp every inherited value as an explicit choice, so
+    // changing one email setting would silently freeze the rest against future changes
+    // to the instance defaults.
+    const currentEmailPrefs = (user.notificationPreferences && user.notificationPreferences.email) || {};
     const ep = req.body.email;
     const emailUpdates = { ...currentEmailPrefs };
     if (typeof ep.enabled === 'boolean') emailUpdates.enabled = ep.enabled;
@@ -9884,8 +9919,11 @@ app.get('/api/admin/instance-config', authenticateToken, (req, res) => {
       ...config,
       // Tell the client what it's allowed to set, and what the fallbacks are
       availableDefaults: INSTANCE_DEFAULTABLE_PREFS,
+      availableNotificationDefaults: INSTANCE_NOTIF_DEFAULT_KEYS,
+      availableEmailNotificationDefaults: INSTANCE_EMAIL_NOTIF_DEFAULT_KEYS,
       availableFeatures: INSTANCE_FEATURES,
       codeDefaults: CODE_DEFAULT_PREFS,
+      codeNotificationDefaults: CODE_DEFAULT_NOTIF_PREFS,
     });
   } catch (error) {
     console.error('Failed to read instance config:', error);
@@ -9899,7 +9937,7 @@ app.put('/api/admin/instance-config', authenticateToken, (req, res) => {
   const admin = db.findUserById(req.user.userId);
   if (!requireRole(admin, ROLES.ADMIN, res)) return;
 
-  const { defaults, features, branding } = req.body || {};
+  const { defaults, notificationDefaults, features, branding } = req.body || {};
   const patch = {};
 
   // Whitelist every incoming key — never trust the client to stay inside the schema
@@ -9913,6 +9951,37 @@ app.put('/api/admin/instance-config', authenticateToken, (req, res) => {
         return res.status(400).json({ error: `Invalid type for default '${key}': expected ${expected}` });
       }
       patch.defaults[key] = typeof value === 'string' ? sanitizeInput(value) : value;
+    }
+  }
+
+  if (notificationDefaults && typeof notificationDefaults === 'object') {
+    patch.notificationDefaults = {};
+    for (const [key, value] of Object.entries(notificationDefaults)) {
+      if (key === 'email') {
+        // Nested: merge onto whatever is already stored so setting one email default
+        // doesn't silently clear the others
+        if (!value || typeof value !== 'object') continue;
+        const current = (db.getInstanceConfig().notificationDefaults || {}).email || {};
+        const email = { ...current };
+        for (const [ekey, evalue] of Object.entries(value)) {
+          if (!INSTANCE_EMAIL_NOTIF_DEFAULT_KEYS.includes(ekey)) continue;
+          if (evalue === null) { delete email[ekey]; continue; }
+          const expected = typeof CODE_DEFAULT_EMAIL_NOTIF_PREFS[ekey];
+          if (typeof evalue !== expected) {
+            return res.status(400).json({ error: `Invalid type for email notification default '${ekey}': expected ${expected}` });
+          }
+          email[ekey] = evalue;
+        }
+        patch.notificationDefaults.email = Object.keys(email).length ? email : null;
+        continue;
+      }
+      if (!INSTANCE_NOTIF_DEFAULT_KEYS.includes(key)) continue;
+      if (value === null) { patch.notificationDefaults[key] = null; continue; }
+      const expected = typeof CODE_DEFAULT_NOTIF_PREFS[key];
+      if (typeof value !== expected) {
+        return res.status(400).json({ error: `Invalid type for notification default '${key}': expected ${expected}` });
+      }
+      patch.notificationDefaults[key] = value;
     }
   }
 
@@ -20413,26 +20482,16 @@ if (FEDERATION_ENABLED && FEDERATION_DECOY_ENABLED) {
 
 // ============ Notification Creation Helpers ============
 
-// Default notification preferences (must match server endpoint defaults)
-const DEFAULT_NOTIF_PREFS = {
-  enabled: true,
-  directMentions: 'always',
-  replies: 'always',
-  reactions: 'always',
-  waveActivity: 'app_closed',
-  burstEvents: 'app_closed',
-  soundEnabled: false,
-  suppressWhileFocused: true,
-  pushDebounceMinutes: 5,
-  email: DEFAULT_EMAIL_NOTIF_PREFS,
-};
+// (v2.66.0) A second hardcoded copy of the notification defaults used to live here. It
+// had already drifted from the original — missing `reactions` — so it's gone; everything
+// now resolves through resolveNotificationPreferences().
 
 // Check if a user should receive a notification based on their preferences
 function shouldCreateNotification(userId, notificationType) {
   const user = db.findUserById(userId);
   if (!user) return false;
 
-  const prefs = user.notificationPreferences || DEFAULT_NOTIF_PREFS;
+  const prefs = resolveNotificationPreferences(user);
 
   // Global kill switch
   if (!prefs.enabled) return false;
@@ -20493,8 +20552,8 @@ async function sendEmailNotificationIfOffline(userId, type, emailData) {
     const user = db.findUserById(userId);
     if (!user) return;
 
-    const prefs = user.notificationPreferences || DEFAULT_NOTIF_PREFS;
-    const emailPrefs = prefs.email || DEFAULT_EMAIL_NOTIF_PREFS;
+    const prefs = resolveNotificationPreferences(user);
+    const emailPrefs = prefs.email;
     if (!emailPrefs.enabled) {
       console.log(`[email-notif] Skipping ${type} for @${user.handle} — email notifications disabled`);
       return;
@@ -20725,7 +20784,7 @@ function createPingNotifications(ping, wave, author) {
 
     // Skip wave_activity if user is currently viewing this wave (focus awareness)
     const participantUser = participantUsers.get(participant.id);
-    const participantPrefs = participantUser?.notificationPreferences || DEFAULT_NOTIF_PREFS;
+    const participantPrefs = resolveNotificationPreferences(participantUser);
     if (participantPrefs.suppressWhileFocused) {
       const viewingState = userViewingState.get(participant.id);
       if (viewingState && viewingState.waveId === wave.id) {
@@ -20887,7 +20946,7 @@ async function sendPushNotification(userId, payload) {
   // respect the user's preference when the app is visible. Default true
   // (suppress) to preserve existing behaviour for users who haven't changed it.
   const pushUser = db.findUserById(userId);
-  const pushPrefs = pushUser?.notificationPreferences || DEFAULT_NOTIF_PREFS;
+  const pushPrefs = resolveNotificationPreferences(pushUser);
   const enrichedPayload = {
     ...payload,
     suppressWhileFocused: pushPrefs.suppressWhileFocused ?? true,
@@ -21025,7 +21084,7 @@ function broadcastToWaveWithPush(waveId, message, pushPayload = null, excludeWs 
     // Send push notification - respects user notification preferences (v2.32.0)
     if (pushPayload) {
       const pushUser = db.findUserById(userId);
-      const pushPrefs = pushUser?.notificationPreferences || DEFAULT_NOTIF_PREFS;
+      const pushPrefs = resolveNotificationPreferences(pushUser);
 
       // Skip push if notifications are globally disabled
       if (!pushPrefs.enabled) continue;
