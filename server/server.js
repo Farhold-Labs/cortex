@@ -4539,7 +4539,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
     res.status(201).json({
       token,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
     });
   } catch (err) {
     console.error('Registration error:', err);
@@ -4631,7 +4631,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     res.json({
       token,
       requirePasswordChange,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: 'online', isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: 'online', isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -4642,7 +4642,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 app.get('/api/auth/me', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility });
+  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility });
 });
 
 app.post('/api/auth/logout', authenticateToken, (req, res) => {
@@ -4709,7 +4709,7 @@ app.post('/api/auth/refresh', loginLimiter, authenticateToken, async (req, res) 
     res.json({
       token,
       sessionDuration,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user) },
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {} },
     });
   } catch (err) {
     console.error('Session refresh error:', err);
@@ -4743,7 +4743,7 @@ app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) =>
 
     res.json({
       token: newToken,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user) }
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {} }
     });
 
     // Revoke old token after response is sent — client already has the new one
@@ -4802,7 +4802,7 @@ app.post('/api/auth/reauth', loginLimiter, async (req, res) => {
     res.json({
       token: newToken,
       sessionDuration,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user) }
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {} }
     });
   } catch (err) {
     console.error('Re-auth error:', err);
@@ -6773,7 +6773,7 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
   }
 
   // Return what the client should actually apply, not just the stored overrides
-  res.json({ success: true, preferences: resolvePreferences({ preferences: updatedPreferences }) });
+  res.json({ success: true, preferences: resolvePreferences({ preferences: updatedPreferences }), preferenceOverrides: updatedPreferences });
 });
 
 // Default notification preferences
