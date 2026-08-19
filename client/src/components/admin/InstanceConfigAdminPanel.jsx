@@ -32,6 +32,28 @@ const FEATURES = [
   { key: 'registration', label: 'OPEN REGISTRATION', hint: 'When off, only an admin can add users' },
 ];
 
+// Notification defaults. `always | app_closed | never` for the per-type ones, matching
+// the user-facing notification settings.
+const NOTIF_MODE_OPTIONS = [['always', 'Always'], ['app_closed', 'App closed'], ['never', 'Never']];
+const NOTIF_MODE_DEFAULTS = [
+  { key: 'directMentions', label: 'MENTIONS' },
+  { key: 'replies', label: 'REPLIES' },
+  { key: 'reactions', label: 'REACTIONS' },
+  { key: 'waveActivity', label: 'WAVE ACTIVITY' },
+  { key: 'burstEvents', label: 'THREAD EVENTS' },
+];
+const NOTIF_TOGGLE_DEFAULTS = [
+  { key: 'enabled', label: 'NOTIFICATIONS ON' },
+  { key: 'soundEnabled', label: 'NOTIFICATION SOUND' },
+  { key: 'suppressWhileFocused', label: 'SUPPRESS WHILE FOCUSED' },
+];
+const EMAIL_TOGGLE_DEFAULTS = [
+  { key: 'enabled', label: 'EMAIL NOTIFICATIONS ON' },
+  { key: 'mentions', label: 'EMAIL ON MENTIONS' },
+  { key: 'replies', label: 'EMAIL ON REPLIES' },
+  { key: 'calendarReminders', label: 'EMAIL CALENDAR REMINDERS' },
+];
+
 const BRANDING = [
   { key: 'instanceName', label: 'INSTANCE NAME', placeholder: 'Cortex' },
   { key: 'tagline', label: 'LOGIN TAGLINE', placeholder: 'Leave blank for the rotating default' },
@@ -77,6 +99,13 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
   // default applies and clearing it hands control back to the code.
   const effectiveDefault = (key) => (config?.defaults?.[key] !== undefined ? config.defaults[key] : codeDefaults[key]);
   const isOverridden = (key) => config?.defaults?.[key] !== undefined;
+
+  const codeNotif = config?.codeNotificationDefaults || {};
+  const notifSet = config?.notificationDefaults || {};
+  const effectiveNotif = (key) => (notifSet[key] !== undefined ? notifSet[key] : codeNotif[key]);
+  const isNotifOverridden = (key) => notifSet[key] !== undefined;
+  const effectiveEmailNotif = (key) => (notifSet.email?.[key] !== undefined ? notifSet.email[key] : codeNotif.email?.[key]);
+  const isEmailNotifOverridden = (key) => notifSet.email?.[key] !== undefined;
 
   const pillStyle = (active, color = 'var(--accent-amber)') => ({
     padding: '5px 12px',
@@ -149,6 +178,69 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
                   <button disabled={saving} onClick={() => save({ defaults: { [key]: false } }, `${label} default disabled`)} style={pillStyle(effectiveDefault(key) === false, 'var(--accent-orange)')}>▢ OFF</button>
                   {isOverridden(key) && (
                     <button disabled={saving} onClick={() => save({ defaults: { [key]: null } }, `${label} default cleared`)} style={{ ...pillStyle(false), color: 'var(--text-muted)' }}>✕ clear</button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* ---- Notification defaults ---- */}
+          <div>
+            <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ NOTIFICATION DEFAULTS</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '12px', lineHeight: 1.5 }}>
+              What new users start with. Existing users who never opened their notification
+              settings pick these up too; anyone who has changed a setting keeps their choice.
+            </div>
+
+            {NOTIF_TOGGLE_DEFAULTS.map(({ key, label }) => (
+              <div key={key} style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>
+                  {label}
+                  {isNotifOverridden(key) && <span style={{ color: 'var(--accent-amber)', marginLeft: '8px' }}>• set by admin</span>}
+                </label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button disabled={saving} onClick={() => save({ notificationDefaults: { [key]: true } }, `${label} default enabled`)} style={pillStyle(effectiveNotif(key) === true, 'var(--accent-green)')}>▣ ON</button>
+                  <button disabled={saving} onClick={() => save({ notificationDefaults: { [key]: false } }, `${label} default disabled`)} style={pillStyle(effectiveNotif(key) === false, 'var(--accent-orange)')}>▢ OFF</button>
+                  {isNotifOverridden(key) && (
+                    <button disabled={saving} onClick={() => save({ notificationDefaults: { [key]: null } }, `${label} default cleared`)} style={{ ...pillStyle(false), color: 'var(--text-muted)' }}>✕ clear</button>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {NOTIF_MODE_DEFAULTS.map(({ key, label }) => (
+              <div key={key} style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>
+                  {label}
+                  {isNotifOverridden(key) && <span style={{ color: 'var(--accent-amber)', marginLeft: '8px' }}>• set by admin</span>}
+                </label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {NOTIF_MODE_OPTIONS.map(([id, name]) => (
+                    <button key={id} disabled={saving} onClick={() => save({ notificationDefaults: { [key]: id } }, `Default ${label.toLowerCase()} set to ${name}`)} style={pillStyle(effectiveNotif(key) === id)}>{name}</button>
+                  ))}
+                  {isNotifOverridden(key) && (
+                    <button disabled={saving} onClick={() => save({ notificationDefaults: { [key]: null } }, `${label} default cleared`)} style={{ ...pillStyle(false), color: 'var(--text-muted)' }}>✕ clear</button>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            <div style={{ color: 'var(--accent-teal)', fontSize: '0.75rem', margin: '18px 0 10px' }}>▹ EMAIL</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '12px', lineHeight: 1.5 }}>
+              Email notifications only send when a user is offline past their threshold, and
+              only if this server has SMTP configured.
+            </div>
+            {EMAIL_TOGGLE_DEFAULTS.map(({ key, label }) => (
+              <div key={key} style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>
+                  {label}
+                  {isEmailNotifOverridden(key) && <span style={{ color: 'var(--accent-amber)', marginLeft: '8px' }}>• set by admin</span>}
+                </label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button disabled={saving} onClick={() => save({ notificationDefaults: { email: { [key]: true } } }, `${label} default enabled`)} style={pillStyle(effectiveEmailNotif(key) === true, 'var(--accent-green)')}>▣ ON</button>
+                  <button disabled={saving} onClick={() => save({ notificationDefaults: { email: { [key]: false } } }, `${label} default disabled`)} style={pillStyle(effectiveEmailNotif(key) === false, 'var(--accent-orange)')}>▢ OFF</button>
+                  {isEmailNotifOverridden(key) && (
+                    <button disabled={saving} onClick={() => save({ notificationDefaults: { email: { [key]: null } } }, `${label} default cleared`)} style={{ ...pillStyle(false), color: 'var(--text-muted)' }}>✕ clear</button>
                   )}
                 </div>
               </div>
