@@ -1872,7 +1872,7 @@ class Database {
       handleHistory: [],
       lastHandleChange: null,
       isAdmin: this.users.users.length === 0, // First user is admin
-      preferences: { theme: 'serenity', fontSize: 'medium' },
+      preferences: {},  // empty = follow instance defaults (v2.65.0)
       bio: null, // About me section (max 500 chars)
       avatarUrl: null, // Profile image URL
     };
@@ -1898,14 +1898,15 @@ class Database {
     }
   }
 
-  updateUserPreferences(userId, preferences) {
+  updateUserPreferences(userId, preferences, clearKeys = []) {
     const user = this.findUserById(userId);
     if (!user) return null;
 
     if (!user.preferences) {
-      user.preferences = { theme: 'serenity', fontSize: 'medium' };
+      user.preferences = {};
     }
     user.preferences = { ...user.preferences, ...preferences };
+    for (const key of clearKeys) delete user.preferences[key];
     this.saveUsers();
     return user.preferences;
   }
@@ -4479,6 +4480,15 @@ const botLimiter = rateLimit({
 // ============ Auth Routes ============
 app.post('/api/auth/register', registerLimiter, async (req, res) => {
   try {
+    // Closed registration (v2.65.0). The very first account is always allowed through, so
+    // an admin can never lock themselves out of a fresh instance.
+    if (!isFeatureEnabled('registration')) {
+      const existingUsers = db.stmts?.countUsers ? db.stmts.countUsers.get().count : 1;
+      if (existingUsers > 0) {
+        return res.status(403).json({ error: 'Registration is closed on this server' });
+      }
+    }
+
     const handle = sanitizeInput(req.body.handle || req.body.username);
     const email = sanitizeInput(req.body.email);
     const password = req.body.password;
@@ -4529,7 +4539,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
     res.status(201).json({
       token,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' }, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
     });
   } catch (err) {
     console.error('Registration error:', err);
@@ -4621,7 +4631,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     res.json({
       token,
       requirePasswordChange,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: 'online', isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' }, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: 'online', isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -4632,7 +4642,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 app.get('/api/auth/me', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' }, accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility });
+  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility });
 });
 
 app.post('/api/auth/logout', authenticateToken, (req, res) => {
@@ -4699,7 +4709,7 @@ app.post('/api/auth/refresh', loginLimiter, authenticateToken, async (req, res) 
     res.json({
       token,
       sessionDuration,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } },
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user) },
     });
   } catch (err) {
     console.error('Session refresh error:', err);
@@ -4733,7 +4743,7 @@ app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) =>
 
     res.json({
       token: newToken,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } }
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user) }
     });
 
     // Revoke old token after response is sent — client already has the new one
@@ -4792,7 +4802,7 @@ app.post('/api/auth/reauth', loginLimiter, async (req, res) => {
     res.json({
       token: newToken,
       sessionDuration,
-      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: user.preferences || { theme: 'serenity', fontSize: 'medium' } }
+      user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user) }
     });
   } catch (err) {
     console.error('Re-auth error:', err);
@@ -6596,6 +6606,78 @@ app.post('/api/profile/handle-request', authenticateToken, (req, res) => {
   res.json({ success: true, message: 'Handle change request submitted for review' });
 });
 
+// ============ INSTANCE CONFIG (v2.65.0) ============
+// Three-layer preference resolution: code defaults <- instance defaults <- user overrides.
+// A user's stored preferences hold ONLY keys they explicitly set, so an admin changing an
+// instance default reaches everyone who never chose for themselves (including existing
+// users), while explicit choices are never overwritten.
+
+// Values here must match the client constants (themes.js, constants.js). Note the old
+// hardcoded 'firefly' theme was never a real theme key — the client silently fell back to
+// serenity — which is why the v2.65.0 migration clears it rather than preserving it.
+const CODE_DEFAULT_PREFS = {
+  theme: 'serenity',
+  fontSize: 'medium',
+  messageFont: 'terminal',
+  scanLines: true,
+  holidayEffects: true,
+  waveDensity: 'comfy',
+  autoCollapseMessages: false,
+  autoFocusMessages: false,
+};
+
+// Preference keys an admin may set an instance-wide default for. Anything outside this
+// list is ignored on write — keeps an admin from injecting arbitrary keys into every
+// user's resolved preferences.
+const INSTANCE_DEFAULTABLE_PREFS = Object.keys(CODE_DEFAULT_PREFS);
+
+// Feature flags. `true` = available (the default when unset), `false` = off for the whole
+// instance. Enforced server-side in the relevant routes, not just hidden in the client.
+const INSTANCE_FEATURES = ['videoFeed', 'crawlBar', 'calendar', 'publicPortal', 'registration'];
+
+// Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
+const INSTANCE_BRANDING_FIELDS = ['instanceName', 'tagline'];
+
+function getInstanceDefaults() {
+  try {
+    return db.getInstanceConfig ? db.getInstanceConfig().defaults : {};
+  } catch (err) {
+    console.error('[instance-config] Failed to read defaults:', err.message);
+    return {};
+  }
+}
+
+// True unless an admin has explicitly switched the feature off.
+function isFeatureEnabled(feature) {
+  try {
+    const features = db.getInstanceConfig ? db.getInstanceConfig().features : {};
+    return features[feature] !== false;
+  } catch (err) {
+    console.error('[instance-config] Failed to read features:', err.message);
+    return true;
+  }
+}
+
+// 403 helper for routes behind a feature flag.
+function requireFeature(feature, res) {
+  if (isFeatureEnabled(feature)) return true;
+  res.status(403).json({ error: 'This feature is disabled on this server', feature });
+  return false;
+}
+
+// Resolve the preferences a client should actually apply.
+function resolvePreferences(user) {
+  const overrides = (user && user.preferences && typeof user.preferences === 'object') ? user.preferences : {};
+  const instanceDefaults = getInstanceDefaults();
+  const resolved = { ...CODE_DEFAULT_PREFS };
+
+  for (const key of INSTANCE_DEFAULTABLE_PREFS) {
+    if (instanceDefaults[key] !== undefined) resolved[key] = instanceDefaults[key];
+  }
+  // User overrides win, including nested objects the admin has no say over (crawlBar, videoFeed)
+  return { ...resolved, ...overrides };
+}
+
 app.put('/api/profile/preferences', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -6676,13 +6758,22 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
     };
   }
 
+  // Explicit null clears a preference so the user falls back to the instance default
+  // (v2.65.0). Without this there'd be no way back to "let the admin decide" once a user
+  // has chosen — every value would be a permanent override.
+  const clearKeys = [];
+  for (const key of INSTANCE_DEFAULTABLE_PREFS) {
+    if (req.body[key] === null) clearKeys.push(key);
+  }
+
   // Use the dedicated method that works with both JSON and SQLite
-  const updatedPreferences = db.updateUserPreferences(req.user.userId, updates);
+  const updatedPreferences = db.updateUserPreferences(req.user.userId, updates, clearKeys);
   if (!updatedPreferences) {
     return res.status(500).json({ error: 'Failed to update preferences' });
   }
 
-  res.json({ success: true, preferences: updatedPreferences });
+  // Return what the client should actually apply, not just the stored overrides
+  res.json({ success: true, preferences: resolvePreferences({ preferences: updatedPreferences }) });
 });
 
 // Default notification preferences
@@ -9759,6 +9850,111 @@ app.get('/api/plex/thumbnail/:connectionId/:ratingKey', async (req, res) => {
   }
 });
 
+// ============ Instance Config Endpoints (v2.65.0) ============
+
+// Public instance info — served WITHOUT auth so the login screen can render branding and
+// know whether registration is open. Deliberately narrow: branding + feature flags only,
+// never preference defaults or anything operator-sensitive.
+app.get('/api/instance-config', (req, res) => {
+  try {
+    const config = db.getInstanceConfig();
+    const features = {};
+    for (const key of INSTANCE_FEATURES) features[key] = config.features[key] !== false;
+
+    const branding = {};
+    for (const key of INSTANCE_BRANDING_FIELDS) {
+      if (config.branding[key]) branding[key] = config.branding[key];
+    }
+
+    res.json({ branding, features, nodeName: FEDERATION_NODE_NAME || null, version: VERSION });
+  } catch (error) {
+    console.error('Failed to read instance config:', error);
+    res.status(500).json({ error: 'Failed to read instance configuration' });
+  }
+});
+
+// Full instance config (admin only) — includes preference defaults
+app.get('/api/admin/instance-config', authenticateToken, (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+  try {
+    const config = db.getInstanceConfig();
+    res.json({
+      ...config,
+      // Tell the client what it's allowed to set, and what the fallbacks are
+      availableDefaults: INSTANCE_DEFAULTABLE_PREFS,
+      availableFeatures: INSTANCE_FEATURES,
+      codeDefaults: CODE_DEFAULT_PREFS,
+    });
+  } catch (error) {
+    console.error('Failed to read instance config:', error);
+    res.status(500).json({ error: 'Failed to read instance configuration' });
+  }
+});
+
+// Update instance config (admin only). Merge-patch: omit a namespace to leave it alone,
+// set a key to null to clear it back to the code default.
+app.put('/api/admin/instance-config', authenticateToken, (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+  const { defaults, features, branding } = req.body || {};
+  const patch = {};
+
+  // Whitelist every incoming key — never trust the client to stay inside the schema
+  if (defaults && typeof defaults === 'object') {
+    patch.defaults = {};
+    for (const [key, value] of Object.entries(defaults)) {
+      if (!INSTANCE_DEFAULTABLE_PREFS.includes(key)) continue;
+      if (value === null) { patch.defaults[key] = null; continue; }
+      const expected = typeof CODE_DEFAULT_PREFS[key];
+      if (typeof value !== expected) {
+        return res.status(400).json({ error: `Invalid type for default '${key}': expected ${expected}` });
+      }
+      patch.defaults[key] = typeof value === 'string' ? sanitizeInput(value) : value;
+    }
+  }
+
+  if (features && typeof features === 'object') {
+    patch.features = {};
+    for (const [key, value] of Object.entries(features)) {
+      if (!INSTANCE_FEATURES.includes(key)) continue;
+      if (value === null) { patch.features[key] = null; continue; }
+      if (typeof value !== 'boolean') {
+        return res.status(400).json({ error: `Feature '${key}' must be true or false` });
+      }
+      patch.features[key] = value;
+    }
+  }
+
+  if (branding && typeof branding === 'object') {
+    patch.branding = {};
+    for (const [key, value] of Object.entries(branding)) {
+      if (!INSTANCE_BRANDING_FIELDS.includes(key)) continue;
+      if (value === null || value === '') { patch.branding[key] = null; continue; }
+      if (typeof value !== 'string') {
+        return res.status(400).json({ error: `Branding field '${key}' must be a string` });
+      }
+      patch.branding[key] = sanitizeInput(value).slice(0, 120);
+    }
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'No valid configuration fields supplied' });
+  }
+
+  try {
+    const updated = db.updateInstanceConfig(patch, admin.id);
+    if (db.logActivity) db.logActivity(admin.id, 'instance_config_updated', 'instance_config', '1', { namespaces: Object.keys(patch) });
+    console.log(`⚙️  Instance config updated by @${admin.handle}: ${Object.keys(patch).join(', ')}`);
+    res.json(updated);
+  } catch (error) {
+    console.error('Failed to update instance config:', error);
+    res.status(500).json({ error: 'Failed to update instance configuration' });
+  }
+});
+
 // ============ Crawl Bar Endpoints (v1.15.0) ============
 
 // Get crawl bar configuration (admin only)
@@ -9972,6 +10168,7 @@ app.get('/api/crawl/news', authenticateToken, crawlLimiter, async (req, res) => 
 
 // Combined endpoint for efficiency (preferred by client)
 app.get('/api/crawl/all', authenticateToken, crawlLimiter, async (req, res) => {
+  if (!requireFeature('crawlBar', res)) return;
   const config = db.getCrawlConfig();
   const userId = req.user.userId;
   const user = db.findUserById(userId);
@@ -16433,6 +16630,7 @@ const feedLimiter = rateLimit({
  * Excludes encrypted videos and videos from blocked users
  */
 app.get('/api/feed/videos', authenticateToken, feedLimiter, (req, res) => {
+  if (!requireFeature('videoFeed', res)) return;
   try {
     const userId = req.user.userId;
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
@@ -16450,6 +16648,7 @@ app.get('/api/feed/videos', authenticateToken, feedLimiter, (req, res) => {
 
 // Mark video as viewed (v2.10.0 - for recommendation algorithm)
 app.post('/api/feed/videos/:id/view', authenticateToken, (req, res) => {
+  if (!requireFeature('videoFeed', res)) return;
   try {
     const userId = req.user.userId;
     const videoId = sanitizeInput(req.params.id);
@@ -16522,6 +16721,7 @@ app.get('/api/profile/wave', authenticateToken, (req, res) => {
  * Requires media_url from a prior upload to /api/uploads/media
  */
 app.post('/api/profile/wave/videos', authenticateToken, (req, res) => {
+  if (!requireFeature('videoFeed', res)) return;
   try {
     const userId = req.user.userId;
     const { media_url, content, media_duration } = req.body;
@@ -16571,6 +16771,7 @@ app.post('/api/profile/wave/videos', authenticateToken, (req, res) => {
  * Get public videos from a user's profile wave
  */
 app.get('/api/users/:handle/videos', authenticateToken, (req, res) => {
+  if (!requireFeature('videoFeed', res)) return;
   try {
     const handle = sanitizeInput(req.params.handle);
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
@@ -16597,6 +16798,7 @@ app.get('/api/users/:handle/videos', authenticateToken, (req, res) => {
  * Reply to a profile video - auto-creates a burst wave for the conversation
  */
 app.post('/api/profile/videos/:id/reply', authenticateToken, (req, res) => {
+  if (!requireFeature('videoFeed', res)) return;
   try {
     const userId = req.user.userId;
     const pingId = sanitizeInput(req.params.id);

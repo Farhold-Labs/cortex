@@ -3,15 +3,15 @@ import { triggerHaptic } from '../../utils/capacitor-push.js';
 import { isNativeApp } from '../../config/constants.js';
 
 // ============ BOTTOM NAVIGATION ============
-const BottomNav = ({ activeView, onNavigate, unreadCount, pendingContacts, pendingGroups }) => {
+const BottomNav = ({ activeView, onNavigate, unreadCount, pendingContacts, pendingGroups, features = {} }) => {
   const pendingPeople = (pendingContacts || 0) + (pendingGroups || 0);
   const items = [
     { id: 'waves',    icon: '◈', label: 'Waves',    badge: unreadCount },
-    { id: 'feed',     icon: '▶', label: 'Feed' },
+    { id: 'feed',     icon: '▶', label: 'Feed' },  // filtered out by MainApp when disabled
     { id: 'people',   icon: '●', label: 'People',   badge: pendingPeople },
     { id: 'calendar', icon: '▦', label: 'Calendar' },
-    { id: 'profile',  icon: '⚙', label: 'Profile' },
-  ];
+    { id: 'settings', icon: '⚙', label: 'Settings' },
+  ].filter(item => item.id !== 'feed' || features.videoFeed !== false);
 
   const handleNavigate = (view) => {
     // Haptic feedback — prefer Capacitor native haptics, fall back to Web Vibration API
