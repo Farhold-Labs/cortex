@@ -5,6 +5,22 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.66.0] - 2026-08-19
+
+### Added
+
+- **Per-instance notification defaults.** Admins can now set the notification behaviour new users start with, in a new **NOTIFICATION DEFAULTS** block of the instance config panel. Servers that want notifications on out of the box (e.g. cortex.pottermckeanplayers.org) can have them; servers that don't, don't.
+  - Covers the global on/off, sound, suppress-while-focused, and the per-type modes (mentions, replies, reactions, wave activity, thread events) with `always | app_closed | never`.
+  - **Email defaults** too: whether email notifications start enabled, which types send, and the offline threshold. This is the one most worth setting per-instance — email notifications are opt-in and default to off in code, so on a server with SMTP configured they otherwise reach nobody until each user finds the setting.
+  - Stored in a new `notification_defaults` namespace on `instance_config`, resolved through the same three layers as appearance preferences: code defaults ← instance defaults ← user overrides. `email` is deep-merged, so setting one email default never clears the others.
+
+### Fixed
+
+- **Saving any notification setting used to freeze all of them.** `updateNotificationPreferences` merged updates into a full copy of the defaults, so a user's first save stamped *every* key as an explicit choice — including the ones they'd never touched. Those users could then never pick up an instance default. Storage now records only what the user actually changed.
+  - Same bug in the email branch of `PUT /api/notifications/preferences`, which seeded its merge from *resolved* values: changing one email setting silently froze the rest.
+  - One-time migration removes notification keys still holding the built-in value, so existing users read as "never chose" for those. Anything genuinely changed is preserved.
+- **A third drifted copy of the notification defaults.** The defaults existed in three places — twice in `server.js` and once inside `database-sqlite.js` — and had diverged: the database copy was missing `reactions` entirely, so that key silently vanished from any user's preferences on save. All three are now one constant behind `resolveNotificationPreferences()`.
+
 ## [2.65.1] - 2026-08-19
 
 ### Added
