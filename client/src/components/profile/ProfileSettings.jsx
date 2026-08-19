@@ -17,6 +17,7 @@ import UserManagementPanel from '../admin/UserManagementPanel.jsx';
 import AdminReportsPanel from '../admin/AdminReportsPanel.jsx';
 import ActivityLogPanel from '../admin/ActivityLogPanel.jsx';
 import CrawlBarAdminPanel from '../admin/CrawlBarAdminPanel.jsx';
+import InstanceConfigAdminPanel from '../admin/InstanceConfigAdminPanel.jsx';
 import AlertsAdminPanel from '../admin/AlertsAdminPanel.jsx';
 import AlertSubscriptionsPanel from '../admin/AlertSubscriptionsPanel.jsx';
 import EventsAdminPanel from '../admin/EventsAdminPanel.jsx';
@@ -2308,6 +2309,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
               {/* Handle Requests Panel */}
               <HandleRequestsList fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'handles'} onToggle={() => toggleAdminSection('handles')} />
+
+              {/* Instance Defaults (v2.65.0) — server-wide defaults, features, branding */}
+              <InstanceConfigAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'instance'} onToggle={() => toggleAdminSection('instance')} />
 
               {/* Crawl Bar Admin Panel */}
               <CrawlBarAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'crawl'} onToggle={() => toggleAdminSection('crawl')} />
