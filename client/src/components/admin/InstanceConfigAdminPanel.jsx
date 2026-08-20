@@ -29,7 +29,7 @@ const FEATURES = [
   { key: 'crawlBar', label: 'CRAWL BAR', hint: 'Disables the stocks/weather/news ticker' },
   { key: 'calendar', label: 'CALENDAR', hint: 'Hides the Calendar tab' },
   { key: 'publicPortal', label: 'PUBLIC PORTAL', hint: 'Disables the unauthenticated portal' },
-  { key: 'registration', label: 'OPEN REGISTRATION', hint: 'When off, only an admin can add users' },
+  { key: 'registration', label: 'OPEN REGISTRATION', hint: 'When off, people can only join via an invitation link' },
 ];
 
 // Notification defaults. `always | app_closed | never` for the per-type ones, matching

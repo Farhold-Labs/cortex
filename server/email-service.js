@@ -170,6 +170,32 @@ class EmailService {
    * @param {string} resetUrl - Full URL for password reset
    * @returns {Promise<{success: boolean, error?: string}>}
    */
+  /**
+   * Invite someone to create an account (v2.67.0)
+   * @param {string} email - Recipient
+   * @param {Object} opts - { inviteUrl, inviterName, instanceName, expiresAt }
+   */
+  async sendInviteEmail(email, { inviteUrl, inviterName, instanceName, expiresAt }) {
+    const where = instanceName || 'Cortex';
+    const who = inviterName ? `${inviterName} has invited you` : 'You have been invited';
+    const expires = expiresAt ? new Date(expiresAt).toLocaleDateString() : null;
+    const subject = `Cortex - You're invited to join ${where}`;
+    const html = `
+      <div style="font-family: 'Courier New', monospace; max-width: 600px; margin: 0 auto; padding: 20px; background: #050805; color: #e8e8e8;">
+        <h1 style="color: #ffd23f; text-align: center; border-bottom: 1px solid #3a4a3a; padding-bottom: 20px;">CORTEX</h1>
+        <h2 style="color: #0ead69;">You're invited</h2>
+        <p>${who} to join <strong>${where}</strong>.</p>
+        <p style="margin: 30px 0; text-align: center;">
+          <a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; background: #ffd23f20; border: 1px solid #ffd23f; color: #ffd23f; text-decoration: none; font-family: monospace;">
+            CREATE YOUR ACCOUNT
+          </a>
+        </p>
+        ${expires ? `<p style="color: #888; font-size: 0.9em;">This invitation expires on ${expires}.</p>` : ''}
+        <p style="color: #888; font-size: 0.9em;">This link can only be used once. If you weren't expecting this, you can ignore it.</p>
+      </div>`;
+    return this.sendEmail({ to: email, subject, html });
+  }
+
   async sendPasswordResetEmail(email, token, resetUrl) {
     const subject = 'Cortex - Password Reset Request';
     const html = `
