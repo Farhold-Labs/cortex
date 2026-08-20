@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.67.2] - 2026-08-20
+
+### Fixed
+
+- **The desktop header no longer overflows in a narrow window.** Every piece of it is rem-sized — the nav labels, the ENC/API/WS pips, the username — while the window is not, so the header needs **~945px at the default font and ~1229px at FONT SIZE X-Large**. Below that, the nav (`flex: 1`) could not shrink past its content and pushed the notification bell, search and username off the right edge with no way to reach them. This was most visible with a squished wave in desktop mode.
+  - The header now sheds its least useful pieces as room runs out, measured in font-independent units (`window width ÷ font scale`) so the behaviour is identical at every FONT SIZE setting:
+    - below **980**: the ENC/API/WS status pips are hidden (the footer carries the same readout) and the nav buttons tighten from `8px 16px` to `8px 10px` padding — fits in 779px.
+    - below **800**: the username is hidden too (it is on the SETTINGS screen) — fits in 648px.
+  - As a final safety valve the nav can shrink and scroll horizontally, so the bell and search are reachable at any width rather than being pushed off-screen.
+  - A long display name is capped at `10rem` with an ellipsis so it cannot reintroduce the overflow on its own.
+
 ## [2.67.1] - 2026-08-20
 
 ### Fixed

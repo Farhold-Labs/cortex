@@ -155,6 +155,16 @@ function MainApp({ sharePingId }) {
   const fontSizePreference = user?.preferences?.fontSize || 'medium';
   const fontScale = FONT_SIZES[fontSizePreference]?.multiplier || 1;
 
+  // The desktop header needs ~945px to lay out at the default font, and every
+  // piece of it (nav labels, status pips, username) is rem-sized — so at
+  // FONT SIZE X-Large it wants ~1229px. A narrower window used to push the
+  // notification bell and username off the right edge with no way to reach
+  // them. Divide by fontScale to measure the window in font-independent units,
+  // then shed the least useful pieces first.
+  const headerRoom = width / fontScale;
+  const tightHeader = !isMobile && headerRoom < 980;      // drop pips, tighten nav
+  const veryTightHeader = !isMobile && headerRoom < 800;  // also drop the username
+
   // Apply font scaling to the root HTML element so rem units scale properly
   useEffect(() => {
     document.documentElement.style.fontSize = `${fontScale * 100}%`;
@@ -1458,6 +1468,7 @@ function MainApp({ sharePingId }) {
         borderBottom: '2px solid var(--accent-amber)40',
         background: 'linear-gradient(90deg, var(--bg-surface), var(--bg-hover), var(--bg-surface))',
         display: 'flex', alignItems: 'center', gap: isMobile ? '8px' : '12px',
+        minWidth: 0,
         WebkitAppRegion: isElectronMac ? 'drag' : undefined,
       }}>
         {/* Logo and Status */}
@@ -1466,8 +1477,9 @@ function MainApp({ sharePingId }) {
             <GlowText color="var(--accent-amber)" size={isMobile ? '1.2rem' : '1.5rem'} weight={700}>CORTEX</GlowText>
             <span style={{ color: 'var(--text-muted)', fontSize: '0.55rem' }}>v{VERSION}</span>
           </div>
-          {/* Status indicators */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '10px', fontSize: '0.55rem', fontFamily: 'monospace' }}>
+          {/* Status indicators — hidden when the header is tight; the footer
+              carries the same ENCRYPTED / API / LIVE readout. */}
+          <div style={{ display: tightHeader ? 'none' : 'flex', alignItems: 'center', gap: isMobile ? '6px' : '10px', fontSize: '0.55rem', fontFamily: 'monospace' }}>
             <span style={{ color: 'var(--text-muted)' }}><span style={{ color: 'var(--accent-green)' }}>●</span> ENC</span>
             <span style={{ color: 'var(--text-muted)' }}><span style={{ color: apiConnected ? 'var(--accent-green)' : 'var(--accent-orange)' }}>●</span> API</span>
             <span style={{ color: 'var(--text-muted)' }}><span style={{ color: wsConnected ? 'var(--accent-green)' : 'var(--accent-orange)' }}>●</span> WS</span>
@@ -1508,14 +1520,21 @@ function MainApp({ sharePingId }) {
 
         {/* Nav Items - grows to fill space - hidden on mobile (using bottom nav instead) */}
         {!isMobile && (
-          <div style={{ display: 'flex', gap: '4px', flex: 1, justifyContent: 'center', WebkitAppRegion: 'no-drag' }}>
+          <div style={{
+            display: 'flex', gap: '4px', flex: 1, justifyContent: 'center',
+            // Never push the bell/search/username off the edge: the nav shrinks
+            // and scrolls instead of overflowing the header.
+            minWidth: 0, overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
+            WebkitAppRegion: 'no-drag',
+          }}>
             {navItems.map(view => {
               const totalUnread = view === 'waves' ? waves.reduce((sum, w) => sum + (w.unread_count || 0), 0) : 0;
               const pendingRequests = view === 'people' ? (contactRequests.length + groupInvitations.length) : 0;
               const badgeCount = totalUnread || pendingRequests;
               return (
                 <button key={view} onClick={() => { setActiveView(view); loadWaves(); loadWaveNotifications(); }} style={{
-                  padding: '8px 16px',
+                  padding: tightHeader ? '8px 10px' : '8px 16px',
+                  flexShrink: 0,
                   background: activeView === view ? 'var(--accent-amber)15' : 'transparent',
                   border: `1px solid ${activeView === view ? 'var(--accent-amber)50' : 'var(--border-primary)'}`,
                   color: activeView === view ? 'var(--accent-amber)' : 'var(--text-dim)',
@@ -1571,9 +1590,15 @@ function MainApp({ sharePingId }) {
             >
               🔍
             </button>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem' }}>{user?.displayName}</div>
-            </div>
+            {!veryTightHeader && (
+              <div style={{ textAlign: 'right' }}>
+                <div style={{
+                  color: 'var(--accent-amber)', fontSize: '0.8rem', whiteSpace: 'nowrap',
+                  // capped so a long display name can't reintroduce the overflow
+                  maxWidth: '10rem', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>{user?.displayName}</div>
+              </div>
+            )}
           </div>
         )}
       </header>
