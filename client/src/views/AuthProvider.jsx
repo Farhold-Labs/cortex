@@ -285,10 +285,10 @@ function AuthProvider({ children }) {
     return { success: true };
   };
 
-  const register = async (handle, email, password, displayName, sessionDuration = '7d') => {
+  const register = async (handle, email, password, displayName, sessionDuration = '7d', inviteToken = null) => {
     const res = await fetch(`${API_URL}/auth/register`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ handle, email, password, displayName, sessionDuration }),
+      body: JSON.stringify({ handle, email, password, displayName, sessionDuration, inviteToken }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Registration failed');

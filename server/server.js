@@ -4480,12 +4480,24 @@ const botLimiter = rateLimit({
 // ============ Auth Routes ============
 app.post('/api/auth/register', registerLimiter, async (req, res) => {
   try {
+    // An invite is the way in when registration is closed (v2.67.0). Validated here but
+    // only consumed after the account exists, so a failed signup doesn't burn the invite.
+    let invitation = null;
+    if (req.body.inviteToken) {
+      invitation = db.getInvitationByTokenHash
+        ? db.getInvitationByTokenHash(hashInviteToken(String(req.body.inviteToken)))
+        : null;
+      if (!invitation || invitation.status !== 'pending') {
+        return res.status(400).json({ error: 'This invitation is not valid' });
+      }
+    }
+
     // Closed registration (v2.65.0). The very first account is always allowed through, so
     // an admin can never lock themselves out of a fresh instance.
-    if (!isFeatureEnabled('registration')) {
+    if (!isFeatureEnabled('registration') && !invitation) {
       const existingUsers = db.stmts?.countUsers ? db.stmts.countUsers.get().count : 1;
       if (existingUsers > 0) {
-        return res.status(403).json({ error: 'Registration is closed on this server' });
+        return res.status(403).json({ error: 'Registration is closed on this server — you need an invitation' });
       }
     }
 
@@ -4532,6 +4544,20 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     const session = createSession(user.id, token, req);
     if (session) {
       console.log(`📱 Session created for new user: ${handle}`);
+    }
+
+    // Consume the invite now that the account exists. If two people race the same link,
+    // consumeInvitation() reports 0 changes for the loser and only the winner keeps the
+    // invited role — the loser still gets a plain account rather than an error, since
+    // their account already exists at this point.
+    if (invitation) {
+      const claimed = db.consumeInvitation(invitation.id, user.id);
+      if (claimed && invitation.role && invitation.role !== ROLES.USER) {
+        db.updateUserRole?.(user.id, invitation.role);
+        user.role = invitation.role;
+        console.log(`✉️  Invite granted role '${invitation.role}' to @${handle}`);
+      }
+      if (db.logActivity) db.logActivity(user.id, 'invite_redeemed', 'invite', invitation.id, { claimed });
     }
 
     // Log registration
@@ -9882,6 +9908,155 @@ app.get('/api/plex/thumbnail/:connectionId/:ratingKey', async (req, res) => {
   } catch (err) {
     console.error('Plex thumbnail error:', err);
     res.status(500).json({ error: 'Failed to fetch thumbnail' });
+  }
+});
+
+// ============ Account Invitations (v2.67.0) ============
+//
+// Closed registration is only usable if there's another way in. Invites are that way:
+// a single-use link an admin or moderator hands out. Only the token's SHA-256 hash is
+// stored, so the raw token is shown exactly once at creation and never again.
+
+const INVITE_DEFAULT_TTL_DAYS = 7;
+const INVITE_MAX_TTL_DAYS = 90;
+
+const hashInviteToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
+function inviteUrlFor(token) {
+  return `${getAppBaseUrl()}/?invite=${token}`;
+}
+
+// Create an invitation (moderator or admin)
+app.post('/api/admin/invites', authenticateToken, async (req, res) => {
+  const actor = db.findUserById(req.user.userId);
+  if (!requireRole(actor, ROLES.MODERATOR, res)) return;
+
+  const { email, role, note, expiresInDays, sendEmail: shouldEmail } = req.body || {};
+
+  // Only an admin may mint an invite that grants elevated privileges
+  const requestedRole = role || ROLES.USER;
+  if (![ROLES.USER, ROLES.MODERATOR, ROLES.ADMIN].includes(requestedRole)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
+  if (requestedRole !== ROLES.USER && !hasRole(actor, ROLES.ADMIN)) {
+    return res.status(403).json({ error: 'Only an admin can invite moderators or admins' });
+  }
+
+  let cleanEmail = null;
+  if (email) {
+    cleanEmail = sanitizeInput(String(email)).trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+  }
+
+  const days = Math.max(1, Math.min(INVITE_MAX_TTL_DAYS, parseInt(expiresInDays, 10) || INVITE_DEFAULT_TTL_DAYS));
+  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+
+  // 32 random bytes, url-safe. Never stored raw.
+  const token = crypto.randomBytes(32).toString('base64url');
+
+  try {
+    const invitation = db.createInvitation({
+      id: `invite-${crypto.randomUUID()}`,
+      tokenHash: hashInviteToken(token),
+      email: cleanEmail,
+      role: requestedRole,
+      note: note ? sanitizeInput(String(note)).slice(0, 200) : null,
+      createdBy: actor.id,
+      expiresAt,
+    });
+
+    const url = inviteUrlFor(token);
+    let emailed = false;
+    let emailError = null;
+
+    if (shouldEmail && cleanEmail) {
+      const emailService = getEmailService();
+      if (!emailService.isConfigured()) {
+        emailError = 'Email is not configured on this server — send the link manually';
+      } else {
+        try {
+          const branding = db.getInstanceConfig().branding || {};
+          await emailService.sendInviteEmail(cleanEmail, {
+            inviteUrl: url,
+            inviterName: actor.displayName || actor.handle,
+            instanceName: branding.instanceName || FEDERATION_NODE_NAME || 'Cortex',
+            expiresAt,
+          });
+          emailed = true;
+        } catch (err) {
+          emailError = err.message || 'Failed to send invite email';
+          console.error('Invite email failed:', err);
+        }
+      }
+    }
+
+    if (db.logActivity) db.logActivity(actor.id, 'invite_created', 'invite', invitation.id, { role: requestedRole, emailed });
+    console.log(`✉️  Invite created by @${actor.handle}${cleanEmail ? ` for ${cleanEmail}` : ''} (role: ${requestedRole})`);
+
+    // The raw token appears here and nowhere else, ever
+    res.status(201).json({ invitation, url, token, emailed, emailError });
+  } catch (error) {
+    console.error('Failed to create invitation:', error);
+    res.status(500).json({ error: 'Failed to create invitation' });
+  }
+});
+
+// List invitations (moderator or admin)
+app.get('/api/admin/invites', authenticateToken, (req, res) => {
+  const actor = db.findUserById(req.user.userId);
+  if (!requireRole(actor, ROLES.MODERATOR, res)) return;
+
+  try {
+    res.json({ invitations: db.listInvitations({ includeUsed: req.query.pending !== 'true' }) });
+  } catch (error) {
+    console.error('Failed to list invitations:', error);
+    res.status(500).json({ error: 'Failed to list invitations' });
+  }
+});
+
+// Revoke an invitation (moderator or admin)
+app.delete('/api/admin/invites/:id', authenticateToken, (req, res) => {
+  const actor = db.findUserById(req.user.userId);
+  if (!requireRole(actor, ROLES.MODERATOR, res)) return;
+
+  try {
+    const invitation = db.getInvitationById(req.params.id);
+    if (!invitation) return res.status(404).json({ error: 'Invitation not found' });
+    if (invitation.status === 'used') return res.status(400).json({ error: 'That invitation has already been used' });
+
+    if (!db.revokeInvitation(req.params.id)) {
+      return res.status(400).json({ error: 'Invitation could not be revoked' });
+    }
+    if (db.logActivity) db.logActivity(actor.id, 'invite_revoked', 'invite', req.params.id, {});
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Failed to revoke invitation:', error);
+    res.status(500).json({ error: 'Failed to revoke invitation' });
+  }
+});
+
+// Validate an invite token (public — the signup page calls this before showing the form).
+// Rate limited because it's an unauthenticated endpoint that takes a secret.
+app.get('/api/invites/:token', registerLimiter, (req, res) => {
+  try {
+    const invitation = db.getInvitationByTokenHash(hashInviteToken(req.params.token));
+    if (!invitation || invitation.status !== 'pending') {
+      // Deliberately uniform: never reveal whether a token existed but was used/expired
+      return res.status(404).json({ valid: false, error: 'This invitation is not valid' });
+    }
+    const branding = db.getInstanceConfig().branding || {};
+    res.json({
+      valid: true,
+      email: invitation.email,
+      expiresAt: invitation.expiresAt,
+      invitedBy: invitation.createdByHandle,
+      instanceName: branding.instanceName || null,
+    });
+  } catch (error) {
+    console.error('Failed to validate invitation:', error);
+    res.status(500).json({ valid: false, error: 'Failed to validate invitation' });
   }
 });
 

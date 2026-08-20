@@ -48,6 +48,7 @@ import AdminReportsPanel from '../admin/AdminReportsPanel.jsx';
 import ActivityLogPanel from '../admin/ActivityLogPanel.jsx';
 import CrawlBarAdminPanel from '../admin/CrawlBarAdminPanel.jsx';
 import InstanceConfigAdminPanel from '../admin/InstanceConfigAdminPanel.jsx';
+import InvitesAdminPanel from '../admin/InvitesAdminPanel.jsx';
 import AlertsAdminPanel from '../admin/AlertsAdminPanel.jsx';
 import AlertSubscriptionsPanel from '../admin/AlertSubscriptionsPanel.jsx';
 import EventsAdminPanel from '../admin/EventsAdminPanel.jsx';
@@ -2347,6 +2348,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
               {/* Handle Requests Panel */}
               <HandleRequestsList fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'handles'} onToggle={() => toggleAdminSection('handles')} />
+
+              {/* Invitations (v2.67.0) — the way in when registration is closed */}
+              <InvitesAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} user={user} isOpen={openAdminSection === 'invites'} onToggle={() => toggleAdminSection('invites')} />
 
               {/* Instance Defaults (v2.65.0) — server-wide defaults, features, branding */}
               <InstanceConfigAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'instance'} onToggle={() => toggleAdminSection('instance')} />
