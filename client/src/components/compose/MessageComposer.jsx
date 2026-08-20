@@ -51,7 +51,10 @@ const MessageComposer = forwardRef(({
   const [gifResults, setGifResults] = useState([]);
   const [gifLoading, setGifLoading] = useState(false);
   const [gifStartPos, setGifStartPos] = useState(null);
+  const [rowWidth, setRowWidth] = useState(0);   // measured width of the input row
+  const [rootFontPx, setRootFontPx] = useState(16); // honours the FONT SIZE preference
   const textareaRef = useRef(null);
+  const inputRowRef = useRef(null); // the [attach][textarea][actions] row
   const popoutRef = useRef(null); // textarea inside the pop-out editor
   const fileInputRef = useRef(null);
   const fileAttachInputRef = useRef(null);
@@ -66,6 +69,47 @@ const MessageComposer = forwardRef(({
     appendMessage: (text) => setNewMessage(prev => prev + (prev ? '\n' : '') + text),
     clear: () => setNewMessage(''),
   }));
+
+  // Measure the input row so it can restack when it runs out of room. Width
+  // alone isn't enough: the buttons carry rem-sized labels, so at FONT SIZE
+  // X-Large the same 400px row holds a third less textarea. Comparing against a
+  // rem-derived threshold makes the switch scale with the user's font setting.
+  useEffect(() => {
+    const el = inputRowRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => setRowWidth(entry.contentRect.width));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // The FONT SIZE preference is applied as a font-size on <html> (see MainApp),
+  // which never changes the row's width — so watch the attribute directly.
+  useEffect(() => {
+    const read = () => {
+      const px = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      setRootFontPx(px || 16);
+    };
+    read();
+    if (typeof MutationObserver === 'undefined') return;
+    const observer = new MutationObserver(read);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    return () => observer.disconnect();
+  }, []);
+
+  // Grow the textarea with its content up to its max-height, rather than
+  // scrolling a one-line box. Re-runs on font-size and width changes because
+  // both change how many lines the same text wraps to.
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight}px`;
+  }, [newMessage, rootFontPx, rowWidth]);
+
+  // Below ~26rem of row there isn't a usable textarea left once the attach,
+  // format, pop-out and send buttons take their share, so drop the buttons onto
+  // their own line underneath and give the textarea the full width.
+  const stackedActions = rowWidth > 0 && rowWidth < rootFontPx * 26;
 
   const handleSend = () => {
     if (!newMessage.trim()) return;
@@ -334,8 +378,12 @@ const MessageComposer = forwardRef(({
         </div>
       )}
 
-      {/* Input row: [+] [textarea] [Aa] [pop-out] [SEND] */}
-      <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+      {/* Input row: [+] [textarea] [Aa] [pop-out] [SEND], or when there isn't
+          room for that, the textarea on its own line with the buttons below. */}
+      <div ref={inputRowRef} style={{
+        display: 'flex', gap: '6px', alignItems: 'flex-end',
+        flexWrap: stackedActions ? 'wrap' : 'nowrap',
+      }}>
         <div style={{ position: 'relative', flexShrink: 0, alignSelf: 'flex-end' }}>
           <input type="file" ref={fileInputRef} onChange={(e) => { const file = e.target.files?.[0]; if (file) handleImageFile(file); }} accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" style={{ display: 'none' }} />
           <input type="file" ref={fileAttachInputRef} onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFileAttach(file); }} style={{ display: 'none' }} />
@@ -411,7 +459,12 @@ const MessageComposer = forwardRef(({
             </div>
           )}
         </div>
-        <div style={{ position: 'relative', flex: 1 }}>
+        <div style={{
+          position: 'relative',
+          flex: stackedActions ? '0 0 100%' : 1,
+          minWidth: 0,
+          order: stackedActions ? -1 : 0,
+        }}>
         <textarea
           ref={textareaRef}
           value={newMessage}
@@ -569,8 +622,9 @@ const MessageComposer = forwardRef(({
           style={{
             width: '100%',
             padding: isMobile ? '10px 12px' : (compact ? '7px 10px' : '8px 10px'),
-            minHeight: isMobile ? '44px' : (compact ? '40px' : 'auto'),
-            maxHeight: compact ? '150px' : '200px',
+            // rem, not px: a 40px box holds barely one line at FONT SIZE X-Large
+            minHeight: isMobile ? '2.75rem' : (compact ? '2.5rem' : '2.25rem'),
+            maxHeight: compact ? '9.5rem' : '12.5rem',
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-subtle)',
             color: 'var(--text-primary)',
@@ -747,6 +801,7 @@ const MessageComposer = forwardRef(({
             fontSize: isMobile ? '0.85rem' : '0.75rem',
             flexShrink: 0,
             alignSelf: 'flex-end',
+            marginLeft: stackedActions ? 'auto' : 0,
           }}
         >
           SEND
