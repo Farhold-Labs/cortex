@@ -61,11 +61,20 @@ export function useAPI() {
 
     const data = await res.json();
     if (!res.ok) {
+      // Preserve the machine-readable parts of the response: callers should be
+      // able to branch on a code rather than pattern-matching the prose.
+      const apiError = () => {
+        const e = new Error(data.error || `API error: ${res.status}`);
+        e.status = res.status;
+        if (data.code) e.code = data.code;
+        if (data.feature) e.feature = data.feature;
+        return e;
+      };
       if (res.status === 401) {
         // If the token was rotated during this request's flight (renewal), the 401 is stale —
         // the client already has a fresh token. Drop silently rather than logging out.
         if (requestToken !== storage.getToken()) {
-          throw new Error(data.error || `API error: ${res.status}`);
+          throw apiError();
         }
         // Token expired — show renewal modal instead of immediate logout (v2.29.0)
         if (data.code === 'TOKEN_EXPIRED') {
@@ -77,7 +86,7 @@ export function useAPI() {
         // Account moderated — force logout (v2.37.0)
         logout?.();
       }
-      throw new Error(data.error || `API error: ${res.status}`);
+      throw apiError();
     }
     return data;
   }, [logout, triggerSessionExpiry, isSlowConnection]);
