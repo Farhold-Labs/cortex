@@ -5,6 +5,39 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.67.3] - 2026-08-20
+
+### Fixed
+
+- **Nav items were clipped and unreachable in a very narrow desktop window.** v2.67.2 let the nav shrink and scroll so it could not push the bell off the edge, but it kept `justify-content: center` — and an overflowing flex row that is centered clips **both** ends, with the start sitting at negative scroll offset where no amount of scrolling can bring it back. At 600px with FONT SIZE X-Large that left `WAVES` clipped to 38 of its 63px and permanently unreachable, while the tail of `SETTINGS` stayed clickable.
+  - The nav now switches to `justify-content: flex-start` as soon as the header is tight, so the first item is always the one you can see and reach.
+  - Below **680** font-independent units the nav moves to its own full-width second line instead of competing with the logo and bell for the first one. At 600px with X-Large it needs 375 units and gets 413 — it fits outright, with no clipping and no scrolling. The header is two rows tall at those widths.
+  - The horizontal scroll remains as a safety valve for anything narrower still, and now actually works, because the start of the row is reachable.
+
+## [2.67.2] - 2026-08-20
+
+### Fixed
+
+- **The desktop header no longer overflows in a narrow window.** Every piece of it is rem-sized — the nav labels, the ENC/API/WS pips, the username — while the window is not, so the header needs **~945px at the default font and ~1229px at FONT SIZE X-Large**. Below that, the nav (`flex: 1`) could not shrink past its content and pushed the notification bell, search and username off the right edge with no way to reach them. This was most visible with a squished wave in desktop mode.
+  - The header now sheds its least useful pieces as room runs out, measured in font-independent units (`window width ÷ font scale`) so the behaviour is identical at every FONT SIZE setting:
+    - below **980**: the ENC/API/WS status pips are hidden (the footer carries the same readout) and the nav buttons tighten from `8px 16px` to `8px 10px` padding — fits in 779px.
+    - below **800**: the username is hidden too (it is on the SETTINGS screen) — fits in 648px.
+  - As a final safety valve the nav can shrink and scroll horizontally, so the bell and search are reachable at any width rather than being pushed off-screen.
+  - A long display name is capped at `10rem` with an ellipsis so it cannot reintroduce the overflow on its own.
+
+## [2.67.1] - 2026-08-20
+
+### Fixed
+
+- **Tablets held vertically no longer get the desktop layout.** The mobile layout was gated purely on `window.innerWidth < 600`, so a tablet in portrait (768–834 CSS px) took the desktop path: the 300px wave list stayed pinned open and the wave itself was squeezed into what was left. `useWindowSize` now also treats a **touch device in portrait between 600px and 1024px** as mobile, so portrait tablets get the same single-pane list-or-wave flow as phones, and rotating to landscape puts the sidebar back.
+  - The rule is gated on a coarse pointer, so desktop and Electron windows keep the desktop layout no matter how narrow they are dragged — they still have Ctrl+B to collapse the sidebar.
+  - `isTablet` / `isDesktop` were previously computed but never read by any component; they are now consistent with `isMobile` (a portrait tablet reports `isMobile`, not `isTablet`). New `isPhone` and `isPortraitTablet` flags are exposed for callers that need to tell the two apart.
+
+- **The composer no longer crowds the text box out of existence.** The attach, format, pop-out and SEND buttons shared one row with the textarea, and their labels are rem-sized — so at **FONT SIZE: X-Large** they grew while the row did not, leaving a sliver of an input unless you opened the pop-out editor.
+  - The input row is measured with a `ResizeObserver` and, below roughly **26rem**, drops the buttons onto their own line beneath a full-width textarea (SEND stays right-aligned). Because the threshold is in rem, it scales with the font preference — a larger font restacks sooner. Wide layouts are unchanged.
+  - The textarea now **grows with its content** up to its max height instead of scrolling a one-line box.
+  - Its min and max heights are in rem rather than px, so an X-Large font gets a proportionally taller box rather than the same 40px one.
+
 ## [2.67.0] - 2026-08-19
 
 ### Added
