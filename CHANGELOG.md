@@ -5,6 +5,28 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.67.0] - 2026-08-19
+
+### Added
+
+- **Account invitations.** Closing registration in v2.65.0 left no way for anyone to join — there was no invite system and no admin "create user" endpoint, so the switch could strand a server. Invitations are that missing way in.
+  - **Single-use links**, created from a new **INVITATIONS** panel in the admin section. Optionally tied to an email address, with a note for your own reference and an expiry of 1 / 7 / 30 / 90 days (default 7).
+  - **Send by email or copy the link** — emailing needs SMTP configured, and the panel says so plainly when it isn't rather than silently failing.
+  - Invitations work whether registration is open or closed, so they're also just a convenient way to onboard someone.
+  - **Role-granting invites**: an admin can issue an invitation that makes the redeemer a moderator or admin. Moderators can create ordinary invitations but cannot mint elevated ones.
+  - The signup page reads `?invite=<token>`, validates it up front, and shows who invited you — so a spent or revoked link says so immediately instead of after the form is filled in.
+  - `GET /api/invites/:token` (public, rate-limited), `POST|GET /api/admin/invites`, `DELETE /api/admin/invites/:id`.
+
+### Security
+
+- Only the **SHA-256 hash** of an invite token is stored. The raw token is returned exactly once, at creation, and cannot be recovered afterwards — a leaked database yields no usable invitations. Revoke and reissue is the only path if a link is lost.
+- The invite is **consumed after the account exists**, not before, so a failed signup doesn't burn the link. Consumption is a conditional `UPDATE`, so two people racing the same link cannot both claim it.
+- Validation responses are deliberately uniform: a token that never existed, one already used, one revoked and one expired all return the same message, revealing nothing to someone guessing tokens. The public endpoint is rate-limited.
+
+### Fixed
+
+- The **OPEN REGISTRATION** toggle's hint said "When off, only an admin can add users", which was false — no such capability existed. It now reads "When off, people can only join via an invitation link", which is true as of this release.
+
 ## [2.66.1] - 2026-08-19
 
 ### Added

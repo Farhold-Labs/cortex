@@ -2267,6 +2267,32 @@ export class DatabaseSQLite {
       console.log('✅ instance_config table created');
     }
 
+    // v2.67.0 — account invitations (needed before closed registration is usable)
+    const invitesExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='user_invitations'`
+    ).get();
+    if (!invitesExists) {
+      console.log('📝 Adding user_invitations table (v2.67.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS user_invitations (
+          id         TEXT PRIMARY KEY,
+          token_hash TEXT UNIQUE NOT NULL,
+          email      TEXT,
+          role       TEXT NOT NULL DEFAULT 'user',
+          note       TEXT,
+          created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          used_at    TEXT,
+          used_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          revoked_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_invitations_token ON user_invitations(token_hash);
+        CREATE INDEX IF NOT EXISTS idx_user_invitations_created_by ON user_invitations(created_by);
+      `);
+      console.log('✅ user_invitations table created');
+    }
+
     // v2.66.0 — notification defaults namespace on instance_config
     const instCols = this.db.prepare(`PRAGMA table_info(instance_config)`).all();
     if (instCols.length > 0 && !instCols.some(c => c.name === 'notification_defaults')) {
@@ -8045,6 +8071,91 @@ export class DatabaseSQLite {
     `).run(cutoff);
 
     return result.changes;
+  }
+
+  // ============ Account Invitations (v2.67.0) ============
+  //
+  // Only the SHA-256 hash of an invite token is stored — the raw token is shown to the
+  // admin once, at creation, and is unrecoverable afterwards. A leaked database therefore
+  // yields no usable invites.
+
+  createInvitation({ id, tokenHash, email, role, note, createdBy, expiresAt }) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO user_invitations (id, token_hash, email, role, note, created_by, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, tokenHash, email || null, role || 'user', note || null, createdBy || null, now, expiresAt);
+    return this.getInvitationById(id);
+  }
+
+  getInvitationById(id) {
+    return this.rowToInvitation(this.db.prepare('SELECT * FROM user_invitations WHERE id = ?').get(id));
+  }
+
+  getInvitationByTokenHash(tokenHash) {
+    // Joins the creator so the signup page can say who invited you
+    return this.rowToInvitation(this.db.prepare(`
+      SELECT i.*, c.handle AS created_by_handle
+      FROM user_invitations i
+      LEFT JOIN users c ON c.id = i.created_by
+      WHERE i.token_hash = ?
+    `).get(tokenHash));
+  }
+
+  listInvitations({ includeUsed = true } = {}) {
+    const rows = this.db.prepare(`
+      SELECT i.*, c.handle AS created_by_handle, u.handle AS used_by_handle
+      FROM user_invitations i
+      LEFT JOIN users c ON c.id = i.created_by
+      LEFT JOIN users u ON u.id = i.used_by
+      ORDER BY i.created_at DESC
+    `).all();
+    const mapped = rows.map(r => this.rowToInvitation(r));
+    return includeUsed ? mapped : mapped.filter(i => i.status === 'pending');
+  }
+
+  revokeInvitation(id) {
+    const res = this.db.prepare(
+      `UPDATE user_invitations SET revoked_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`
+    ).run(new Date().toISOString(), id);
+    return res.changes > 0;
+  }
+
+  // Marks an invite used. The WHERE clause is the guard against two people redeeming the
+  // same link at once — whoever's UPDATE reports 0 changes loses.
+  consumeInvitation(id, userId) {
+    const res = this.db.prepare(`
+      UPDATE user_invitations SET used_at = ?, used_by = ?
+      WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL
+    `).run(new Date().toISOString(), userId, id);
+    return res.changes > 0;
+  }
+
+  deleteExpiredInvitations(beforeIso) {
+    return this.db.prepare(
+      `DELETE FROM user_invitations WHERE used_at IS NULL AND expires_at < ?`
+    ).run(beforeIso).changes;
+  }
+
+  rowToInvitation(row) {
+    if (!row) return null;
+    const expired = new Date(row.expires_at).getTime() < Date.now();
+    const status = row.used_at ? 'used' : row.revoked_at ? 'revoked' : expired ? 'expired' : 'pending';
+    return {
+      id: row.id,
+      email: row.email || null,
+      role: row.role || 'user',
+      note: row.note || null,
+      createdBy: row.created_by || null,
+      createdByHandle: row.created_by_handle || null,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      usedAt: row.used_at || null,
+      usedBy: row.used_by || null,
+      usedByHandle: row.used_by_handle || null,
+      revokedAt: row.revoked_at || null,
+      status,
+    };
   }
 
   // ============ Instance Config Methods (v2.65.0) ============
