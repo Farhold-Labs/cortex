@@ -5,6 +5,27 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.67.4] - 2026-08-20
+
+### Fixed
+
+- **A crawl bar that is switched off instance-wide no longer keeps asking for data.** On a node with the `crawlBar` feature disabled, `GET /api/crawl/all` answers 403 "This feature is disabled on this server" — and the client treated that permanent answer as a transient failure, logging an error and polling again. On the PMP node this filled the console with hundreds of identical 403s.
+  - `CrawlBar` now latches on a feature-disabled 403: it stops polling for the rest of the session and renders nothing.
+  - `MainApp` gates the crawl bar on `instanceFeatures.crawlBar`, the same way the video feed is gated, so on an instance with it switched off the component never mounts at all.
+  - The flags arrive over the network, so for the first moment of the app's life every flag reads as "not disabled" — the crawl bar mounted and fired before the config landed, taking one 403 on the way. It now waits for the flags to load before it can fetch at all.
+  - Measured on an instance with `crawlBar` switched off: **zero requests, zero 403s.** Previously the component stayed live and kept retrying.
+  - Same race fixed for the **FEED** nav item, which appeared for a moment on an instance with the video feed switched off and then vanished.
+
+- **`logout` was rebuilt on every `AuthProvider` render**, which gave `fetchAPI` a new identity (it is one of its dependencies) and re-fired the effects of every component with `fetchAPI` in its dependency array. It is now a `useCallback` reading the token through a ref — keying it on `token` directly would have reintroduced the same churn on every silent session renewal, which is what `useAPI`'s own `tokenRef` already guards against. All three of `fetchAPI`'s dependencies are now stable.
+
+### Added
+
+- Feature-gate 403s carry a machine-readable `code: 'FEATURE_DISABLED'` alongside the human-readable message, and `fetchAPI` now preserves `status`, `code` and `feature` on the Error it throws, so callers can branch on a code instead of pattern-matching prose. `CrawlBar` prefers the code and falls back to the message for federated nodes running older builds.
+
+### Known
+
+- Six `AuthProvider` handlers (`login`, `completeMfaLogin`, `register`, `updateUser`, `getPendingPassword`, `clearPendingPassword`) are still recreated per render, and the context value is an inline object literal, so every consumer re-renders whenever `AuthProvider` does. This no longer causes refetches now that `fetchAPI` is stable, but it is worth cleaning up separately.
+
 ## [2.67.3] - 2026-08-20
 
 ### Fixed

@@ -23,6 +23,10 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
   const [contentWidth, setContentWidth] = useState(0);
   const dragStartRef = useRef({ x: 0, animTime: 0 });
   const resumeTimeoutRef = useRef(null);
+  // Set when the server says the crawl bar is switched off for this instance.
+  // That is a permanent answer, not a transient failure, so polling must stop —
+  // otherwise every re-render restarts a poll that can only ever 403 again.
+  const [featureDisabled, setFeatureDisabled] = useState(false);
 
   const scrollSpeed = CRAWL_SCROLL_SPEEDS[userPrefs.scrollSpeed || 'normal'];
   const RESUME_DELAY = 3000; // Resume after 3 seconds of no interaction
@@ -70,6 +74,14 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
         }
       });
     } catch (err) {
+      // A disabled feature answers 403 every time — stop asking rather than
+      // logging an error per render for the life of the session.
+      // Match the code where the server sends one; fall back to the message for
+      // federated nodes still running a build from before FEATURE_DISABLED existed.
+      if (err?.code === 'FEATURE_DISABLED' || /disabled on this server/i.test(err?.message || '')) {
+        setFeatureDisabled(true);
+        return;
+      }
       console.error('Crawl bar error:', err);
     } finally {
       setLoading(false);
@@ -78,12 +90,12 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
 
   // Initial load and polling
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || featureDisabled) return;
 
     loadData();
     const interval = setInterval(loadData, 60000); // Refresh every minute
     return () => clearInterval(interval);
-  }, [enabled, loadData]);
+  }, [enabled, featureDisabled, loadData]);
 
   // Measure content width for pixel-perfect seamless looping
   useEffect(() => {
@@ -264,7 +276,7 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  if (!enabled) {
+  if (!enabled || featureDisabled) {
     return null;
   }
 
