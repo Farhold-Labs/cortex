@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.67.3] - 2026-08-20
+
+### Fixed
+
+- **Nav items were clipped and unreachable in a very narrow desktop window.** v2.67.2 let the nav shrink and scroll so it could not push the bell off the edge, but it kept `justify-content: center` — and an overflowing flex row that is centered clips **both** ends, with the start sitting at negative scroll offset where no amount of scrolling can bring it back. At 600px with FONT SIZE X-Large that left `WAVES` clipped to 38 of its 63px and permanently unreachable, while the tail of `SETTINGS` stayed clickable.
+  - The nav now switches to `justify-content: flex-start` as soon as the header is tight, so the first item is always the one you can see and reach.
+  - Below **680** font-independent units the nav moves to its own full-width second line instead of competing with the logo and bell for the first one. At 600px with X-Large it needs 375 units and gets 413 — it fits outright, with no clipping and no scrolling. The header is two rows tall at those widths.
+  - The horizontal scroll remains as a safety valve for anything narrower still, and now actually works, because the start of the row is reachable.
+
 ## [2.67.2] - 2026-08-20
 
 ### Fixed
