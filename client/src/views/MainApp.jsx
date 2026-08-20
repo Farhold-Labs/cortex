@@ -1617,7 +1617,7 @@ function MainApp({ sharePingId }) {
       {user && (
         <CrawlBar
           fetchAPI={fetchAPI}
-          enabled={user?.preferences?.crawlBar?.enabled !== false}
+          enabled={instanceFeatures.crawlBar !== false && user?.preferences?.crawlBar?.enabled !== false}
           userPrefs={user?.preferences?.crawlBar || {}}
           isMobile={isMobile}
           onAlertClick={setSelectedAlert}
