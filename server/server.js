@@ -6687,7 +6687,7 @@ function isFeatureEnabled(feature) {
 // 403 helper for routes behind a feature flag.
 function requireFeature(feature, res) {
   if (isFeatureEnabled(feature)) return true;
-  res.status(403).json({ error: 'This feature is disabled on this server', feature });
+  res.status(403).json({ error: 'This feature is disabled on this server', code: 'FEATURE_DISABLED', feature });
   return false;
 }
 

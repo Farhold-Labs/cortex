@@ -302,7 +302,17 @@ function AuthProvider({ children }) {
     setToken(data.token); setUser(data.user);
   };
 
-  const logout = async () => {
+  // Read the token through a ref so logout's identity never changes. logout is a
+  // dependency of fetchAPI (useAPI.js), which in turn is in the dependency array
+  // of effects all over the app — as a plain function it took a new identity on
+  // every render here, re-firing all of those effects and their fetches. Keying
+  // it on `token` instead would reintroduce the same churn on every silent
+  // session renewal, which is exactly what useAPI's own tokenRef guards against.
+  const logoutTokenRef = useRef(token);
+  useEffect(() => { logoutTokenRef.current = token; }, [token]);
+
+  const logout = useCallback(async () => {
+    const token = logoutTokenRef.current;
     // Clean up push subscription before revoking token
     if (token && storage.getPushEnabled()) {
       try {
@@ -330,7 +340,7 @@ function AuthProvider({ children }) {
     setSessionExpiring(false);
     setSessionExpiresAt(null);
     setToken(null); setUser(null);
-  };
+  }, []);
 
   const updateUser = (updates) => {
     const updatedUser = { ...user, ...updates };

@@ -61,6 +61,10 @@ function MainApp({ sharePingId }) {
   // Instance feature flags (v2.65.0) — public endpoint, no auth needed. Defaults to
   // everything enabled so a fetch failure never hides working features.
   const [instanceFeatures, setInstanceFeatures] = useState({});
+  // Feature flags arrive over the network, so for the first moment of the app's
+  // life every flag reads as "not disabled". Anything that would hit a
+  // feature-gated endpoint has to wait for this rather than fire and take a 403.
+  const [instanceFeaturesLoaded, setInstanceFeaturesLoaded] = useState(false);
   const [apiConnected, setApiConnected] = useState(false);
   const [waves, setWaves] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -1365,7 +1369,8 @@ function MainApp({ sharePingId }) {
     fetch(`${API_URL}/instance-config`)
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data && !cancelled) setInstanceFeatures(data.features || {}); })
-      .catch(() => { /* keep defaults — every feature stays available */ });
+      .catch(() => { /* keep defaults — every feature stays available */ })
+      .finally(() => { if (!cancelled) setInstanceFeaturesLoaded(true); });
     return () => { cancelled = true; };
   }, []);
 
@@ -1373,7 +1378,9 @@ function MainApp({ sharePingId }) {
   // settings, with profile editing as its first section. Feed is hidden when the admin
   // has switched the instance feature off.
   const navItems = ['waves', 'feed', 'people', 'calendar', 'settings'].filter(
-    view => view !== 'feed' || instanceFeatures.videoFeed !== false
+    // Wait for the flags before showing FEED, otherwise it appears for a moment
+    // on an instance that has the video feed switched off and then vanishes.
+    view => view !== 'feed' || (instanceFeaturesLoaded && instanceFeatures.videoFeed !== false)
   );
   const navLabels = { waves: 'WAVES', feed: 'FEED', people: 'PEOPLE', calendar: 'CALENDAR', settings: 'SETTINGS' };
 
@@ -1617,7 +1624,7 @@ function MainApp({ sharePingId }) {
       {user && (
         <CrawlBar
           fetchAPI={fetchAPI}
-          enabled={user?.preferences?.crawlBar?.enabled !== false}
+          enabled={instanceFeaturesLoaded && instanceFeatures.crawlBar !== false && user?.preferences?.crawlBar?.enabled !== false}
           userPrefs={user?.preferences?.crawlBar || {}}
           isMobile={isMobile}
           onAlertClick={setSelectedAlert}
