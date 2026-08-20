@@ -164,6 +164,9 @@ function MainApp({ sharePingId }) {
   const headerRoom = width / fontScale;
   const tightHeader = !isMobile && headerRoom < 980;      // drop pips, tighten nav
   const veryTightHeader = !isMobile && headerRoom < 800;  // also drop the username
+  // Below ~680 even the stripped-down single row can't hold the nav (it needs
+  // ~375), so give the nav a full-width second line rather than clipping it.
+  const wrapHeader = !isMobile && headerRoom < 680;
 
   // Apply font scaling to the root HTML element so rem units scale properly
   useEffect(() => {
@@ -1468,7 +1471,7 @@ function MainApp({ sharePingId }) {
         borderBottom: '2px solid var(--accent-amber)40',
         background: 'linear-gradient(90deg, var(--bg-surface), var(--bg-hover), var(--bg-surface))',
         display: 'flex', alignItems: 'center', gap: isMobile ? '8px' : '12px',
-        minWidth: 0,
+        minWidth: 0, flexWrap: wrapHeader ? 'wrap' : 'nowrap',
         WebkitAppRegion: isElectronMac ? 'drag' : undefined,
       }}>
         {/* Logo and Status */}
@@ -1521,7 +1524,14 @@ function MainApp({ sharePingId }) {
         {/* Nav Items - grows to fill space - hidden on mobile (using bottom nav instead) */}
         {!isMobile && (
           <div style={{
-            display: 'flex', gap: '4px', flex: 1, justifyContent: 'center',
+            display: 'flex', gap: '4px',
+            flex: wrapHeader ? '0 0 100%' : 1,
+            order: wrapHeader ? 1 : 0,
+            // center only while everything fits. An overflowing flex row that is
+            // justify-content:center clips BOTH ends and the start cannot be
+            // scrolled back into view — which is how WAVES became unreachable
+            // while the tail of SETTINGS stayed clickable.
+            justifyContent: tightHeader ? 'flex-start' : 'center',
             // Never push the bell/search/username off the edge: the nav shrinks
             // and scrolls instead of overflowing the header.
             minWidth: 0, overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
@@ -1566,7 +1576,7 @@ function MainApp({ sharePingId }) {
 
         {/* Notifications, Search and User - desktop only */}
         {!isMobile && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, WebkitAppRegion: 'no-drag' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, marginLeft: wrapHeader ? 'auto' : 0, WebkitAppRegion: 'no-drag' }}>
             <NotificationBell
               fetchAPI={fetchAPI}
               onNavigateToWave={handleNavigateToWaveById}
