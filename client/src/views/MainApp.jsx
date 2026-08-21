@@ -1542,6 +1542,13 @@ function MainApp({ sharePingId }) {
             // Never push the bell/search/username off the edge: the nav shrinks
             // and scrolls instead of overflowing the header.
             minWidth: 0, overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
+            // The unread badge is positioned at top:-6px and overflows the button.
+            // overflowX:auto forces this box to clip vertically too (an axis set
+            // to `visible` computes to `auto` when the other axis is not), which
+            // sliced the top off the badge. Pad the box out far enough to contain
+            // the badge and its glow, then pull the padding back off the layout.
+            paddingTop: '10px', marginTop: '-10px',
+            paddingBottom: '4px', marginBottom: '-4px',
             WebkitAppRegion: 'no-drag',
           }}>
             {navItems.map(view => {
@@ -1985,10 +1992,16 @@ function MainApp({ sharePingId }) {
               setShowSearch(true);
             } else {
               setActiveView(view);
-              // On mobile, close all tabs when navigating away (mobile shows list OR wave)
+              // Mobile shows the list OR a wave, never both, so leaving a view has
+              // to drop the open wave entirely. Clearing tabs is not enough:
+              // tapping a wave sets previewWaveId (the default navigation mode) and
+              // opens no tab, so without this the wave survived the navigation and
+              // WAVES appeared to do nothing.
               setOpenTabs([]);
               setActiveTabId(null);
+              setPreviewWaveId(null);
               setFocusStack([]);
+              setActiveThread(null);
               loadWaves();
               loadWaveNotifications();
             }
