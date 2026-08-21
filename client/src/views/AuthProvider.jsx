@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { API_URL } from '../config/constants.js';
 import { storage, getTokenExpiry, getTokenIssuedAt } from '../utils/storage.js';
 import { unsubscribeFromPush } from '../utils/pwa.js';
@@ -218,17 +218,22 @@ function AuthProvider({ children }) {
   }, [token, autoRenewSession]);
 
   // Get pending password for E2EE unlock (one-time read, clears after access)
-  const getPendingPassword = () => {
+  // Every handler below is wrapped so its identity survives a re-render. They
+  // are values on the auth context, and a context value that changes identity
+  // re-renders every consumer in the app — and anything that lands in an effect
+  // dependency array re-fires that effect. See the logout note further down for
+  // the concrete cascade this caused.
+  const getPendingPassword = useCallback(() => {
     const pwd = pendingPasswordRef.current;
     return pwd;
-  };
+  }, []);
 
   // Clear pending password after E2EE has used it
-  const clearPendingPassword = () => {
+  const clearPendingPassword = useCallback(() => {
     pendingPasswordRef.current = null;
-  };
+  }, []);
 
-  const login = async (handle, password, sessionDuration = '7d') => {
+  const login = useCallback(async (handle, password, sessionDuration = '7d') => {
     const sessionOnly = sessionDuration === 'session';
     const serverDuration = sessionOnly ? '24h' : sessionDuration;
     const res = await fetch(`${API_URL}/auth/login`, {
@@ -264,9 +269,9 @@ function AuthProvider({ children }) {
     dismissedUntilRef.current = 0;
     setToken(data.token); setUser(data.user);
     return { success: true };
-  };
+  }, []);
 
-  const completeMfaLogin = async (challengeId, method, code) => {
+  const completeMfaLogin = useCallback(async (challengeId, method, code) => {
     const res = await fetch(`${API_URL}/auth/mfa/verify`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ challengeId, method, code }),
@@ -283,9 +288,9 @@ function AuthProvider({ children }) {
     dismissedUntilRef.current = 0;
     setToken(data.token); setUser(data.user);
     return { success: true };
-  };
+  }, []);
 
-  const register = async (handle, email, password, displayName, sessionDuration = '7d', inviteToken = null) => {
+  const register = useCallback(async (handle, email, password, displayName, sessionDuration = '7d', inviteToken = null) => {
     const res = await fetch(`${API_URL}/auth/register`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ handle, email, password, displayName, sessionDuration, inviteToken }),
@@ -300,7 +305,7 @@ function AuthProvider({ children }) {
     setSessionExpiring(false);
     dismissedUntilRef.current = 0;
     setToken(data.token); setUser(data.user);
-  };
+  }, []);
 
   // Read the token through a ref so logout's identity never changes. logout is a
   // dependency of fetchAPI (useAPI.js), which in turn is in the dependency array
@@ -342,11 +347,17 @@ function AuthProvider({ children }) {
     setToken(null); setUser(null);
   }, []);
 
-  const updateUser = (updates) => {
-    const updatedUser = { ...user, ...updates };
-    setUser(updatedUser);
-    storage.setUser(updatedUser);
-  };
+  // Merge against the previous state rather than the `user` closure, so this
+  // doesn't need `user` in its dependency array (which would give it a new
+  // identity on every profile change). The storage write rides along inside the
+  // updater: it is idempotent, so a double invocation would be harmless.
+  const updateUser = useCallback((updates) => {
+    setUser((prev) => {
+      const updatedUser = { ...prev, ...updates };
+      storage.setUser(updatedUser);
+      return updatedUser;
+    });
+  }, []);
 
   // Refresh session with password (v2.29.0)
   const refreshSession = useCallback(async (password, sessionDuration) => {
@@ -415,15 +426,27 @@ function AuthProvider({ children }) {
     setSessionExpiring(false);
   }, []);
 
+  // An inline object literal here would be a new value on every render, which
+  // re-renders every consumer no matter how stable the handlers are. With the
+  // handlers memoised this changes only when auth state genuinely changes.
+  const contextValue = useMemo(() => ({
+    user, token, login, completeMfaLogin, register, logout, updateUser,
+    getPendingPassword, clearPendingPassword,
+    sessionExpiring, sessionExpired, isAutoRenewing,
+    sessionExpiresAt, refreshSession, reauth, dismissSessionWarning, triggerSessionExpiry
+  }), [
+    user, token, login, completeMfaLogin, register, logout, updateUser,
+    getPendingPassword, clearPendingPassword,
+    sessionExpiring, sessionExpired, isAutoRenewing,
+    sessionExpiresAt, refreshSession, reauth, dismissSessionWarning, triggerSessionExpiry
+  ]);
+
+  // Note: this early return sits *after* every hook above, which is required —
+  // hooks must not be skipped on the loading render.
   if (loading) return <LoadingSpinner />;
 
   return (
-    <AuthContext.Provider value={{
-      user, token, login, completeMfaLogin, register, logout, updateUser,
-      getPendingPassword, clearPendingPassword,
-      sessionExpiring, sessionExpired, isAutoRenewing,
-      sessionExpiresAt, refreshSession, reauth, dismissSessionWarning, triggerSessionExpiry
-    }}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );
