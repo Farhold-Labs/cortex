@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.67.5] - 2026-08-20
+
+### Changed
+
+- **Every `AuthProvider` handler is now referentially stable, and the auth context value is memoised.** `login`, `completeMfaLogin`, `register`, `updateUser`, `getPendingPassword` and `clearPendingPassword` were plain functions rebuilt on every render, and the context value was an inline object literal — so every consumer of `useAuth()` re-rendered whenever `AuthProvider` did, and anything landing in an effect dependency array re-fired that effect. `logout` was fixed in v2.67.4 for exactly this reason; this finishes the job.
+  - Five of the six needed only wrapping: they touch refs, setters and module-level helpers, nothing reactive.
+  - `updateUser` merged against the `user` closure, which would have forced `user` into its dependency array and given it a new identity on every profile change. It now merges against the previous state in the updater instead. The `localStorage` write rides along inside the updater and is idempotent.
+  - `refreshSession`, `reauth` and `autoRenewSession` keep `[token]` — they genuinely use it, and `token` is part of the context value anyway, so stabilising them would not change how often the value changes.
+
+  Verified against the running app rather than by inspection: log in through the form, E2EE auto-unlock, change FONT SIZE to X-Large in SETTINGS and see it reach React state, `localStorage` and the applied root font size, restore it, then log out and confirm the token and user are cleared and the login form returns.
+
 ## [2.67.4] - 2026-08-20
 
 ### Fixed
