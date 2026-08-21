@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.67.6] - 2026-08-21
+
+### Fixed
+
+- **The unread count on the desktop WAVES button was sliced off at the top.** A regression from the v2.67.2/v2.67.3 header work: making the nav scroll horizontally so it could never push the notification bell off the edge meant setting `overflow-x: auto`, and an axis set to `visible` computes to `auto` when the other axis is not — so the row clipped vertically too, cutting through the badge sitting at `top: -6px`. The nav is now padded far enough to contain the badge and its glow, with the padding pulled back off the layout by a matching negative margin. Measured: 0px clipped.
+
+- **On mobile, WAVES in the bottom bar did not return you to the wave list.** Leaving a view cleared open tabs, but tapping a wave sets `previewWaveId` and opens no tab — preview is the default navigation mode — so the wave survived the navigation and WAVES appeared to do nothing. The same held for PEOPLE and back: you landed on the wave you had been reading rather than the list. Mobile navigation now drops the previewed wave and any open thread panel as well as tabs.
+  - Desktop is deliberately unchanged: it keeps tabs and the previewed wave across view switches, so PEOPLE then WAVES still returns you to what you were reading.
+
 ## [2.67.5] - 2026-08-20
 
 ### Changed
