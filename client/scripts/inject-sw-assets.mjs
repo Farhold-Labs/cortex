@@ -6,8 +6,11 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
-const manifestPath = join(ROOT, 'dist', '.vite', 'manifest.json');
-const swPath = join(ROOT, 'dist', 'sw.js');
+// The build stages into a temporary directory and swaps it into place (see
+// scripts/build.mjs), so the directory to patch is not always literally "dist".
+const OUT_DIR = process.env.CORTEX_OUT_DIR || 'dist';
+const manifestPath = join(ROOT, OUT_DIR, '.vite', 'manifest.json');
+const swPath = join(ROOT, OUT_DIR, 'sw.js');
 
 if (!existsSync(manifestPath)) {
   console.warn('[inject-sw-assets] Vite manifest not found — skipping SW injection.');
@@ -51,5 +54,5 @@ sw = sw.replace(/const API_CACHE_NAME = 'cortex-api-v[^']+';/, `const API_CACHE_
 writeFileSync(swPath, sw, 'utf8');
 
 console.log(`[inject-sw-assets] Cache name set to cortex-v${version}`);
-console.log(`[inject-sw-assets] Injected ${assets.length} assets into dist/sw.js`);
+console.log(`[inject-sw-assets] Injected ${assets.length} assets into ${OUT_DIR}/sw.js`);
 assets.forEach(a => console.log(`  ${a}`));

@@ -1066,7 +1066,9 @@ CREATE TABLE IF NOT EXISTS portal_waves (
           display_order INTEGER NOT NULL DEFAULT 0,
           added_at      TEXT NOT NULL,
           added_by      TEXT REFERENCES users(id)
-        );
+        , slug TEXT, events_enabled INTEGER NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_waves_slug
+        ON portal_waves(slug) WHERE slug IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS instance_config (
           id         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1094,6 +1096,22 @@ CREATE TABLE IF NOT EXISTS user_invitations (
         );
 CREATE INDEX IF NOT EXISTS idx_user_invitations_token ON user_invitations(token_hash);
 CREATE INDEX IF NOT EXISTS idx_user_invitations_created_by ON user_invitations(created_by);
+
+CREATE TABLE IF NOT EXISTS event_rsvp_guest (
+          id              TEXT PRIMARY KEY,
+          event_id        TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          name            TEXT NOT NULL,
+          email_encrypted TEXT,
+          email_iv        TEXT,
+          email_hash      TEXT NOT NULL,
+          guest_count     INTEGER NOT NULL DEFAULT 1,
+          status          TEXT NOT NULL DEFAULT 'going' CHECK(status IN ('going','maybe','not_going')),
+          cancel_token_hash TEXT UNIQUE,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT,
+          UNIQUE(event_id, email_hash)
+        );
+CREATE INDEX IF NOT EXISTS idx_event_rsvp_guest_event ON event_rsvp_guest(event_id);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
