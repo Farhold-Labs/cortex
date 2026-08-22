@@ -40,6 +40,79 @@ function localDateString(d = new Date()) {
   ].join('-');
 }
 
+// Expand recurring events into their occurrences within [from, to].
+// Shared by the in-app calendar and the public event pages so the rules stay in
+// one place. Events are camelCase (post rowToEvent). Non-recurring events pass
+// through when they fall in range.
+function expandRecurrences(events, from, to) {
+  const fromDate = from instanceof Date ? from : new Date(from);
+  const toDate   = to   instanceof Date ? to   : new Date(to);
+  const fromYear = fromDate.getFullYear();
+  const toYear   = toDate.getFullYear();
+  const result = [];
+
+  // Never project further than this, so an endless rule can't fill a page.
+  const CAP_YEARS = 2;
+  const hardCap = new Date();
+  hardCap.setFullYear(hardCap.getFullYear() + CAP_YEARS);
+
+  for (const ev of events) {
+    if (ev.recurrence) {
+      // Midday anchor keeps the date stable against DST shifts.
+      const anchor = new Date(ev.eventDate + 'T12:00:00');
+      if (isNaN(anchor)) continue;   // legacy bare MM-DD rows
+      const endBound = ev.recurrenceEndDate
+        ? new Date(ev.recurrenceEndDate + 'T23:59:59')
+        : hardCap;
+
+      if (ev.recurrence === 'yearly') {
+        for (let y = fromYear; y <= toYear; y++) {
+          const mm = String(anchor.getMonth() + 1).padStart(2, '0');
+          const dd = String(anchor.getDate()).padStart(2, '0');
+          const dateStr = `${y}-${mm}-${dd}`;
+          const d = new Date(dateStr + 'T12:00:00');
+          if (!isNaN(d) && d >= fromDate && d <= toDate && d <= endBound) {
+            result.push({ ...ev, eventDate: dateStr, recurringInstance: true });
+          }
+        }
+      } else {
+        const step = (d) => {
+          if (ev.recurrence === 'weekly')        d.setDate(d.getDate() + 7);
+          else if (ev.recurrence === 'biweekly') d.setDate(d.getDate() + 14);
+          else if (ev.recurrence === 'monthly')  d.setMonth(d.getMonth() + 1);
+          else return false;
+          return true;
+        };
+        let cur = new Date(anchor);
+        while (cur < fromDate) { if (!step(cur)) break; }
+        while (cur <= toDate) {
+          if (cur >= fromDate && cur <= endBound) {
+            result.push({ ...ev, eventDate: localDateString(cur), recurringInstance: true });
+          }
+          if (cur > endBound) break;
+          if (!step(cur)) break;
+        }
+      }
+    } else {
+      const d = new Date(ev.eventDate + 'T12:00:00');
+      if (!isNaN(d) && d >= fromDate && d <= toDate) result.push(ev);
+    }
+  }
+  return result;
+}
+
+// Expand + sort + trim, for callers that have already mapped rows to camelCase.
+function expandForPublicRows(events, { includePast = false, horizonDays = 365, limit = 100 } = {}) {
+  const from = includePast ? new Date(2000, 0, 1) : new Date(new Date().setHours(0, 0, 0, 0));
+  const to = new Date();
+  to.setDate(to.getDate() + horizonDays);
+  const expanded = expandRecurrences(events, from, to);
+  expanded.sort((a, b) =>
+    a.eventDate.localeCompare(b.eventDate) ||
+    String(a.eventTime || '00:00').localeCompare(String(b.eventTime || '00:00')));
+  return expanded.slice(0, limit);
+}
+
 function hashEmail(email) {
   if (!email) return null;
   const normalized = email.toLowerCase().trim();
@@ -10251,39 +10324,64 @@ export class DatabaseSQLite {
   }
 
   // Upcoming (and optionally past) events for a wave, for public display.
-  getPublicWaveEvents(waveId, { includePast = false, limit = 100 } = {}) {
+  // Public event lists, with recurring events expanded into occurrences.
+  // `horizonDays` bounds how far ahead a repeating event is projected.
+  getPublicWaveEvents(waveId, { includePast = false, limit = 100, horizonDays = 365 } = {}) {
     // Local date, not UTC. event_date is a plain YYYY-MM-DD in the organiser's
     // own day, so comparing against the UTC date drops tonight's events the
     // moment UTC rolls over — west of Greenwich that is early evening, exactly
     // when someone is looking for what's on tonight.
     const today = localDateString();
-    return this.db.prepare(`
-      SELECT id, title, description, event_date, event_time, event_end_time,
-             timezone, location, category, rsvp_enabled, recurrence, recurrence_end_date
+    const rows = this.db.prepare(`
+      SELECT *
       FROM events
       WHERE wave_id = ?
         -- Legacy rows store a bare MM-DD for annual events. The calendar's own
         -- expander already skips them (the date won't parse); a public page has
         -- nowhere sensible to put one either, so don't publish them.
         AND LENGTH(event_date) = 10
-        ${includePast ? '' : 'AND event_date >= ?'}
+        -- A recurring event's stored date is only its anchor: the series can
+        -- still have upcoming occurrences long after it. Filtering on the
+        -- anchor would hide those, so let recurring rows through and let the
+        -- expansion decide.
+        ${includePast ? '' : "AND (event_date >= ? OR (recurrence IS NOT NULL AND recurrence != ''))"}
       ORDER BY event_date ASC, COALESCE(event_time, '00:00') ASC
       LIMIT ?
     `).all(...(includePast ? [waveId, limit] : [waveId, today, limit]));
+
+    return this.expandForPublic(rows, { includePast, horizonDays, limit });
+  }
+
+  // Shared tail for the public list queries: expand recurrences over the
+  // display window, then trim back to the requested size.
+  expandForPublic(rows, { includePast = false, horizonDays = 365, limit = 100 } = {}) {
+    const from = includePast ? new Date(2000, 0, 1) : new Date(new Date().setHours(0, 0, 0, 0));
+    const to = new Date();
+    to.setDate(to.getDate() + horizonDays);
+    const expanded = expandRecurrences(rows.map(r => this.rowToEvent(r)), from, to);
+    expanded.sort((a, b) =>
+      a.eventDate.localeCompare(b.eventDate) ||
+      String(a.eventTime || '00:00').localeCompare(String(b.eventTime || '00:00')));
+    return expanded.slice(0, limit);
   }
 
   // Everything publicly visible across the instance, in date order: events from
   // any portal wave that has publishing switched on, plus server-scope events
   // when the operator has opted in. Each row carries the slug it belongs to so
   // the index can link straight to the right detail page.
-  getPublicEventsIndex({ includeServer = false, includePast = false, limit = 200 } = {}) {
+  getPublicEventsIndex({ includeServer = false, includePast = false, limit = 200, horizonDays = 365 } = {}) {
     const today = localDateString();
-    const dateClause = includePast ? '' : 'AND e.event_date >= ?';
+    // Let recurring rows through regardless of their anchor date; the expansion
+    // below decides which occurrences actually fall in the window.
+    const dateClause = includePast
+      ? ''
+      : "AND (e.event_date >= ? OR (e.recurrence IS NOT NULL AND e.recurrence != ''))";
     const params = [];
 
     let sql = `
       SELECT e.id, e.title, e.description, e.event_date, e.event_time, e.event_end_time,
              e.timezone, e.location, e.category, e.rsvp_enabled, e.scope,
+             e.recurrence, e.recurrence_end_date,
              COALESCE(e.event_time, '00:00') AS sort_time,
              pw.slug AS slug, COALESCE(pw.label, w.title) AS source_title
       FROM events e
@@ -10300,6 +10398,7 @@ export class DatabaseSQLite {
         UNION ALL
         SELECT e.id, e.title, e.description, e.event_date, e.event_time, e.event_end_time,
                e.timezone, e.location, e.category, e.rsvp_enabled, e.scope,
+               e.recurrence, e.recurrence_end_date,
                COALESCE(e.event_time, '00:00') AS sort_time,
                NULL AS slug, NULL AS source_title
         FROM events e
@@ -10309,26 +10408,33 @@ export class DatabaseSQLite {
     }
 
     sql += ` ORDER BY event_date ASC, sort_time ASC LIMIT ?`;
-    params.push(limit);
-    return this.db.prepare(sql).all(...params);
+    // Fetch generously before expanding: a recurring row is one database row but
+    // many occurrences, and trimming happens after expansion.
+    params.push(limit * 4);
+    const rows = this.db.prepare(sql).all(...params);
+
+    // Carry slug/source through the expansion — expandRecurrences spreads the
+    // whole object, so the extra fields survive onto each occurrence.
+    const expanded = expandForPublicRows(rows.map(r => ({
+      ...this.rowToEvent(r), slug: r.slug, source_title: r.source_title, scope: r.scope,
+    })), { includePast, horizonDays, limit });
+    return expanded;
   }
 
   // A server-scope event, for its own public page. Deliberately separate from
   // getPublicEvent so a wave slug can never be used to reach one, or vice versa.
   getPublicServerEvent(eventId) {
-    return this.db.prepare(`
-      SELECT id, title, description, event_date, event_time, event_end_time,
-             timezone, location, category, rsvp_enabled, recurrence, recurrence_end_date, scope
-      FROM events WHERE id = ? AND scope = 'server'
-    `).get(eventId);
+    const row = this.db.prepare(
+      `SELECT * FROM events WHERE id = ? AND scope = 'server'`
+    ).get(eventId);
+    return row ? this.rowToEvent(row) : null;
   }
 
   getPublicEvent(waveId, eventId) {
-    return this.db.prepare(`
-      SELECT id, title, description, event_date, event_time, event_end_time,
-             timezone, location, category, rsvp_enabled, recurrence, recurrence_end_date, wave_id
-      FROM events WHERE id = ? AND wave_id = ?
-    `).get(eventId, waveId);
+    const row = this.db.prepare(
+      `SELECT * FROM events WHERE id = ? AND wave_id = ?`
+    ).get(eventId, waveId);
+    return row ? this.rowToEvent(row) : null;
   }
 
   // Guest RSVPs. Email is stored encrypted at rest with a hash alongside it for
@@ -10357,6 +10463,47 @@ export class DatabaseSQLite {
     `).run(id, eventId, name, enc?.encrypted || null, enc?.iv || null, hash,
            guestCount, status, cancelTokenHash, now);
     return { id, updated: false };
+  }
+
+  // Occurrences of one event within a window. Used to check that a ?date= on a
+  // public URL is a date the recurrence rule actually generates.
+  expandEventOccurrences(event, from, to) {
+    return expandRecurrences([event], from, to);
+  }
+
+  // Members and guests RSVP into two different tables. Count them together, and
+  // do not count the same person twice: someone who RSVP'd as a guest and later
+  // signed in and RSVP'd as themselves is matched on their account email.
+  getRsvpCountsCombined(eventId) {
+    const out = { going: 0, maybe: 0, not_going: 0, guests: 0 };
+
+    const memberRows = this.db.prepare(`
+      SELECT r.status, COUNT(*) AS n
+      FROM event_rsvp r WHERE r.event_id = ? GROUP BY r.status
+    `).all(eventId);
+    for (const r of memberRows) out[r.status] = (out[r.status] || 0) + r.n;
+
+    // Guest rows whose email matches a member who already RSVP'd to this event
+    // are the same human — skip them rather than counting the person twice.
+    const guestRows = this.db.prepare(`
+      SELECT g.status, COUNT(*) AS people, COALESCE(SUM(g.guest_count), 0) AS guests
+      FROM event_rsvp_guest g
+      WHERE g.event_id = ?
+        AND g.email_hash NOT IN (
+          SELECT u.email_hash FROM event_rsvp r
+          JOIN users u ON u.id = r.user_id
+          WHERE r.event_id = ? AND u.email_hash IS NOT NULL
+        )
+      GROUP BY g.status
+    `).all(eventId, eventId);
+    for (const r of guestRows) {
+      out[r.status] = (out[r.status] || 0) + r.people;
+      if (r.status === 'going') out.guests += r.guests;
+    }
+
+    // Members count as one head each unless they brought guests.
+    out.guests += out.going - (guestRows.find(r => r.status === 'going')?.people || 0);
+    return out;
   }
 
   // Public-safe counts only — never the attendee list.
@@ -11333,64 +11480,7 @@ export class DatabaseSQLite {
 
     const fromDate = new Date(from);
     const toDate   = new Date(to);
-    const fromYear = fromDate.getFullYear();
-    const toYear   = toDate.getFullYear();
-    const result   = [];
-
-    const CAP_YEARS = 2;
-    const hardCap = new Date();
-    hardCap.setFullYear(hardCap.getFullYear() + CAP_YEARS);
-
-    for (const row of rows) {
-      const ev = this.rowToEvent(row);
-      if (ev.recurrence) {
-        const anchor = new Date(ev.eventDate + 'T12:00:00');
-        if (isNaN(anchor)) continue;
-        const endBound = ev.recurrenceEndDate
-          ? new Date(ev.recurrenceEndDate + 'T23:59:59')
-          : hardCap;
-
-        if (ev.recurrence === 'yearly') {
-          // Expand across years in range
-          for (let y = fromYear; y <= toYear; y++) {
-            const mm = String(anchor.getMonth() + 1).padStart(2, '0');
-            const dd = String(anchor.getDate()).padStart(2, '0');
-            const dateStr = `${y}-${mm}-${dd}`;
-            const d = new Date(dateStr + 'T12:00:00');
-            if (!isNaN(d) && d >= fromDate && d <= toDate && d <= endBound) {
-              result.push({ ...ev, eventDate: dateStr, recurringInstance: true });
-            }
-          }
-        } else {
-          // Step through occurrences from anchor until end of range
-          let cur = new Date(anchor);
-          // Fast-forward to on/after fromDate
-          while (cur < fromDate) {
-            if (ev.recurrence === 'weekly')   cur.setDate(cur.getDate() + 7);
-            else if (ev.recurrence === 'biweekly') cur.setDate(cur.getDate() + 14);
-            else if (ev.recurrence === 'monthly')  cur.setMonth(cur.getMonth() + 1);
-            else break;
-          }
-          // Collect occurrences within [fromDate, toDate] ∩ [anchor, endBound]
-          while (cur <= toDate) {
-            if (cur >= fromDate && cur <= endBound) {
-              const dateStr = cur.toISOString().slice(0, 10);
-              result.push({ ...ev, eventDate: dateStr, recurringInstance: true });
-            }
-            if (cur > endBound) break;
-            if (ev.recurrence === 'weekly')   cur.setDate(cur.getDate() + 7);
-            else if (ev.recurrence === 'biweekly') cur.setDate(cur.getDate() + 14);
-            else if (ev.recurrence === 'monthly')  cur.setMonth(cur.getMonth() + 1);
-            else break;
-          }
-        }
-      } else {
-        const d = new Date(ev.eventDate + 'T12:00:00');
-        if (!isNaN(d) && d >= fromDate && d <= toDate) {
-          result.push(ev);
-        }
-      }
-    }
+    const result = expandRecurrences(rows.map(row => this.rowToEvent(row)), fromDate, toDate);
 
     result.sort((a, b) => {
       const dateCompare = a.eventDate.localeCompare(b.eventDate);
