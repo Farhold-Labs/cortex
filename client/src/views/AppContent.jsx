@@ -142,11 +142,13 @@ function AppContent() {
   }
 
   // Public event pages: /events/:slug and /events/:slug/:eventId (v2.68.0)
-  const eventsMatch = currentPath.match(/^\/events\/([a-z0-9-]{2,48})(?:\/([^/]+))?\/?$/);
+  // /events (index), /events/:slug (one wave), /events/:slug/:eventId (one event).
+  // "server" is a reserved slug, so /events/server/:id reaches server-wide events.
+  const eventsMatch = currentPath.match(/^\/events(?:\/([a-z0-9-]{2,48})(?:\/([^/]+))?)?\/?$/);
   if (eventsMatch) {
     return (
       <PublicEventsView
-        slug={eventsMatch[1]}
+        slug={eventsMatch[1] || null}
         eventId={eventsMatch[2] || null}
         navigate={navigate}
       />

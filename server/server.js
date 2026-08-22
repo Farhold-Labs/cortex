@@ -6703,6 +6703,13 @@ const INSTANCE_DEFAULTABLE_PREFS = Object.keys(CODE_DEFAULT_PREFS);
 // instance. Enforced server-side in the relevant routes, not just hidden in the client.
 const INSTANCE_FEATURES = ['videoFeed', 'crawlBar', 'calendar', 'publicPortal', 'registration'];
 
+// Features that default OFF. Every flag above answers `!== false`, i.e. on
+// unless switched off — right for things already visible to members. Publishing
+// server-wide events to the open internet is a disclosure, so it has to be
+// switched on deliberately and must never appear by upgrading.
+const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents'];
+const ALL_INSTANCE_FEATURES = [...INSTANCE_FEATURES, ...INSTANCE_OPT_IN_FEATURES];
+
 // Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
 const INSTANCE_BRANDING_FIELDS = ['instanceName', 'tagline'];
 
@@ -6717,12 +6724,15 @@ function getInstanceDefaults() {
 
 // True unless an admin has explicitly switched the feature off.
 function isFeatureEnabled(feature) {
+  const optIn = INSTANCE_OPT_IN_FEATURES.includes(feature);
   try {
     const features = db.getInstanceConfig ? db.getInstanceConfig().features : {};
-    return features[feature] !== false;
+    return optIn ? features[feature] === true : features[feature] !== false;
   } catch (err) {
     console.error('[instance-config] Failed to read features:', err.message);
-    return true;
+    // Fail closed for opt-in features: a config read error must not publish
+    // anything that was never switched on.
+    return !optIn;
   }
 }
 
@@ -10112,6 +10122,7 @@ app.get('/api/instance-config', (req, res) => {
     const config = db.getInstanceConfig();
     const features = {};
     for (const key of INSTANCE_FEATURES) features[key] = config.features[key] !== false;
+    for (const key of INSTANCE_OPT_IN_FEATURES) features[key] = config.features[key] === true;
 
     const branding = {};
     for (const key of INSTANCE_BRANDING_FIELDS) {
@@ -10138,7 +10149,7 @@ app.get('/api/admin/instance-config', authenticateToken, (req, res) => {
       availableDefaults: INSTANCE_DEFAULTABLE_PREFS,
       availableNotificationDefaults: INSTANCE_NOTIF_DEFAULT_KEYS,
       availableEmailNotificationDefaults: INSTANCE_EMAIL_NOTIF_DEFAULT_KEYS,
-      availableFeatures: INSTANCE_FEATURES,
+      availableFeatures: ALL_INSTANCE_FEATURES,
       codeDefaults: CODE_DEFAULT_PREFS,
       codeNotificationDefaults: CODE_DEFAULT_NOTIF_PREFS,
     });
@@ -10205,7 +10216,7 @@ app.put('/api/admin/instance-config', authenticateToken, (req, res) => {
   if (features && typeof features === 'object') {
     patch.features = {};
     for (const [key, value] of Object.entries(features)) {
-      if (!INSTANCE_FEATURES.includes(key)) continue;
+      if (!ALL_INSTANCE_FEATURES.includes(key)) continue;
       if (value === null) { patch.features[key] = null; continue; }
       if (typeof value !== 'boolean') {
         return res.status(400).json({ error: `Feature '${key}' must be true or false` });
@@ -13076,6 +13087,83 @@ app.get('/api/public/portal/:waveId/messages', (req, res) => {
   }
 });
 
+// Shared by the wave and server-scope RSVP routes so the validation, limits and
+// token handling cannot drift apart between them. `cancelPath` is the page the
+// emailed cancel link returns to.
+async function handleGuestRsvp(req, res, event, cancelPath) {
+  const { name: rawName, email: rawEmail, guestCount: rawCount, status: rawStatus } = req.body || {};
+
+  const name = sanitizeInput(String(rawName || '')).trim();
+  if (!name || name.length > 100) {
+    return res.status(400).json({ error: 'Please give a name (100 characters or fewer).' });
+  }
+
+  const email = String(rawEmail || '').trim().toLowerCase();
+  // Deliberately loose: enough to catch typos, not to adjudicate RFC 5322.
+  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Please give a valid email address.' });
+  }
+
+  const guestCount = rawCount === undefined ? 1 : Number(rawCount);
+  if (!Number.isInteger(guestCount) || guestCount < 1 || guestCount > 20) {
+    return res.status(400).json({ error: 'Guest count must be a whole number between 1 and 20.' });
+  }
+
+  const status = ['going', 'maybe', 'not_going'].includes(rawStatus) ? rawStatus : 'going';
+
+  // Second limiter keyed on the email itself, so rotating IPs doesn't let one
+  // address be used to spam an event (or a person's inbox).
+  if (!consumeRateLimit(`rsvp:email:${hashEmail(email)}`, 5, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many RSVP attempts for this email. Please try again later.' });
+  }
+
+  // Raw token goes to the user once, in their confirmation email; only the
+  // hash is stored, so a database leak yields no working cancel links.
+  const cancelToken = crypto.randomBytes(24).toString('hex');
+  const cancelTokenHash = crypto.createHash('sha256').update(cancelToken).digest('hex');
+
+  const result = db.createOrUpdateGuestRsvp({
+    id: `rsvp-${crypto.randomUUID()}`,
+    eventId: event.id,
+    name, email, guestCount, status, cancelTokenHash,
+  });
+
+  // Confirmation email is best-effort: an SMTP outage must not fail the RSVP.
+  let emailed = false;
+  if (!result.updated) {
+    try {
+      const emailService = getEmailService();
+      if (emailService.isConfigured()) {
+        const base = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+        await emailService.sendEmail({
+          to: email,
+          subject: `You're on the list: ${event.title}`,
+          text: [
+            `Thanks ${name} — your RSVP for "${event.title}" is recorded.`,
+            ``,
+            `When:  ${event.event_date}${event.event_time ? ' at ' + event.event_time : ''}`,
+            event.location ? `Where: ${event.location}` : null,
+            `Party size: ${guestCount}`,
+            ``,
+            `Can't make it after all? Cancel here:`,
+            `${base}${cancelPath}?cancel=${cancelToken}`,
+          ].filter(Boolean).join('\n'),
+        });
+        emailed = true;
+      }
+    } catch (mailErr) {
+      console.error('RSVP confirmation email failed:', mailErr.message);
+    }
+  }
+
+  res.status(result.updated ? 200 : 201).json({
+    success: true,
+    updated: result.updated,
+    emailed,
+    counts: db.getGuestRsvpCounts(event.id),
+  });
+}
+
 // ============ PUBLIC EVENT PAGES (v2.68.0) ============
 // Everything here is unauthenticated. The security boundary is portal_waves:
 // a wave is only readable if an admin put it in the portal AND gave it a slug
@@ -13087,6 +13175,7 @@ const RESERVED_SLUGS = new Set([
   'api', 'assets', 'about', 'portal', 'share', 'events', 'admin', 'login',
   'logout', 'register', 'signup', 'reset-password', 'cross-port', 'cross-port-auth',
   'sw.js', 'manifest.json', 'index.html', 'static', 'public', 'well-known',
+  'server',  // /events/server/:id is the server-scope event route
 ]);
 
 function normaliseSlug(raw) {
@@ -13125,6 +13214,77 @@ const publicEvent = (e) => ({
   rsvpEnabled: !!e.rsvp_enabled,
   recurrence: e.recurrence || null,
   recurrenceEndDate: e.recurrence_end_date || null,
+});
+
+// GET /api/public/events — everything published across the instance.
+// This is the front door: /events with no slug. It spans every portal wave that
+// has publishing switched on, plus server-wide events when the operator has
+// opted in, so a visitor can see what's on without knowing any slug.
+app.get('/api/public/events', (req, res) => {
+  try {
+    if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const includeServer = isFeatureEnabled('publicServerEvents');
+    const includePast = req.query.past === '1';
+    const rows = db.getPublicEventsIndex({ includeServer, includePast });
+
+    res.json({
+      events: rows.map(e => ({
+        ...publicEvent(e),
+        scope: e.scope,
+        // Where to find this event's own page. Wave events live under their
+        // wave's slug; server events have no wave, so they get /events/server.
+        slug: e.slug || null,
+        source: e.source_title || null,
+        href: e.scope === 'server' ? `/events/server/${e.id}` : `/events/${e.slug}/${e.id}`,
+        rsvpCounts: e.rsvp_enabled ? db.getGuestRsvpCounts(e.id) : null,
+      })),
+      includesServerEvents: includeServer,
+    });
+  } catch (err) {
+    console.error('Public events index error:', err);
+    res.status(500).json({ error: 'Failed to load events' });
+  }
+});
+
+// GET /api/public/events/server/:eventId — a server-wide event's own page.
+// Declared before the /:slug routes so "server" is matched as a route, not a slug.
+app.get('/api/public/events/server/:eventId', (req, res) => {
+  try {
+    if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')
+        || !isFeatureEnabled('publicServerEvents')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const event = db.getPublicServerEvent(sanitizeInput(req.params.eventId));
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    res.json({
+      slug: 'server',
+      waveTitle: null,
+      event: publicEvent(event),
+      rsvpCounts: event.rsvp_enabled ? db.getGuestRsvpCounts(event.id) : null,
+    });
+  } catch (err) {
+    console.error('Public server event error:', err);
+    res.status(500).json({ error: 'Failed to load event' });
+  }
+});
+
+// POST /api/public/events/server/:eventId/rsvp — same guarantees as the wave
+// RSVP route: rate limited per IP and per email, hashed cancel token.
+app.post('/api/public/events/server/:eventId/rsvp', publicRsvpLimiter, async (req, res) => {
+  try {
+    if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')
+        || !isFeatureEnabled('publicServerEvents')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const event = db.getPublicServerEvent(sanitizeInput(req.params.eventId));
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    return handleGuestRsvp(req, res, event, `/events/server/${event.id}`);
+  } catch (err) {
+    console.error('Public server RSVP error:', err);
+    res.status(500).json({ error: 'Failed to record RSVP' });
+  }
 });
 
 // GET /api/public/events/:slug — the event list for one wave
@@ -13196,77 +13356,7 @@ app.post('/api/public/events/:slug/:eventId/rsvp', publicRsvpLimiter, async (req
       return res.status(403).json({ error: 'RSVP is not open for this event' });
     }
 
-    const { name: rawName, email: rawEmail, guestCount: rawCount, status: rawStatus } = req.body || {};
-
-    const name = sanitizeInput(String(rawName || '')).trim();
-    if (!name || name.length > 100) {
-      return res.status(400).json({ error: 'Please give a name (100 characters or fewer).' });
-    }
-
-    const email = String(rawEmail || '').trim().toLowerCase();
-    // Deliberately loose: enough to catch typos, not to adjudicate RFC 5322.
-    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: 'Please give a valid email address.' });
-    }
-
-    const guestCount = rawCount === undefined ? 1 : Number(rawCount);
-    if (!Number.isInteger(guestCount) || guestCount < 1 || guestCount > 20) {
-      return res.status(400).json({ error: 'Guest count must be a whole number between 1 and 20.' });
-    }
-
-    const status = ['going', 'maybe', 'not_going'].includes(rawStatus) ? rawStatus : 'going';
-
-    // Second limiter keyed on the email itself, so rotating IPs doesn't let one
-    // address be used to spam an event (or a person's inbox).
-    if (!consumeRateLimit(`rsvp:email:${hashEmail(email)}`, 5, 60 * 60 * 1000)) {
-      return res.status(429).json({ error: 'Too many RSVP attempts for this email. Please try again later.' });
-    }
-
-    // Raw token goes to the user once, in their confirmation email; only the
-    // hash is stored, so a database leak yields no working cancel links.
-    const cancelToken = crypto.randomBytes(24).toString('hex');
-    const cancelTokenHash = crypto.createHash('sha256').update(cancelToken).digest('hex');
-
-    const result = db.createOrUpdateGuestRsvp({
-      id: `rsvp-${crypto.randomUUID()}`,
-      eventId: event.id,
-      name, email, guestCount, status, cancelTokenHash,
-    });
-
-    // Confirmation email is best-effort: an SMTP outage must not fail the RSVP.
-    let emailed = false;
-    if (!result.updated) {
-      try {
-        const emailService = getEmailService();
-        if (emailService.isConfigured()) {
-          const base = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
-          await emailService.sendEmail({
-            to: email,
-            subject: `You're on the list: ${event.title}`,
-            text: [
-              `Thanks ${name} — your RSVP for "${event.title}" is recorded.`,
-              ``,
-              `When:  ${event.event_date}${event.event_time ? ' at ' + event.event_time : ''}`,
-              event.location ? `Where: ${event.location}` : null,
-              `Party size: ${guestCount}`,
-              ``,
-              `Can't make it after all? Cancel here:`,
-              `${base}/events/${entry.slug}/${event.id}?cancel=${cancelToken}`,
-            ].filter(Boolean).join('\n'),
-          });
-          emailed = true;
-        }
-      } catch (mailErr) {
-        console.error('RSVP confirmation email failed:', mailErr.message);
-      }
-    }
-
-    res.status(result.updated ? 200 : 201).json({
-      success: true,
-      updated: result.updated,
-      emailed,
-      counts: db.getGuestRsvpCounts(event.id),
-    });
+    return handleGuestRsvp(req, res, event, `/events/${entry.slug}/${event.id}`);
   } catch (err) {
     console.error('Public RSVP error:', err);
     res.status(500).json({ error: 'Failed to record RSVP' });

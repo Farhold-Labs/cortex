@@ -31,6 +31,15 @@ const EMAIL_ENCRYPTION_KEY = process.env.EMAIL_ENCRYPTION_KEY || null;
  * @param {string} email - Email address
  * @returns {string|null} SHA-256 hash (hex)
  */
+// YYYY-MM-DD in the server's own timezone (toISOString would give UTC).
+function localDateString(d = new Date()) {
+  return [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, '0'),
+    String(d.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
 function hashEmail(email) {
   if (!email) return null;
   const normalized = email.toLowerCase().trim();
@@ -10243,16 +10252,75 @@ export class DatabaseSQLite {
 
   // Upcoming (and optionally past) events for a wave, for public display.
   getPublicWaveEvents(waveId, { includePast = false, limit = 100 } = {}) {
-    const today = new Date().toISOString().slice(0, 10);
+    // Local date, not UTC. event_date is a plain YYYY-MM-DD in the organiser's
+    // own day, so comparing against the UTC date drops tonight's events the
+    // moment UTC rolls over — west of Greenwich that is early evening, exactly
+    // when someone is looking for what's on tonight.
+    const today = localDateString();
     return this.db.prepare(`
       SELECT id, title, description, event_date, event_time, event_end_time,
              timezone, location, category, rsvp_enabled, recurrence, recurrence_end_date
       FROM events
       WHERE wave_id = ?
+        -- Legacy rows store a bare MM-DD for annual events. The calendar's own
+        -- expander already skips them (the date won't parse); a public page has
+        -- nowhere sensible to put one either, so don't publish them.
+        AND LENGTH(event_date) = 10
         ${includePast ? '' : 'AND event_date >= ?'}
       ORDER BY event_date ASC, COALESCE(event_time, '00:00') ASC
       LIMIT ?
     `).all(...(includePast ? [waveId, limit] : [waveId, today, limit]));
+  }
+
+  // Everything publicly visible across the instance, in date order: events from
+  // any portal wave that has publishing switched on, plus server-scope events
+  // when the operator has opted in. Each row carries the slug it belongs to so
+  // the index can link straight to the right detail page.
+  getPublicEventsIndex({ includeServer = false, includePast = false, limit = 200 } = {}) {
+    const today = localDateString();
+    const dateClause = includePast ? '' : 'AND e.event_date >= ?';
+    const params = [];
+
+    let sql = `
+      SELECT e.id, e.title, e.description, e.event_date, e.event_time, e.event_end_time,
+             e.timezone, e.location, e.category, e.rsvp_enabled, e.scope,
+             COALESCE(e.event_time, '00:00') AS sort_time,
+             pw.slug AS slug, COALESCE(pw.label, w.title) AS source_title
+      FROM events e
+      JOIN portal_waves pw ON pw.wave_id = e.wave_id
+      JOIN waves w ON w.id = e.wave_id
+      WHERE e.scope = 'wave' AND pw.events_enabled = 1 AND pw.slug IS NOT NULL
+        AND LENGTH(e.event_date) = 10
+        ${dateClause}
+    `;
+    if (!includePast) params.push(today);
+
+    if (includeServer) {
+      sql += `
+        UNION ALL
+        SELECT e.id, e.title, e.description, e.event_date, e.event_time, e.event_end_time,
+               e.timezone, e.location, e.category, e.rsvp_enabled, e.scope,
+               COALESCE(e.event_time, '00:00') AS sort_time,
+               NULL AS slug, NULL AS source_title
+        FROM events e
+        WHERE e.scope = 'server' AND LENGTH(e.event_date) = 10 ${dateClause}
+      `;
+      if (!includePast) params.push(today);
+    }
+
+    sql += ` ORDER BY event_date ASC, sort_time ASC LIMIT ?`;
+    params.push(limit);
+    return this.db.prepare(sql).all(...params);
+  }
+
+  // A server-scope event, for its own public page. Deliberately separate from
+  // getPublicEvent so a wave slug can never be used to reach one, or vice versa.
+  getPublicServerEvent(eventId) {
+    return this.db.prepare(`
+      SELECT id, title, description, event_date, event_time, event_end_time,
+             timezone, location, category, rsvp_enabled, recurrence, recurrence_end_date, scope
+      FROM events WHERE id = ? AND scope = 'server'
+    `).get(eventId);
   }
 
   getPublicEvent(waveId, eventId) {

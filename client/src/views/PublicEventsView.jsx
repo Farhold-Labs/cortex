@@ -356,6 +356,79 @@ const EventList = ({ slug, onOpen }) => {
   );
 };
 
+// ============ INDEX: everything published across the instance ============
+
+const EventIndex = ({ navigate }) => {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const { isMobile } = useWindowSize();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_URL}/public/events`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { if (!cancelled) setData(d); })
+      .catch(() => { if (!cancelled) setError('Events are not available on this server.'); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (error) return <Shell><div style={card}>{error}</div></Shell>;
+  if (!data) return <Shell><div style={{ ...card, color: 'var(--text-muted, #6a806a)' }}>Loading…</div></Shell>;
+
+  // Group by day so a date reads once rather than on every row.
+  const days = [];
+  for (const ev of data.events) {
+    const last = days[days.length - 1];
+    if (last && last.date === ev.date) last.events.push(ev);
+    else days.push({ date: ev.date, events: [ev] });
+  }
+
+  return (
+    <Shell title="What's on" slug="index">
+      {days.length === 0 ? (
+        <div style={{ ...card, color: 'var(--text-muted, #6a806a)' }}>
+          No upcoming events. Check back soon.
+        </div>
+      ) : days.map(day => (
+        <div key={day.date} style={{ marginBottom: 18 }}>
+          <div style={{
+            ...label, color: 'var(--accent-amber, #ffd23f)', marginBottom: 8,
+            borderBottom: '1px solid var(--border-subtle, #1a2a1a)', paddingBottom: 5,
+          }}>{formatDay(day.date)}</div>
+
+          {day.events.map(ev => (
+            <div
+              key={ev.id}
+              onClick={() => navigate(ev.href)}
+              role="link"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(ev.href); } }}
+              style={{ ...card, cursor: 'pointer', marginBottom: 8, display: 'flex', gap: 14, alignItems: 'flex-start' }}
+            >
+              <div style={{
+                flexShrink: 0, minWidth: 72, color: 'var(--text-dim, #8aa08a)',
+                fontFamily: 'monospace', fontSize: '0.8rem', paddingTop: 2,
+              }}>{formatTime(ev.time) || 'All day'}</div>
+
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{
+                  color: 'var(--text-primary, #d8e8d8)', fontSize: isMobile ? '0.95rem' : '1.05rem',
+                  marginBottom: 3, wordBreak: 'break-word',
+                }}>{ev.title}</div>
+                <div style={{ color: 'var(--text-muted, #6a806a)', fontSize: '0.72rem', fontFamily: 'monospace' }}>
+                  {ev.scope === 'server' ? 'Server-wide' : ev.source}
+                  {ev.location ? ` · ${ev.location}` : ''}
+                </div>
+                {ev.rsvpEnabled && <div style={{ marginTop: 4 }}><RsvpCounts counts={ev.rsvpCounts} /></div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </Shell>
+  );
+};
+
 // ============ SHELL ============
 
 const Shell = ({ children, title, slug, onBack }) => (
@@ -393,6 +466,9 @@ const Shell = ({ children, title, slug, onBack }) => (
 // ============ ENTRY ============
 
 const PublicEventsView = ({ slug, eventId, navigate }) => {
+  // /events — everything published, across every wave plus server-wide events.
+  if (!slug) return <EventIndex navigate={navigate} />;
+
   if (eventId) {
     return (
       <EventDetail

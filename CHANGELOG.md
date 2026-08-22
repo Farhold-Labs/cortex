@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Guest RSVP** — name, email and party size, no account. Stored in a new `event_rsvp_guest` table, since `event_rsvp.user_id` is a `NOT NULL` reference to `users`. One RSVP per email per event: a repeat submission updates rather than duplicating, matched case-insensitively.
   - **Attendee list and CSV export** for moderators, in the PUBLIC PORTAL panel — the only place guest emails are ever returned.
 
+- **`/events` — one page listing everything published across the instance**, grouped by day, each entry linking to its own page. Covers every portal wave that has publishing switched on, plus server-wide events when the operator opts in. This is also the answer to "I made an event and the page was empty": you can see what is actually published without knowing any slug.
+  - **Server-wide events** get their own public pages at `/events/server/<eventId>`, with the same guest RSVP. `server` is a reserved slug so a wave can never claim that path.
+  - Publishing them is behind a new **`PUBLIC SERVER EVENTS`** instance switch that **defaults off** — the first Cortex feature flag to do so. Every existing flag answers "on unless switched off", which is right for things members can already see; putting server-wide events on the open internet is a disclosure and must be a deliberate act, never something that appears on upgrade. `isFeatureEnabled` also fails *closed* for opt-in flags, so a config read error cannot publish them.
+
 ### Security
 
 - Guest emails are **encrypted at rest** (AES-256-GCM, `EMAIL_ENCRYPTION_KEY`) with a SHA-256 hash stored alongside for lookup — the same shape the users table uses. The public endpoints return **counts only** and never a name or address.
@@ -25,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Events dated today stopped appearing partway through the evening.** The "upcoming" filter compared against the **UTC** date, while `event_date` is a plain `YYYY-MM-DD` in the organiser's own day. West of Greenwich, UTC rolls over during the evening — so an event at 8:55pm vanished from the public page at 8pm, exactly when someone would be looking for what is on tonight. It now compares against the server's local date.
+- Legacy events stored with a bare `MM-DD` (annual events from before the `recurrence` field) are **excluded from public pages**. The calendar's own expander already skips them because the date will not parse; a public page has nowhere sensible to put one either.
 - `getPortalWaves()` did not select the new `slug` / `events_enabled` columns, so the admin panel reported every wave as unpublished even when it was live. Found by reading the database directly after the UI disagreed with it.
 
 ## [2.67.6] - 2026-08-21
