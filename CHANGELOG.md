@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Confirmation email is best-effort — an SMTP outage cannot fail an RSVP.
 - Cancelling has its own, more generous limiter, so a spent RSVP budget can't lock a household behind one IP out of cancelling.
 
+### Changed
+
+- **`npm run build` is now atomic.** `vite build` empties its output directory before writing the new one, and the dev box serves `client/dist` straight out of the working copy — so for the ~14 seconds of a build the live site returned **404** for every route, and the service worker then fell back to a cached shell that could be several versions old. The build now stages into `dist.staging`, patches the service worker there, and swaps it into place with two renames. A failed build leaves the previous `dist` untouched instead of deleted. Verified by polling the live site throughout a build: 90/90 requests returned 200. (`build:inplace` is kept as an escape hatch.)
+
 ### Fixed
 
 - **Events dated today stopped appearing partway through the evening.** The "upcoming" filter compared against the **UTC** date, while `event_date` is a plain `YYYY-MM-DD` in the organiser's own day. West of Greenwich, UTC rolls over during the evening — so an event at 8:55pm vanished from the public page at 8pm, exactly when someone would be looking for what is on tonight. It now compares against the server's local date.
