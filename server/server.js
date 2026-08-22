@@ -13521,14 +13521,15 @@ app.get('/api/admin/events/:eventId/attendees', authenticateToken, (req, res) =>
     const event = db.getEvent(eventId);
     if (!event) return res.status(404).json({ error: 'Event not found' });
 
-    const guests = db.getGuestRsvpsForEvent(eventId);
-    const counts = db.getGuestRsvpCounts(eventId);
+    // Members and guests together, so the list agrees with the counts.
+    const guests = db.getAllRsvpsForEvent(eventId);
+    const counts = db.getRsvpCountsCombined(eventId);
 
     if (req.query.format === 'csv') {
       const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const rows = [
-        ['Name', 'Email', 'Party size', 'Status', 'RSVP at'].map(esc).join(','),
-        ...guests.map(g => [g.name, g.email || '', g.guestCount, g.status, g.createdAt].map(esc).join(',')),
+        ['Name', 'Handle', 'Email', 'Party size', 'Status', 'Via', 'RSVP at'].map(esc).join(','),
+        ...guests.map(g => [g.name, g.handle || '', g.email || '', g.guestCount, g.status, g.via, g.createdAt].map(esc).join(',')),
       ].join('\n');
       const filename = `rsvps-${eventId}.csv`.replace(/[^a-zA-Z0-9._-]/g, '');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');

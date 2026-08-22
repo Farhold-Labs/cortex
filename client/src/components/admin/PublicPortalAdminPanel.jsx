@@ -425,15 +425,20 @@ const AttendeeList = ({ waveId, fetchAPI, showToast, rowBtnStyle }) => {
                         <tr style={{ color: 'var(--text-muted)' }}>
                           <th style={cell}>Name</th><th style={cell}>Email</th>
                           <th style={cell}>Party</th><th style={cell}>Status</th>
+                          <th style={cell}>Via</th>
                         </tr>
                       </thead>
                       <tbody>
                         {detail.guests.map(g => (
-                          <tr key={g.id} style={{ color: 'var(--text-secondary)' }}>
-                            <td style={cell}>{g.name}</td>
+                          <tr key={`${g.via}-${g.id}`} style={{ color: 'var(--text-secondary)' }}>
+                            <td style={cell}>{g.name}{g.handle ? ` (@${g.handle})` : ''}</td>
+                            {/* Members are identified by handle; we never expose their address here. */}
                             <td style={cell}>{g.email || '—'}</td>
                             <td style={cell}>{g.guestCount}</td>
                             <td style={cell}>{g.status.replace('_', ' ')}</td>
+                            <td style={{ ...cell, color: g.via === 'member' ? 'var(--accent-teal)' : 'var(--text-muted)' }}>
+                              {g.via}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

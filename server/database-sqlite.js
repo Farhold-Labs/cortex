@@ -10536,6 +10536,40 @@ export class DatabaseSQLite {
     }));
   }
 
+  // Everyone who has RSVP'd to an event — members and guests in one list, in
+  // the order they responded. The counts have always combined the two tables;
+  // this makes the attendee list agree with them instead of showing half.
+  getAllRsvpsForEvent(eventId) {
+    const members = this.db.prepare(`
+      SELECT r.user_id, r.status, r.created_at, r.updated_at,
+             u.handle, u.display_name, u.email_hash
+      FROM event_rsvp r JOIN users u ON u.id = r.user_id
+      WHERE r.event_id = ? ORDER BY r.created_at ASC
+    `).all(eventId).map(r => ({
+      id: r.user_id,
+      via: 'member',
+      name: r.display_name || r.handle,
+      handle: r.handle,
+      email: null,          // members are identified by handle, not address
+      emailHash: r.email_hash,
+      guestCount: 1,
+      status: r.status,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+
+    // Drop guest rows belonging to a member who also RSVP'd — same human,
+    // matching how getRsvpCountsCombined() counts them.
+    const memberHashes = new Set(members.map(m => m.emailHash).filter(Boolean));
+    const guests = this.getGuestRsvpsForEvent(eventId)
+      .map(g => ({ ...g, via: 'guest', handle: null }))
+      .filter(g => !(g.email && memberHashes.has(hashEmail(g.email))));
+
+    return [...members, ...guests]
+      .map(({ emailHash, ...rest }) => rest)
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  }
+
   cancelGuestRsvpByToken(cancelTokenHash) {
     return this.db.prepare(
       `DELETE FROM event_rsvp_guest WHERE cancel_token_hash = ?`
