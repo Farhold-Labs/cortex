@@ -30,6 +30,10 @@ const FEATURES = [
   { key: 'calendar', label: 'CALENDAR', hint: 'Hides the Calendar tab' },
   { key: 'publicPortal', label: 'PUBLIC PORTAL', hint: 'Disables the unauthenticated portal' },
   { key: 'registration', label: 'OPEN REGISTRATION', hint: 'When off, people can only join via an invitation link' },
+  // Unlike the others this defaults OFF — publishing server-wide events to the
+  // open internet is a disclosure, so it has to be switched on deliberately.
+  { key: 'publicServerEvents', label: 'PUBLIC SERVER EVENTS', defaultOff: true,
+    hint: 'Lists server-wide calendar events on the public /events page. Off by default.' },
 ];
 
 // Notification defaults. `always | app_closed | never` for the per-type ones, matching
@@ -295,8 +299,10 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
               Switching a feature off hides it AND refuses the matching API calls — users cannot
               re-enable it for themselves.
             </div>
-            {FEATURES.map(({ key, label, hint }) => {
-              const enabled = config.features?.[key] !== false;
+            {FEATURES.map(({ key, label, hint, defaultOff }) => {
+              const enabled = defaultOff
+                ? config.features?.[key] === true
+                : config.features?.[key] !== false;
               return (
                 <div key={key} style={{ marginBottom: '12px' }}>
                   <label style={labelStyle}>{label}</label>
