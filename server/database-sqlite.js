@@ -2245,6 +2245,51 @@ export class DatabaseSQLite {
       console.log('✅ portal_waves table created');
     }
 
+    // v2.68.0 — Public event pages: portal waves get a URL slug, and events can
+    // be published per wave. Guest RSVPs live in their own table because
+    // event_rsvp.user_id is a NOT NULL reference to users — a member of the
+    // public has no account.
+    const portalSlugExists = this.db.prepare(
+      `SELECT name FROM pragma_table_info('portal_waves') WHERE name = 'slug'`
+    ).get();
+    if (!portalSlugExists) {
+      console.log('📝 Adding portal_waves.slug + events_enabled (v2.68.0)...');
+      this.db.exec(`ALTER TABLE portal_waves ADD COLUMN slug TEXT;`);
+      this.db.exec(`ALTER TABLE portal_waves ADD COLUMN events_enabled INTEGER NOT NULL DEFAULT 0;`);
+      // Partial unique index: many rows may have no slug, but a slug that exists
+      // must be unique — it is the public URL.
+      this.db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_waves_slug
+        ON portal_waves(slug) WHERE slug IS NOT NULL;
+      `);
+      console.log('✅ portal_waves.slug added');
+    }
+
+    const guestRsvpExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='event_rsvp_guest'`
+    ).get();
+    if (!guestRsvpExists) {
+      console.log('📝 Adding event_rsvp_guest table (v2.68.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS event_rsvp_guest (
+          id              TEXT PRIMARY KEY,
+          event_id        TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          name            TEXT NOT NULL,
+          email_encrypted TEXT,
+          email_iv        TEXT,
+          email_hash      TEXT NOT NULL,
+          guest_count     INTEGER NOT NULL DEFAULT 1,
+          status          TEXT NOT NULL DEFAULT 'going' CHECK(status IN ('going','maybe','not_going')),
+          cancel_token_hash TEXT UNIQUE,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT,
+          UNIQUE(event_id, email_hash)
+        );
+      `);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_event_rsvp_guest_event ON event_rsvp_guest(event_id);`);
+      console.log('✅ event_rsvp_guest table created');
+    }
+
     // v2.65.0 — Instance configuration (server-wide defaults, feature flags, branding)
     const instanceConfigExists = this.db.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='instance_config'`
@@ -10147,6 +10192,7 @@ export class DatabaseSQLite {
   getPortalWaves() {
     return this.db.prepare(`
       SELECT pw.wave_id, pw.label, pw.display_order, pw.added_at,
+             pw.slug, pw.events_enabled,
              w.title, w.topic, w.privacy, w.encrypted
       FROM portal_waves pw
       JOIN waves w ON w.id = pw.wave_id
@@ -10170,14 +10216,115 @@ export class DatabaseSQLite {
     return this.db.prepare(`DELETE FROM portal_waves WHERE wave_id = ?`).run(waveId).changes > 0;
   }
 
-  updatePortalWave(waveId, { label, displayOrder }) {
+  updatePortalWave(waveId, { label, displayOrder, slug, eventsEnabled }) {
     const updates = [];
     const params = [];
     if (label !== undefined) { updates.push('label = ?'); params.push(label || null); }
     if (displayOrder !== undefined) { updates.push('display_order = ?'); params.push(displayOrder); }
+    if (slug !== undefined) { updates.push('slug = ?'); params.push(slug || null); }
+    if (eventsEnabled !== undefined) { updates.push('events_enabled = ?'); params.push(eventsEnabled ? 1 : 0); }
     if (!updates.length) return;
     params.push(waveId);
     this.db.prepare(`UPDATE portal_waves SET ${updates.join(', ')} WHERE wave_id = ?`).run(...params);
+  }
+
+  // ============ PUBLIC EVENT PAGES (v2.68.0) ============
+
+  // The slug is the public URL, so this is the entry point for every public
+  // event request. Only ever returns waves an admin put in the portal.
+  getPortalWaveBySlug(slug) {
+    return this.db.prepare(`
+      SELECT pw.*, w.title, w.topic, w.privacy, w.encrypted
+      FROM portal_waves pw
+      JOIN waves w ON w.id = pw.wave_id
+      WHERE pw.slug = ?
+    `).get(slug);
+  }
+
+  // Upcoming (and optionally past) events for a wave, for public display.
+  getPublicWaveEvents(waveId, { includePast = false, limit = 100 } = {}) {
+    const today = new Date().toISOString().slice(0, 10);
+    return this.db.prepare(`
+      SELECT id, title, description, event_date, event_time, event_end_time,
+             timezone, location, category, rsvp_enabled, recurrence, recurrence_end_date
+      FROM events
+      WHERE wave_id = ?
+        ${includePast ? '' : 'AND event_date >= ?'}
+      ORDER BY event_date ASC, COALESCE(event_time, '00:00') ASC
+      LIMIT ?
+    `).all(...(includePast ? [waveId, limit] : [waveId, today, limit]));
+  }
+
+  getPublicEvent(waveId, eventId) {
+    return this.db.prepare(`
+      SELECT id, title, description, event_date, event_time, event_end_time,
+             timezone, location, category, rsvp_enabled, recurrence, recurrence_end_date, wave_id
+      FROM events WHERE id = ? AND wave_id = ?
+    `).get(eventId, waveId);
+  }
+
+  // Guest RSVPs. Email is stored encrypted at rest with a hash alongside it for
+  // lookup — the same shape the users table uses.
+  createOrUpdateGuestRsvp({ id, eventId, name, email, guestCount, status, cancelTokenHash }) {
+    const enc = encryptEmail(email);
+    const hash = hashEmail(email);
+    const now = new Date().toISOString();
+    // One RSVP per email per event: a repeat submission updates rather than
+    // stacking duplicates (and keeps the original cancel token working).
+    const existing = this.db.prepare(
+      `SELECT id FROM event_rsvp_guest WHERE event_id = ? AND email_hash = ?`
+    ).get(eventId, hash);
+    if (existing) {
+      this.db.prepare(`
+        UPDATE event_rsvp_guest
+        SET name = ?, guest_count = ?, status = ?, updated_at = ?
+        WHERE id = ?
+      `).run(name, guestCount, status, now, existing.id);
+      return { id: existing.id, updated: true };
+    }
+    this.db.prepare(`
+      INSERT INTO event_rsvp_guest
+        (id, event_id, name, email_encrypted, email_iv, email_hash, guest_count, status, cancel_token_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, eventId, name, enc?.encrypted || null, enc?.iv || null, hash,
+           guestCount, status, cancelTokenHash, now);
+    return { id, updated: false };
+  }
+
+  // Public-safe counts only — never the attendee list.
+  getGuestRsvpCounts(eventId) {
+    const rows = this.db.prepare(`
+      SELECT status, COUNT(*) AS people, COALESCE(SUM(guest_count), 0) AS guests
+      FROM event_rsvp_guest WHERE event_id = ? GROUP BY status
+    `).all(eventId);
+    const out = { going: 0, maybe: 0, not_going: 0, guests: 0 };
+    for (const r of rows) {
+      out[r.status] = r.people;
+      if (r.status === 'going') out.guests = r.guests;
+    }
+    return out;
+  }
+
+  // Moderator-only: the actual attendee list, emails decrypted for display.
+  getGuestRsvpsForEvent(eventId) {
+    return this.db.prepare(`
+      SELECT id, name, email_encrypted, email_iv, guest_count, status, created_at, updated_at
+      FROM event_rsvp_guest WHERE event_id = ? ORDER BY created_at ASC
+    `).all(eventId).map(r => ({
+      id: r.id,
+      name: r.name,
+      email: decryptEmail(r.email_encrypted, r.email_iv),
+      guestCount: r.guest_count,
+      status: r.status,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  cancelGuestRsvpByToken(cancelTokenHash) {
+    return this.db.prepare(
+      `DELETE FROM event_rsvp_guest WHERE cancel_token_hash = ?`
+    ).run(cancelTokenHash).changes > 0;
   }
 
   getPortalMessages(waveId, { limit = 50, before = null } = {}) {

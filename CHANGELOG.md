@@ -5,6 +5,28 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.68.0] - 2026-08-21
+
+### Added
+
+- **Public event pages.** A wave's calendar events can now be published at a public URL — `/events/<slug>` lists the upcoming events, `/events/<slug>/<eventId>` is a shareable page for one of them, and where an event has RSVP switched on, a member of the public can RSVP without a Cortex account. Modelled on wulfpak.events.
+  - **Slugs.** Portal waves get an optional URL slug, set from the PUBLIC PORTAL admin panel. Slugs are normalised (`"News Updates!"` → `news-updates`), 2–48 characters, and checked against a reserved list so one can never shadow an app route (`about`, `portal`, `share`, `api`, `assets`, `reset-password`, …). A duplicate returns a clear 409 rather than a constraint error.
+  - **Publishing is opt-in twice over**: the wave must be in the public portal *and* have `PUBLISH EVENTS` switched on. Both are admin-only. An unknown slug, a wave not in the portal, and a wave with events switched off all return the same 404, so the endpoint cannot be used to probe for waves.
+  - **Guest RSVP** — name, email and party size, no account. Stored in a new `event_rsvp_guest` table, since `event_rsvp.user_id` is a `NOT NULL` reference to `users`. One RSVP per email per event: a repeat submission updates rather than duplicating, matched case-insensitively.
+  - **Attendee list and CSV export** for moderators, in the PUBLIC PORTAL panel — the only place guest emails are ever returned.
+
+### Security
+
+- Guest emails are **encrypted at rest** (AES-256-GCM, `EMAIL_ENCRYPTION_KEY`) with a SHA-256 hash stored alongside for lookup — the same shape the users table uses. The public endpoints return **counts only** and never a name or address.
+- The RSVP endpoint is the only unauthenticated write besides registration, so it carries **two independent limits**: per IP (10 / 15 min) and per email hash (5 / hour). Neither alone is sufficient — one caps an attacker rotating emails, the other caps one rotating IPs.
+- **Cancellation tokens are stored hashed**, never raw. The raw token goes out once in the confirmation email; a leaked database yields no working cancel links. A spent token and a forged one get the same response.
+- Confirmation email is best-effort — an SMTP outage cannot fail an RSVP.
+- Cancelling has its own, more generous limiter, so a spent RSVP budget can't lock a household behind one IP out of cancelling.
+
+### Fixed
+
+- `getPortalWaves()` did not select the new `slug` / `events_enabled` columns, so the admin panel reported every wave as unpublished even when it was live. Found by reading the database directly after the UI disagreed with it.
+
 ## [2.67.6] - 2026-08-21
 
 ### Fixed

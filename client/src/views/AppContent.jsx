@@ -7,6 +7,7 @@ import AboutServerPage from './AboutServerPage.jsx';
 import ResetPasswordPage from './ResetPasswordPage.jsx';
 import PublicMessageView from './PublicMessageView.jsx';
 import PublicPortalView from './PublicPortalView.jsx';
+import PublicEventsView from './PublicEventsView.jsx';
 import CrossPortAuthView from './CrossPortAuthView.jsx';
 import CrossPortCallbackView from './CrossPortCallbackView.jsx';
 import AuthProvider from './AuthProvider.jsx';
@@ -137,6 +138,18 @@ function AppContent() {
         setCurrentPath('/');
         setShowLoginScreen(true);
       }} />
+    );
+  }
+
+  // Public event pages: /events/:slug and /events/:slug/:eventId (v2.68.0)
+  const eventsMatch = currentPath.match(/^\/events\/([a-z0-9-]{2,48})(?:\/([^/]+))?\/?$/);
+  if (eventsMatch) {
+    return (
+      <PublicEventsView
+        slug={eventsMatch[1]}
+        eventId={eventsMatch[2] || null}
+        navigate={navigate}
+      />
     );
   }
 
