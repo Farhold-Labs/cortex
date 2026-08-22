@@ -5,6 +5,38 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.68.0] - 2026-08-21
+
+### Added
+
+- **Public event pages.** A wave's calendar events can now be published at a public URL — `/events/<slug>` lists the upcoming events, `/events/<slug>/<eventId>` is a shareable page for one of them, and where an event has RSVP switched on, a member of the public can RSVP without a Cortex account. Modelled on wulfpak.events.
+  - **Slugs.** Portal waves get an optional URL slug, set from the PUBLIC PORTAL admin panel. Slugs are normalised (`"News Updates!"` → `news-updates`), 2–48 characters, and checked against a reserved list so one can never shadow an app route (`about`, `portal`, `share`, `api`, `assets`, `reset-password`, …). A duplicate returns a clear 409 rather than a constraint error.
+  - **Publishing is opt-in twice over**: the wave must be in the public portal *and* have `PUBLISH EVENTS` switched on. Both are admin-only. An unknown slug, a wave not in the portal, and a wave with events switched off all return the same 404, so the endpoint cannot be used to probe for waves.
+  - **Guest RSVP** — name, email and party size, no account. Stored in a new `event_rsvp_guest` table, since `event_rsvp.user_id` is a `NOT NULL` reference to `users`. One RSVP per email per event: a repeat submission updates rather than duplicating, matched case-insensitively.
+  - **Attendee list and CSV export** for moderators, in the PUBLIC PORTAL panel — the only place guest emails are ever returned.
+
+- **`/events` — one page listing everything published across the instance**, grouped by day, each entry linking to its own page. Covers every portal wave that has publishing switched on, plus server-wide events when the operator opts in. This is also the answer to "I made an event and the page was empty": you can see what is actually published without knowing any slug.
+  - **Server-wide events** get their own public pages at `/events/server/<eventId>`, with the same guest RSVP. `server` is a reserved slug so a wave can never claim that path.
+  - Publishing them is behind a new **`PUBLIC SERVER EVENTS`** instance switch that **defaults off** — the first Cortex feature flag to do so. Every existing flag answers "on unless switched off", which is right for things members can already see; putting server-wide events on the open internet is a disclosure and must be a deliberate act, never something that appears on upgrade. `isFeatureEnabled` also fails *closed* for opt-in flags, so a config read error cannot publish them.
+
+### Security
+
+- Guest emails are **encrypted at rest** (AES-256-GCM, `EMAIL_ENCRYPTION_KEY`) with a SHA-256 hash stored alongside for lookup — the same shape the users table uses. The public endpoints return **counts only** and never a name or address.
+- The RSVP endpoint is the only unauthenticated write besides registration, so it carries **two independent limits**: per IP (10 / 15 min) and per email hash (5 / hour). Neither alone is sufficient — one caps an attacker rotating emails, the other caps one rotating IPs.
+- **Cancellation tokens are stored hashed**, never raw. The raw token goes out once in the confirmation email; a leaked database yields no working cancel links. A spent token and a forged one get the same response.
+- Confirmation email is best-effort — an SMTP outage cannot fail an RSVP.
+- Cancelling has its own, more generous limiter, so a spent RSVP budget can't lock a household behind one IP out of cancelling.
+
+### Changed
+
+- **`npm run build` is now atomic.** `vite build` empties its output directory before writing the new one, and the dev box serves `client/dist` straight out of the working copy — so for the ~14 seconds of a build the live site returned **404** for every route, and the service worker then fell back to a cached shell that could be several versions old. The build now stages into `dist.staging`, patches the service worker there, and swaps it into place with two renames. A failed build leaves the previous `dist` untouched instead of deleted. Verified by polling the live site throughout a build: 90/90 requests returned 200. (`build:inplace` is kept as an escape hatch.)
+
+### Fixed
+
+- **Events dated today stopped appearing partway through the evening.** The "upcoming" filter compared against the **UTC** date, while `event_date` is a plain `YYYY-MM-DD` in the organiser's own day. West of Greenwich, UTC rolls over during the evening — so an event at 8:55pm vanished from the public page at 8pm, exactly when someone would be looking for what is on tonight. It now compares against the server's local date.
+- Legacy events stored with a bare `MM-DD` (annual events from before the `recurrence` field) are **excluded from public pages**. The calendar's own expander already skips them because the date will not parse; a public page has nowhere sensible to put one either.
+- `getPortalWaves()` did not select the new `slug` / `events_enabled` columns, so the admin panel reported every wave as unpublished even when it was live. Found by reading the database directly after the UI disagreed with it.
+
 ## [2.67.6] - 2026-08-21
 
 ### Fixed

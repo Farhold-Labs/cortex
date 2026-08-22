@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
+import { API_URL } from '../../config/constants.js';
 
 const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [portalWaves, setPortalWaves] = useState([]);
@@ -62,6 +63,18 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
       await load();
     } catch (err) {
       showToast(err.message || 'Failed to update label', 'error');
+    }
+  };
+
+  // v2.68.0 — slug and events switch. The server normalises and validates the
+  // slug, so surface its message rather than guessing client-side.
+  const handleUpdateEvents = async (waveId, patch) => {
+    try {
+      const res = await fetchAPI(`/admin/portal/${waveId}`, { method: 'PATCH', body: patch });
+      showToast(patch.slug !== undefined ? `Event page: /events/${res.slug || '—'}` : 'Updated', 'success');
+      await load();
+    } catch (err) {
+      showToast(err.message || 'Failed to update', 'error');
     }
   };
 
@@ -171,6 +184,9 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
                 wave={w}
                 onRemove={() => handleRemove(w.waveId)}
                 onUpdateLabel={(lbl) => handleUpdateLabel(w.waveId, lbl)}
+                onUpdateEvents={(patch) => handleUpdateEvents(w.waveId, patch)}
+                fetchAPI={fetchAPI}
+                showToast={showToast}
                 embedSnippet={embedSnippet(w.waveId)}
                 onCopy={() => copySnippet(w.waveId)}
                 copied={copiedId === w.waveId}
@@ -185,9 +201,11 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
   );
 };
 
-const PortalWaveRow = ({ wave, onRemove, onUpdateLabel, embedSnippet, onCopy, copied, isMobile, inputStyle }) => {
+const PortalWaveRow = ({ wave, onRemove, onUpdateLabel, onUpdateEvents, embedSnippet, onCopy, copied, isMobile, inputStyle, fetchAPI, showToast }) => {
   const [editLabel, setEditLabel] = useState(wave.label || '');
   const [showEmbed, setShowEmbed] = useState(false);
+  const [editSlug, setEditSlug] = useState(wave.slug || '');
+  const [showAttendees, setShowAttendees] = useState(false);
 
   const rowBtnStyle = (variant) => ({
     padding: isMobile ? '6px 10px' : '4px 10px',
@@ -241,6 +259,61 @@ const PortalWaveRow = ({ wave, onRemove, onUpdateLabel, embedSnippet, onCopy, co
         </button>
       </div>
 
+      {/* v2.68.0 — public event page */}
+      <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 200px' }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>
+              EVENT PAGE SLUG
+            </div>
+            <input
+              type="text"
+              value={editSlug}
+              onChange={e => setEditSlug(e.target.value)}
+              placeholder="e.g. news"
+              style={inputStyle}
+            />
+          </div>
+          <button
+            onClick={() => onUpdateEvents({ slug: editSlug.trim() || null })}
+            style={{
+              padding: '6px 12px', background: 'var(--accent-green)', border: 'none',
+              color: '#000', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',
+              fontWeight: 'bold', whiteSpace: 'nowrap',
+            }}
+          >
+            Save slug
+          </button>
+          <button
+            onClick={() => onUpdateEvents({ eventsEnabled: !wave.eventsEnabled })}
+            style={rowBtnStyle(wave.eventsEnabled ? 'amber' : undefined)}
+          >
+            {wave.eventsEnabled ? '\u2713 EVENTS PUBLISHED' : 'PUBLISH EVENTS'}
+          </button>
+        </div>
+
+        {wave.slug && wave.eventsEnabled ? (
+          <div style={{ marginTop: 6, fontSize: '0.72rem', fontFamily: 'monospace' }}>
+            <a href={`/events/${wave.slug}`} target="_blank" rel="noopener noreferrer"
+               style={{ color: 'var(--accent-amber)' }}>
+              {window.location.origin}/events/{wave.slug}
+            </a>
+          </div>
+        ) : (
+          <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: '0.7rem', fontFamily: 'monospace' }}>
+            {wave.slug ? 'Slug set — switch on PUBLISH EVENTS to make the page live.'
+                       : 'Give the wave a slug to publish its calendar events publicly.'}
+          </div>
+        )}
+
+        <button onClick={() => setShowAttendees(v => !v)} style={{ ...rowBtnStyle(), marginTop: 8 }}>
+          {showAttendees ? 'HIDE RSVPS' : 'VIEW RSVPS'}
+        </button>
+        {showAttendees && (
+          <AttendeeList waveId={wave.waveId} fetchAPI={fetchAPI} showToast={showToast} rowBtnStyle={rowBtnStyle} />
+        )}
+      </div>
+
       {showEmbed && (
         <div style={{ marginTop: 12 }}>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>EMBED SNIPPET</div>
@@ -257,6 +330,123 @@ const PortalWaveRow = ({ wave, onRemove, onUpdateLabel, embedSnippet, onCopy, co
           </button>
         </div>
       )}
+    </div>
+  );
+};
+
+
+// Lists this wave's events with their RSVP tallies, and expands to the actual
+// attendee list on demand. Guest emails are personal data, so they are only
+// fetched when a moderator asks for a specific event — never listed wholesale.
+const AttendeeList = ({ waveId, fetchAPI, showToast, rowBtnStyle }) => {
+  const [events, setEvents] = useState(null);
+  const [openEventId, setOpenEventId] = useState(null);
+  const [detail, setDetail] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAPI(`/events/wave/${waveId}`)
+      .then(d => { if (!cancelled) setEvents(d.events || d || []); })
+      .catch(() => { if (!cancelled) setEvents([]); });
+    return () => { cancelled = true; };
+  }, [waveId, fetchAPI]);
+
+  const openEvent = async (eventId) => {
+    if (openEventId === eventId) { setOpenEventId(null); setDetail(null); return; }
+    setOpenEventId(eventId);
+    setDetail(null);
+    try {
+      setDetail(await fetchAPI(`/admin/events/${eventId}/attendees`));
+    } catch (err) {
+      showToast(err.message || 'Failed to load RSVPs', 'error');
+      setOpenEventId(null);
+    }
+  };
+
+  const downloadCsv = async (eventId) => {
+    try {
+      // fetchAPI parses JSON, so go direct for a file download.
+      const token = localStorage.getItem('farhold_token');
+      const res = await fetch(`${API_URL}/admin/events/${eventId}/attendees?format=csv`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `rsvps-${eventId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast(err.message || 'Export failed', 'error');
+    }
+  };
+
+  const cell = { padding: '4px 8px', fontFamily: 'monospace', fontSize: '0.72rem', textAlign: 'left' };
+
+  if (!events) return <div style={{ ...cell, color: 'var(--text-muted)' }}>Loading events…</div>;
+  if (!events.length) return <div style={{ ...cell, color: 'var(--text-muted)' }}>This wave has no calendar events.</div>;
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      {events.map(ev => (
+        <div key={ev.id} style={{ borderTop: '1px solid var(--border-subtle)', padding: '6px 0' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '0.75rem', flex: 1, minWidth: 0 }}>
+              {ev.eventDate || ev.event_date} — {ev.title}
+            </span>
+            {(ev.rsvpEnabled ?? ev.rsvp_enabled) ? (
+              <>
+                <button onClick={() => openEvent(ev.id)} style={rowBtnStyle()}>
+                  {openEventId === ev.id ? 'HIDE' : 'RSVPS'}
+                </button>
+                <button onClick={() => downloadCsv(ev.id)} style={rowBtnStyle()}>CSV</button>
+              </>
+            ) : (
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontFamily: 'monospace' }}>no RSVP</span>
+            )}
+          </div>
+
+          {openEventId === ev.id && (
+            detail ? (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ color: 'var(--accent-green)', fontSize: '0.72rem', fontFamily: 'monospace', marginBottom: 4 }}>
+                  {detail.counts.going} going · {detail.counts.guests} attending · {detail.counts.maybe} maybe
+                </div>
+                {detail.guests.length === 0 ? (
+                  <div style={{ ...cell, color: 'var(--text-muted)' }}>No RSVPs yet.</div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ color: 'var(--text-muted)' }}>
+                          <th style={cell}>Name</th><th style={cell}>Email</th>
+                          <th style={cell}>Party</th><th style={cell}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.guests.map(g => (
+                          <tr key={g.id} style={{ color: 'var(--text-secondary)' }}>
+                            <td style={cell}>{g.name}</td>
+                            <td style={cell}>{g.email || '—'}</td>
+                            <td style={cell}>{g.guestCount}</td>
+                            <td style={cell}>{g.status.replace('_', ' ')}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ ...cell, color: 'var(--text-muted)' }}>Loading RSVPs…</div>
+            )
+          )}
+        </div>
+      ))}
     </div>
   );
 };
