@@ -10336,6 +10336,10 @@ export class DatabaseSQLite {
       SELECT *
       FROM events
       WHERE wave_id = ?
+        -- Scope, not just wave_id: an event moved out of a wave keeps its old
+        -- wave_id in some historical rows, and matching on wave_id alone would
+        -- leave it on that wave's public page after it had been moved away.
+        AND scope = 'wave'
         -- Legacy rows store a bare MM-DD for annual events. The calendar's own
         -- expander already skips them (the date won't parse); a public page has
         -- nowhere sensible to put one either, so don't publish them.

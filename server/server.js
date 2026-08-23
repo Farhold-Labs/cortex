@@ -11391,9 +11391,49 @@ app.put('/api/events/:id', authenticateToken, (req, res) => {
     if (updates.title) updates.title = sanitizeInput(updates.title.trim());
     if (updates.description) updates.description = sanitizeInput(updates.description.trim());
     if (updates.location) updates.location = sanitizeInput(updates.location.trim());
+
+    // Moving an event between scopes was silently dropped: `scope` and `waveId`
+    // were not in the list above, so the update succeeded, reported success and
+    // changed nothing. Moving is permission-sensitive, so it carries the same
+    // checks the create route applies rather than being added to that list.
+    if (req.body.scope !== undefined) {
+      const nextScope = req.body.scope;
+      if (!['personal', 'wave', 'server'].includes(nextScope)) {
+        return res.status(400).json({ error: 'scope must be personal, wave, or server' });
+      }
+      if (nextScope === 'server' && !hasRole(user, ROLES.MODERATOR)) {
+        return res.status(403).json({ error: 'Moderator or admin required for server-wide events' });
+      }
+      if (nextScope === 'wave') {
+        const nextWaveId = req.body.waveId !== undefined ? req.body.waveId : event.waveId;
+        if (!nextWaveId) return res.status(400).json({ error: 'waveId required for wave events' });
+        if (!db.isWaveParticipant(nextWaveId, user.id)) {
+          return res.status(403).json({ error: 'Not a participant in this wave' });
+        }
+        updates.waveId = nextWaveId;
+      } else {
+        // Leaving wave scope must clear the wave, or the event keeps pointing at
+        // a wave it no longer belongs to — and would still surface on that
+        // wave's public event page.
+        updates.waveId = null;
+      }
+      updates.scope = nextScope;
+    } else if (req.body.waveId !== undefined && event.scope === 'wave') {
+      // Moving between waves without changing scope.
+      if (!db.isWaveParticipant(req.body.waveId, user.id)) {
+        return res.status(403).json({ error: 'Not a participant in this wave' });
+      }
+      updates.waveId = req.body.waveId;
+    }
+
     const updated = db.updateEvent(req.params.id, updates);
-    if (event.scope === 'wave' && event.waveId) {
-      broadcastToWave(event.waveId, { type: 'wave_event_updated', event: updated });
+
+    // Tell both sides: the wave it left needs to drop it, the wave it joined
+    // needs to show it.
+    const before = event.scope === 'wave' ? event.waveId : null;
+    const after = updated.scope === 'wave' ? updated.waveId : null;
+    for (const waveId of new Set([before, after].filter(Boolean))) {
+      broadcastToWave(waveId, { type: 'wave_event_updated', event: updated });
     }
     res.json({ event: updated });
   } catch (err) {
