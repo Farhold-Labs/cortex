@@ -14,12 +14,38 @@ const RECURRENCE_OPTIONS = [
   { value: 'yearly',    label: 'Yearly' },
 ];
 
+// An empty <input type="time"> makes the browser's picker open at the current
+// time, and nobody schedules an event for right now — so every new event meant
+// changing the time by hand. Default to the next half hour instead, with the
+// end an hour later.
+const nextHalfHour = (from = new Date()) => {
+  const d = new Date(from);
+  d.setSeconds(0, 0);
+  const m = d.getMinutes();
+  // Already exactly on :00 or :30 — keep it rather than skipping ahead.
+  if (m !== 0 && m !== 30) d.setMinutes(m < 30 ? 30 : 60);
+  return d;
+};
+
+const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [], initialDate = '', editEvent = null, onSaved }) => {
+  // Computed once per open. Rounding up can cross midnight (23:50 → 00:00), in
+  // which case the default date has to move with it, or the form would offer a
+  // time that has already passed.
+  const [defaults] = useState(() => {
+    const start = nextHalfHour();
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    return { date: ymd(start), start: hhmm(start), end: hhmm(end) };
+  });
   const [title,              setTitle]              = useState(editEvent?.title              || '');
   const [description,        setDescription]        = useState(editEvent?.description        || '');
-  const [eventDate,          setEventDate]          = useState(editEvent?.eventDate          || initialDate);
-  const [eventTime,          setEventTime]          = useState(editEvent?.eventTime          || '');
-  const [eventEndTime,       setEventEndTime]       = useState(editEvent?.eventEndTime       || '');
+  const [eventDate,          setEventDate]          = useState(editEvent?.eventDate || initialDate || defaults.date);
+  // Only prefill when creating: an existing all-day event has no time, and
+  // falling back to a default here would silently turn it into a timed one.
+  const [eventTime,          setEventTime]          = useState(editEvent ? (editEvent.eventTime || '')    : defaults.start);
+  const [eventEndTime,       setEventEndTime]       = useState(editEvent ? (editEvent.eventEndTime || '') : defaults.end);
   const [location,           setLocation]           = useState(editEvent?.location           || '');
   const [category,           setCategory]           = useState(editEvent?.category           || 'general');
   const [scope,              setScope]              = useState(editEvent?.scope              || 'personal');
