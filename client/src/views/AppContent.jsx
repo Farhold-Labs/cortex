@@ -119,7 +119,10 @@ function AppContent() {
   // Navigate function for internal links
   const navigate = (path) => {
     window.history.pushState({}, '', path);
-    setCurrentPath(path);
+    // Route matching is on the pathname only — a query string (e.g. the ?date=
+    // that selects one occurrence of a repeating event) would otherwise be
+    // swallowed into the last path parameter.
+    setCurrentPath(path.split('?')[0].split('#')[0]);
   };
 
   // Public routes (accessible without login)
