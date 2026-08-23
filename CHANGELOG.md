@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.69.1] - 2026-08-22
+
+### Added
+
+- **The event modal now says whether a wave's calendar is public.** A wave event opened in the calendar shows either its public address, or "This wave's events are not public" with the three steps to publish it (admins only — everyone else is told an admin can do it). Publishing needs a wave added to the portal, given a slug, and switched on, all inside a panel named for the *message* portal, with nothing in the calendar mentioning that publishing exists. Two events were created and their public pages came back empty for exactly this reason; the answer now appears where the question gets asked.
+
+### Fixed
+
+- **Guest RSVPs were rejected on wave events.** A regression in v2.69.0: normalising `getPublicEvent()` to camelCase left the public RSVP route still checking `event.rsvp_enabled`, which no longer exists — so it read `undefined` and answered **403 "RSVP is not open for this event"** for every wave event. Server-wide events were unaffected, which is why it survived the release checks. Anyone whose public page carried an RSVP form could not use it.
+- **The in-app event modal showed member RSVPs only.** Guest RSVPs from the public page were invisible there, even though the counts beside them had included both since v2.69.0 — so the modal could say "1 going" while the public page said 2. It now lists both: members as `@handle`, guests by name with a `+n` for their party, and the summary line uses the combined counts.
+  - Guest **names** are shown to anyone who can already see the attendee list (i.e. members of the wave); their **email addresses** remain visible only in the moderator-only attendee view.
+
 ## [2.69.0] - 2026-08-22
 
 ### Added
