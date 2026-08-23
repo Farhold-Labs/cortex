@@ -11244,7 +11244,28 @@ app.get('/api/events/:id', authenticateToken, (req, res) => {
     }
     const userRsvp = db.getUserRsvp(req.params.id, req.user.userId);
     event.googleCalendarUrl = buildGoogleCalendarUrl(event);
-    res.json({ event, userRsvp: userRsvp?.status || null });
+
+    // Tell the client whether this wave's events are published publicly. Twice
+    // now an event was created and the public URL came back empty, because
+    // publishing is three steps in a panel named for the message portal and
+    // nothing in the calendar mentions it exists. Say so where the question
+    // actually gets asked.
+    let publishing = null;
+    if (event.scope === 'wave' && event.waveId) {
+      const viewer = db.findUserById(req.user.userId);
+      const entry = db.getPortalWave(event.waveId);
+      const live = !!(entry && entry.slug && entry.events_enabled)
+        && isFeatureEnabled('publicPortal') && isFeatureEnabled('calendar');
+      publishing = {
+        published: live,
+        slug: live ? entry.slug : null,
+        url: live ? `/events/${entry.slug}/${event.id}` : null,
+        // Only an admin can act on the hint, so only an admin is told how.
+        canPublish: hasRole(viewer, ROLES.ADMIN),
+      };
+    }
+
+    res.json({ event, userRsvp: userRsvp?.status || null, publishing });
   } catch (err) {
     console.error('Get event error:', err);
     res.status(500).json({ error: 'Failed to get event' });
@@ -11465,7 +11486,17 @@ app.get('/api/events/:id/rsvp', authenticateToken, (req, res) => {
     }
     const rsvps = db.getRsvps(req.params.id);
     const userRsvp = db.getUserRsvp(req.params.id, req.user.userId);
-    res.json({ rsvps, userRsvp: userRsvp?.status || null });
+    // Guests too, so the in-app view agrees with the counts and with the
+    // moderator list. Names only — a guest's email address stays behind the
+    // moderator-only attendee endpoint, since anyone in the wave sees this.
+    const guests = db.getGuestRsvpsForEvent(req.params.id)
+      .map(g => ({ name: g.name, guestCount: g.guestCount, status: g.status }));
+    res.json({
+      rsvps,
+      guests,
+      counts: db.getRsvpCountsCombined(req.params.id),
+      userRsvp: userRsvp?.status || null,
+    });
   } catch (err) {
     console.error('Get RSVP error:', err);
     res.status(500).json({ error: 'Failed to get RSVPs' });
@@ -13483,7 +13514,9 @@ app.post('/api/public/events/:slug/:eventId/rsvp', publicRsvpLimiter, async (req
 
     const event = db.getPublicEvent(entry.wave_id, sanitizeInput(req.params.eventId));
     if (!event) return res.status(404).json({ error: 'Not found' });
-    if (!event.rsvp_enabled) {
+    // camelCase: db.getPublicEvent() runs rows through rowToEvent(). Reading
+    // rsvp_enabled here made every wave-event guest RSVP fail with 403.
+    if (!event.rsvpEnabled) {
       return res.status(403).json({ error: 'RSVP is not open for this event' });
     }
 
