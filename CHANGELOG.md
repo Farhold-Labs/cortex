@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.69.0] - 2026-08-22
+
+### Added
+
+- **Recurring events are expanded on public pages.** A weekly event now appears on every date it actually falls, not just its anchor. Each occurrence links to its own dated page (`?date=YYYY-MM-DD`) so a specific week can be shared. The recurrence rules were **extracted from the in-app calendar and shared**, rather than reimplemented — the two cannot drift apart. A date that the rule does not generate returns 404, so a fabricated URL cannot mint a page for an occurrence that never existed.
+- **Calendar downloads.** Every public event page has *Add to calendar* (`.ics`), which respects the occurrence date, and each wave's page has *Subscribe to this calendar* for the whole published series. Reuses the existing `buildICS()`.
+- **Signed-in visitors RSVP as themselves.** A visitor who already has a session on the server sees "Signed in as …" with Going / Maybe / Can't instead of a name-and-email form, writing to the existing member RSVP table. Tapping the current choice withdraws it, and "RSVP as someone else instead" falls back to the guest form.
+- **One attendee list covering members and guests.** Until now the two halves lived in different places — member RSVPs behind the event in the in-app calendar, guest RSVPs in the PUBLIC PORTAL admin panel — so nobody could see the whole list, and once the counts were combined the count could say 3 while neither list showed 3. The moderator attendee view (and its CSV) now returns both, tagged `member` or `guest`, deduplicated the same way the counts are. Members are identified by handle; their email address is not exposed there.
+- **Member and guest RSVPs are counted together, without double-counting.** A person who RSVP'd as a guest and later signed in and RSVP'd as themselves is matched on their account email and counted once.
+
+### Security
+
+- **`GET /api/events/:id/rsvp` returned the full attendee list of *any* event to *any* authenticated user.** No scope or membership check — unlike `/api/events/:id` and `/api/events/:id/ics` immediately beside it, which both check. Any member could read who was attending a private wave's event, or someone's personal event, knowing only its id. Attendee lists now require wave participation (or ownership, for personal events).
+- `POST /api/events/:id/rsvp` gained a matching check. It is deliberately *more* permissive than the read: a published public event accepts an RSVP from any signed-in user, which is the point of publishing it — but publishing exposes counts, never names.
+
 ## [2.68.0] - 2026-08-21
 
 ### Added
