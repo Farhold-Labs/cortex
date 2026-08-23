@@ -10,6 +10,8 @@ const RSVP_OPTIONS = [
 const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, currentUser, onEdit, onDelete }) => {
   const [event, setEvent]       = useState(initialEvent);
   const [rsvps, setRsvps]       = useState([]);
+  const [guests, setGuests]     = useState([]);   // public RSVPs (names only)
+  const [counts, setCounts]     = useState(null); // members + guests combined
   const [userRsvp, setUserRsvp] = useState(null);
   const [showRsvps, setShowRsvps] = useState(false);
   const [rsvpLoading, setRsvpLoading] = useState(false);
@@ -23,7 +25,12 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
       .catch(() => {});
     if (event.rsvpEnabled) {
       fetchAPI(`/events/${event.id}/rsvp`)
-        .then(data => { setRsvps(data.rsvps || []); setUserRsvp(data.userRsvp); })
+        .then(data => {
+          setRsvps(data.rsvps || []);
+          setGuests(data.guests || []);
+          setCounts(data.counts || null);
+          setUserRsvp(data.userRsvp);
+        })
         .catch(() => {});
     }
   }, [event.id, event.rsvpEnabled, fetchAPI]);
@@ -40,6 +47,8 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
       }
       const data = await fetchAPI(`/events/${event.id}/rsvp`);
       setRsvps(data.rsvps || []);
+      setGuests(data.guests || []);
+      setCounts(data.counts || null);
     } catch (err) {
       showToast(err.message || 'Failed to update RSVP', 'error');
     }
@@ -147,7 +156,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
                   </button>
                 ))}
               </div>
-              {rsvps.length > 0 && (
+              {(rsvps.length > 0 || guests.length > 0) && (
                 <button
                   onClick={() => setShowRsvps(!showRsvps)}
                   style={{
@@ -155,11 +164,13 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
                     color: 'var(--text-muted)', fontSize: '0.7rem', cursor: 'pointer', fontFamily: 'monospace',
                   }}
                 >
-                  {showRsvps ? '▼' : '▶'} {rsvps.filter(r => r.status === 'going').length} going ·{' '}
-                  {rsvps.filter(r => r.status === 'maybe').length} maybe
+                  {showRsvps ? '▼' : '▶'}{' '}
+                  {(counts?.going ?? rsvps.filter(r => r.status === 'going').length)} going
+                  {counts && counts.guests > counts.going ? ` · ${counts.guests} attending` : ''} ·{' '}
+                  {(counts?.maybe ?? rsvps.filter(r => r.status === 'maybe').length)} maybe
                 </button>
               )}
-              {showRsvps && rsvps.length > 0 && (
+              {showRsvps && (rsvps.length > 0 || guests.length > 0) && (
                 <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                   {rsvps.map(r => (
                     <span key={r.user_id} style={{
@@ -168,6 +179,17 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
                       color: r.status === 'going' ? 'var(--accent-green)' : r.status === 'maybe' ? 'var(--accent-amber)' : 'var(--text-dim)',
                     }}>
                       @{r.handle}
+                    </span>
+                  ))}
+                  {/* Public RSVPs. Shown by name — the address is only ever
+                      visible in the moderator-only attendee view. */}
+                  {guests.map((g, i) => (
+                    <span key={`guest-${i}`} style={{
+                      fontSize: '0.7rem', padding: '2px 6px', fontFamily: 'monospace',
+                      background: 'var(--bg-surface)', border: '1px dashed var(--border-subtle)',
+                      color: g.status === 'going' ? 'var(--accent-green)' : g.status === 'maybe' ? 'var(--accent-amber)' : 'var(--text-dim)',
+                    }} title="RSVP'd from the public event page">
+                      {g.name}{g.guestCount > 1 ? ` +${g.guestCount - 1}` : ''}
                     </span>
                   ))}
                 </div>

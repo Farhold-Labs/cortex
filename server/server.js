@@ -11465,7 +11465,17 @@ app.get('/api/events/:id/rsvp', authenticateToken, (req, res) => {
     }
     const rsvps = db.getRsvps(req.params.id);
     const userRsvp = db.getUserRsvp(req.params.id, req.user.userId);
-    res.json({ rsvps, userRsvp: userRsvp?.status || null });
+    // Guests too, so the in-app view agrees with the counts and with the
+    // moderator list. Names only — a guest's email address stays behind the
+    // moderator-only attendee endpoint, since anyone in the wave sees this.
+    const guests = db.getGuestRsvpsForEvent(req.params.id)
+      .map(g => ({ name: g.name, guestCount: g.guestCount, status: g.status }));
+    res.json({
+      rsvps,
+      guests,
+      counts: db.getRsvpCountsCombined(req.params.id),
+      userRsvp: userRsvp?.status || null,
+    });
   } catch (err) {
     console.error('Get RSVP error:', err);
     res.status(500).json({ error: 'Failed to get RSVPs' });
@@ -13483,7 +13493,9 @@ app.post('/api/public/events/:slug/:eventId/rsvp', publicRsvpLimiter, async (req
 
     const event = db.getPublicEvent(entry.wave_id, sanitizeInput(req.params.eventId));
     if (!event) return res.status(404).json({ error: 'Not found' });
-    if (!event.rsvp_enabled) {
+    // camelCase: db.getPublicEvent() runs rows through rowToEvent(). Reading
+    // rsvp_enabled here made every wave-event guest RSVP fail with 403.
+    if (!event.rsvpEnabled) {
       return res.status(403).json({ error: 'RSVP is not open for this event' });
     }
 
