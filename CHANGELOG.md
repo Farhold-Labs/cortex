@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.70.0] - 2026-08-23
+
+### Added
+
+- **Guests who RSVP from a public event page now get reminder emails.** They had been getting nothing: the reminder job builds its recipient list from `getEventParticipants()`, which reads only the `users` table, so somebody who RSVP'd publicly — and handed over an address precisely so they could be told about the event — was never reminded. Guests now receive the 1-day and 1-hour reminders (the 30- and 15-minute ones would be inbox noise), each carrying a fresh cancellation link.
+  - Tracked in a new `event_reminder_sent_guest` table. `event_reminder_sent` could not be reused: its `user_id` is a `NOT NULL` reference to `users`.
+  - A failed send is left unmarked so the next pass retries, and if SMTP is not configured nothing is marked at all.
+  - Cancellation tokens are rotated with each reminder, so the newest email always carries a working link. The alternative would be storing a token the server could replay itself.
+
+### Fixed
+
+- **An event created shortly before it started sent two reminders at once, one of them wrong.** Every reminder window whose threshold the event fell inside fired, so an event 50 minutes away matched both `1day` and `1hour` — and the 1-day message said the event was **"tomorrow"**. Only the tightest applicable window now fires; as time passes the tightest moves inward, so the 1h / 30m / 15m reminders each still arrive at their own moment. This affected member reminders too, and had done since v2.47.0 — it stayed hidden because member emails are additionally filtered by the offline gate.
+
+### Changed
+
+- **New events default to a sensible time.** The time fields started empty, which makes the browser's picker open at the current moment — and nobody schedules an event for right now, so the time always had to be changed by hand. A new event now starts at the **next half hour** with the end an hour later. Rounding *up* rather than to the literal nearest, since the nearest is often a few minutes in the past; crossing midnight moves the default date with it. Editing an existing event is untouched, so an all-day event does not silently acquire a start time.
+
 ## [2.69.2] - 2026-08-23
 
 ### Added

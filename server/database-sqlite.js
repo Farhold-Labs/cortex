@@ -2372,6 +2372,28 @@ export class DatabaseSQLite {
       console.log('✅ event_rsvp_guest table created');
     }
 
+    // v2.70.0 — Reminder bookkeeping for guest RSVPs. Cannot reuse
+    // event_reminder_sent: its user_id is a NOT NULL reference to users, and a
+    // guest has no account.
+    const guestReminderExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='event_reminder_sent_guest'`
+    ).get();
+    if (!guestReminderExists) {
+      console.log('📝 Adding event_reminder_sent_guest table (v2.70.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS event_reminder_sent_guest (
+          id            TEXT PRIMARY KEY,
+          event_id      TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          guest_rsvp_id TEXT NOT NULL REFERENCES event_rsvp_guest(id) ON DELETE CASCADE,
+          window        TEXT NOT NULL,
+          sent_at       TEXT NOT NULL,
+          UNIQUE(event_id, guest_rsvp_id, window)
+        );
+      `);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_reminder_guest_event ON event_reminder_sent_guest(event_id);`);
+      console.log('✅ event_reminder_sent_guest table created');
+    }
+
     // v2.65.0 — Instance configuration (server-wide defaults, feature flags, branding)
     const instanceConfigExists = this.db.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='instance_config'`
@@ -10572,6 +10594,46 @@ export class DatabaseSQLite {
     return [...members, ...guests]
       .map(({ emailHash, ...rest }) => rest)
       .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  }
+
+  // Guests who RSVP'd to an event, with their addresses, for reminder emails.
+  // Separate from getGuestRsvpsForEvent because this one is only ever used by
+  // the reminder job and carries the row id needed for bookkeeping.
+  getGuestRsvpsForReminder(eventId) {
+    return this.db.prepare(`
+      SELECT id, name, email_encrypted, email_iv, status, guest_count
+      FROM event_rsvp_guest WHERE event_id = ?
+    `).all(eventId).map(r => ({
+      id: r.id,
+      name: r.name,
+      email: decryptEmail(r.email_encrypted, r.email_iv),
+      status: r.status,
+      guestCount: r.guest_count,
+    })).filter(g => !!g.email);
+  }
+
+  wasGuestReminderSent(eventId, guestRsvpId, window) {
+    return !!this.db.prepare(
+      `SELECT 1 FROM event_reminder_sent_guest WHERE event_id=? AND guest_rsvp_id=? AND window=?`
+    ).get(eventId, guestRsvpId, window);
+  }
+
+  markGuestReminderSent(eventId, guestRsvpId, window) {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO event_reminder_sent_guest (id, event_id, guest_rsvp_id, window, sent_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(`grem-${crypto.randomUUID()}`, eventId, guestRsvpId, window, new Date().toISOString());
+  }
+
+  // Issue a fresh cancellation token for a guest RSVP and store only its hash.
+  // Rotating means the newest email always carries a working link and older
+  // ones stop working — the same trade-off as any "use the latest email" flow,
+  // and the alternative would be storing a token we could replay ourselves.
+  rotateGuestCancelToken(guestRsvpId) {
+    const token = crypto.randomBytes(24).toString('hex');
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    this.db.prepare(`UPDATE event_rsvp_guest SET cancel_token_hash = ? WHERE id = ?`).run(hash, guestRsvpId);
+    return token;
   }
 
   cancelGuestRsvpByToken(cancelTokenHash) {
