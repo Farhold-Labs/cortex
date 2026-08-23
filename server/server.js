@@ -11407,6 +11407,9 @@ app.post('/api/events/:id/rsvp', authenticateToken, (req, res) => {
     const event = db.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: 'Event not found' });
     if (!event.rsvpEnabled) return res.status(400).json({ error: 'RSVP not enabled for this event' });
+    if (!canRsvpToEvent(event, req.user.userId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const { status } = req.body;
     if (!['going','maybe','not_going'].includes(status)) {
       return res.status(400).json({ error: 'status must be going, maybe, or not_going' });
@@ -11420,10 +11423,46 @@ app.post('/api/events/:id/rsvp', authenticateToken, (req, res) => {
 });
 
 // GET /api/events/:id/rsvp — get RSVP list
+// Is this event published on a public event page? A wave event is public only
+// when an admin put its wave in the portal, gave it a slug and switched events
+// on — the same boundary the /api/public routes enforce.
+function isEventPubliclyPublished(event) {
+  if (!event || event.scope !== 'wave' || !event.waveId) return false;
+  if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')) return false;
+  const entry = db.getPortalWave(event.waveId);
+  return !!(entry && entry.events_enabled && entry.slug);
+}
+
+// Who may RSVP. Wave events normally need participation, but an event published
+// on a public page is open to anyone — that is the whole point of publishing it,
+// and it lets a signed-in member RSVP as themselves rather than as a guest.
+function canRsvpToEvent(event, userId) {
+  if (event.scope === 'server') return true;
+  if (event.scope === 'personal') return event.createdBy === userId;
+  if (event.scope === 'wave') {
+    return db.isWaveParticipant(event.waveId, userId) || isEventPubliclyPublished(event);
+  }
+  return false;
+}
+
+// Who may see the attendee *list*. Deliberately stricter than canRsvpToEvent:
+// publishing an event exposes counts, never names. Without this check any
+// authenticated user could read the attendee list of a private wave's event
+// (or a personal one) just by knowing its id.
+function canSeeEventRsvps(event, userId) {
+  if (event.scope === 'server') return true;
+  if (event.scope === 'personal') return event.createdBy === userId;
+  if (event.scope === 'wave') return db.isWaveParticipant(event.waveId, userId);
+  return false;
+}
+
 app.get('/api/events/:id/rsvp', authenticateToken, (req, res) => {
   try {
     const event = db.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!canSeeEventRsvps(event, req.user.userId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const rsvps = db.getRsvps(req.params.id);
     const userRsvp = db.getUserRsvp(req.params.id, req.user.userId);
     res.json({ rsvps, userRsvp: userRsvp?.status || null });
@@ -13141,7 +13180,7 @@ async function handleGuestRsvp(req, res, event, cancelPath) {
           text: [
             `Thanks ${name} — your RSVP for "${event.title}" is recorded.`,
             ``,
-            `When:  ${event.event_date}${event.event_time ? ' at ' + event.event_time : ''}`,
+            `When:  ${event.eventDate}${event.eventTime ? ' at ' + event.eventTime : ''}`,
             event.location ? `Where: ${event.location}` : null,
             `Party size: ${guestCount}`,
             ``,
@@ -13201,19 +13240,105 @@ function resolveEventSlug(slug, res) {
   return entry;
 }
 
+// Events reaching here have been through rowToEvent(), so they are camelCase.
 const publicEvent = (e) => ({
   id: e.id,
   title: e.title,
   description: e.description || null,
-  date: e.event_date,
-  time: e.event_time || null,
-  endTime: e.event_end_time || null,
+  date: e.eventDate,
+  time: e.eventTime || null,
+  endTime: e.eventEndTime || null,
   timezone: e.timezone || null,
   location: e.location || null,
   category: e.category || null,
-  rsvpEnabled: !!e.rsvp_enabled,
+  rsvpEnabled: !!e.rsvpEnabled,
   recurrence: e.recurrence || null,
-  recurrenceEndDate: e.recurrence_end_date || null,
+  recurrenceEndDate: e.recurrenceEndDate || null,
+  // Set on generated occurrences of a repeating event, so the client can label
+  // them and link to the specific date rather than the series anchor.
+  isOccurrence: !!e.recurringInstance,
+});
+
+// A recurring event has one database row and many occurrences. `?date=` picks
+// one; it must be a date the rule actually generates, so a fabricated date
+// can't mint a page that never existed. Returns false when it doesn't.
+function resolveOccurrence(event, rawDate) {
+  const date = String(rawDate || '').trim();
+  if (!date) return event;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  if (date === event.eventDate) return event;
+  if (!event.recurrence) return false;
+  const target = new Date(date + 'T12:00:00');
+  if (isNaN(target)) return false;
+  const matches = db.expandEventOccurrences(event, target, target);
+  if (!matches.some(o => o.eventDate === date)) return false;
+  return { ...event, eventDate: date, recurringInstance: true };
+}
+
+// Build an .ics for a single public event (or one occurrence of it).
+function sendPublicIcs(res, event) {
+  const ics = buildICS([event], event.title);
+  const filename = `${String(event.title).replace(/[^a-zA-Z0-9]/g, '-').slice(0, 60) || 'event'}.ics`;
+  res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(ics);
+}
+
+// GET /api/public/events/server/:eventId/ics
+app.get('/api/public/events/server/:eventId/ics', (req, res) => {
+  try {
+    if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')
+        || !isFeatureEnabled('publicServerEvents')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const event = db.getPublicServerEvent(sanitizeInput(req.params.eventId));
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    const occurrence = resolveOccurrence(event, req.query.date);
+    if (occurrence === false) return res.status(404).json({ error: 'Not found' });
+    sendPublicIcs(res, occurrence);
+  } catch (err) {
+    console.error('Public server ICS error:', err);
+    res.status(500).json({ error: 'Failed to generate calendar file' });
+  }
+});
+
+// GET /api/public/events/:slug/:eventId/ics — one event, or one occurrence
+app.get('/api/public/events/:slug/:eventId/ics', (req, res) => {
+  try {
+    if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const entry = resolveEventSlug(req.params.slug, res);
+    if (!entry) return;
+    const event = db.getPublicEvent(entry.wave_id, sanitizeInput(req.params.eventId));
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    const occurrence = resolveOccurrence(event, req.query.date);
+    if (occurrence === false) return res.status(404).json({ error: 'Not found' });
+    sendPublicIcs(res, occurrence);
+  } catch (err) {
+    console.error('Public ICS error:', err);
+    res.status(500).json({ error: 'Failed to generate calendar file' });
+  }
+});
+
+// GET /api/public/events/:slug/calendar.ics — the whole published calendar,
+// so a visitor can subscribe once rather than adding events one at a time.
+app.get('/api/public/events/:slug/calendar.ics', (req, res) => {
+  try {
+    if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const entry = resolveEventSlug(req.params.slug, res);
+    if (!entry) return;
+    const events = db.getPublicWaveEvents(entry.wave_id, { includePast: false });
+    const name = entry.label || entry.title;
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${entry.slug}.ics"`);
+    res.send(buildICS(events, name));
+  } catch (err) {
+    console.error('Public calendar ICS error:', err);
+    res.status(500).json({ error: 'Failed to generate calendar file' });
+  }
 });
 
 // GET /api/public/events — everything published across the instance.
@@ -13237,7 +13362,8 @@ app.get('/api/public/events', (req, res) => {
         // wave's slug; server events have no wave, so they get /events/server.
         slug: e.slug || null,
         source: e.source_title || null,
-        href: e.scope === 'server' ? `/events/server/${e.id}` : `/events/${e.slug}/${e.id}`,
+        href: (e.scope === 'server' ? `/events/server/${e.id}` : `/events/${e.slug}/${e.id}`)
+          + (e.recurringInstance ? `?date=${e.eventDate}` : ''),
         rsvpCounts: e.rsvp_enabled ? db.getGuestRsvpCounts(e.id) : null,
       })),
       includesServerEvents: includeServer,
@@ -13258,11 +13384,13 @@ app.get('/api/public/events/server/:eventId', (req, res) => {
     }
     const event = db.getPublicServerEvent(sanitizeInput(req.params.eventId));
     if (!event) return res.status(404).json({ error: 'Not found' });
+    const occurrence = resolveOccurrence(event, req.query.date);
+    if (occurrence === false) return res.status(404).json({ error: 'Not found' });
     res.json({
       slug: 'server',
       waveTitle: null,
-      event: publicEvent(event),
-      rsvpCounts: event.rsvp_enabled ? db.getGuestRsvpCounts(event.id) : null,
+      event: publicEvent(occurrence),
+      rsvpCounts: event.rsvpEnabled ? db.getRsvpCountsCombined(event.id) : null,
     });
   } catch (err) {
     console.error('Public server event error:', err);
@@ -13326,11 +13454,14 @@ app.get('/api/public/events/:slug/:eventId', (req, res) => {
     const event = db.getPublicEvent(entry.wave_id, sanitizeInput(req.params.eventId));
     if (!event) return res.status(404).json({ error: 'Not found' });
 
+    const occurrence = resolveOccurrence(event, req.query.date);
+    if (occurrence === false) return res.status(404).json({ error: 'Not found' });
+
     res.json({
       slug: entry.slug,
       waveTitle: entry.label || entry.title,
-      event: publicEvent(event),
-      rsvpCounts: event.rsvp_enabled ? db.getGuestRsvpCounts(event.id) : null,
+      event: publicEvent(occurrence),
+      rsvpCounts: event.rsvpEnabled ? db.getRsvpCountsCombined(event.id) : null,
     });
   } catch (err) {
     console.error('Public event error:', err);
@@ -13390,14 +13521,15 @@ app.get('/api/admin/events/:eventId/attendees', authenticateToken, (req, res) =>
     const event = db.getEvent(eventId);
     if (!event) return res.status(404).json({ error: 'Event not found' });
 
-    const guests = db.getGuestRsvpsForEvent(eventId);
-    const counts = db.getGuestRsvpCounts(eventId);
+    // Members and guests together, so the list agrees with the counts.
+    const guests = db.getAllRsvpsForEvent(eventId);
+    const counts = db.getRsvpCountsCombined(eventId);
 
     if (req.query.format === 'csv') {
       const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const rows = [
-        ['Name', 'Email', 'Party size', 'Status', 'RSVP at'].map(esc).join(','),
-        ...guests.map(g => [g.name, g.email || '', g.guestCount, g.status, g.createdAt].map(esc).join(',')),
+        ['Name', 'Handle', 'Email', 'Party size', 'Status', 'Via', 'RSVP at'].map(esc).join(','),
+        ...guests.map(g => [g.name, g.handle || '', g.email || '', g.guestCount, g.status, g.via, g.createdAt].map(esc).join(',')),
       ].join('\n');
       const filename = `rsvps-${eventId}.csv`.replace(/[^a-zA-Z0-9._-]/g, '');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');

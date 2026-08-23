@@ -196,6 +196,83 @@ const RsvpForm = ({ slug, eventId, onCounts }) => {
   );
 };
 
+// A visitor who already has a Cortex session on this server can RSVP as
+// themselves instead of retyping their name and email. The public page is
+// otherwise anonymous, so read the session directly rather than pulling in the
+// whole auth context.
+const readSession = () => {
+  try {
+    const token = localStorage.getItem('farhold_token');
+    if (!token) return null;
+    const user = JSON.parse(localStorage.getItem('farhold_user') || 'null');
+    return user ? { token, user } : null;
+  } catch { return null; }
+};
+
+const MemberRsvp = ({ session, eventId, onCounts, onGuestInstead }) => {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Existing RSVP, if any. A 403 here just means this member cannot see the
+  // attendee list for the event — not that they cannot RSVP — so ignore it.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_URL}/events/${encodeURIComponent(eventId)}/rsvp`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled && d) setStatus(d.userRsvp); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [eventId, session.token]);
+
+  const send = async (next) => {
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(`${API_URL}/events/${encodeURIComponent(eventId)}/rsvp`, {
+        method: next === status ? 'DELETE' : 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+        body: next === status ? undefined : JSON.stringify({ status: next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || 'Could not save your RSVP.'); return; }
+      setStatus(next === status ? null : next);
+      onCounts?.();
+    } catch {
+      setError('Could not reach the server.');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={card}>
+      <div style={{ ...label, marginBottom: 10, color: 'var(--accent-amber, #ffd23f)' }}>RSVP</div>
+      <div style={{ color: 'var(--text-dim, #8aa08a)', fontSize: '0.85rem', marginBottom: 10 }}>
+        Signed in as <span style={{ color: 'var(--text-primary, #d8e8d8)' }}>
+          {session.user.displayName || session.user.handle}
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+        {[['going', 'Going'], ['maybe', 'Maybe'], ['not_going', "Can't"]].map(([v, l]) => (
+          <button key={v} type="button" disabled={busy} onClick={() => send(v)}
+            style={{ ...btn(status === v), flex: 1, padding: '10px 8px' }}>{l}</button>
+        ))}
+      </div>
+      {status && (
+        <div style={{ color: 'var(--accent-green, #0ead69)', fontSize: '0.78rem', marginBottom: 8 }}>
+          You're down as {status.replace('_', ' ')}. Tap it again to withdraw.
+        </div>
+      )}
+      {error && <div style={{ color: 'var(--accent-orange, #ff6b35)', fontSize: '0.8rem', marginBottom: 8 }}>{error}</div>}
+      <button type="button" onClick={onGuestInstead}
+        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                 color: 'var(--accent-teal, #3bceac)', fontSize: '0.75rem', fontFamily: 'monospace' }}>
+        RSVP as someone else instead
+      </button>
+    </div>
+  );
+};
+
 // ============ SINGLE EVENT ============
 
 const EventDetail = ({ slug, eventId, onBack }) => {
@@ -203,16 +280,31 @@ const EventDetail = ({ slug, eventId, onBack }) => {
   const [error, setError] = useState(null);
   const [counts, setCounts] = useState(null);
   const [cancelled, setCancelled] = useState(null);
+  const [session] = useState(readSession);
+  const [asGuest, setAsGuest] = useState(false);
   const { isMobile } = useWindowSize();
+
+  // ?date= selects one occurrence of a repeating event; it is carried through
+  // to the API and the .ics so every link refers to the same specific day.
+  const occurrenceDate = new URLSearchParams(window.location.search).get('date');
+  const dateQuery = occurrenceDate ? `?date=${encodeURIComponent(occurrenceDate)}` : '';
+  const base = `${API_URL}/public/events/${encodeURIComponent(slug)}/${encodeURIComponent(eventId)}`;
+
+  const loadCounts = useCallback(() => {
+    fetch(`${base}${dateQuery}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setCounts(d.rsvpCounts); })
+      .catch(() => {});
+  }, [base, dateQuery]);
 
   useEffect(() => {
     let cancelledFetch = false;
-    fetch(`${API_URL}/public/events/${encodeURIComponent(slug)}/${encodeURIComponent(eventId)}`)
+    fetch(`${base}${dateQuery}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { if (!cancelledFetch) { setData(d); setCounts(d.rsvpCounts); } })
       .catch(() => { if (!cancelledFetch) setError('This event could not be found.'); });
     return () => { cancelledFetch = true; };
-  }, [slug, eventId]);
+  }, [base, dateQuery]);
 
   // Cancellation links from confirmation emails land here as ?cancel=<token>.
   useEffect(() => {
@@ -276,13 +368,25 @@ const EventDetail = ({ slug, eventId, onBack }) => {
           }}>{ev.description}</div>
         )}
 
-        {ev.rsvpEnabled && (
-          <div style={{ marginTop: 14 }}><RsvpCounts counts={counts} /></div>
+        {ev.recurrence && (
+          <div style={{ color: 'var(--text-muted, #6a806a)', fontSize: '0.72rem', marginTop: 10, fontFamily: 'monospace' }}>
+            Repeats {ev.recurrence}{ev.recurrenceEndDate ? ` until ${formatDayShort(ev.recurrenceEndDate)}` : ''}
+          </div>
         )}
+
+        <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <a href={`${base}/ics${dateQuery}`} style={{ ...btn(false), textDecoration: 'none', display: 'inline-block' }}>
+            + Add to calendar
+          </a>
+          {ev.rsvpEnabled && <RsvpCounts counts={counts} />}
+        </div>
       </div>
 
       {ev.rsvpEnabled && !past && (
-        <RsvpForm slug={slug} eventId={ev.id} onCounts={setCounts} />
+        session && !asGuest
+          ? <MemberRsvp session={session} eventId={ev.id} onCounts={loadCounts}
+              onGuestInstead={() => setAsGuest(true)} />
+          : <RsvpForm slug={slug} eventId={ev.id} onCounts={setCounts} />
       )}
     </Shell>
   );
@@ -313,17 +417,26 @@ const EventList = ({ slug, onOpen }) => {
         <div style={{ color: 'var(--text-dim, #8aa08a)', marginBottom: 18, lineHeight: 1.5 }}>{data.topic}</div>
       )}
 
+      {data.events.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <a href={`${API_URL}/public/events/${encodeURIComponent(slug)}/calendar.ics`}
+             style={{ ...btn(false), textDecoration: 'none', display: 'inline-block' }}>
+            + Subscribe to this calendar
+          </a>
+        </div>
+      )}
+
       {data.events.length === 0 ? (
         <div style={{ ...card, color: 'var(--text-muted, #6a806a)' }}>
           No upcoming events. Check back soon.
         </div>
       ) : data.events.map(ev => (
         <div
-          key={ev.id}
-          onClick={() => onOpen(ev.id)}
+          key={`${ev.id}-${ev.date}`}
+          onClick={() => onOpen(ev.id, ev.isOccurrence ? ev.date : null)}
           role="link"
           tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(ev.id); } }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(ev.id, ev.isOccurrence ? ev.date : null); } }}
           style={{ ...card, cursor: 'pointer', display: 'flex', gap: 16, alignItems: 'flex-start' }}
         >
           <div style={{
@@ -478,7 +591,12 @@ const PublicEventsView = ({ slug, eventId, navigate }) => {
       />
     );
   }
-  return <EventList slug={slug} onOpen={(id) => navigate(`/events/${slug}/${id}`)} />;
+  return (
+    <EventList
+      slug={slug}
+      onOpen={(id, date) => navigate(`/events/${slug}/${id}${date ? `?date=${date}` : ''}`)}
+    />
+  );
 };
 
 export default PublicEventsView;
