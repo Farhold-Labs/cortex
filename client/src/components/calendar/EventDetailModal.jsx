@@ -12,6 +12,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
   const [rsvps, setRsvps]       = useState([]);
   const [guests, setGuests]     = useState([]);   // public RSVPs (names only)
   const [counts, setCounts]     = useState(null); // members + guests combined
+  const [publishing, setPublishing] = useState(null); // is this wave's calendar public?
   const [userRsvp, setUserRsvp] = useState(null);
   const [showRsvps, setShowRsvps] = useState(false);
   const [rsvpLoading, setRsvpLoading] = useState(false);
@@ -21,6 +22,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
       .then(data => {
         setEvent(data.event);
         setUserRsvp(data.userRsvp);
+        setPublishing(data.publishing || null);
       })
       .catch(() => {});
     if (event.rsvpEnabled) {
@@ -193,6 +195,33 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
                     </span>
                   ))}
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* Is this wave's calendar public? Shown for wave events only. */}
+          {publishing && (
+            <div style={{
+              marginBottom: '16px', padding: '8px 10px', fontFamily: 'monospace', fontSize: '0.7rem',
+              lineHeight: 1.5, background: 'var(--bg-base)',
+              border: `1px solid ${publishing.published ? 'var(--accent-green)40' : 'var(--border-subtle)'}`,
+              color: publishing.published ? 'var(--accent-green)' : 'var(--text-muted)',
+            }}>
+              {publishing.published ? (
+                <>
+                  Public at{' '}
+                  <a href={publishing.url} target="_blank" rel="noopener noreferrer"
+                     style={{ color: 'var(--accent-amber)' }}>
+                    {publishing.url}
+                  </a>
+                </>
+              ) : (
+                <>
+                  This wave's events are not public.
+                  {publishing.canPublish
+                    ? ' To publish them: SETTINGS → ADMIN PANEL → PUBLIC PORTAL → add the wave, give it a slug, then PUBLISH EVENTS.'
+                    : ' An admin can publish them from the public portal settings.'}
+                </>
               )}
             </div>
           )}

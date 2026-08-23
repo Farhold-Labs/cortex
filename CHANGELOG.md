@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.69.1] - 2026-08-22
 
+### Added
+
+- **The event modal now says whether a wave's calendar is public.** A wave event opened in the calendar shows either its public address, or "This wave's events are not public" with the three steps to publish it (admins only — everyone else is told an admin can do it). Publishing needs a wave added to the portal, given a slug, and switched on, all inside a panel named for the *message* portal, with nothing in the calendar mentioning that publishing exists. Two events were created and their public pages came back empty for exactly this reason; the answer now appears where the question gets asked.
+
 ### Fixed
 
 - **Guest RSVPs were rejected on wave events.** A regression in v2.69.0: normalising `getPublicEvent()` to camelCase left the public RSVP route still checking `event.rsvp_enabled`, which no longer exists — so it read `undefined` and answered **403 "RSVP is not open for this event"** for every wave event. Server-wide events were unaffected, which is why it survived the release checks. Anyone whose public page carried an RSVP form could not use it.

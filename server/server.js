@@ -11244,7 +11244,28 @@ app.get('/api/events/:id', authenticateToken, (req, res) => {
     }
     const userRsvp = db.getUserRsvp(req.params.id, req.user.userId);
     event.googleCalendarUrl = buildGoogleCalendarUrl(event);
-    res.json({ event, userRsvp: userRsvp?.status || null });
+
+    // Tell the client whether this wave's events are published publicly. Twice
+    // now an event was created and the public URL came back empty, because
+    // publishing is three steps in a panel named for the message portal and
+    // nothing in the calendar mentions it exists. Say so where the question
+    // actually gets asked.
+    let publishing = null;
+    if (event.scope === 'wave' && event.waveId) {
+      const viewer = db.findUserById(req.user.userId);
+      const entry = db.getPortalWave(event.waveId);
+      const live = !!(entry && entry.slug && entry.events_enabled)
+        && isFeatureEnabled('publicPortal') && isFeatureEnabled('calendar');
+      publishing = {
+        published: live,
+        slug: live ? entry.slug : null,
+        url: live ? `/events/${entry.slug}/${event.id}` : null,
+        // Only an admin can act on the hint, so only an admin is told how.
+        canPublish: hasRole(viewer, ROLES.ADMIN),
+      };
+    }
+
+    res.json({ event, userRsvp: userRsvp?.status || null, publishing });
   } catch (err) {
     console.error('Get event error:', err);
     res.status(500).json({ error: 'Failed to get event' });
