@@ -22110,6 +22110,17 @@ server.listen(PORT, BIND_HOST, () => {
   // Check interval: every 5 minutes
   const REMINDER_CHECK_INTERVAL = 5 * 60 * 1000;
 
+  // The public address of an event, or null when it isn't published. Guests can
+  // only have RSVP'd through such a page, but a wave can be unpublished later.
+  function publicEventPath(event) {
+    if (event.scope === 'server') return `/events/server/${event.id}`;
+    if (event.scope === 'wave' && event.waveId) {
+      const entry = db.getPortalWave(event.waveId);
+      if (entry && entry.slug && entry.events_enabled) return `/events/${entry.slug}/${event.id}`;
+    }
+    return null;
+  }
+
   async function processEventReminders() {
     try {
       const now = Date.now();
@@ -22126,8 +22137,15 @@ server.listen(PORT, BIND_HOST, () => {
         const minUntil = Math.round(msUntil / 60000);
         const participants = db.getEventParticipants(event);
 
-        for (const win of REMINDER_WINDOWS) {
-          if (msUntil > win.ms) continue;
+        // Only the tightest window that applies. Every window whose threshold
+        // the event is inside used to fire, so an event created 50 minutes
+        // before it starts sent the 1-day and 1-hour reminders one second
+        // apart — and the 1-day one said "tomorrow" about something happening
+        // within the hour. As time passes the tightest window moves in, so the
+        // 1h / 30m / 15m reminders still each arrive at their own moment.
+        const applicable = REMINDER_WINDOWS.filter(w => msUntil <= w.ms);
+        const tightest = applicable[applicable.length - 1];   // list runs widest → narrowest
+        for (const win of tightest ? [tightest] : []) {
           for (const participant of participants) {
             if (db.wasReminderSent(event.id, participant.id, win.key)) continue;
             const connected = clients.has(participant.id);
@@ -22164,6 +22182,45 @@ server.listen(PORT, BIND_HOST, () => {
               });
             }
             db.markReminderSent(event.id, participant.id, win.key);
+          }
+
+          // Guests who RSVP'd from a public event page. They have no account,
+          // so email is the only channel — and they handed over an address
+          // precisely so we could tell them about this event. Same two windows
+          // as members; the 30/15-minute ones would be spam to an inbox.
+          if (win.key === '1day' || win.key === '1hour') {
+            for (const guest of db.getGuestRsvpsForReminder(event.id)) {
+              if (db.wasGuestReminderSent(event.id, guest.id, win.key)) continue;
+              try {
+                const emailService = getEmailService();
+                if (!emailService.isConfigured()) break;   // no SMTP: don't mark as sent
+                const cancelToken = db.rotateGuestCancelToken(guest.id);
+                const base = getAppBaseUrl();
+                const path = publicEventPath(event);
+                await emailService.sendEmail({
+                  to: guest.email,
+                  subject: `Reminder: ${event.title} ${win.label}`,
+                  text: [
+                    `${event.title} is ${win.label}.`,
+                    ``,
+                    `When:  ${event.eventDate}${event.eventTime ? ' at ' + event.eventTime : ''}`,
+                    event.location ? `Where: ${event.location}` : null,
+                    `You replied: ${guest.status.replace('_', ' ')}${guest.guestCount > 1 ? ` (party of ${guest.guestCount})` : ''}`,
+                    path ? `` : null,
+                    path ? `Details: ${base}${path}` : null,
+                    ``,
+                    `No longer coming? Cancel here:`,
+                    `${base}${path || ''}?cancel=${cancelToken}`,
+                    `(this replaces any earlier cancellation link)`,
+                  ].filter(v => v !== null).join('\n'),
+                });
+                db.markGuestReminderSent(event.id, guest.id, win.key);
+                console.log(`📅 Sent ${win.key} guest reminder for "${event.title}" to a public RSVP`);
+              } catch (mailErr) {
+                // Leave it unmarked so the next pass retries.
+                console.error(`📅 Guest reminder failed for event ${event.id}:`, mailErr.message);
+              }
+            }
           }
         }
       }
