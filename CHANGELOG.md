@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.69.2] - 2026-08-23
+
+### Fixed
+
+- **Moving an event between scopes silently did nothing.** Editing a personal event to belong to a wave (or the reverse) reported "Event updated" and left it exactly where it was. The update route has an allow-list of editable fields, and `scope` / `waveId` were not on it — the client sent them, the server dropped them, everything else saved, and the 200 response made it look like it had worked.
+  - Moving is permission-sensitive, so rather than adding the two fields to that list it now carries the same checks the create route applies: moderator or admin to move an event server-wide, participation in the target wave to move it into one, and a `waveId` is required when the scope is `wave`.
+  - Leaving wave scope now **clears** `wave_id`, instead of leaving the event pointing at a wave it no longer belongs to.
+  - Both waves are notified over the socket when an event moves between them — the one it left needs to drop it, the one it joined needs to show it. Previously only the original wave was told.
+
+### Security
+
+- The public wave event query matched on `wave_id` alone, without checking scope. An event moved out of a wave while keeping a stale `wave_id` would have continued to appear on that wave's public page. It now requires `scope = 'wave'` as well.
+
 ## [2.69.1] - 2026-08-22
 
 ### Added
