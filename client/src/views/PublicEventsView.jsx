@@ -275,7 +275,7 @@ const MemberRsvp = ({ session, eventId, onCounts, onGuestInstead }) => {
 
 // ============ SINGLE EVENT ============
 
-const EventDetail = ({ slug, eventId, onBack }) => {
+const EventDetail = ({ slug, eventId, onBack, navigate }) => {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [counts, setCounts] = useState(null);
@@ -323,7 +323,16 @@ const EventDetail = ({ slug, eventId, onBack }) => {
   const past = isPast(ev.date);
 
   return (
-    <Shell title={data.waveTitle} slug={slug} onBack={onBack}>
+    <Shell
+      title={data.waveTitle}
+      slug={slug}
+      navigate={navigate}
+      onBack={onBack}
+      // A server-wide event has no wave list to go back to, so its back button
+      // goes to the index — it used to point at /events/server, which is not a
+      // page and rendered "No event page found at this address."
+      backLabel={slug === 'server' ? 'All events' : `${data.waveTitle || 'Wave'} events`}
+    >
       {cancelled && (
         <div style={{ ...card, borderColor: 'var(--accent-orange, #ff6b35)' }}>
           {cancelled === 'done' && 'Your RSVP has been cancelled.'}
@@ -394,7 +403,7 @@ const EventDetail = ({ slug, eventId, onBack }) => {
 
 // ============ EVENT LIST ============
 
-const EventList = ({ slug, onOpen }) => {
+const EventList = ({ slug, onOpen, navigate }) => {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const { isMobile } = useWindowSize();
@@ -412,7 +421,7 @@ const EventList = ({ slug, onOpen }) => {
   if (!data) return <Shell><div style={{ ...card, color: 'var(--text-muted, #6a806a)' }}>Loading…</div></Shell>;
 
   return (
-    <Shell title={data.title} slug={slug}>
+    <Shell title={data.title} slug={slug} navigate={navigate}>
       {data.topic && (
         <div style={{ color: 'var(--text-dim, #8aa08a)', marginBottom: 18, lineHeight: 1.5 }}>{data.topic}</div>
       )}
@@ -497,7 +506,7 @@ const EventIndex = ({ navigate }) => {
   }
 
   return (
-    <Shell title="What's on" slug="index">
+    <Shell title="What's on" slug="index" navigate={navigate}>
       {days.length === 0 ? (
         <div style={{ ...card, color: 'var(--text-muted, #6a806a)' }}>
           No upcoming events. Check back soon.
@@ -544,7 +553,7 @@ const EventIndex = ({ navigate }) => {
 
 // ============ SHELL ============
 
-const Shell = ({ children, title, slug, onBack }) => (
+const Shell = ({ children, title, slug, onBack, backLabel, navigate }) => (
   <div style={{
     minHeight: '100vh',
     background: 'var(--bg-base, #050805)',
@@ -556,13 +565,29 @@ const Shell = ({ children, title, slug, onBack }) => (
       {!isEmbed && (
         <div style={{ marginBottom: 22 }}>
           {onBack ? (
-            <button onClick={onBack} style={{ ...btn(false), marginBottom: 14 }}>← All events</button>
+            <button onClick={onBack} style={{ ...btn(false), marginBottom: 14 }}>
+              ← {backLabel || 'Back'}
+            </button>
           ) : null}
           {title && (
             <div style={{
               color: 'var(--accent-amber, #ffd23f)', fontSize: '0.75rem',
               letterSpacing: '0.12em', textTransform: 'uppercase', fontFamily: 'monospace',
             }}>{title} · Events</div>
+          )}
+          {/* Every wave/event page offers a way up to everything published on
+              the server; without it a visitor who arrives on a shared link has
+              no idea the rest exists. */}
+          {slug && slug !== 'index' && (
+            <button
+              onClick={() => (navigate ? navigate('/events') : (window.location.href = '/events'))}
+              style={{
+                marginTop: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                color: 'var(--accent-teal, #3bceac)', fontFamily: 'monospace', fontSize: '0.72rem',
+              }}
+            >
+              See all events on this server →
+            </button>
           )}
         </div>
       )}
@@ -587,13 +612,15 @@ const PublicEventsView = ({ slug, eventId, navigate }) => {
       <EventDetail
         slug={slug}
         eventId={eventId}
-        onBack={() => navigate(`/events/${slug}`)}
+        navigate={navigate}
+        onBack={() => navigate(slug === 'server' ? '/events' : `/events/${slug}`)}
       />
     );
   }
   return (
     <EventList
       slug={slug}
+      navigate={navigate}
       onOpen={(id, date) => navigate(`/events/${slug}/${id}${date ? `?date=${date}` : ''}`)}
     />
   );
