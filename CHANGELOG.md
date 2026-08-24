@@ -13,7 +13,7 @@ Full audit against the code. Three of the findings were factual errors rather th
 
 - **README claimed daily recurrence, which does not exist.** The server accepts `weekly`, `biweekly`, `monthly`, `yearly` — so a reader following the README would have tried a daily event and received a 400. Bi-weekly was also missing from the list. Corrected.
 - **README documented `GET`/`POST /api/waves/:id/events`. Neither route exists.** The real endpoints are `GET /api/events/wave/:waveId` and `POST /api/events`. Corrected, and the calendar section rewritten to match what the API actually exposes.
-- **`landing/nginx.conf` pointed its `root` at a developer path** (`/home/jempson/development/cortex/landing`) that serves nothing in production; farhold.com is served from `/home/cortex/cortex/landing` on the production VPS. Corrected.
+- **`landing/nginx.conf` pointed its `root` at a developer path** (`/home/jempson/development/cortex/landing`) that serves nothing in production. The real docroot is **`/var/www/farhold-landing/`**, owned by root — *not* the repo's `landing/` directory. Deploying Cortex updates `~/cortex/landing/` and leaves the live page untouched, so publishing the landing page is a deliberate copy step. The config now records both the real path and the command.
 
 Beyond the errors:
 
@@ -25,7 +25,7 @@ Beyond the errors:
 
 ### Changed
 
-- **Landing page** gained an *Events & Calendar* card. The last eight releases were about events and the page did not mention them at all.
+- **Landing page** gained an *Events & Calendar* card. The last eight releases were about events and the page did not mention them at all. This does **not** go live with the deploy — see the docroot note above; it needs `sudo cp ~/cortex/landing/index.html /var/www/farhold-landing/index.html` on the production VPS.
 
 ## [2.72.0] - 2026-08-24
 
