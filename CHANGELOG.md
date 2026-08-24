@@ -5,6 +5,36 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.72.0] - 2026-08-24
+
+### Added
+
+- **Events now appear inside the wave they belong to.** Opening a wave from a reminder or a calendar entry used to show nothing about the event, so unless the title happened to explain itself you arrived with no idea what it was about. Three surfaces now cover it:
+  - **An event card in the timeline.** Creating a wave event posts a card into the wave, so it is discussable in context, raises unread counts, reaches notifications, and stays in history and search. The card carries the date, time, location, a description excerpt, the attendee tally and **Going / Maybe / Can't inline** — one tap where it previously took four.
+  - **An upcoming-events banner** at the top of the wave, listing the next few with `Today` / `Tomorrow` / weekday labels. Answers "what's coming?" without scrolling history.
+  - **Create an event without leaving the wave** — `+ event` on the banner opens the form with the scope and wave already filled in, where the calendar makes you choose both from a list.
+- The card **stores only the event id and renders live**, so editing or cancelling an event updates every card rather than leaving a message in the history that lies about it. A deleted event degrades the card to "This event has been cancelled or removed" — the ping's `event_id` is `ON DELETE SET NULL`, so the conversation underneath a cancelled event survives it.
+- In an **end-to-end encrypted wave the card says so**: the server creates it and holds no wave key, so the card is plaintext. Event records were always stored in plaintext, so this exposes nothing new — but an encrypted wave should not imply otherwise, so the card carries "🔓 Event details are not end-to-end encrypted".
+
+### Fixed
+
+- `/api/events/wave/:waveId` returned every event ever attached to a wave, including past ones and unexpanded recurring series. It now takes `?upcoming=1`, which expands recurrences and returns only what is still to come — what a banner inside a wave actually wants.
+
+## [2.71.0] - 2026-08-23
+
+### Changed
+
+- **In-app event reminders now escalate as the event approaches.** Every reminder used to arrive as the same small card in the top-right corner, which is easy to miss entirely when the event is fifteen minutes away.
+  - A day or an hour out: the corner card, as before, now with a live countdown and actions.
+  - Thirty or fifteen minutes out, or starting: a **centre-stage banner** — wider, orange, a pulsing glow, a CRT sweep line, the title at 1.25rem and a countdown ticking **every second** (`14m 03s`). Seconds only appear under ten minutes, where they mean something.
+  - Both gained **Open wave** and **Dismiss**. The timer runs once per second only while something urgent is on screen, and every animation is dropped under `prefers-reduced-motion` in favour of a static shadow.
+
+### Fixed
+
+- **Crawl-bar alerts never appeared for events created later the same day.** `generateDailyAlerts()` only creates alerts for *today's* events but ran **once every 24 hours** — so anything added after that day's sweep had already missed its only chance, and never reached the ticker at all. It now sweeps every 15 minutes; every branch already checked for an existing alert first, so re-running costs nothing.
+- **The alert sweep used the UTC date while building its alert window from the local one**, so the two disagreed every evening west of Greenwich — it would look for tomorrow's events while stamping the alert with today's window. Same bug class as the public event queries fixed in v2.68.0.
+- **The reminder payload carried no `waveId`**, so a reminder had no way to offer a jump to its event. Fixed in the reminder job *and* in the separate on-login catch-up path, which builds its own payload and had the same omission.
+
 ## [2.70.0] - 2026-08-23
 
 ### Added
