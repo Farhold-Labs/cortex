@@ -6711,7 +6711,16 @@ const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents'];
 const ALL_INSTANCE_FEATURES = [...INSTANCE_FEATURES, ...INSTANCE_OPT_IN_FEATURES];
 
 // Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
-const INSTANCE_BRANDING_FIELDS = ['instanceName', 'tagline'];
+const INSTANCE_BRANDING_FIELDS = ['instanceName', 'tagline', 'publicTheme'];
+
+// Themes the client ships. `publicTheme` is written straight into a
+// `data-theme` attribute by the boot script, so it is validated against this
+// list rather than sanitised as free text.
+const PUBLIC_THEME_IDS = [
+  'serenity', 'malsBrowncoat', 'zoesWarrior', 'washSky', 'kayleeFloweredDress',
+  'jaynesKnitCap', 'inaraSilk', 'simonsClinic', 'riversMind', 'booksWisdom',
+  'reaverRed', 'allianceWhite', 'pipBoy', 'highContrast', 'amoled', 'blackAndWhite',
+];
 
 function getInstanceDefaults() {
   try {
@@ -10233,7 +10242,11 @@ app.put('/api/admin/instance-config', authenticateToken, (req, res) => {
       if (typeof value !== 'string') {
         return res.status(400).json({ error: `Branding field '${key}' must be a string` });
       }
-      patch.branding[key] = sanitizeInput(value).slice(0, 120);
+      // publicTheme becomes a data-theme attribute value; only known ids allowed.
+      if (key === 'publicTheme' && !PUBLIC_THEME_IDS.includes(value)) {
+        return res.status(400).json({ error: `publicTheme must be one of: ${PUBLIC_THEME_IDS.join(', ')}` });
+      }
+      patch.branding[key] = key === 'publicTheme' ? value : sanitizeInput(value).slice(0, 120);
     }
   }
 
