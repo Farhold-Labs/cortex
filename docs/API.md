@@ -43,6 +43,10 @@ The Cortex API is a RESTful API that powers the Cortex federated communication p
    - [Federation](#federation-endpoints)
    - [Cross-Port Authentication](#cross-port-authentication-endpoints)
    - [Public Portal](#public-portal-endpoints)
+   - [Public Event Pages](#public-event-pages-endpoints)
+   - [Calendar & Events](#calendar--events-endpoints)
+   - [Instance Configuration](#instance-configuration-endpoints)
+   - [Invitations](#invitations-endpoints)
    - [Crawl Bar](#crawl-bar-endpoints)
 5. [WebSocket API](#websocket-api)
 
@@ -3952,6 +3956,167 @@ Updates a portal wave's `label` and/or `displayOrder`. **Admin only.**
 ### DELETE /api/admin/portal/:waveId
 
 Removes a wave from the portal. **Admin only.**
+
+---
+
+## Public Event Pages Endpoints
+
+*(v2.68.0 – v2.72.0)* A wave's calendar can be published to login-free pages. **Nothing is public until an admin does two things**: adds the wave to the public portal *and* switches `PUBLISH EVENTS` on for it, having given it a URL slug. An unknown slug, a wave not in the portal, and a wave with events switched off all return an identical `404`, so these endpoints cannot be used to discover what waves a server has.
+
+Slugs are normalised (`"News Updates!"` → `news-updates`), 2–48 characters, and checked against a reserved list so one can never shadow an application route. `server` is reserved for the server-wide event route below.
+
+All endpoints here are unauthenticated. Public responses carry **RSVP counts only** — never an attendee's name or address.
+
+### GET /api/public/events
+
+Everything published on this server, in date order, with recurring events expanded into occurrences. Includes server-wide events only when the operator has switched on `publicServerEvents`, which **defaults off**.
+
+**Query:** `past=1` to include past events.
+
+**Response:** `200 OK`
+```json
+{
+  "events": [
+    {
+      "id": "event-...", "title": "Read-through: Act I",
+      "date": "2026-08-25", "time": "19:00", "endTime": "21:00",
+      "location": "The Barn", "rsvpEnabled": true, "isOccurrence": false,
+      "scope": "wave", "slug": "earnest", "source": "Earnest",
+      "href": "/events/earnest/event-...",
+      "rsvpCounts": { "going": 4, "maybe": 1, "not_going": 0, "guests": 6 }
+    }
+  ],
+  "includesServerEvents": false
+}
+```
+
+### GET /api/public/events/:slug
+
+One wave's upcoming published events. `404` if the slug is unknown or the wave is not publishing.
+
+### GET /api/public/events/:slug/:eventId
+
+A single event. `?date=YYYY-MM-DD` selects one occurrence of a repeating event; a date the recurrence rule does not generate returns `404`.
+
+### GET /api/public/events/server/:eventId
+
+A server-wide event. Requires `publicServerEvents` to be switched on.
+
+### GET /api/public/events/:slug/:eventId/ics
+### GET /api/public/events/server/:eventId/ics
+
+A calendar file for one event, honouring `?date=` for occurrences.
+
+### GET /api/public/events/:slug/calendar.ics
+
+The whole published calendar for a wave, for subscribing once rather than adding events individually.
+
+### POST /api/public/events/:slug/:eventId/rsvp
+### POST /api/public/events/server/:eventId/rsvp
+
+Guest RSVP — no account required. **The only unauthenticated write besides registration**, so it carries two independent limits: **10 per 15 minutes per IP** and **5 per hour per email address**. Either alone would leave an attacker rotating the other uncapped.
+
+**Body:**
+```json
+{ "name": "Inara Serra", "email": "inara@example.com", "guestCount": 3, "status": "going" }
+```
+
+`status` is `going` (default), `maybe` or `not_going`. `guestCount` is 1–20. One RSVP per email per event — a repeat submission updates the existing one rather than adding a duplicate, matched case-insensitively.
+
+**Response:** `201 Created` (new) or `200 OK` (updated)
+```json
+{ "success": true, "updated": false, "emailed": true,
+  "counts": { "going": 5, "maybe": 1, "not_going": 0, "guests": 8 } }
+```
+
+Emails are stored encrypted with a hash for lookup. A confirmation carries a cancellation link; the token is stored only as a hash and is reissued with each reminder.
+
+### DELETE /api/public/events/rsvp/:token
+
+Cancels a guest RSVP using the token from its email. A spent token and a forged one return the same response (`{ "success": true, "removed": false }`), revealing nothing to someone guessing.
+
+---
+
+## Calendar & Events Endpoints
+
+### GET /api/events
+
+Events in a date range. **Query:** `from`, `to` (max 93 days apart), optional `scope` (`server,personal,wave`) and `category`. Recurring events are expanded into occurrences.
+
+### GET /api/events/wave/:waveId
+
+A wave's events. Requires participation. `?upcoming=1` expands recurrences and returns only what is still to come (`&limit=` up to 20); without it, every event ever attached to the wave, unexpanded.
+
+### POST /api/events
+
+Creates an event. `scope` is `personal`, `wave` (requires `waveId` and participation) or `server` (moderator+). `recurrence` is `weekly`, `biweekly`, `monthly` or `yearly`, and anything but `yearly` requires `recurrenceEndDate`.
+
+Creating a **wave** event also posts an event card into that wave. The card stores only the event id and renders live, so edits and cancellations are reflected rather than frozen.
+
+### PUT /api/events/:id
+
+Updates an event, **including moving it between scopes**. Moving carries the same checks as creation: moderator+ for `server`, participation for the target wave, `waveId` required when scope is `wave`. Leaving wave scope clears the wave association.
+
+### DELETE /api/events/:id
+
+Deletes an event. Any event card ping in a wave survives with its `event_id` cleared, so the conversation underneath a cancelled event is preserved.
+
+### GET/POST/DELETE /api/events/:id/rsvp
+
+Read, set, or withdraw your own RSVP.
+
+`GET` returns member RSVPs, guest RSVPs (names only — **never addresses**), combined counts and your own answer. **Reading the attendee list requires participation in the wave** (or ownership, for a personal event). Setting one is deliberately more permissive: a publicly published event accepts an RSVP from any signed-in user.
+
+### GET /api/events/:id/ics
+
+A calendar file for one event.
+
+### GET /api/admin/events/:eventId/attendees
+
+*(moderator+)* Everyone who has responded — members and guests in one list, deduplicated on account email so somebody who did both is counted once. Each row is tagged `member` or `guest`; members appear by handle, guests by name and email. **The only endpoint that returns guest email addresses.**
+
+**Query:** `format=csv` for a spreadsheet export.
+
+---
+
+## Instance Configuration Endpoints
+
+*(v2.65.0)* Server-wide defaults, feature switches and branding.
+
+### GET /api/instance-config
+
+Public and unauthenticated — the login screen needs it before anyone has signed in. Deliberately narrow: **branding and feature flags only**, never preference defaults or anything operator-sensitive.
+
+### GET/PUT /api/admin/instance-config
+
+*(admin)* Full configuration. Preference defaults store **only explicit overrides** — `null` clears one back to the code default, and `false` is a real value, not an absence.
+
+Feature switches answer *"on unless switched off"*, with one exception: **`publicServerEvents` defaults off** and must be switched on deliberately, because publishing server-wide events to the open internet is a disclosure rather than a UI change. It also fails **closed** if the configuration cannot be read.
+
+Switching a feature off hides it in the client **and** refuses the matching API calls with `403 { "code": "FEATURE_DISABLED" }` — users cannot re-enable it for themselves.
+
+---
+
+## Invitations Endpoints
+
+*(v2.67.0)* Single-use invitation links, so a server can close registration without becoming impossible to join.
+
+### POST /api/admin/invites
+
+*(moderator+; admin for role-granting invites)* Creates an invitation. Optionally tied to an email address, with a note and an expiry of 1/7/30/90 days.
+
+**Only the SHA-256 hash of the token is stored.** The usable link is returned exactly once, at creation, and cannot be recovered afterwards — a leaked database yields no usable invitations. Revoke and reissue is the only path if a link is lost.
+
+### GET /api/admin/invites
+### DELETE /api/admin/invites/:id
+
+List and revoke invitations.
+
+### GET /api/invites/:token
+
+Public and rate-limited. Validates a token before the signup form is filled in. Responses are deliberately uniform: a token that never existed, one already used, one revoked and one expired all return the same message, revealing nothing to somebody guessing tokens.
+
+An invitation is **consumed after the account exists**, not before, so a failed signup does not burn the link. Consumption is a conditional `UPDATE`, so two people racing the same link cannot both claim it.
 
 ---
 

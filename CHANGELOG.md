@@ -5,6 +5,28 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.72.1] - 2026-08-24
+
+### Documentation
+
+Full audit against the code. Three of the findings were factual errors rather than staleness:
+
+- **README claimed daily recurrence, which does not exist.** The server accepts `weekly`, `biweekly`, `monthly`, `yearly` — so a reader following the README would have tried a daily event and received a 400. Bi-weekly was also missing from the list. Corrected.
+- **README documented `GET`/`POST /api/waves/:id/events`. Neither route exists.** The real endpoints are `GET /api/events/wave/:waveId` and `POST /api/events`. Corrected, and the calendar section rewritten to match what the API actually exposes.
+- **`landing/nginx.conf` pointed its `root` at a developer path** (`/home/jempson/development/cortex/landing`) that serves nothing in production; farhold.com is served from `/home/cortex/cortex/landing` on the production VPS. Corrected.
+
+Beyond the errors:
+
+- **`docs/PRIVACY.md` did not mention guest RSVP at all** — the only route by which Cortex stores data about someone who has no account. It now documents exactly what is kept when a member of the public RSVPs (name in plaintext, email encrypted with a hash for lookup, party size, hashed cancellation token), who can see it (names to wave members and moderators, addresses to moderators only, never on the public page), and how to remove it. It also now states plainly that **calendar events are stored in plaintext even in an end-to-end encrypted wave** — E2EE covers message content and never covered calendar entries.
+- **`docs/API.md`** gained the endpoints added since v2.60.0: public event pages, calendar and events, instance configuration, and invitations, including the rate-limiting and 404-uniformity behaviour that makes them safe to expose.
+- **README** brought from v2.57.2 to v2.72.0.
+- **`OUTSTANDING-FEATURES.md`** and **`docs/BACKLOG.md`** completed tables extended from v2.47.2 / v2.28.1 to v2.72.0.
+- The old "droplet"/"burst"/"group" references in `docs/API.md` were checked and **deliberately left**: they document backward-compatible aliases that still exist, with 20 live `/api/groups` routes.
+
+### Changed
+
+- **Landing page** gained an *Events & Calendar* card. The last eight releases were about events and the page did not mention them at all.
+
 ## [2.72.0] - 2026-08-24
 
 ### Added
