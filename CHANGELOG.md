@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.73.0] - 2026-08-24
+
+### Added
+
+- **The public portal and event pages have their own theme, chosen by the operator.** A new `PUBLIC PAGE THEME` setting under INSTANCE DEFAULTS → BRANDING picks from the sixteen shipped themes, and applies to every visitor of `/portal` and `/events*`. Members' own theme choices are untouched. Left unset, the pages use the default.
+  - `publicTheme` is validated against the known theme ids rather than sanitised as free text, because it is written straight into a `data-theme` attribute — an injection attempt is rejected with the list of valid values.
+  - The value is served by the already-public `/api/instance-config` and cached in `localStorage` under its own key, so only a visitor's very first view can show the default before the operator's theme lands.
+
+### Fixed
+
+- **Public pages leaked the visitor's private theme.** The boot script in `index.html` applies a stored theme before React loads, and it ran on *every* route — so anyone who had ever signed in on that browser saw the portal and event pages painted in their own preference, while a stranger saw the default. Two people opening the same shared event link got different colours, and neither the operator nor the visitor had asked for that. Public routes now read only the instance's own cached theme.
+
 ## [2.72.3] - 2026-08-24
 
 ### Documentation

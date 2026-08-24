@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { VERSION } from '../config/constants.js';
+import { VERSION, API_URL } from '../config/constants.js';
 import { storage } from '../utils/storage.js';
 import { useAuth } from '../hooks/useAPI.js';
 import LoginScreen from './LoginScreen.jsx';
@@ -124,6 +124,33 @@ function AppContent() {
     // swallowed into the last path parameter.
     setCurrentPath(path.split('?')[0].split('#')[0]);
   };
+
+  // Public pages use the theme the instance operator chose, not the visitor's.
+  // The boot script in index.html applies a cached value synchronously; this
+  // refreshes it from the server and caches it for next time, so the only visit
+  // that can flash is the very first one.
+  useEffect(() => {
+    const path = currentPath;
+    const isPublicPage = path === '/portal' || path === '/events' || path.startsWith('/events/');
+    if (!isPublicPage) return;
+    let cancelled = false;
+    fetch(`${API_URL}/instance-config`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (cancelled || !data) return;
+        const theme = data.branding?.publicTheme || null;
+        if (theme) {
+          localStorage.setItem('farhold_public_theme', theme);
+          document.documentElement.setAttribute('data-theme', theme);
+        } else {
+          // Operator cleared it — drop the cache and fall back to the default.
+          localStorage.removeItem('farhold_public_theme');
+          document.documentElement.removeAttribute('data-theme');
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentPath]);
 
   // Public routes (accessible without login)
   if (currentPath === '/cross-port-auth') {
