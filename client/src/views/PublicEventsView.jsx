@@ -385,8 +385,16 @@ const EventDetail = ({ slug, eventId, onBack, navigate }) => {
 
         <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <a href={`${base}/ics${dateQuery}`} style={{ ...btn(false), textDecoration: 'none', display: 'inline-block' }}>
-            + Add to calendar
+            ↓ .ics (Apple / Outlook)
           </a>
+          {/* Built server-side from the occurrence being viewed, so adding a
+              particular week of a repeating event adds that week. */}
+          {ev.googleCalendarUrl && (
+            <a href={ev.googleCalendarUrl} target="_blank" rel="noopener noreferrer"
+               style={{ ...btn(false), textDecoration: 'none', display: 'inline-block' }}>
+              + Google Calendar
+            </a>
+          )}
           {ev.rsvpEnabled && <RsvpCounts counts={counts} />}
         </div>
       </div>
