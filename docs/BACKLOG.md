@@ -27,4 +27,21 @@ Future feature ideas and enhancements for consideration.
 
 ---
 
+## Pending
+
+### Add to Google Calendar from public event pages
+
+The public event pages offer an `.ics` download, but no one-click **Add to Google Calendar** link — the in-app event modal has had one for a while.
+
+The work is small because the hard part already exists:
+
+- `buildGoogleCalendarUrl(ev)` (`server/server.js`) already builds the URL.
+- It is currently attached in **one** place only: the authenticated `GET /api/events/:id`.
+- Expose it from `publicEvent()` — the shaper used by every `/api/public/events/*` response — so the public pages receive it too.
+- Add the button beside *"+ Add to calendar"* in `PublicEventsView.jsx`.
+
+Note the URL must respect the `?date=` occurrence of a repeating event, the way the `.ics` route already does; otherwise every occurrence of a weekly event would add the series anchor to someone's calendar.
+
+---
+
 *"We have done the impossible, and that makes us mighty."*
