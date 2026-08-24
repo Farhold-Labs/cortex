@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
-**Last Updated:** April 2026
-**Current Version:** v2.47.2
+**Last Updated:** August 2026
+**Current Version:** v2.72.0
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.47.2)
+## Completed Features (v1.5.0 - v2.72.0)
 
 | Feature | Version |
 |---------|---------|
@@ -79,6 +79,21 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | People Nav Consolidation (Contacts + Crews merged into single People nav item) | v2.47.0 |
 | Bot Post Notifications (createPingNotifications now called for bot/posting token posts) | v2.47.1 |
 | Bot Owner Notifications, Posting Tokens Admin Panel, Electron Media URL Fix | v2.47.2 |
+| Public Portal (admin-selected non-E2EE waves readable without login, iframe embeds) | v2.55.0 |
+| Cross-Port Authentication | v2.56.0 |
+| Service Worker Cache-Poisoning Fix (404-invariant for missing assets) | v2.60.3 |
+| Accessibility Pass (WCAG 2.1 AA quick wins) | v2.62.0 |
+| Instance Configuration (server-wide preference defaults, feature switches, branding) | v2.65.0 |
+| Per-Instance Notification Defaults | v2.66.0 |
+| Account Invitations (single-use hashed links, optional role grant, email or copy) | v2.67.0 |
+| Portrait-Tablet Mobile Layout; Composer Restacking at Large Font Sizes | v2.67.1 |
+| Desktop Header Responsive Shedding (narrow windows no longer push the bell off-screen) | v2.67.2 - v2.67.3 |
+| Public Event Pages (`/events`, per-wave slugs, per-event pages, guest RSVP without an account) | v2.68.0 |
+| Recurrence Expansion on Public Pages, `.ics` Downloads, Signed-In RSVP, Combined Attendee List | v2.69.0 - v2.69.1 |
+| Event Scope Moves (personal ↔ wave ↔ server) + Public Event Page Navigation | v2.69.2 |
+| Guest RSVP Reminder Emails; Sensible Default Event Times | v2.70.0 |
+| Escalating In-App Reminders; 15-Minute Crawl-Bar Alert Sweep | v2.71.0 |
+| Event Cards in Waves (live-rendering, inline RSVP, in-wave creation, E2EE labelling) | v2.72.0 |
 
 ---
 
