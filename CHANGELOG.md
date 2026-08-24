@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.72.2] - 2026-08-24
+
+### Added
+
+- **"Add to Google Calendar" on the public event pages.** They offered an `.ics` download only, while the in-app event view has had a Google link for some time. The URL is built from the **occurrence being viewed**, so adding one week of a repeating event adds that week rather than the date the series is anchored on. The `.ics` button is now labelled "↓ .ics (Apple / Outlook)" to say what it is, matching the in-app wording.
+
+### Fixed
+
+- **Google Calendar links produced zero-length events in two common cases**, in-app as well as on the new public pages:
+  - An **all-day** event sent `dates=20260825/20260825`. Google treats the end date as exclusive, so a single-day event needs the *next* day — it now sends `20260825/20260826`.
+  - A **timed event with no end time** sent the same value for start and end, landing in the calendar as a point in time rather than an appointment. It now defaults to one hour.
+- **An event running past midnight ended before it started.** Adding an hour to a 23:30 start produced `20260825T233000/20260825T003000`, and an event explicitly scheduled 23:00–01:00 had the same problem. The end date now rolls to the next day whenever the end time is at or before the start, across month and year boundaries.
+
 ## [2.72.1] - 2026-08-24
 
 ### Documentation
@@ -13,7 +26,7 @@ Full audit against the code. Three of the findings were factual errors rather th
 
 - **README claimed daily recurrence, which does not exist.** The server accepts `weekly`, `biweekly`, `monthly`, `yearly` — so a reader following the README would have tried a daily event and received a 400. Bi-weekly was also missing from the list. Corrected.
 - **README documented `GET`/`POST /api/waves/:id/events`. Neither route exists.** The real endpoints are `GET /api/events/wave/:waveId` and `POST /api/events`. Corrected, and the calendar section rewritten to match what the API actually exposes.
-- **`landing/nginx.conf` pointed its `root` at a developer path** (`/home/jempson/development/cortex/landing`) that serves nothing in production; farhold.com is served from `/home/cortex/cortex/landing` on the production VPS. Corrected.
+- **`landing/nginx.conf` pointed its `root` at a developer path** (`/home/jempson/development/cortex/landing`) that serves nothing in production. The real docroot is **`/var/www/farhold-landing/`**, owned by root — *not* the repo's `landing/` directory. Deploying Cortex updates `~/cortex/landing/` and leaves the live page untouched, so publishing the landing page is a deliberate copy step. The config now records both the real path and the command.
 
 Beyond the errors:
 
@@ -25,7 +38,7 @@ Beyond the errors:
 
 ### Changed
 
-- **Landing page** gained an *Events & Calendar* card. The last eight releases were about events and the page did not mention them at all.
+- **Landing page** gained an *Events & Calendar* card. The last eight releases were about events and the page did not mention them at all. This does **not** go live with the deploy — see the docroot note above; it needs `sudo cp ~/cortex/landing/index.html /var/www/farhold-landing/index.html` on the production VPS.
 
 ## [2.72.0] - 2026-08-24
 

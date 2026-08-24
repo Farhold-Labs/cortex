@@ -24,6 +24,9 @@ Future feature ideas and enhancements for consideration.
 | Public Event Pages with Guest RSVP | v2.68.0 - v2.69.2 | Aug 2026 |
 | Event Reminders (guest emails, escalating in-app, crawl-bar sweep) | v2.70.0 - v2.71.0 | Aug 2026 |
 | Event Cards in Waves | v2.72.0 | Aug 2026 |
+| Add to Google Calendar from public event pages | v2.72.2 | Aug 2026 |
+
+---
 
 ---
 
