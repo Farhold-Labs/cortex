@@ -739,14 +739,30 @@
       // Apply theme immediately before React loads to prevent flash
       (function() {
         try {
-          // First try dedicated theme storage (fastest)
-          var theme = localStorage.getItem('farhold_theme');
-          // Fallback to user object in storage
-          if (!theme) {
-            var user = localStorage.getItem('farhold_user');
-            if (user) {
-              var parsed = JSON.parse(user);
-              theme = parsed && parsed.preferences && parsed.preferences.theme;
+          // Public pages (the portal and event pages) must NOT inherit the
+          // visitor's own theme. This script runs on every route, so anyone who
+          // had ever signed in on this browser saw a public page painted in
+          // their private preference — two people opening the same shared event
+          // link got different colours. Public pages use the theme the instance
+          // operator chose, cached separately so it can never leak either way.
+          var path = location.pathname;
+          var isPublicPage = path === '/portal' || path === '/events' || path.indexOf('/events/') === 0;
+
+          var theme;
+          if (isPublicPage) {
+            // Cached from /api/instance-config on a previous visit; absent on a
+            // first visit, in which case the default applies until React fetches it.
+            theme = localStorage.getItem('farhold_public_theme');
+          } else {
+            // First try dedicated theme storage (fastest)
+            theme = localStorage.getItem('farhold_theme');
+            // Fallback to user object in storage
+            if (!theme) {
+              var user = localStorage.getItem('farhold_user');
+              if (user) {
+                var parsed = JSON.parse(user);
+                theme = parsed && parsed.preferences && parsed.preferences.theme;
+              }
             }
           }
           if (theme && ['serenity', 'malsBrowncoat', 'zoesWarrior', 'washSky', 'kayleeFloweredDress', 'jaynesKnitCap', 'inaraSilk', 'simonsClinic', 'riversMind', 'booksWisdom', 'reaverRed', 'allianceWhite', 'pipBoy', 'highContrast', 'amoled', 'blackAndWhite'].indexOf(theme) !== -1) {
