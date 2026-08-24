@@ -68,6 +68,18 @@ const BRANDING = [
   { key: 'tagline', label: 'LOGIN TAGLINE', placeholder: 'Leave blank for the rotating default' },
 ];
 
+// Theme applied to the public portal and event pages, for everyone, regardless
+// of what any individual visitor has chosen for themselves.
+const PUBLIC_THEMES = [
+  ['', 'Default (Serenity)'],
+  ['serenity', 'Serenity'], ['malsBrowncoat', "Mal's Browncoat"], ['zoesWarrior', "Zoe's Warrior"],
+  ['washSky', "Wash's Sky"], ['kayleeFloweredDress', "Kaylee's Flowered Dress"],
+  ['jaynesKnitCap', "Jayne's Knit Cap"], ['inaraSilk', 'Inara Silk'], ['simonsClinic', "Simon's Clinic"],
+  ['riversMind', "River's Mind"], ['booksWisdom', "Book's Wisdom"], ['reaverRed', 'Reaver Red'],
+  ['allianceWhite', 'Alliance White'], ['pipBoy', 'Pip-Boy'],
+  ['highContrast', 'High Contrast'], ['amoled', 'AMOLED'], ['blackAndWhite', 'Black & White'],
+];
+
 const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [config, setConfig] = useState(null);
   const [codeDefaults, setCodeDefaults] = useState({});
@@ -336,6 +348,28 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
                 />
               </div>
             ))}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>PUBLIC PAGE THEME</label>
+              <select
+                value={branding.publicTheme || ''}
+                onChange={(e) => setBranding(prev => ({ ...prev, publicTheme: e.target.value }))}
+                style={{
+                  width: '100%', padding: '8px', background: 'var(--bg-base)',
+                  border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
+                  fontFamily: 'monospace', fontSize: '0.8rem', borderRadius: '2px',
+                }}
+              >
+                {PUBLIC_THEMES.map(([value, label]) => (
+                  <option key={value || 'default'} value={value}>{label}</option>
+                ))}
+              </select>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '4px', lineHeight: 1.5 }}>
+                Applies to the public portal and event pages, for every visitor. Members' own theme
+                choices are unaffected — and no longer leak onto public pages, which they previously did
+                for anyone who had signed in on that browser.
+              </div>
+            </div>
+
             <button
               disabled={saving}
               onClick={() => save({ branding }, 'Branding saved')}
