@@ -1,6 +1,6 @@
 # Cortex Privacy Policy
 
-*Last updated: April 2026 — applies to Cortex v2.47.2+*
+*Last updated: August 2026 — applies to Cortex v2.72.0+*
 
 This policy describes what a Cortex instance actually does with your data. No legalese, no weasel words. If you can't verify a claim yourself, it shouldn't be in here.
 
@@ -18,6 +18,39 @@ When you create an account, the server stores:
 - **Password** — bcrypt hashed; the server never stores or sees your actual password
 - **Avatar** — stored with your user ID if you upload one
 - **Bio** — stored in plaintext if you provide one
+
+---
+
+## If You RSVP to a Public Event Without an Account
+
+A server can publish a wave's calendar to a public page. Anyone can respond to
+an event there without signing up, and doing so means handing the server an
+email address. That is the only route by which Cortex stores data about someone
+who has no account, so it is worth being explicit about it.
+
+When you RSVP as a guest, the server stores:
+
+- **Name** — as you typed it, in plaintext. Shown to members of the wave the
+  event belongs to, and to moderators. **Never shown on the public page** —
+  visitors see counts only, never who is coming.
+- **Email** — encrypted (AES-256-GCM) with a SHA-256 hash alongside it for
+  lookup, exactly as account emails are handled. It is used to send you a
+  confirmation and event reminders, and to recognise a repeat response as the
+  same person rather than a duplicate. It is visible to **moderators only**, in
+  the attendee list and its CSV export — not to ordinary members.
+- **Party size and your answer** — going, maybe, or can't.
+- **A cancellation token** — stored only as a hash. The usable token is sent to
+  you by email and is not recoverable from the database, so a leaked copy yields
+  no working cancellation links. It is reissued with each reminder, which means
+  the most recent email always holds the working link.
+
+**Removing it:** the cancellation link in any confirmation or reminder email
+deletes the RSVP outright, including the stored name and email. Deleting the
+event does the same for every RSVP attached to it.
+
+**Reminders:** if you RSVP, the server emails you a day before and an hour
+before the event. There is no separate marketing list — the address is used for
+that event and nothing else.
 
 ---
 
@@ -94,6 +127,12 @@ The instance operator (whoever runs the server) can see:
 - Wave titles
 - That a user account exists
 - Server logs (with anonymized IPs and truncated user-agents)
+- **Calendar events** — titles, dates, times, locations and descriptions are
+  stored in plaintext, including events attached to an end-to-end encrypted
+  wave. E2EE covers message content; it has never covered calendar entries. An
+  event card shown inside an encrypted wave says so on the card itself.
+- **Guest RSVP names**, and their email addresses via the moderator attendee
+  list (see the guest RSVP section above)
 
 ---
 

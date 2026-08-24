@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.57.2** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.72.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -65,9 +65,13 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 
 ### Calendar & Events
 - **Wave calendar** — Attach events to any wave with date, time, location, and description
-- **Recurring events** — Daily, weekly, monthly, and yearly recurrence patterns
-- **RSVP** — Accept, decline, or mark tentative; organizer sees attendee responses
-- **Reminders** — Configurable push notifications before events
+- **Recurring events** — Weekly, bi-weekly, monthly, and yearly recurrence patterns
+- **Events in the wave** — A wave event posts a card into the conversation: date, time, place, attendee tally and inline RSVP. The card holds only the event id and renders live, so edits and cancellations are reflected rather than frozen. An upcoming-events banner sits above the conversation, and events can be created without leaving the wave
+- **RSVP** — Going, maybe, or can't; organizer sees attendee responses, members and public guests in one list with CSV export
+- **Public event pages** — Admins can publish a wave's calendar to a login-free page: `/events` lists everything published on the server, `/events/<slug>` one wave, `/events/<slug>/<event>` a shareable page per event. Server-wide events can be published too, behind a separate opt-in switch that defaults off
+- **Guest RSVP** — Members of the public can RSVP with a name, email and party size, no account required. Rate limited per IP *and* per email address; confirmation and reminder emails carry a cancellation link
+- **Calendar downloads** — `.ics` per event (respecting the occurrence of a repeating event) and a subscribe link for a whole published calendar
+- **Reminders** — In-app, push, and email. In-app reminders escalate as the event approaches: a corner card a day out, a centre-screen countdown fifteen minutes out. Email goes to members when they're away, and to public guests who RSVP'd
 
 ### End-to-End Encryption
 - **ECDH P-384 + AES-256-GCM** — Per-wave symmetric keys distributed via key exchange
@@ -276,11 +280,24 @@ SUPPORT_BOT_KEY=bot_...            # Fallback: bot API key
 ### Calendar
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/waves/:id/events` | List wave events |
-| POST | `/api/waves/:id/events` | Create event |
-| PUT | `/api/events/:id` | Update event |
+| GET | `/api/events` | Events in a date range (`?from=&to=&scope=`) |
+| GET | `/api/events/wave/:waveId` | Wave events (`?upcoming=1` expands recurrences, drops past) |
+| POST | `/api/events` | Create event (`scope`: `personal` \| `wave` \| `server`) |
+| PUT | `/api/events/:id` | Update event (including moving it between scopes) |
 | DELETE | `/api/events/:id` | Delete event |
-| POST | `/api/events/:id/rsvp` | RSVP to event |
+| GET/POST/DELETE | `/api/events/:id/rsvp` | Read, set, or withdraw your RSVP |
+| GET | `/api/events/:id/ics` | Calendar file for one event |
+| GET | `/api/admin/events/:id/attendees` | Attendee list + `?format=csv` (moderator+) |
+
+### Public Event Pages (no authentication)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/public/events` | Everything published on this server |
+| GET | `/api/public/events/:slug` | One wave's published events |
+| GET | `/api/public/events/:slug/:eventId` | One event (`?date=` selects an occurrence) |
+| GET | `/api/public/events/:slug/calendar.ics` | Subscribe to a published calendar |
+| POST | `/api/public/events/:slug/:eventId/rsvp` | Guest RSVP (rate limited per IP and per email) |
+| DELETE | `/api/public/events/rsvp/:token` | Cancel a guest RSVP via its emailed link |
 
 ### Crews & Contacts
 | Method | Endpoint | Description |
