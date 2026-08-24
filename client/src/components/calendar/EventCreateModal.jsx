@@ -30,7 +30,7 @@ const nextHalfHour = (from = new Date()) => {
 const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [], initialDate = '', editEvent = null, onSaved }) => {
+const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [], initialDate = '', editEvent = null, onSaved, lockedScope = null, lockedWaveId = null }) => {
   // Computed once per open. Rounding up can cross midnight (23:50 → 00:00), in
   // which case the default date has to move with it, or the form would offer a
   // time that has already passed.
@@ -48,8 +48,8 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
   const [eventEndTime,       setEventEndTime]       = useState(editEvent ? (editEvent.eventEndTime || '') : defaults.end);
   const [location,           setLocation]           = useState(editEvent?.location           || '');
   const [category,           setCategory]           = useState(editEvent?.category           || 'general');
-  const [scope,              setScope]              = useState(editEvent?.scope              || 'personal');
-  const [waveId,             setWaveId]             = useState(editEvent?.waveId             || '');
+  const [scope,              setScope]              = useState(editEvent?.scope || lockedScope || 'personal');
+  const [waveId,             setWaveId]             = useState(editEvent?.waveId || lockedWaveId || '');
   const [recurrence,         setRecurrence]         = useState(editEvent?.recurrence         || '');
   const [recurrenceEndDate,  setRecurrenceEndDate]  = useState(editEvent?.recurrenceEndDate  || '');
   const [rsvpEnabled,        setRsvpEnabled]        = useState(editEvent?.rsvpEnabled        || false);
@@ -132,15 +132,15 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
           {/* Scope */}
           <div style={{ marginBottom: '12px' }}>
             <label style={labelStyle}>SCOPE</label>
-            <select value={scope} onChange={e => setScope(e.target.value)} style={inputStyle}>
+            <select value={scope} onChange={e => setScope(e.target.value)} style={inputStyle} disabled={!!lockedScope}>
               {SCOPES.filter(s => s.value !== 'server' || canServerScope).map(s => (
                 <option key={s.value} value={s.value}>{s.label}</option>
               ))}
             </select>
           </div>
 
-          {/* Wave picker (wave scope only) */}
-          {scope === 'wave' && (
+          {/* Wave picker (wave scope only; hidden when the wave is already known) */}
+          {scope === 'wave' && !lockedWaveId && (
             <div style={{ marginBottom: '12px' }}>
               <label style={labelStyle}>WAVE *</label>
               <select value={waveId} onChange={e => setWaveId(e.target.value)} style={inputStyle}>
