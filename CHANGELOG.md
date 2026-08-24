@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.71.0] - 2026-08-23
+
+### Changed
+
+- **In-app event reminders now escalate as the event approaches.** Every reminder used to arrive as the same small card in the top-right corner, which is easy to miss entirely when the event is fifteen minutes away.
+  - A day or an hour out: the corner card, as before, now with a live countdown and actions.
+  - Thirty or fifteen minutes out, or starting: a **centre-stage banner** — wider, orange, a pulsing glow, a CRT sweep line, the title at 1.25rem and a countdown ticking **every second** (`14m 03s`). Seconds only appear under ten minutes, where they mean something.
+  - Both gained **Open wave** and **Dismiss**. The timer runs once per second only while something urgent is on screen, and every animation is dropped under `prefers-reduced-motion` in favour of a static shadow.
+
+### Fixed
+
+- **Crawl-bar alerts never appeared for events created later the same day.** `generateDailyAlerts()` only creates alerts for *today's* events but ran **once every 24 hours** — so anything added after that day's sweep had already missed its only chance, and never reached the ticker at all. It now sweeps every 15 minutes; every branch already checked for an existing alert first, so re-running costs nothing.
+- **The alert sweep used the UTC date while building its alert window from the local one**, so the two disagreed every evening west of Greenwich — it would look for tomorrow's events while stamping the alert with today's window. Same bug class as the public event queries fixed in v2.68.0.
+- **The reminder payload carried no `waveId`**, so a reminder had no way to offer a jump to its event. Fixed in the reminder job *and* in the separate on-login catch-up path, which builds its own payload and had the same omission.
+
 ## [2.70.0] - 2026-08-23
 
 ### Added

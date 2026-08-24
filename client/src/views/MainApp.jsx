@@ -888,6 +888,7 @@ function MainApp({ sharePingId }) {
           eventDate: data.eventDate || null,
           location: data.location || null,
           window: data.window || 'login',
+          waveId: data.waveId || null,
         }];
       });
     }
@@ -2125,6 +2126,13 @@ function MainApp({ sharePingId }) {
       <CalendarReminderAlert
         reminders={calendarReminders}
         onDismiss={id => setCalendarReminders(prev => prev.filter(r => r.id !== id))}
+        onOpen={(r) => {
+          if (!r.waveId) return;
+          const wave = waves.find(w => w.id === r.waveId) || { id: r.waveId, title: r.eventTitle };
+          setActiveView('waves');
+          openWaveTab(wave);
+          setCalendarReminders(prev => prev.filter(x => x.id !== r.id));
+        }}
       />
 
       {/* PWA Components */}

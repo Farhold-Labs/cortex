@@ -20874,6 +20874,10 @@ wss.on('connection', (ws, req) => {
                   eventTime: ev.eventTime,
                   location: ev.location || null,
                   window: 'login',
+                  // Same as the reminder job: without this the alert has no way
+                  // to offer a jump to the event.
+                  waveId: ev.waveId || null,
+                  scope: ev.scope,
                 }));
               }
             }
@@ -22025,7 +22029,11 @@ server.listen(PORT, BIND_HOST, () => {
     try {
       const now = new Date();
       const todayMMDD = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      const todayISO = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      // Local date, not UTC. todayStart/todayEnd below are built from local
+      // parts, so a UTC date here made them disagree every evening west of
+      // Greenwich — the sweep would look for tomorrow's events while stamping
+      // the alert with today's window.
+      const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
       const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
 
@@ -22095,9 +22103,14 @@ server.listen(PORT, BIND_HOST, () => {
     }
   }
 
+  // Sweep often, not daily. It only ever creates alerts for *today*, so running
+  // once every 24h meant an event added this afternoon for this evening never
+  // got a crawl-bar alert at all — its sweep had already happened. Every branch
+  // checks for an existing alert first, so re-running is free.
+  const ALERT_SWEEP_INTERVAL = 15 * 60 * 1000;
   generateDailyAlerts();
-  setInterval(generateDailyAlerts, 24 * 60 * 60 * 1000);
-  console.log('📆 Daily alert generation enabled');
+  setInterval(generateDailyAlerts, ALERT_SWEEP_INTERVAL);
+  console.log('📆 Alert sweep enabled (every 15 min)');
 
   // ============ Calendar Reminder Job (v2.47.0) ============
   // Reminder windows: 1 day, 1 hour, 30 min, 15 min before event
@@ -22161,6 +22174,9 @@ server.listen(PORT, BIND_HOST, () => {
               eventTime: event.eventTime,
               location: event.location || null,
               window: win.key,
+              // So the reminder can offer a way straight to the event.
+              waveId: event.waveId || null,
+              scope: event.scope,
             });
             // Push notification (for backgrounded/native)
             try {
