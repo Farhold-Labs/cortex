@@ -3981,6 +3981,7 @@ Everything published on this server, in date order, with recurring events expand
       "id": "event-...", "title": "Read-through: Act I",
       "date": "2026-08-25", "time": "19:00", "endTime": "21:00",
       "location": "The Barn", "rsvpEnabled": true, "isOccurrence": false,
+      "googleCalendarUrl": "https://calendar.google.com/calendar/render?...",
       "scope": "wave", "slug": "earnest", "source": "Earnest",
       "href": "/events/earnest/event-...",
       "rsvpCounts": { "going": 4, "maybe": 1, "not_going": 0, "guests": 6 }
@@ -4006,6 +4007,8 @@ A server-wide event. Requires `publicServerEvents` to be switched on.
 ### GET /api/public/events/server/:eventId/ics
 
 A calendar file for one event, honouring `?date=` for occurrences.
+
+`googleCalendarUrl` *(v2.72.2)* is present on every event in every public response, built from the **occurrence in hand** — so adding one week of a repeating event adds that week, not the date the series is anchored on. All-day events use an exclusive end date, a timed event with no end time defaults to an hour, and an event running past midnight has its end date rolled to the next day.
 
 ### GET /api/public/events/:slug/calendar.ics
 

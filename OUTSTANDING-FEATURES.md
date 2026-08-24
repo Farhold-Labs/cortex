@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
 **Last Updated:** August 2026
-**Current Version:** v2.72.0
+**Current Version:** v2.72.3
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.72.0)
+## Completed Features (v1.5.0 - v2.72.3)
 
 | Feature | Version |
 |---------|---------|
@@ -94,6 +94,8 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Guest RSVP Reminder Emails; Sensible Default Event Times | v2.70.0 |
 | Escalating In-App Reminders; 15-Minute Crawl-Bar Alert Sweep | v2.71.0 |
 | Event Cards in Waves (live-rendering, inline RSVP, in-wave creation, E2EE labelling) | v2.72.0 |
+| Documentation Audit; Guest RSVP Privacy Disclosure; Landing Page Events Card | v2.72.1 |
+| Add to Google Calendar on Public Event Pages (+ zero-length / past-midnight link fixes) | v2.72.2 |
 
 ---
 
