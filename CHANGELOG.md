@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.72.0] - 2026-08-24
+
+### Added
+
+- **Events now appear inside the wave they belong to.** Opening a wave from a reminder or a calendar entry used to show nothing about the event, so unless the title happened to explain itself you arrived with no idea what it was about. Three surfaces now cover it:
+  - **An event card in the timeline.** Creating a wave event posts a card into the wave, so it is discussable in context, raises unread counts, reaches notifications, and stays in history and search. The card carries the date, time, location, a description excerpt, the attendee tally and **Going / Maybe / Can't inline** — one tap where it previously took four.
+  - **An upcoming-events banner** at the top of the wave, listing the next few with `Today` / `Tomorrow` / weekday labels. Answers "what's coming?" without scrolling history.
+  - **Create an event without leaving the wave** — `+ event` on the banner opens the form with the scope and wave already filled in, where the calendar makes you choose both from a list.
+- The card **stores only the event id and renders live**, so editing or cancelling an event updates every card rather than leaving a message in the history that lies about it. A deleted event degrades the card to "This event has been cancelled or removed" — the ping's `event_id` is `ON DELETE SET NULL`, so the conversation underneath a cancelled event survives it.
+- In an **end-to-end encrypted wave the card says so**: the server creates it and holds no wave key, so the card is plaintext. Event records were always stored in plaintext, so this exposes nothing new — but an encrypted wave should not imply otherwise, so the card carries "🔓 Event details are not end-to-end encrypted".
+
+### Fixed
+
+- `/api/events/wave/:waveId` returned every event ever attached to a wave, including past ones and unexpanded recurring series. It now takes `?upcoming=1`, which expands recurrences and returns only what is still to come — what a banner inside a wave actually wants.
+
 ## [2.71.0] - 2026-08-23
 
 ### Changed

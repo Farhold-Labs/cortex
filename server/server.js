@@ -11222,7 +11222,11 @@ app.get('/api/events/wave/:waveId', authenticateToken, (req, res) => {
     if (!db.isWaveParticipant(req.params.waveId, req.user.userId)) {
       return res.status(403).json({ error: 'Not a participant in this wave' });
     }
-    const events = db.getWaveEvents(req.params.waveId);
+    // ?upcoming=1 gives the wave's next few events with recurrences expanded —
+    // what a banner inside the wave wants. Without it, the full unexpanded list.
+    const events = req.query.upcoming === '1'
+      ? db.getUpcomingWaveEvents(req.params.waveId, { limit: Math.min(parseInt(req.query.limit) || 5, 20) })
+      : db.getWaveEvents(req.params.waveId);
     res.json({ events });
   } catch (err) {
     console.error('Get wave events error:', err);
@@ -11366,6 +11370,30 @@ app.post('/api/events', authenticateToken, (req, res) => {
     });
 
     if (resolvedScope === 'wave' && waveId) {
+      // Drop a card into the wave so the event is discussable in context and
+      // shows up in unread counts, notifications and history. The card stores
+      // only the event id — it renders live, so an edit or cancellation is
+      // reflected rather than leaving a message that lies.
+      //
+      // Note the card is never encrypted, even in an E2EE wave: the server
+      // creates it and has no key. Event records are plaintext anyway, so this
+      // exposes nothing new — but the client labels the card so nobody assumes
+      // the details are covered by the wave's encryption.
+      let eventPing = null;
+      try {
+        eventPing = db.createPing({
+          waveId,
+          authorId: user.id,
+          // Plaintext fallback for anything that cannot render the card.
+          content: `📅 ${event.title}`,
+          privacy: 'private',
+          eventId: event.id,
+        });
+        broadcastToWave(waveId, { type: 'new_ping', ping: eventPing, waveId });
+      } catch (pingErr) {
+        // An event that saved but failed to announce is still a good event.
+        console.error('Event card ping failed:', pingErr.message);
+      }
       broadcastToWave(waveId, { type: 'wave_event_created', event });
     }
 
