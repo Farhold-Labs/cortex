@@ -9,6 +9,7 @@ const resolveMediaUrl = (url) => {
 import { Avatar, PrivacyBadge } from '../ui/SimpleComponents.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
 import MessageWithEmbeds from './MessageWithEmbeds.jsx';
+import EventCard from '../calendar/EventCard.jsx';
 import AudioPlayer from '../media/AudioPlayer.jsx';
 import VideoPlayer from '../media/VideoPlayer.jsx';
 
@@ -76,6 +77,9 @@ const Message = ({
   parentPing = null,
   threadReplyCount = 0,
   onScrollToMessage = null,
+  onOpenEvent = null,          // event card → full detail (v2.72.0)
+  waveEncrypted = false,
+  showToast,
 }) => {
   const config = PRIVACY_LEVELS[message.privacy] || PRIVACY_LEVELS.private;
   const isHighlighted = highlightId === message.id;
@@ -486,7 +490,20 @@ const Message = ({
                 wordBreak: 'break-word', whiteSpace: 'pre-wrap', overflow: 'hidden',
               }}
             >
-              {message.content && (
+              {/* Event card (v2.72.0). The ping's own content is a plaintext
+                  fallback ("📅 Title") for anything that cannot render this, so
+                  when the card shows we deliberately do not show it as well. */}
+              {message.event_id ? (
+                <EventCard
+                  eventId={message.event_id}
+                  fetchAPI={fetchAPI}
+                  currentUser={currentUser}
+                  isMobile={isMobile}
+                  waveEncrypted={waveEncrypted}
+                  showToast={showToast}
+                  onOpen={onOpenEvent}
+                />
+              ) : message.content && (
                 <MessageWithEmbeds
                   content={message.content}
                   participants={participants}

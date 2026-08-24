@@ -2372,6 +2372,21 @@ export class DatabaseSQLite {
       console.log('✅ event_rsvp_guest table created');
     }
 
+    // v2.72.0 — Event cards in the wave timeline. The card references the event
+    // rather than copying it, so editing or cancelling an event is reflected
+    // wherever the card appears instead of leaving a message that lies.
+    const pingEventCol = this.db.prepare(
+      `SELECT name FROM pragma_table_info('pings') WHERE name = 'event_id'`
+    ).get();
+    if (!pingEventCol) {
+      console.log('📝 Adding pings.event_id (v2.72.0)...');
+      // ON DELETE SET NULL, not CASCADE: deleting an event should not delete the
+      // conversation that happened underneath its card.
+      this.db.exec(`ALTER TABLE pings ADD COLUMN event_id TEXT REFERENCES events(id) ON DELETE SET NULL;`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pings_event_id ON pings(event_id) WHERE event_id IS NOT NULL;`);
+      console.log('✅ pings.event_id added');
+    }
+
     // v2.70.0 — Reminder bookkeeping for guest RSVPs. Cannot reuse
     // event_reminder_sent: its user_id is a NOT NULL reference to users, and a
     // guest has no account.
@@ -6517,6 +6532,8 @@ export class DatabaseSQLite {
         isBot: isBot,
         botId: d.bot_id || undefined,
         // Media fields (v2.7.0)
+        // Event card (v2.72.0) — the client renders the card from this id.
+        event_id: d.event_id || null,
         media_type: d.media_type,
         media_url: d.media_url,
         media_duration: d.media_duration,
@@ -6655,6 +6672,8 @@ export class DatabaseSQLite {
         isBot: isBot,
         botId: d.bot_id || undefined,
         // Media fields (v2.7.0)
+        // Event card (v2.72.0) — the client renders the card from this id.
+        event_id: d.event_id || null,
         media_type: d.media_type,
         media_url: d.media_url,
         media_duration: d.media_duration,
@@ -6743,6 +6762,8 @@ export class DatabaseSQLite {
       mediaEncrypted: data.mediaEncrypted ? 1 : 0,
       // Threading fields (v2.38.0)
       is_thread_reply: data.isThreadReply ? 1 : 0,
+      // Event card (v2.72.0) — the card renders from this id, never from a copy.
+      eventId: data.eventId || null,
     };
 
     // Check if parent is a remote ping (exists in remote_pings but not in pings table)
@@ -6761,17 +6782,17 @@ export class DatabaseSQLite {
       this.db.exec('PRAGMA foreign_keys = OFF');
       try {
         this.db.prepare(`
-          INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply);
+          INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId);
       } finally {
         this.db.exec('PRAGMA foreign_keys = ON');
       }
     } else {
       this.db.prepare(`
-        INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply);
+        INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId);
     }
 
     // Author has read their own ping (skip for bot pings)
@@ -6869,6 +6890,8 @@ export class DatabaseSQLite {
       nonce: d.nonce,
       keyVersion: d.key_version,
       // Media fields (v2.7.0)
+      // Event card (v2.72.0) — the client renders the card from this id.
+      event_id: d.event_id || null,
       media_type: d.media_type,
       media_url: d.media_url,
       media_duration: d.media_duration,
@@ -11592,6 +11615,18 @@ export class DatabaseSQLite {
     });
 
     return result;
+  }
+
+  // Upcoming events for a wave, recurrences expanded, for the in-app banner.
+  // getWaveEvents() returns the raw rows including past ones and unexpanded
+  // series, which is right for an admin listing and wrong for "what's coming".
+  getUpcomingWaveEvents(waveId, { limit = 5, horizonDays = 365 } = {}) {
+    const rows = this.db.prepare(`
+      SELECT * FROM events
+      WHERE wave_id = ? AND scope = 'wave' AND LENGTH(event_date) = 10
+        AND (event_date >= ? OR (recurrence IS NOT NULL AND recurrence != ''))
+    `).all(waveId, localDateString());
+    return this.expandForPublic(rows, { includePast: false, horizonDays, limit });
   }
 
   getWaveEvents(waveId) {

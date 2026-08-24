@@ -21,6 +21,9 @@ import CameraCapture from '../media/CameraCapture.jsx';
 import PlexBrowserModal from '../media/PlexBrowserModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
+import WaveEventsBanner from './WaveEventsBanner.jsx';
+import EventDetailModal from '../calendar/EventDetailModal.jsx';
+import EventCreateModal from '../calendar/EventCreateModal.jsx';
 import { storage } from '../../utils/storage.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
@@ -34,6 +37,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   const [waveData, setWaveData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [selectedEvent, setSelectedEvent] = useState(null); // event opened from the banner (v2.71.0)
+  const [showEventCreate, setShowEventCreate] = useState(false); // create in-wave (v2.72.0)
+  const [eventsReload, setEventsReload] = useState(0);
   const [replyingTo, setReplyingTo] = useState(null);
   const [newMessage, setNewMessage] = useState('');
   const [collapsed, setCollapsed] = useState(() => {
@@ -2486,6 +2492,17 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             isContinuing={isEncryptingBatch}
           />
         )}
+        {/* Upcoming events for this wave (v2.71.0) — without this, arriving from
+            a reminder or a calendar entry showed no sign of the event at all. */}
+        <WaveEventsBanner
+          waveId={wave?.id}
+          fetchAPI={fetchAPI}
+          isMobile={isMobile}
+          reloadTrigger={`${reloadTrigger}-${eventsReload}`}
+          onOpenEvent={setSelectedEvent}
+          onCreateEvent={() => setShowEventCreate(true)}
+        />
+
         {/* Watch Party Banner (v2.14.0) */}
         {activeWatchParty && (
           <WatchPartyBanner
@@ -2526,6 +2543,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           const threadReplyCount = replyCountMap.get(msg.id) || 0;
           return (
             <Message key={msg.id} message={msg} isFirstInGroup={isFirstInGroup} parentPing={parentPing} threadReplyCount={threadReplyCount}
+              onOpenEvent={setSelectedEvent} waveEncrypted={!!waveData?.encrypted} showToast={showToast}
               onReply={setReplyingTo} onDelete={handleDeleteMessage}
               onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
               editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
@@ -2840,6 +2858,33 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           fetchAPI={fetchAPI}
           showToast={showToast}
           isMobile={isMobile}
+        />
+      )}
+
+      {/* Full event detail from the upcoming-events banner (v2.71.0). Editing
+          and deleting stay in the calendar — this is a read/RSVP surface. */}
+      {selectedEvent && (
+        <EventDetailModal
+          event={selectedEvent}
+          onClose={() => setSelectedEvent(null)}
+          fetchAPI={fetchAPI}
+          showToast={showToast}
+          currentUser={currentUser}
+        />
+      )}
+
+      {/* Create an event without leaving the wave (v2.72.0). Scope and wave are
+          already known here, where the calendar makes you pick both. */}
+      {showEventCreate && (
+        <EventCreateModal
+          onClose={() => setShowEventCreate(false)}
+          fetchAPI={fetchAPI}
+          showToast={showToast}
+          currentUser={currentUser}
+          waves={wave ? [{ id: wave.id, title: wave.title }] : []}
+          lockedScope="wave"
+          lockedWaveId={wave?.id}
+          onSaved={() => { setShowEventCreate(false); setEventsReload(n => n + 1); loadWave(true); }}
         />
       )}
     </div>
