@@ -11176,12 +11176,41 @@ function buildICS(events, calName = 'Cortex Calendar') {
 
 // Helper: build Google Calendar "Add to Calendar" URL
 function buildGoogleCalendarUrl(ev) {
-  const fmt = (dateStr, timeStr) => {
-    if (!timeStr) return dateStr.replace(/-/g, '');
-    return `${dateStr.replace(/-/g, '')}T${timeStr.replace(':', '')}00`;
+  const compact = (dateStr) => dateStr.replace(/-/g, '');
+  const fmt = (dateStr, timeStr) =>
+    timeStr ? `${compact(dateStr)}T${timeStr.replace(':', '')}00` : compact(dateStr);
+
+  // Google reads `dates=start/end`. Both branches below used to produce
+  // start === end, which Google renders as a zero-length entry:
+  //   • an all-day event needs an EXCLUSIVE end date, i.e. the next day
+  //   • a timed event with no end time needs a sensible duration, so default
+  //     to an hour rather than a point in time
+  const nextDay = (dateStr) => {
+    const d = new Date(`${dateStr}T12:00:00`);
+    d.setDate(d.getDate() + 1);
+    return compact(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
   };
+  const plusAnHour = (timeStr) => {
+    const [h, m] = timeStr.split(':').map(Number);
+    const d = new Date(2000, 0, 1, h, m);
+    d.setHours(d.getHours() + 1);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
   const start = fmt(ev.eventDate, ev.eventTime);
-  const end = fmt(ev.eventDate, ev.eventEndTime || ev.eventTime);
+  let end;
+  if (!ev.eventTime) {
+    end = nextDay(ev.eventDate);
+  } else {
+    const endTime = ev.eventEndTime || plusAnHour(ev.eventTime);
+    // An end at or before the start means the event runs past midnight — either
+    // because the organiser said so (23:00–01:00) or because the default hour
+    // rolled over from 23:30. Either way the end belongs on the next day.
+    const endDate = endTime <= ev.eventTime
+      ? nextDay(ev.eventDate)
+      : compact(ev.eventDate);
+    end = `${endDate}T${endTime.replace(':', '')}00`;
+  }
   const params = new URLSearchParams({
     action: 'TEMPLATE',
     text: ev.title,
@@ -13356,6 +13385,10 @@ const publicEvent = (e) => ({
   // Set on generated occurrences of a repeating event, so the client can label
   // them and link to the specific date rather than the series anchor.
   isOccurrence: !!e.recurringInstance,
+  // Built from the event in hand, which for a repeating event is the resolved
+  // occurrence — so adding "next Tuesday" to a calendar adds next Tuesday, not
+  // the date the series happens to be anchored on.
+  googleCalendarUrl: buildGoogleCalendarUrl(e),
 });
 
 // A recurring event has one database row and many occurrences. `?date=` picks
