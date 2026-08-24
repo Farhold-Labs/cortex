@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.72.3] - 2026-08-24
+
+### Documentation
+
+- Version claims brought to v2.72.2 across README and `OUTSTANDING-FEATURES.md`, and `docs/API.md` now documents the `googleCalendarUrl` field added in v2.72.2, including that it is built from the occurrence in hand.
+- Validated rather than assumed: every one of the **38 API paths the README claims** and the **36 endpoints `docs/API.md` documents under a heading** was checked to exist in `server/server.js`. All of them do — no phantom endpoints remain after the v2.72.1 audit, which had found two.
+- `docs/PRIVACY.md` still reads "applies to Cortex v2.72.0+", which stays true for later versions; nothing privacy-relevant changed in v2.72.1 or v2.72.2.
+
+**Known coverage gap:** the server exposes **319** `/api` routes and roughly **145** are not individually documented — overwhelmingly `/api/admin` (40), `/api/auth` variants (17), Jellyfin (13) and Plex (12) integrations, and E2EE internals (11). `docs/API.md` covers the core surface accurately; it does not claim to be exhaustive.
+
 ## [2.72.2] - 2026-08-24
 
 ### Added
