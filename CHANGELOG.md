@@ -5,6 +5,13 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.76.1] - 2026-08-31
+
+### Fixed
+
+- **A correctly configured Resend install reported `EMAIL WILL NOT SEND`.** The startup probe reads `GET /domains`, which a **send-only** API key — the kind Resend recommends and the kind you should deploy — is not permitted to call. Resend reports that as **`401` with `name: 'restricted_api_key'`**, not the `403` the code anticipated, so it was indistinguishable from a rejected key. Both production nodes showed a loud false alarm while being perfectly set up. The probe now recognises a restricted key as authenticated and says plainly that domain verification cannot be checked with it.
+- The success line claimed `SMTP connection verified` even when the provider was Resend, which talks HTTPS and no SMTP at all.
+
 ## [2.76.0] - 2026-08-31
 
 ### Added
