@@ -67,7 +67,7 @@ const MenuItem = ({ onClick, color, style, children }) => {
 const Message = ({
   message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, onCancelEdit,
   editingMessageId, editContent, setEditContent, currentUserId, highlightId,
-  playbackIndex, collapsed, onToggleCollapse, isMobile, contentCollapsed = {},
+  collapsed, onToggleCollapse, isMobile, contentCollapsed = {},
   onToggleContentCollapse, onReact, onMessageClick, participants = [],
   contacts = [], onShowProfile, onReport, onFocus, onShare, wave,
   onNavigateToWave, currentWaveId, unreadCountsByWave = {},
@@ -78,12 +78,12 @@ const Message = ({
   threadReplyCount = 0,
   onScrollToMessage = null,
   onOpenEvent = null,          // event card → full detail (v2.72.0)
+  onTogglePin = null,          // pin/unpin this ping for the whole wave (v2.74.0)
   waveEncrypted = false,
   showToast,
 }) => {
   const config = PRIVACY_LEVELS[message.privacy] || PRIVACY_LEVELS.private;
   const isHighlighted = highlightId === message.id;
-  const isVisible = playbackIndex === null || message._index <= playbackIndex;
 
   const hasVisibleChildren = (children) => {
     if (!children || children.length === 0) return false;
@@ -159,7 +159,6 @@ const Message = ({
   const isContentCollapsed = contentCollapsed[message.id];
   const quickReactions = ['👍', '☝️', '❤️', '😂', '🎉', '🤔', '👏', '😢', '🖕', '😮', '🤦'];
 
-  if (!isVisible) return null;
   if (isDeleted && !hasChildren) return null;
 
   const isMoving = moveSource && moveSource.messageId === message.id;
@@ -294,6 +293,15 @@ const Message = ({
 
         {/* Content column */}
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Pinned marker (v2.74.0) */}
+          {message.pinned_at && !isDeleted && (
+            <div style={{
+              color: 'var(--accent-amber)', fontFamily: 'monospace', fontSize: '0.58rem',
+              letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: '2px',
+            }}>
+              📌 Pinned
+            </div>
+          )}
           {/* Name + timestamp (first in group only) */}
           {isFirstInGroup && (
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '1px', position: 'relative' }}>
@@ -731,6 +739,14 @@ const Message = ({
                         <span>↳</span><span>{message.threaded ? 'Unthread' : 'Thread'}</span>
                       </MenuItem>
                     )}
+                    {onTogglePin && !isDeleted && (
+                      <MenuItem
+                        color="var(--accent-amber)"
+                        onClick={() => { onTogglePin(message); setShowMessageMenu(false); }}
+                      >
+                        <span>📌</span><span>{message.pinned_at ? 'Unpin' : 'Pin'}</span>
+                      </MenuItem>
+                    )}
                     {canMove && (
                       <MenuItem color="var(--accent-amber)" onClick={() => { onStartMove(message, wave?.id); setShowMessageMenu(false); }}>
                         <span>↕</span><span>Move</span>
@@ -789,7 +805,6 @@ const Message = ({
                 setEditContent={setEditContent}
                 currentUserId={currentUserId}
                 highlightId={highlightId}
-                playbackIndex={playbackIndex}
                 collapsed={collapsed}
                 onToggleCollapse={onToggleCollapse}
                 isMobile={isMobile}
@@ -810,6 +825,7 @@ const Message = ({
                 autoFocusMessages={autoFocusMessages}
                 fetchAPI={fetchAPI}
                 onOpenThread={onOpenThread}
+                onTogglePin={onTogglePin}
                 isInThreadPanel={isInThreadPanel}
                 currentUser={currentUser}
                 moveSource={moveSource}

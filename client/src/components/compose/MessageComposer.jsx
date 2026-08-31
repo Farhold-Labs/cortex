@@ -51,6 +51,12 @@ const MessageComposer = forwardRef(({
   const [gifResults, setGifResults] = useState([]);
   const [gifLoading, setGifLoading] = useState(false);
   const [gifStartPos, setGifStartPos] = useState(null);
+  // Every control in the input row shares one height, and it is the same value
+  // as the textarea's resting min-height — so the row reads as a single line
+  // instead of five boxes of different sizes bottom-aligned on a shelf. They
+  // measured 28 / 41 / 29 / 37 / 31px before this.
+  const CONTROL_H = isMobile ? '2.75rem' : (compact ? '2.5rem' : '2.25rem');
+
   const [rowWidth, setRowWidth] = useState(0);   // measured width of the input row
   const [rootFontPx, setRootFontPx] = useState(16); // honours the FONT SIZE preference
   const textareaRef = useRef(null);
@@ -391,8 +397,8 @@ const MessageComposer = forwardRef(({
             onClick={() => setShowAttachMenu(!showAttachMenu)}
             title="Attach media or file" aria-label="Attach media or file"
             style={{
-              padding: isMobile ? '8px 10px' : '5px 8px',
-              minHeight: isMobile ? '36px' : '28px',
+              padding: isMobile ? '0 12px' : '0 10px',
+              height: CONTROL_H, boxSizing: 'border-box',
               background: showAttachMenu ? 'var(--bg-hover)' : 'transparent',
               border: `1px solid ${showAttachMenu ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
               color: showAttachMenu ? 'var(--accent-amber)' : 'var(--text-dim)',
@@ -621,6 +627,11 @@ const MessageComposer = forwardRef(({
           rows={1}
           style={{
             width: '100%',
+            // A textarea is inline-block by default, so it sits on a text
+            // baseline and leaves ~5px of descender space below it inside its
+            // wrapper — which pushed it that far above the buttons even though
+            // every control is the same height.
+            display: 'block',
             padding: isMobile ? '10px 12px' : (compact ? '7px 10px' : '8px 10px'),
             // rem, not px: a 40px box holds barely one line at FONT SIZE X-Large
             minHeight: isMobile ? '2.75rem' : (compact ? '2.5rem' : '2.25rem'),
@@ -767,7 +778,8 @@ const MessageComposer = forwardRef(({
           aria-label="Toggle formatting toolbar"
           aria-pressed={showFormatBar}
           style={{
-            padding: isMobile ? '8px 10px' : '5px 8px', minHeight: isMobile ? '36px' : '28px',
+            padding: isMobile ? '0 12px' : '0 10px',
+            height: CONTROL_H, boxSizing: 'border-box',
             background: showFormatBar ? 'var(--accent-amber)20' : 'transparent',
             border: `1px solid ${showFormatBar ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
             color: showFormatBar ? 'var(--accent-amber)' : 'var(--text-dim)',
@@ -780,7 +792,8 @@ const MessageComposer = forwardRef(({
           title="Expand editor"
           aria-label="Expand editor"
           style={{
-            padding: isMobile ? '8px 10px' : '5px 8px', minHeight: isMobile ? '36px' : '28px',
+            padding: isMobile ? '0 12px' : '0 10px',
+            height: CONTROL_H, boxSizing: 'border-box',
             background: 'transparent', border: '1px solid var(--border-primary)',
             color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace',
             fontSize: isMobile ? '0.85rem' : '0.75rem', flexShrink: 0, alignSelf: 'flex-end',
@@ -791,8 +804,8 @@ const MessageComposer = forwardRef(({
           onClick={handleSend}
           disabled={!newMessage.trim() || uploading}
           style={{
-            padding: isMobile ? '8px 16px' : '6px 12px',
-            minHeight: isMobile ? '36px' : '28px',
+            padding: isMobile ? '0 18px' : '0 14px',
+            height: CONTROL_H, boxSizing: 'border-box',
             background: newMessage.trim() ? 'var(--accent-amber)20' : 'transparent',
             border: `1px solid ${newMessage.trim() ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
             color: newMessage.trim() ? 'var(--accent-amber)' : 'var(--text-muted)',

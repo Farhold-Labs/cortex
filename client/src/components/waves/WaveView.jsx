@@ -8,7 +8,6 @@ import { LegacyWaveNotice, PartialEncryptionBanner } from '../../../e2ee-compone
 import ImageLightbox from '../ui/ImageLightbox.jsx';
 import Message from '../messages/Message.jsx';
 import GifSearchModal from '../search/GifSearchModal.jsx';
-import PlaybackControls from './PlaybackControls.jsx';
 import DeleteConfirmModal from './DeleteConfirmModal.jsx';
 import WaveSettingsModal from './WaveSettingsModal.jsx';
 import ReportModal from '../reports/ReportModal.jsx';
@@ -21,7 +20,7 @@ import CameraCapture from '../media/CameraCapture.jsx';
 import PlexBrowserModal from '../media/PlexBrowserModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
-import WaveEventsBanner from './WaveEventsBanner.jsx';
+import WaveContextBar from './WaveContextBar.jsx';
 import EventDetailModal from '../calendar/EventDetailModal.jsx';
 import EventCreateModal from '../calendar/EventCreateModal.jsx';
 import { storage } from '../../utils/storage.js';
@@ -40,6 +39,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [selectedEvent, setSelectedEvent] = useState(null); // event opened from the banner (v2.71.0)
   const [showEventCreate, setShowEventCreate] = useState(false); // create in-wave (v2.72.0)
   const [eventsReload, setEventsReload] = useState(0);
+  const [pinsReload, setPinsReload] = useState(0);
   const [replyingTo, setReplyingTo] = useState(null);
   const [newMessage, setNewMessage] = useState('');
   const [collapsed, setCollapsed] = useState(() => {
@@ -60,9 +60,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       return {};
     }
   });
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackIndex, setPlaybackIndex] = useState(null);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [showSettings, setShowSettings] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState(null);
@@ -71,7 +68,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [mentionSearch, setMentionSearch] = useState('');
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionStartPos, setMentionStartPos] = useState(null);
-  const [showPlayback, setShowPlayback] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editContent, setEditContent] = useState('');
@@ -135,8 +131,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     };
     loadPlexConnections();
   }, [fetchAPI]);
-
-  const playbackRef = useRef(null);
   const fileInputRef = useRef(null);
   const fileAttachInputRef = useRef(null);
 
@@ -360,6 +354,44 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   };
 
   // Share ping to external platforms
+  // Pin/unpin for the whole wave (v2.74.0). Pins are shared, so this is not a
+  // personal bookmark — the toast says so, because the two are easy to confuse.
+  const handleTogglePin = async (ping) => {
+    const wasPinned = !!ping.pinned_at;
+    try {
+      await fetchAPI(`/pings/${ping.id}/pin`, { method: wasPinned ? 'DELETE' : 'POST' });
+      setPinsReload(n => n + 1);
+      // Refresh the timeline so the ping's own 📌 marker updates. The websocket
+      // event does this for everyone else; the actor should not have to wait.
+      loadWave(true);
+      showToast(wasPinned ? 'Unpinned' : 'Pinned for everyone in this wave', 'success');
+    } catch (err) {
+      showToast(err.message || 'Could not update pin', 'error');
+    }
+  };
+
+  // Jump to a ping from the pins banner. A pin can easily be older than the
+  // loaded window, so fall back to reloading the wave centred on it.
+  const scrollToPing = async (pingId) => {
+    const flash = () => {
+      const el = messagesRef.current?.querySelector(`[data-message-id="${pingId}"]`);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.style.transition = 'background 0.1s';
+      el.style.background = 'var(--accent-amber)18';
+      setTimeout(() => { el.style.background = ''; }, 1200);
+      return true;
+    };
+    if (flash()) return;
+    await loadWave(false, { around: pingId });
+    // Give React a few frames to paint the new window before looking again.
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 150));
+      if (flash()) return;
+    }
+    showToast('Could not find that ping', 'error');
+  };
+
   const handleSharePing = async (ping) => {
     const shareUrl = `${BASE_URL}/share/${ping.id}`;
     const shareTitle = wave?.title || waveData?.title || 'Cortex';
@@ -696,71 +728,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     return () => container.removeEventListener('scroll', handleScroll);
   }, [waveData, wave.id, fetchAPI, onWaveUpdate]);
 
-  useEffect(() => {
-    if (isPlaying && waveData && waveData.all_messages) {
-      const total = waveData.all_messages.length;
-      playbackRef.current = setInterval(() => {
-        setPlaybackIndex(prev => {
-          const next = (prev ?? -1) + 1;
-          if (next >= total) { setIsPlaying(false); return total - 1; }
-          return next;
-        });
-      }, 1500 / playbackSpeed);
-    }
-    return () => { if (playbackRef.current) clearInterval(playbackRef.current); };
-  }, [isPlaying, playbackSpeed, waveData]);
-
-  // Scroll to current playback message when playbackIndex changes
-  useEffect(() => {
-    if (playbackIndex === null || !waveData?.all_messages || !messagesRef.current) return;
-
-    // Find the message with the current playback index
-    const findMessageByIndex = (messages, targetIndex) => {
-      for (const msg of messages) {
-        if (msg._index === targetIndex) return msg;
-        if (msg.children) {
-          const found = findMessageByIndex(msg.children, targetIndex);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-
-    const currentMessage = findMessageByIndex(waveData.messages || [], playbackIndex);
-    if (currentMessage) {
-      // Use setTimeout to ensure React has re-rendered and the element is in the DOM
-      // This is needed because the element only appears when playbackIndex >= its _index
-      setTimeout(() => {
-        const container = messagesRef.current;
-        const element = container?.querySelector(`[data-message-id="${currentMessage.id}"]`);
-        if (element && container) {
-          // Calculate element's position relative to the scroll container
-          const containerRect = container.getBoundingClientRect();
-          const elementRect = element.getBoundingClientRect();
-
-          // Current scroll position + element's visual offset from container top
-          // minus half the container height to center it
-          const elementVisualTop = elementRect.top - containerRect.top;
-          const targetScrollTop = container.scrollTop + elementVisualTop - (containerRect.height / 2) + (elementRect.height / 2);
-
-          // Scroll to the target position (instant for reliability, highlight provides visual feedback)
-          container.scrollTo({
-            top: Math.max(0, targetScrollTop),
-            behavior: 'auto'
-          });
-
-          // Brief highlight effect to show current playback position
-          element.style.transition = 'background-color 0.3s';
-          element.style.backgroundColor = 'var(--accent-amber)30';
-          element.style.outline = '2px solid var(--accent-amber)';
-          setTimeout(() => {
-            element.style.backgroundColor = '';
-            element.style.outline = '';
-          }, 800);
-        }
-      }, 50);
-    }
-  }, [playbackIndex, waveData]);
 
   // Scroll to compose area when replying on mobile
   useEffect(() => {
@@ -817,20 +784,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         }
       }
 
-      // Assign chronological indices based on created_at for proper playback order
-      // Sort all_messages by created_at and create a map of id -> chronoIndex
-      const sortedByTime = [...data.all_messages].sort((a, b) =>
-        new Date(a.created_at) - new Date(b.created_at)
-      );
-      const chronoIndexMap = new Map();
-      sortedByTime.forEach((m, idx) => chronoIndexMap.set(m.id, idx));
-
-      // Apply chronological indices to the tree structure
-      const addIndices = (msgs) => msgs.forEach(m => {
-        m._index = chronoIndexMap.get(m.id) ?? 0;
-        if (m.children) addIndices(m.children);
-      });
-      addIndices(data.messages);
       console.log('Wave data loaded:', {
         title: data.title,
         privacy: data.privacy,
@@ -996,19 +949,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
         const tree = buildMessageTree(mergedMessages);
 
-        // Assign chronological indices based on created_at for proper playback order
-        const sortedByTime = [...mergedMessages].sort((a, b) =>
-          new Date(a.created_at) - new Date(b.created_at)
-        );
-        const chronoIndexMap = new Map();
-        sortedByTime.forEach((m, idx) => chronoIndexMap.set(m.id, idx));
-
-        const addIndices = (msgs) => msgs.forEach(m => {
-          m._index = chronoIndexMap.get(m.id) ?? 0;
-          if (m.children) addIndices(m.children);
-        });
-        addIndices(tree);
-
         setWaveData(prev => ({
           ...prev,
           messages: tree,
@@ -1030,82 +970,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       showToast(formatError('Failed to load older messages'), 'error');
     }
     setLoadingMore(false);
-  };
-
-  // Handle playback toggle - load all messages first if needed
-  const handlePlaybackToggle = async () => {
-    if (isPlaying) {
-      // Stopping playback
-      setIsPlaying(false);
-      return;
-    }
-
-    // Starting playback - load all messages first if there are more
-    if (hasMoreMessages) {
-      showToast('Loading all messages for playback...', 'info');
-      try {
-        // Keep loading until we have all messages
-        let allMessages = [...(waveData?.all_messages || [])];
-        let hasMore = true;
-
-        while (hasMore) {
-          const oldestMessage = allMessages.reduce((oldest, m) =>
-            new Date(m.created_at) < new Date(oldest.created_at) ? m : oldest
-          );
-          const data = await fetchAPI(`/waves/${wave.id}/messages?limit=100&before=${oldestMessage.id}`);
-
-          if (data.messages.length > 0) {
-            allMessages = [...data.messages, ...allMessages];
-            hasMore = data.hasMore;
-          } else {
-            hasMore = false;
-          }
-        }
-
-        // Rebuild the tree with all messages
-        const messageIds = new Set(allMessages.map(m => m.id));
-        function buildMessageTree(messages, parentId = null) {
-          return messages
-            .filter(m => {
-              if (parentId === null) {
-                return m.parent_id === null || !messageIds.has(m.parent_id);
-              }
-              return m.parent_id === parentId;
-            })
-            .map(m => ({ ...m, children: buildMessageTree(messages, m.id) }));
-        }
-
-        const tree = buildMessageTree(allMessages);
-
-        // Assign chronological indices
-        const sortedByTime = [...allMessages].sort((a, b) =>
-          new Date(a.created_at) - new Date(b.created_at)
-        );
-        const chronoIndexMap = new Map();
-        sortedByTime.forEach((m, idx) => chronoIndexMap.set(m.id, idx));
-
-        const addIndices = (msgs) => msgs.forEach(m => {
-          m._index = chronoIndexMap.get(m.id) ?? 0;
-          if (m.children) addIndices(m.children);
-        });
-        addIndices(tree);
-
-        setWaveData(prev => ({
-          ...prev,
-          messages: tree,
-          all_messages: allMessages,
-        }));
-        setHasMoreMessages(false);
-        showToast(`Loaded ${allMessages.length} messages`, 'success');
-      } catch (err) {
-        showToast(formatError('Failed to load all messages for playback'), 'error');
-        return;
-      }
-    }
-
-    // Start playback from the beginning
-    setPlaybackIndex(0);
-    setIsPlaying(true);
   };
 
   const handleSendMessage = async (messageContent) => {
@@ -1693,6 +1557,16 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     });
   }, [allPings, parentMap]);
 
+  // One collapse/expand control instead of two (v2.74.0). Its state comes from
+  // the pings actually loaded, not from the keys of contentCollapsed — that map
+  // keeps entries for pings scrolled out of the window, so counting it would
+  // label the button wrong.
+  const collapsibleIds = React.useMemo(
+    () => allPings.filter(isMessageCollapsible).map(m => m.id),
+    [allPings]
+  );
+  const anyCollapsed = collapsibleIds.some(id => contentCollapsed[id]);
+
   if (loading) return <LoadingSpinner />;
   if (!waveData) return <div style={{ padding: '20px', color: 'var(--text-dim)' }}>Wave not found</div>;
 
@@ -1866,23 +1740,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     <span>Voice/Video Call</span>
                   </div>
 
-                  {/* Playback */}
-                  {total > 0 && (
-                    <div
-                      onClick={() => { setShowPlayback(!showPlayback); setShowWaveMenu(false); }}
-                      style={{
-                        padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem',
-                        color: showPlayback ? config.color : 'var(--text-primary)',
-                        background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px',
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                    >
-                      <span>▶</span>
-                      <span>{showPlayback ? 'Hide Playback' : 'Playback'}</span>
-                    </div>
-                  )}
-
                   {/* Mark All Read */}
                   {allPings.some(m => m.is_unread && m.author_id !== currentUser.id) && (
                     <div
@@ -1986,49 +1843,32 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     </div>
                   )}
 
-                  {/* Collapse/Expand All Messages (v2.23.0) */}
-                  <div
-                    onClick={() => {
-                      collapseAllContent();
-                      setShowWaveMenu(false);
-                    }}
-                    style={{
-                      padding: '10px 14px',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem',
-                      color: 'var(--text-primary)',
-                      background: 'transparent',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                  >
-                    <span>▼</span>
-                    <span>Collapse All Messages</span>
-                  </div>
-                  <div
-                    onClick={() => {
-                      expandAllContent();
-                      setShowWaveMenu(false);
-                    }}
-                    style={{
-                      padding: '10px 14px',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem',
-                      color: 'var(--text-primary)',
-                      background: 'transparent',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                  >
-                    <span>▶</span>
-                    <span>Expand All Messages</span>
-                  </div>
+                  {/* Collapse/Expand All Messages — one toggle labelled for what
+                      it will do (v2.74.0). Hidden when the wave has nothing long
+                      enough to collapse, rather than offering a no-op. */}
+                  {collapsibleIds.length > 0 && (
+                    <div
+                      onClick={() => {
+                        if (anyCollapsed) expandAllContent(); else collapseAllContent();
+                        setShowWaveMenu(false);
+                      }}
+                      style={{
+                        padding: '10px 14px',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        color: 'var(--text-primary)',
+                        background: 'transparent',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>{anyCollapsed ? '▶' : '▼'}</span>
+                      <span>{anyCollapsed ? 'Expand All Messages' : 'Collapse All Messages'}</span>
+                    </div>
+                  )}
 
                   {/* Members (all participants) */}
                   <div
@@ -2465,13 +2305,22 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         </div>
       )}
 
-      {/* Expanded Playback Panel */}
-      {showPlayback && total > 0 && (
-        <PlaybackControls isPlaying={isPlaying} onTogglePlay={handlePlaybackToggle}
-          currentIndex={playbackIndex} totalMessages={total} onSeek={setPlaybackIndex}
-          onReset={() => { setPlaybackIndex(null); setIsPlaying(false); }}
-          playbackSpeed={playbackSpeed} onSpeedChange={setPlaybackSpeed} isMobile={isMobile} />
-      )}
+      {/* Pinned pings + upcoming events (v2.74.0). Deliberately OUTSIDE the
+          message scroller below: as strips inside it they sat above the oldest
+          loaded ping, so in a wave with thousands of messages you could never
+          scroll far enough to reach them. */}
+      <WaveContextBar
+        waveId={wave?.id}
+        fetchAPI={fetchAPI}
+        isMobile={isMobile}
+        reloadTrigger={`${reloadTrigger}-${eventsReload}-${pinsReload}`}
+        onOpenEvent={setSelectedEvent}
+        onCreateEvent={() => setShowEventCreate(true)}
+        decryptPins={decryptMessages}
+        onScrollToPing={scrollToPing}
+        onUnpin={() => loadWave(true)}
+        showToast={showToast}
+      />
 
       {/* Messages */}
       <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '12px' : '20px' }}>
@@ -2492,16 +2341,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             isContinuing={isEncryptingBatch}
           />
         )}
-        {/* Upcoming events for this wave (v2.71.0) — without this, arriving from
-            a reminder or a calendar entry showed no sign of the event at all. */}
-        <WaveEventsBanner
-          waveId={wave?.id}
-          fetchAPI={fetchAPI}
-          isMobile={isMobile}
-          reloadTrigger={`${reloadTrigger}-${eventsReload}`}
-          onOpenEvent={setSelectedEvent}
-          onCreateEvent={() => setShowEventCreate(true)}
-        />
 
         {/* Watch Party Banner (v2.14.0) */}
         {activeWatchParty && (
@@ -2547,7 +2386,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               onReply={setReplyingTo} onDelete={handleDeleteMessage}
               onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
               editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
-              currentUserId={currentUser?.id} highlightId={replyingTo?.id} playbackIndex={playbackIndex}
+              currentUserId={currentUser?.id} highlightId={replyingTo?.id}
               collapsed={collapsed} onToggleCollapse={toggleThreadCollapse} isMobile={isMobile}
               contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
               onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
@@ -2558,6 +2397,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
               fetchAPI={fetchAPI}
               currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove}
+              onTogglePin={handleTogglePin}
               onScrollToMessage={(msgId) => {
                 const el = messagesRef.current?.querySelector(`[data-message-id="${msgId}"]`);
                 if (!el) return;
