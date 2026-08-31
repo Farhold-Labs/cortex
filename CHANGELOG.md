@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.76.0] - 2026-08-31
+
+### Added
+
+- **Resend as an email provider, over HTTPS instead of SMTP.** `EMAIL_PROVIDER=resend` + `RESEND_API_KEY`. Every provider Cortex had — `smtp`, `sendgrid`, `mailgun` — relays over SMTP port 587, which cloud hosts block by default to limit spam; DigitalOcean blackholes it on the PMP droplet, so *all* mail from that node had been failing silently. Port 443 is never blocked, so this path works on any host with no support ticket and no migration.
+  - Implemented as a transport duck-typed to the nodemailer surface `sendEmail()` already uses (`sendMail`, `verify`), so no call site changed and the send-timeout and startup-probe machinery applies to it unchanged.
+  - Errors surface Resend's own wording — "API key is invalid", "domain is not verified" — rather than a flattened generic failure. Those two are the failures that actually happen, and both are unactionable without the text.
+  - `EMAIL_FROM` must use a domain verified in Resend.
+
+### Fixed
+
+- **The startup warning no longer blames a firewall when the provider does not use one.** Suggesting a blocked SMTP port while running an HTTPS provider would send the next person chasing the wrong thing — which is how the PMP outage lasted as long as it did. The port-587 hint now appears only for SMTP-based providers.
+
 ## [2.75.1] - 2026-08-31
 
 ### Fixed

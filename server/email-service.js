@@ -54,6 +54,9 @@ class EmailService {
         case 'mailgun':
           this.initializeMailgun();
           break;
+        case 'resend':
+          this.initializeResend();
+          break;
         default:
           console.warn(`Unknown email provider: ${this.provider}, falling back to SMTP`);
           this.provider = 'smtp';
@@ -76,6 +79,80 @@ class EmailService {
       greetingTimeout: 10000,
       socketTimeout: 20000,
     };
+  }
+
+  // Resend over HTTPS (v2.76.0).
+  //
+  // Every other provider here relays over SMTP port 587, which cloud hosts
+  // block by default to limit spam — DigitalOcean blackholes it on the PMP
+  // droplet, so all mail from that node silently failed. Port 443 is never
+  // blocked, so this path works anywhere without a support ticket.
+  //
+  // Duck-typed to the nodemailer surface `sendEmail()` already uses
+  // (`sendMail`, `verify`), so no call site changes and the send-timeout and
+  // startup-probe machinery applies unchanged.
+  initializeResend() {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.log('Email service disabled: RESEND_API_KEY not configured');
+      return;
+    }
+
+    const request = async (path, { method = 'GET', body } = {}) => {
+      const res = await fetch(`https://api.resend.com${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        // Independent of the outer send cap: this bounds the socket itself, so
+        // a stalled connection cannot consume the whole budget.
+        signal: AbortSignal.timeout(EmailService.TIMEOUTS.socketTimeout),
+      });
+      let payload = null;
+      try { payload = await res.json(); } catch { /* 204s and empty bodies */ }
+      return { status: res.status, ok: res.ok, payload };
+    };
+
+    this.transporter = {
+      async sendMail({ from, to, subject, html, text }) {
+        const { status, ok, payload } = await request('/emails', {
+          method: 'POST',
+          body: {
+            from,
+            // Resend takes an array; callers pass a single address.
+            to: Array.isArray(to) ? to : [to],
+            subject,
+            html,
+            text,
+          },
+        });
+        if (!ok) {
+          // Surface Resend's own wording — "domain is not verified" and
+          // "invalid api key" are the two that actually happen, and both are
+          // useless if flattened into a generic failure.
+          const detail = payload?.message || payload?.name || `HTTP ${status}`;
+          throw new Error(status === 429 ? `Rate limited by Resend (${detail})` : detail);
+        }
+        return { messageId: payload?.id || 'resend-accepted' };
+      },
+
+      async verify() {
+        const { status, ok, payload } = await request('/domains');
+        if (ok) return true;
+        // 403 = the key is real but scoped to sending only. That is a perfectly
+        // normal sending key, so it counts as reachable and authenticated.
+        if (status === 403) return true;
+        // Resend answers an invalid key on this endpoint with 400, not 401
+        // (observed), so status alone loses the reason — always prefer its text.
+        const detail = payload?.message || payload?.name || `HTTP ${status}`;
+        throw new Error(`Resend rejected the API key — ${detail}`);
+      },
+    };
+
+    this.configured = true;
+    console.log('Email service enabled (Resend HTTPS API)');
   }
 
   initializeSMTP() {
@@ -211,8 +288,14 @@ class EmailService {
       await withTimeout(this.transporter.verify(), EmailService.TIMEOUTS.connectionTimeout + 2000, 'timed out');
       console.log('✅ Email service reachable — SMTP connection verified');
     } catch (err) {
-      console.warn(`⚠️  EMAIL WILL NOT SEND: cannot reach the mail server (${err.message}).`);
-      console.warn('⚠️  Outbound SMTP is commonly blocked by default on cloud hosts (DigitalOcean, and others).');
+      console.warn(`⚠️  EMAIL WILL NOT SEND: ${err.message}`);
+      // Only suggest the port block when the provider actually uses SMTP —
+      // pointing at a firewall while running an HTTPS provider sends the next
+      // person chasing the wrong thing, which is how the PMP outage lasted.
+      if (this.provider !== 'resend') {
+        console.warn('⚠️  smtp/sendgrid/mailgun all relay over port 587, which cloud hosts commonly block by default.');
+        console.warn('⚠️  Set EMAIL_PROVIDER=resend to send over HTTPS instead (see .env.example).');
+      }
     }
   }
 
