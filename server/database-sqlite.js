@@ -2405,6 +2405,89 @@ export class DatabaseSQLite {
       console.log('✅ pings.pinned_at / pinned_by added');
     }
 
+    // v2.75.0 — Long-lived sessions via refresh-token rotation.
+    //
+    // Before this, the JWT *was* the session: its exp carried the whole
+    // lifetime (24h/7d/30d), so a stolen token stayed good for up to a month
+    // and anyone who did not open the app inside the renewal window was logged
+    // out. Splitting the two lets the access token be short-lived (minutes)
+    // while the session itself survives for months.
+    //
+    // The security property that makes that safe is rotation + reuse detection:
+    // each refresh token may be redeemed exactly once. Presenting one that has
+    // already been redeemed means two parties hold it — the legitimate client
+    // and a thief — so the whole family is revoked and both must log in again.
+    const refreshExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='refresh_tokens'`
+    ).get();
+    if (!refreshExists) {
+      console.log('📝 Adding refresh_tokens table (v2.75.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+          id                  TEXT PRIMARY KEY,
+          user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- One family per login. Rotation replaces a token within its family;
+          -- reuse detection revokes the family, never just the one token.
+          family_id           TEXT NOT NULL,
+          token_hash          TEXT UNIQUE NOT NULL,
+          parent_id           TEXT,
+          device_info         TEXT,
+          device_label        TEXT,
+          ip_address          TEXT,
+          created_at          TEXT NOT NULL,
+          last_used_at        TEXT,
+          -- Sliding: pushed forward on every rotation. This is the idle window.
+          expires_at          TEXT NOT NULL,
+          -- Hard ceiling for the family, NULL when the operator sets no cap.
+          absolute_expires_at TEXT,
+          -- Set when redeemed. A token with used_at that is presented again is
+          -- the theft signal.
+          used_at             TEXT,
+          revoked_at          TEXT,
+          revoked_reason      TEXT
+        );
+      `);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_refresh_hash ON refresh_tokens(token_hash);`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_refresh_family ON refresh_tokens(family_id);`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens(user_id);`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_refresh_expires ON refresh_tokens(expires_at);`);
+      console.log('✅ refresh_tokens table created');
+    }
+
+    // v2.75.0 — Devices a user has signed in from, so a sign-in from a new one
+    // can be flagged to the account owner. Separate from refresh_tokens because
+    // it must outlive any individual session: a device is only "new" relative to
+    // everything ever seen, not to what is currently active.
+    const knownDeviceExists = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='known_devices'`
+    ).get();
+    if (!knownDeviceExists) {
+      console.log('📝 Adding known_devices table (v2.75.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS known_devices (
+          id           TEXT PRIMARY KEY,
+          user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          device_hash  TEXT NOT NULL,
+          device_label TEXT,
+          first_seen   TEXT NOT NULL,
+          last_seen    TEXT NOT NULL,
+          UNIQUE(user_id, device_hash)
+        );
+      `);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_known_devices_user ON known_devices(user_id);`);
+      console.log('✅ known_devices table created');
+    }
+
+    // v2.75.0 — instance-level security policy (session lifetimes, step-up window,
+    // new-device alerts). Its own namespace: these are operator policy, not user
+    // preference defaults, and must never resolve through the per-user layer.
+    const instColsV275 = this.db.prepare(`PRAGMA table_info(instance_config)`).all();
+    if (instColsV275.length > 0 && !instColsV275.some(c => c.name === 'security')) {
+      console.log('📝 Adding instance_config.security (v2.75.0)...');
+      this.db.exec(`ALTER TABLE instance_config ADD COLUMN security TEXT NOT NULL DEFAULT '{}';`);
+      console.log('✅ instance_config.security added');
+    }
+
     // v2.70.0 — Reminder bookkeeping for guest RSVPs. Cannot reuse
     // event_reminder_sent: its user_id is a NOT NULL reference to users, and a
     // guest has no account.
@@ -8463,6 +8546,10 @@ export class DatabaseSQLite {
       notificationDefaults: parse(config.notification_defaults),
       features: parse(config.features),
       branding: parse(config.branding),
+      // Operator security policy (v2.75.0) — session lifetimes, step-up window.
+      // Deliberately its own namespace: never resolved through the per-user
+      // preference layer the way `defaults` is.
+      security: parse(config.security),
       createdAt: config.created_at,
       updatedAt: config.updated_at,
       updatedBy: config.updated_by || null,
@@ -8475,7 +8562,7 @@ export class DatabaseSQLite {
     const current = this.getInstanceConfig();
     const merged = {};
 
-    for (const ns of ['defaults', 'notificationDefaults', 'features', 'branding']) {
+    for (const ns of ['defaults', 'notificationDefaults', 'features', 'branding', 'security']) {
       if (patch[ns] === undefined) {
         merged[ns] = current[ns];
         continue;
@@ -8490,18 +8577,136 @@ export class DatabaseSQLite {
 
     this.db.prepare(`
       UPDATE instance_config
-      SET defaults = ?, notification_defaults = ?, features = ?, branding = ?, updated_at = ?, updated_by = ?
+      SET defaults = ?, notification_defaults = ?, features = ?, branding = ?, security = ?, updated_at = ?, updated_by = ?
       WHERE id = 1
     `).run(
       JSON.stringify(merged.defaults),
       JSON.stringify(merged.notificationDefaults),
       JSON.stringify(merged.features),
       JSON.stringify(merged.branding),
+      JSON.stringify(merged.security),
       new Date().toISOString(),
       updatedBy
     );
 
     return this.getInstanceConfig();
+  }
+
+  // ============ Refresh Tokens (v2.75.0) ============
+  // The server never stores a refresh token, only its sha256 — the same posture
+  // as user_sessions. Callers pass hashes; the plaintext exists only in transit
+  // and in the client's storage.
+
+  createRefreshToken({ id, userId, familyId, tokenHash, parentId = null, deviceInfo = null,
+                       deviceLabel = null, ipAddress = null, expiresAt, absoluteExpiresAt = null }) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO refresh_tokens
+        (id, user_id, family_id, token_hash, parent_id, device_info, device_label,
+         ip_address, created_at, expires_at, absolute_expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, userId, familyId, tokenHash, parentId, deviceInfo, deviceLabel,
+           ipAddress, now, expiresAt, absoluteExpiresAt);
+    return { id, userId, familyId, expiresAt, absoluteExpiresAt, createdAt: now };
+  }
+
+  getRefreshTokenByHash(tokenHash) {
+    const r = this.db.prepare('SELECT * FROM refresh_tokens WHERE token_hash = ?').get(tokenHash);
+    if (!r) return null;
+    return {
+      id: r.id, userId: r.user_id, familyId: r.family_id, parentId: r.parent_id,
+      deviceInfo: r.device_info, deviceLabel: r.device_label, ipAddress: r.ip_address,
+      createdAt: r.created_at, lastUsedAt: r.last_used_at,
+      expiresAt: r.expires_at, absoluteExpiresAt: r.absolute_expires_at,
+      usedAt: r.used_at, revokedAt: r.revoked_at, revokedReason: r.revoked_reason,
+    };
+  }
+
+  markRefreshTokenUsed(id) {
+    this.db.prepare('UPDATE refresh_tokens SET used_at = ?, last_used_at = ? WHERE id = ?')
+      .run(new Date().toISOString(), new Date().toISOString(), id);
+  }
+
+  // Revoking the family, not the token, is the point: on a detected reuse we
+  // cannot tell the thief's copy from the victim's, so both lose access.
+  revokeRefreshFamily(familyId, reason = 'revoked') {
+    const info = this.db.prepare(
+      'UPDATE refresh_tokens SET revoked_at = ?, revoked_reason = ? WHERE family_id = ? AND revoked_at IS NULL'
+    ).run(new Date().toISOString(), reason, familyId);
+    return info.changes;
+  }
+
+  revokeAllRefreshTokensForUser(userId, reason = 'revoked', exceptFamilyId = null) {
+    const now = new Date().toISOString();
+    if (exceptFamilyId) {
+      return this.db.prepare(
+        'UPDATE refresh_tokens SET revoked_at = ?, revoked_reason = ? WHERE user_id = ? AND family_id != ? AND revoked_at IS NULL'
+      ).run(now, reason, userId, exceptFamilyId).changes;
+    }
+    return this.db.prepare(
+      'UPDATE refresh_tokens SET revoked_at = ?, revoked_reason = ? WHERE user_id = ? AND revoked_at IS NULL'
+    ).run(now, reason, userId).changes;
+  }
+
+  // One row per family — a "device" from the user's point of view. The newest
+  // token in the family carries the current expiry and last-used time.
+  listRefreshFamilies(userId) {
+    const rows = this.db.prepare(`
+      SELECT family_id,
+             MIN(created_at)                        AS started_at,
+             MAX(COALESCE(last_used_at, created_at)) AS last_used_at,
+             MAX(expires_at)                        AS expires_at,
+             MAX(COALESCE(revoked_at, ''))          AS revoked_at,
+             COUNT(*)                               AS rotations
+      FROM refresh_tokens
+      WHERE user_id = ?
+      GROUP BY family_id
+      ORDER BY last_used_at DESC
+    `).all(userId);
+    return rows.map(r => {
+      const newest = this.db.prepare(
+        'SELECT device_info, device_label, ip_address FROM refresh_tokens WHERE family_id = ? ORDER BY created_at DESC LIMIT 1'
+      ).get(r.family_id);
+      return {
+        familyId: r.family_id,
+        startedAt: r.started_at,
+        lastUsedAt: r.last_used_at,
+        expiresAt: r.expires_at,
+        revoked: !!r.revoked_at,
+        rotations: r.rotations,
+        deviceInfo: newest?.device_info || null,
+        deviceLabel: newest?.device_label || null,
+        ipAddress: newest?.ip_address || null,
+      };
+    });
+  }
+
+  // Expired rows are useless for reuse detection once past the idle window, but
+  // keep them briefly so a replay just after expiry still reports as theft
+  // rather than as an ordinary expiry.
+  pruneRefreshTokens(graceDays = 30) {
+    const cutoff = new Date(Date.now() - graceDays * 86400000).toISOString();
+    return this.db.prepare('DELETE FROM refresh_tokens WHERE expires_at < ?').run(cutoff).changes;
+  }
+
+  // ============ Known Devices (v2.75.0) ============
+
+  // Returns true when this device has been seen for this user before. Records
+  // it either way, so the first sign-in from a device is "new" exactly once.
+  seenDeviceBefore(userId, deviceHash, deviceLabel = null) {
+    const now = new Date().toISOString();
+    const existing = this.db.prepare(
+      'SELECT id FROM known_devices WHERE user_id = ? AND device_hash = ?'
+    ).get(userId, deviceHash);
+    if (existing) {
+      this.db.prepare('UPDATE known_devices SET last_seen = ?, device_label = COALESCE(?, device_label) WHERE id = ?')
+        .run(now, deviceLabel, existing.id);
+      return true;
+    }
+    this.db.prepare(
+      'INSERT INTO known_devices (id, user_id, device_hash, device_label, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(`dev-${crypto.randomUUID()}`, userId, deviceHash, deviceLabel, now, now);
+    return false;
   }
 
   // ============ Crawl Bar Config Methods ============

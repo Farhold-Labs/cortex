@@ -63,6 +63,25 @@ const EMAIL_TOGGLE_DEFAULTS = [
   { key: 'calendarReminders', label: 'EMAIL CALENDAR REMINDERS' },
 ];
 
+const SECURITY_FIELDS = [
+  {
+    key: 'sessionIdleDays', label: 'STAY SIGNED IN FOR', unit: 'days of inactivity',
+    hint: 'How long someone can go without opening Cortex before they must sign in again. Using the app resets the clock, so regular users are never asked.',
+  },
+  {
+    key: 'sessionAbsoluteDays', label: 'MAXIMUM SESSION AGE', unit: 'days', allowBlank: true,
+    hint: 'A hard ceiling regardless of activity. Unset by default: forcing a periodic re-login mostly inconveniences the people least able to cope with it.',
+  },
+  {
+    key: 'accessTokenMinutes', label: 'ACCESS TOKEN LIFETIME', unit: 'minutes',
+    hint: 'How long a stolen access token would remain usable. Renewal is automatic and invisible, so lowering this costs users nothing.',
+  },
+  {
+    key: 'stepUpMinutes', label: 'PASSWORD CONFIRMATION LASTS', unit: 'minutes',
+    hint: 'After confirming their password for a sensitive action, how long before they are asked again.',
+  },
+];
+
 const BRANDING = [
   { key: 'instanceName', label: 'INSTANCE NAME', placeholder: 'Cortex' },
   { key: 'tagline', label: 'LOGIN TAGLINE', placeholder: 'Leave blank for the rotating default' },
@@ -86,6 +105,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [branding, setBranding] = useState({});
+  const [security, setSecurity] = useState({});
 
   const load = useCallback(async () => {
     try {
@@ -94,6 +114,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
       setConfig(data);
       setCodeDefaults(data.codeDefaults || {});
       setBranding(data.branding || {});
+      setSecurity(data.security || {});
     } catch (err) {
       showToast(err.message || 'Failed to load instance configuration', 'error');
     } finally {
@@ -376,6 +397,72 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
               style={{ ...pillStyle(true, 'var(--accent-purple)'), padding: '8px 20px' }}
             >
               {saving ? 'SAVING…' : 'SAVE BRANDING'}
+            </button>
+          </div>
+
+          {/* ▸ SESSIONS & SECURITY (v2.75.0) */}
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
+            <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ SESSIONS &amp; SECURITY</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '12px', lineHeight: 1.5 }}>
+              People stay signed in as long as they use Cortex at least once inside the idle window.
+              Sign-in is not the security boundary any more — access tokens are short-lived and rotate
+              automatically, and a stolen refresh token is detected the first time it is replayed, which
+              ends that session everywhere. Leave these alone unless you have a policy that requires otherwise.
+            </div>
+
+            {SECURITY_FIELDS.map(({ key, label, hint, unit, allowBlank }) => (
+              <div key={key} style={{ marginBottom: '12px' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '4px' }}>{label}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="number"
+                    value={security[key] ?? ''}
+                    placeholder={String(config.securityDefaults?.[key] ?? '')}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setSecurity(prev => ({ ...prev, [key]: raw === '' ? undefined : Number(raw) }));
+                    }}
+                    style={{
+                      width: '110px', padding: '6px 8px', background: 'var(--bg-surface)',
+                      border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
+                      fontFamily: 'monospace', fontSize: '0.8rem',
+                    }}
+                  />
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{unit}</span>
+                </div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '4px', lineHeight: 1.5 }}>
+                  {hint}
+                  {allowBlank && ' Leave blank for no limit.'}
+                </div>
+              </div>
+            ))}
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={security.newDeviceAlerts !== false}
+                onChange={(e) => setSecurity(prev => ({ ...prev, newDeviceAlerts: e.target.checked }))}
+              />
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                Email members when their account is signed in to from a new device
+              </span>
+            </label>
+
+            <button
+              disabled={saving}
+              onClick={() => {
+                // undefined means "no override" — send null so the server clears
+                // the stored value rather than writing the placeholder back.
+                const patch = {};
+                for (const { key } of SECURITY_FIELDS) {
+                  patch[key] = security[key] === undefined || Number.isNaN(security[key]) ? null : security[key];
+                }
+                patch.newDeviceAlerts = security.newDeviceAlerts !== false;
+                save({ security: patch }, 'Session policy saved');
+              }}
+              style={{ ...pillStyle(true, 'var(--accent-amber)'), padding: '8px 20px' }}
+            >
+              {saving ? 'SAVING…' : 'SAVE SESSION POLICY'}
             </button>
           </div>
 

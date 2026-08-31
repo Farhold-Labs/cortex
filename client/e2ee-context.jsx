@@ -45,6 +45,27 @@ function getJWTRemainingMs(token) {
   }
 }
 
+// How long "until my session expires" should actually last (v2.75.0).
+//
+// This used to read the JWT's exp, which was right when the JWT *was* the
+// session. Now the access token lives about an hour and rotates, so reading it
+// would re-lock E2EE hourly — turning a feature meant to reduce interruptions
+// into a much worse one. The session's real end is the refresh token's expiry,
+// which the server sends on login and on every rotation.
+function getSessionRemainingMs(token) {
+  try {
+    const stored = localStorage.getItem('farhold_session_expires')
+      || sessionStorage.getItem('farhold_session_expires');
+    if (stored) {
+      const at = Date.parse(stored);
+      if (Number.isFinite(at)) return Math.max(at - Date.now(), 0);
+    }
+  } catch { /* fall through to the token */ }
+  // No session expiry recorded: a legacy long-lived JWT, or a session-only
+  // login. In both cases the access token really is the session.
+  return getJWTRemainingMs(token);
+}
+
 // ============ Context ============
 const E2EEContext = createContext(null);
 
@@ -90,7 +111,7 @@ export function E2EEProvider({ children, token, API_URL }) {
 
       // 'auto': match the JWT session lifetime so E2EE stays unlocked as long as the user is logged in
       const durationMs = duration === 'auto'
-        ? getJWTRemainingMs(tokenRef.current)
+        ? getSessionRemainingMs(tokenRef.current)
         : (REMEMBER_DURATIONS[duration] ?? 0);
 
       if (durationMs > 0) {
@@ -191,14 +212,14 @@ export function E2EEProvider({ children, token, API_URL }) {
   }, []);
 
   // Keep the persistent E2EE cache aligned with the live session when the user
-  // chose "Until my session expires" ('auto'). The JWT is silently renewed as the
-  // user stays active, extending the session — without this the E2EE cache keeps
-  // its original (shorter) expiry and forces a re-unlock while still logged in.
+  // chose "Until my session expires" ('auto'). The session slides forward as the
+  // user stays active — without this the E2EE cache keeps its original (shorter)
+  // expiry and forces a re-unlock while still logged in.
   useEffect(() => {
     if (!token) return;
     if (localStorage.getItem(PERSISTENT_DURATION) !== 'auto') return;
     if (!localStorage.getItem(PERSISTENT_KEY_STORAGE)) return;
-    const remaining = getJWTRemainingMs(token);
+    const remaining = getSessionRemainingMs(token);
     if (remaining > 0) {
       localStorage.setItem(PERSISTENT_EXPIRY, (Date.now() + remaining).toString());
     }
