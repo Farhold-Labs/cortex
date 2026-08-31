@@ -589,7 +589,6 @@ const FocusView = ({
             setEditContent={setEditContent}
             currentUserId={currentUser?.id}
             highlightId={replyingTo?.id}
-            playbackIndex={null}
             collapsed={collapsed}
             onToggleCollapse={toggleThreadCollapse}
             isMobile={isMobile}

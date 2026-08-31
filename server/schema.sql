@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS pings (
     -- Threading fields (v2.38.0)
     threaded INTEGER DEFAULT 0,            -- 1 if message has been burst/threaded
     is_thread_reply INTEGER DEFAULT 0      -- 1 if reply was made within thread panel
-, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0);
+, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL);
 CREATE INDEX IF NOT EXISTS idx_pings_wave ON pings(wave_id);
 CREATE INDEX IF NOT EXISTS idx_pings_author ON pings(author_id);
 CREATE INDEX IF NOT EXISTS idx_pings_parent ON pings(parent_id);
@@ -192,6 +192,8 @@ CREATE INDEX IF NOT EXISTS idx_pings_bot_id ON pings(bot_id);
 CREATE INDEX IF NOT EXISTS idx_pings_video_feed
         ON pings(media_type, created_at DESC)
         WHERE media_type = 'video' AND deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_pings_event_id ON pings(event_id) WHERE event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pings_pinned ON pings(wave_id, pinned_at) WHERE pinned_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ping_read_by (
     ping_id TEXT NOT NULL REFERENCES pings(id) ON DELETE CASCADE,
@@ -1112,6 +1114,16 @@ CREATE TABLE IF NOT EXISTS event_rsvp_guest (
           UNIQUE(event_id, email_hash)
         );
 CREATE INDEX IF NOT EXISTS idx_event_rsvp_guest_event ON event_rsvp_guest(event_id);
+
+CREATE TABLE IF NOT EXISTS event_reminder_sent_guest (
+          id            TEXT PRIMARY KEY,
+          event_id      TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          guest_rsvp_id TEXT NOT NULL REFERENCES event_rsvp_guest(id) ON DELETE CASCADE,
+          window        TEXT NOT NULL,
+          sent_at       TEXT NOT NULL,
+          UNIQUE(event_id, guest_rsvp_id, window)
+        );
+CREATE INDEX IF NOT EXISTS idx_reminder_guest_event ON event_reminder_sent_guest(event_id);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
