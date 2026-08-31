@@ -67,7 +67,7 @@ const MenuItem = ({ onClick, color, style, children }) => {
 const Message = ({
   message, depth = 0, onReply, onDelete, onEdit, onSaveEdit, onCancelEdit,
   editingMessageId, editContent, setEditContent, currentUserId, highlightId,
-  playbackIndex, collapsed, onToggleCollapse, isMobile, contentCollapsed = {},
+  collapsed, onToggleCollapse, isMobile, contentCollapsed = {},
   onToggleContentCollapse, onReact, onMessageClick, participants = [],
   contacts = [], onShowProfile, onReport, onFocus, onShare, wave,
   onNavigateToWave, currentWaveId, unreadCountsByWave = {},
@@ -84,7 +84,6 @@ const Message = ({
 }) => {
   const config = PRIVACY_LEVELS[message.privacy] || PRIVACY_LEVELS.private;
   const isHighlighted = highlightId === message.id;
-  const isVisible = playbackIndex === null || message._index <= playbackIndex;
 
   const hasVisibleChildren = (children) => {
     if (!children || children.length === 0) return false;
@@ -160,7 +159,6 @@ const Message = ({
   const isContentCollapsed = contentCollapsed[message.id];
   const quickReactions = ['👍', '☝️', '❤️', '😂', '🎉', '🤔', '👏', '😢', '🖕', '😮', '🤦'];
 
-  if (!isVisible) return null;
   if (isDeleted && !hasChildren) return null;
 
   const isMoving = moveSource && moveSource.messageId === message.id;
@@ -807,7 +805,6 @@ const Message = ({
                 setEditContent={setEditContent}
                 currentUserId={currentUserId}
                 highlightId={highlightId}
-                playbackIndex={playbackIndex}
                 collapsed={collapsed}
                 onToggleCollapse={onToggleCollapse}
                 isMobile={isMobile}

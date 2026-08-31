@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Access is enforced server-side on all three endpoints (`POST`/`DELETE /api/pings/:id/pin`, `GET /api/waves/:id/pins`) with `canAccessWaveFromCache` — the same rule that governs posting a ping. Public waves are open to anyone signed in, crew waves go by crew membership, private waves by participation; anyone else gets 403, admins included. Changes broadcast over WebSocket as `ping_pinned`, so a pin lands for everyone in the wave without a refresh.
   - `wave_participants.pinned` — pinning a whole *wave* in the list — is a separate, per-user feature and is unaffected.
 
+### Removed
+
+- **Wave playback ("Playback" in the wave menu) is gone.** It never worked, in any version: `Message` gated visibility on `message._index <= playbackIndex`, but `_index` was only ever assigned to the message *tree* (`data.messages`), while what actually renders is the flat `all_messages` list. Every rendered ping therefore had `_index === undefined`, `undefined <= 0` is `false`, and pressing play blanked the entire wave permanently — reproduced on dev: 49 pings before play, 0 during, 0 after. Broken since rendering moved to the flat list in v1.11.0.
+  - Removed `PlaybackControls.jsx`, the menu item, the playback state/timer/scroll effects, `handlePlaybackToggle` (which also loaded every ping in the wave into memory 100 at a time before starting), and the `_index` bookkeeping in three places — the last of which ran on every wave load purely to feed a feature that never functioned.
+  - `GET /api/waves/:id/messages` stays: "Load older pings" still uses it.
+
 ### Changed
 
 - **Collapse/Expand All Messages is one menu item instead of two.** It now reads `Collapse All Messages` when the wave's long pings are expanded and `Expand All Messages` when they are collapsed, so the label says what the click will do. The state is derived from the pings actually loaded rather than from the stored collapse map, which keeps entries for pings scrolled out of the window and would have labelled the button wrong. The item is hidden entirely in a wave with nothing long enough to collapse, rather than offering a no-op.
