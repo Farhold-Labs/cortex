@@ -1732,6 +1732,16 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     });
   }, [allPings, parentMap]);
 
+  // One collapse/expand control instead of two (v2.74.0). Its state comes from
+  // the pings actually loaded, not from the keys of contentCollapsed — that map
+  // keeps entries for pings scrolled out of the window, so counting it would
+  // label the button wrong.
+  const collapsibleIds = React.useMemo(
+    () => allPings.filter(isMessageCollapsible).map(m => m.id),
+    [allPings]
+  );
+  const anyCollapsed = collapsibleIds.some(id => contentCollapsed[id]);
+
   if (loading) return <LoadingSpinner />;
   if (!waveData) return <div style={{ padding: '20px', color: 'var(--text-dim)' }}>Wave not found</div>;
 
@@ -2025,49 +2035,32 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     </div>
                   )}
 
-                  {/* Collapse/Expand All Messages (v2.23.0) */}
-                  <div
-                    onClick={() => {
-                      collapseAllContent();
-                      setShowWaveMenu(false);
-                    }}
-                    style={{
-                      padding: '10px 14px',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem',
-                      color: 'var(--text-primary)',
-                      background: 'transparent',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                  >
-                    <span>▼</span>
-                    <span>Collapse All Messages</span>
-                  </div>
-                  <div
-                    onClick={() => {
-                      expandAllContent();
-                      setShowWaveMenu(false);
-                    }}
-                    style={{
-                      padding: '10px 14px',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem',
-                      color: 'var(--text-primary)',
-                      background: 'transparent',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                  >
-                    <span>▶</span>
-                    <span>Expand All Messages</span>
-                  </div>
+                  {/* Collapse/Expand All Messages — one toggle labelled for what
+                      it will do (v2.74.0). Hidden when the wave has nothing long
+                      enough to collapse, rather than offering a no-op. */}
+                  {collapsibleIds.length > 0 && (
+                    <div
+                      onClick={() => {
+                        if (anyCollapsed) expandAllContent(); else collapseAllContent();
+                        setShowWaveMenu(false);
+                      }}
+                      style={{
+                        padding: '10px 14px',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        color: 'var(--text-primary)',
+                        background: 'transparent',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>{anyCollapsed ? '▶' : '▼'}</span>
+                      <span>{anyCollapsed ? 'Expand All Messages' : 'Collapse All Messages'}</span>
+                    </div>
+                  )}
 
                   {/* Members (all participants) */}
                   <div

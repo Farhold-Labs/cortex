@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Access is enforced server-side on all three endpoints (`POST`/`DELETE /api/pings/:id/pin`, `GET /api/waves/:id/pins`) with `canAccessWaveFromCache` — the same rule that governs posting a ping. Public waves are open to anyone signed in, crew waves go by crew membership, private waves by participation; anyone else gets 403, admins included. Changes broadcast over WebSocket as `ping_pinned`, so a pin lands for everyone in the wave without a refresh.
   - `wave_participants.pinned` — pinning a whole *wave* in the list — is a separate, per-user feature and is unaffected.
 
+### Changed
+
+- **Collapse/Expand All Messages is one menu item instead of two.** It now reads `Collapse All Messages` when the wave's long pings are expanded and `Expand All Messages` when they are collapsed, so the label says what the click will do. The state is derived from the pings actually loaded rather than from the stored collapse map, which keeps entries for pings scrolled out of the window and would have labelled the button wrong. The item is hidden entirely in a wave with nothing long enough to collapse, rather than offering a no-op.
+
 ### Fixed
 
 - **Composer controls did not line up.** The attach (⋮), format (Aa), pop-out (⛶) and SEND controls each sized themselves from their own glyph, so the row was five boxes of five different heights — 28 / 29 / 37 / 31px around a 36px textarea — bottom-aligned on a shelf with ragged tops. Every control now shares one height that also scales with the FONT SIZE preference.
