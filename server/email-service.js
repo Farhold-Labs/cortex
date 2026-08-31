@@ -278,6 +278,41 @@ class EmailService {
   }
 
   /**
+   * Alert the account owner that a session started on a device we have not seen
+   * before (v2.75.0). Sessions can now last months, so a sign-in the owner did
+   * not perform is worth surfacing while they can still act on it.
+   * @param {string} email - Recipient email
+   * @param {string} deviceLabel - Truncated user agent of the new device
+   * @param {string} ipAddress - Anonymised IP
+   * @param {string} when - Human-readable timestamp
+   * @param {string} manageUrl - Link to the sessions screen
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  async sendNewDeviceEmail(email, deviceLabel, ipAddress, when, manageUrl) {
+    const subject = 'Cortex - New sign-in to your account';
+    const html = `
+      <div style="font-family: 'Courier New', monospace; max-width: 600px; margin: 0 auto; padding: 20px; background: #050805; color: #e8e8e8;">
+        <h1 style="color: #ffd23f; text-align: center; border-bottom: 1px solid #3a4a3a; padding-bottom: 20px;">CORTEX</h1>
+        <h2 style="color: #0ead69;">New sign-in</h2>
+        <p>Your account was signed in to from a device we have not seen before.</p>
+        <table style="margin: 20px 0; color: #b8ccb8;">
+          <tr><td style="padding: 4px 12px 4px 0; color: #8aa08a;">When</td><td>${when}</td></tr>
+          <tr><td style="padding: 4px 12px 4px 0; color: #8aa08a;">Device</td><td>${deviceLabel}</td></tr>
+          <tr><td style="padding: 4px 12px 4px 0; color: #8aa08a;">Approx. location</td><td>${ipAddress}</td></tr>
+        </table>
+        <p style="color: #0ead69;">If this was you, nothing to do.</p>
+        <p style="color: #ff6b35;">If it was not, change your password now — that ends every other signed-in session immediately.</p>
+        <p style="margin: 30px 0; text-align: center;">
+          <a href="${manageUrl}" style="display: inline-block; padding: 14px 28px; background: #ffd23f20; border: 2px solid #ffd23f; color: #ffd23f; text-decoration: none;">Review your sessions</a>
+        </p>
+        <hr style="border: none; border-top: 1px solid #3a4a3a; margin: 30px 0;">
+        <p style="color: #666; font-size: 0.8em; text-align: center;">Cortex - Secure Communications</p>
+      </div>
+    `;
+    return this.sendEmail({ to: email, subject, html });
+  }
+
+  /**
    * Send a warning notification email
    * @param {string} email - Recipient email
    * @param {string} reason - Warning reason

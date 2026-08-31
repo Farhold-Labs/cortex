@@ -5,6 +5,41 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.75.0] - 2026-08-31
+
+### Added
+
+- **Sessions now last months instead of days, without weakening security.** Previously the JWT *was* the session: its lifetime had to trade off directly against how often people were forced to sign in, so a 30-day session meant 30 days of exposure if a token was stolen, and anyone who did not open the app inside the renewal window was logged out anyway. Access tokens and sessions are now separate things.
+  - **Access tokens are short-lived (1 hour by default) and rotate automatically.** That hour — not a month — is now the window a stolen access token buys an attacker. Renewal is invisible; nobody is asked for anything.
+  - **A rotating refresh token carries the session**, sliding forward every time it is used. Open Cortex at least once inside the idle window (90 days by default) and you are never asked to sign in again.
+  - **Reuse detection is what makes that safe.** Each refresh token may be redeemed exactly once. Presenting one that has already been redeemed means two parties hold it — the real client and a thief — so the entire token family is revoked and both must sign in again. A stolen session cannot be used quietly; using it is what exposes it.
+  - Other devices are not collateral damage: their access tokens are revoked too, but each recovers transparently through its own refresh token on the next request. Only the compromised device is signed out.
+  - **"This session only" logins get no refresh token at all** — that credential is supposed to die with the browser, which is exactly what a months-long token must not do.
+
+- **Step-up re-authentication for sensitive actions.** A months-long session is one an attacker can inherit from an unlocked laptop, so holding a session is now weaker evidence of being the account owner. Revoking sessions, assigning roles, and changing instance configuration require the password again, in the moment, and prove it with a short-lived token rather than session state (which would be lost on every rotation). Changing a password and deleting an account already required it.
+
+- **New-device sign-in alerts.** When a session begins on a device the account has not been seen on before, the owner gets an email with the device, approximate location, and a link to review their sessions. Honest about its limits: the signal is the coarse user-agent, not a fingerprint, so it reliably catches a different browser or platform but will not flag an attacker using the same browser/OS combination. It is a tripwire, not a control — the controls are rotation, reuse detection, and step-up.
+
+- **Changing your password now ends every other session immediately**, refresh tokens included, while keeping you signed in where you made the change. With sessions lasting months this is the one lever a user has to evict someone who already got in, so it has to actually evict them.
+
+- **Operator-tunable session policy** under INSTANCE DEFAULTS → SESSIONS & SECURITY: idle window, optional absolute cap (unset by default), access-token lifetime, step-up duration, and whether new-device alerts are sent. Values are clamped to sane bounds rather than rejected, so a typo cannot lock an instance out, and the response reports what was stored rather than what was asked for. Editing it requires step-up — otherwise a stolen admin session could quietly extend its own lifetime.
+
+### Fixed
+
+- **Two places treated the access token's expiry as the session's end**, which would have re-locked things hourly once tokens started rotating — turning a feature meant to remove interruptions into a much worse one:
+  - `storage.isSessionExpired()` read the JWT `exp` as "source of truth". It ran *before* the start-up refresh and destroyed the refresh token that would have recovered the session, so returning to the app after an hour dropped you at the login screen.
+  - E2EE's "until my session expires" unlock read the same claim, and would have demanded the passphrase again every hour. Both now follow the session's real end.
+- **The start-up identity check bypassed refresh entirely.** It used a raw `fetch` and treated any 401 as the end of the session — the single path that decides whether someone returning after a long gap sees their waves or a login form. It now rotates before giving up, with a timeout budget sized for the extra round-trips.
+- **A 401 that meant "confirm your password" triggered a pointless token rotation**, churning auth state enough to knock E2EE back to locked and unmount the step-up prompt mid-flow. The client now reads the error code before deciding whether rotating could possibly help.
+
+### Compatibility
+
+Clients running an older bundle keep receiving the previous long-lived JWT — the server only issues short access tokens to clients that announce they can rotate. Existing sessions continue working until they expire on their own.
+
+### Migration
+
+Adds `refresh_tokens` and `known_devices` tables and an `instance_config.security` namespace. Applies automatically on server start. **Back up your database first.**
+
 ## [2.74.0] - 2026-08-30
 
 ### Added

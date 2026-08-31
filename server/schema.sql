@@ -1081,7 +1081,7 @@ CREATE TABLE IF NOT EXISTS instance_config (
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
-        );
+        , security TEXT NOT NULL DEFAULT '{}');
 
 CREATE TABLE IF NOT EXISTS user_invitations (
           id         TEXT PRIMARY KEY,
@@ -1124,6 +1124,45 @@ CREATE TABLE IF NOT EXISTS event_reminder_sent_guest (
           UNIQUE(event_id, guest_rsvp_id, window)
         );
 CREATE INDEX IF NOT EXISTS idx_reminder_guest_event ON event_reminder_sent_guest(event_id);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+          id                  TEXT PRIMARY KEY,
+          user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- One family per login. Rotation replaces a token within its family;
+          -- reuse detection revokes the family, never just the one token.
+          family_id           TEXT NOT NULL,
+          token_hash          TEXT UNIQUE NOT NULL,
+          parent_id           TEXT,
+          device_info         TEXT,
+          device_label        TEXT,
+          ip_address          TEXT,
+          created_at          TEXT NOT NULL,
+          last_used_at        TEXT,
+          -- Sliding: pushed forward on every rotation. This is the idle window.
+          expires_at          TEXT NOT NULL,
+          -- Hard ceiling for the family, NULL when the operator sets no cap.
+          absolute_expires_at TEXT,
+          -- Set when redeemed. A token with used_at that is presented again is
+          -- the theft signal.
+          used_at             TEXT,
+          revoked_at          TEXT,
+          revoked_reason      TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_refresh_hash ON refresh_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_refresh_family ON refresh_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_expires ON refresh_tokens(expires_at);
+
+CREATE TABLE IF NOT EXISTS known_devices (
+          id           TEXT PRIMARY KEY,
+          user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          device_hash  TEXT NOT NULL,
+          device_label TEXT,
+          first_seen   TEXT NOT NULL,
+          last_seen    TEXT NOT NULL,
+          UNIQUE(user_id, device_hash)
+        );
+CREATE INDEX IF NOT EXISTS idx_known_devices_user ON known_devices(user_id);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN

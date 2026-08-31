@@ -95,6 +95,201 @@ const SESSION_DURATIONS = {
   '30d': 30 * 24 * 60 * 60 * 1000  // 30 days
 };
 
+// ============ Long-lived sessions (v2.75.0) ============
+//
+// The access token is now short-lived and the *session* is carried by a
+// rotating refresh token. Before v2.75.0 the JWT was the session, so its
+// lifetime had to trade off directly against how often people were forced to
+// log in — 30 days of stolen-token exposure to avoid monthly re-auth. Splitting
+// them removes that trade: exposure is now minutes, and the session can last
+// months.
+//
+// Operators tune the policy per instance; these are the fallbacks.
+const SECURITY_POLICY_DEFAULTS = {
+  // How long an access token is good for. Short — this is the window a stolen
+  // token buys an attacker.
+  accessTokenMinutes: 60,
+  // Idle window. Use the app once inside it and the session rolls forward.
+  sessionIdleDays: 90,
+  // Hard ceiling regardless of activity. null = none, which is the default:
+  // forcing a yearly re-login mostly punishes the users this feature is for.
+  sessionAbsoluteDays: null,
+  // How long a password step-up authorises sensitive actions.
+  stepUpMinutes: 15,
+  // Email the account owner when a session begins on an unrecognised device.
+  newDeviceAlerts: true,
+};
+
+const SECURITY_POLICY_KEYS = Object.keys(SECURITY_POLICY_DEFAULTS);
+
+// Bounds exist because these are reachable from the admin API. A zero-minute
+// access token would lock everyone out; a ten-year one would defeat the design.
+const SECURITY_POLICY_BOUNDS = {
+  accessTokenMinutes: { min: 5, max: 24 * 60 },
+  sessionIdleDays: { min: 1, max: 3650 },
+  sessionAbsoluteDays: { min: 1, max: 3650 },
+  stepUpMinutes: { min: 1, max: 240 },
+};
+
+function getSecurityPolicy() {
+  let stored = {};
+  try {
+    stored = (db.getInstanceConfig ? db.getInstanceConfig().security : {}) || {};
+  } catch { stored = {}; }
+  const policy = { ...SECURITY_POLICY_DEFAULTS };
+  for (const key of SECURITY_POLICY_KEYS) {
+    const value = stored[key];
+    if (value === undefined) continue;
+    if (key === 'newDeviceAlerts') { policy[key] = value !== false; continue; }
+    if (key === 'sessionAbsoluteDays' && value === null) { policy[key] = null; continue; }
+    const n = Number(value);
+    if (!Number.isFinite(n)) continue;
+    const b = SECURITY_POLICY_BOUNDS[key];
+    policy[key] = b ? Math.min(b.max, Math.max(b.min, Math.round(n))) : n;
+  }
+  return policy;
+}
+
+const REFRESH_TOKEN_BYTES = 32;
+
+function generateRefreshToken() {
+  // Opaque and high-entropy. Not a JWT: it carries no claims, is checked only
+  // against the database, and must be revocable the instant reuse is detected.
+  return `cxr_${crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('base64url')}`;
+}
+
+// A coarse device identity, used only to decide whether to warn about a new
+// sign-in. Deliberately the truncated user agent rather than a fingerprint, so
+// it cannot become a tracking vector.
+//
+// Be clear about what this does and does not catch. It reliably flags a sign-in
+// from a different browser or platform. It will NOT flag an attacker who
+// happens to use the same browser/OS combination as the victim — that reads as
+// the same "device". The IP is deliberately left out of the hash: it is already
+// anonymised, and mobile users change networks constantly, so including it
+// would bury real alerts under routine ones. This is a tripwire, not a control;
+// the controls are rotation, reuse detection, and step-up.
+function deviceHashFor(req) {
+  const ua = truncateUserAgent(req.headers['user-agent'] || 'Unknown');
+  return crypto.createHash('sha256').update(ua).digest('hex').slice(0, 32);
+}
+
+// Issue a refresh token, either starting a family (login) or extending one
+// (rotation). Returns the plaintext exactly once — it is never recoverable after.
+function issueRefreshToken(userId, req, { familyId = null, parentId = null, absoluteExpiresAt = null } = {}) {
+  const policy = getSecurityPolicy();
+  const token = generateRefreshToken();
+  const now = Date.now();
+  const idleExpiry = new Date(now + policy.sessionIdleDays * 86400000).toISOString();
+
+  let absolute = absoluteExpiresAt;
+  if (absolute === null && policy.sessionAbsoluteDays) {
+    absolute = new Date(now + policy.sessionAbsoluteDays * 86400000).toISOString();
+  }
+  // Never let the sliding window outrun the family's hard ceiling.
+  const expiresAt = (absolute && new Date(idleExpiry) > new Date(absolute)) ? absolute : idleExpiry;
+
+  const rawIp = req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || req?.ip || 'Unknown';
+  const family = familyId || `fam-${crypto.randomUUID()}`;
+  db.createRefreshToken({
+    id: `rt-${crypto.randomUUID()}`,
+    userId,
+    familyId: family,
+    tokenHash: hashToken(token),
+    parentId,
+    deviceInfo: truncateUserAgent(req?.headers?.['user-agent'] || 'Unknown'),
+    ipAddress: anonymizeIP(rawIp) || 'Unknown',
+    expiresAt,
+    absoluteExpiresAt: absolute,
+  });
+  return { token, expiresAt, absoluteExpiresAt: absolute, familyId: family };
+}
+
+// Mint the credentials a successful authentication hands back.
+//
+// `supportsRefresh` is the transition switch. A client that has not yet loaded
+// the v2.75.0 bundle knows nothing about refresh tokens and treats the access
+// token as the whole session — handing one of those clients a 60-minute token
+// would log it out hourly. Those callers keep the old long-lived JWT until
+// their bundle updates; only clients that say they can rotate get the short one.
+function issueAuthCredentials(user, req, { sessionDuration, supportsRefresh, sessionOnly = false }) {
+  const policy = getSecurityPolicy();
+  const base = { userId: user.id, handle: user.handle };
+
+  if (!supportsRefresh) {
+    const token = jwt.sign({ ...base, jti: crypto.randomUUID() }, JWT_SECRET, { expiresIn: sessionDuration });
+    createSession(user.id, token, req);
+    return { token, refreshToken: null, legacy: true };
+  }
+
+  // "This session only" means the credential must die with the browser session,
+  // which is exactly what a months-long refresh token must not do. Such logins
+  // get an access token and no refresh token at all.
+  if (sessionOnly) {
+    const token = jwt.sign({ ...base, jti: crypto.randomUUID() }, JWT_SECRET, { expiresIn: `${policy.accessTokenMinutes}m` });
+    createSession(user.id, token, req);
+    return { token, refreshToken: null, sessionOnly: true };
+  }
+
+  const refresh = issueRefreshToken(user.id, req);
+  // `fam` lets a request identify its own device without ever handling the
+  // refresh token — used to spare the current session when revoking others.
+  const token = jwt.sign(
+    { ...base, jti: crypto.randomUUID(), fam: refresh.familyId },
+    JWT_SECRET,
+    { expiresIn: `${policy.accessTokenMinutes}m` }
+  );
+  createSession(user.id, token, req);
+  return {
+    token,
+    refreshToken: refresh.token,
+    sessionExpiresAt: refresh.expiresAt,
+    absoluteExpiresAt: refresh.absoluteExpiresAt,
+  };
+}
+
+// The refresh family behind the current request, when there is one. Legacy and
+// session-only tokens have none, and callers must treat null as "unknown".
+function currentFamilyId(req) {
+  return req.user?.fam || null;
+}
+
+async function sendNewDeviceEmail(user, deviceLabel, ipAddress, req) {
+  const emailService = getEmailService();
+  if (!emailService.isConfigured()) return;
+  // Emails are encrypted at rest (v2.16.0); the plaintext is only available
+  // through this accessor, and may legitimately be unavailable.
+  const to = db.getDecryptedEmail ? db.getDecryptedEmail(user.id) : user.email;
+  if (!to || to.startsWith('[protected:')) return;
+  const origin = req?.headers?.origin || process.env.CLIENT_URL || 'https://cortex.farhold.com';
+  await emailService.sendNewDeviceEmail(
+    to,
+    deviceLabel,
+    ipAddress,
+    new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }),
+    `${origin}/?view=settings`
+  );
+}
+
+// Warn the account owner about a sign-in from a device we have not seen before.
+// Best-effort and never blocks the login.
+function notifyIfNewDevice(user, req) {
+  try {
+    const policy = getSecurityPolicy();
+    if (!policy.newDeviceAlerts) return;
+    if (!db.seenDeviceBefore) return;
+    const label = truncateUserAgent(req.headers['user-agent'] || 'Unknown');
+    const seen = db.seenDeviceBefore(user.id, deviceHashFor(req), label);
+    if (seen) return;
+    const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'Unknown';
+    sendNewDeviceEmail(user, label, anonymizeIP(rawIp) || 'Unknown', req).catch(err =>
+      console.error('[Auth] New-device email failed:', err.message)
+    );
+  } catch (err) {
+    console.error('[Auth] New-device check failed:', err.message);
+  }
+}
+
 // Session management configuration (v1.18.0)
 const SESSION_CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
 const SESSION_TRACKING_ENABLED = process.env.SESSION_TRACKING_ENABLED !== 'false'; // Default true
@@ -323,6 +518,17 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => req.ip + ':' + (req.body?.handle || req.body?.username || 'unknown'),
+});
+
+// Rotation is called far more often than login (roughly once per access-token
+// lifetime per device), so it needs its own budget — but still a bounded one,
+// since this endpoint takes an unauthenticated credential.
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { error: 'Too many refresh attempts. Please try again shortly.' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 const registerLimiter = rateLimit({
@@ -4684,20 +4890,23 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     // Check if user needs to change password (set by admin reset)
     const requirePasswordChange = db.requiresPasswordChange ? db.requiresPasswordChange(user.id) : false;
 
-    const token = jwt.sign({ userId: user.id, handle: user.handle, jti: crypto.randomUUID() }, JWT_SECRET, { expiresIn: sessionDuration });
-    console.log(`✅ User logged in: ${handle} with ${sessionDuration} session`);
+    const creds = issueAuthCredentials(user, req, {
+      sessionDuration,
+      supportsRefresh: req.body.supportsRefresh === true,
+      sessionOnly: req.body.sessionOnly === true,
+    });
+    const token = creds.token;
+    console.log(`✅ User logged in: ${handle}${creds.refreshToken ? ' (rotating session)' : ` with ${sessionDuration} session`}`);
 
-    // Create session for the login
-    const session = createSession(user.id, token, req);
-    if (session) {
-      console.log(`📱 Session created for: ${handle}`);
-    }
+    notifyIfNewDevice(user, req);
 
     // Log successful login
     if (db.logActivity) db.logActivity(user.id, 'login', 'user', user.id, meta);
 
     res.json({
       token,
+      refreshToken: creds.refreshToken,
+      sessionExpiresAt: creds.sessionExpiresAt || null,
       requirePasswordChange,
       user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: 'online', isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
     });
@@ -4736,9 +4945,206 @@ app.post('/api/auth/logout', authenticateToken, (req, res) => {
     console.log(`📱 Logout without token for: ${req.user.handle}`);
   }
 
+  // Logging out must end the refresh family too (v2.75.0). Revoking only the
+  // access token would leave a months-long refresh token alive in storage —
+  // "log out" has to mean the session is gone, not paused.
+  const familyId = currentFamilyId(req);
+  if (familyId && db.revokeRefreshFamily) {
+    try {
+      db.revokeRefreshFamily(familyId, 'logout');
+    } catch (err) {
+      console.error('[Auth] Refresh family revocation on logout failed:', err.message);
+    }
+  }
+
   // Log logout
   if (db.logActivity) db.logActivity(req.user.userId, 'logout', 'user', req.user.userId, getRequestMeta(req));
   res.json({ success: true });
+});
+
+// ============ Step-up re-authentication (v2.75.0) ============
+//
+// A session that lasts months is a session an attacker can inherit by stealing
+// a laptop that is already signed in. Step-up closes the gap between "has a
+// session" and "is the account owner": the password is required again, in the
+// moment, for anything that could take the account away from its owner.
+//
+// The proof is a short-lived signed token rather than server state, because the
+// access token rotates roughly hourly and session-bound state would be lost
+// every rotation.
+app.post('/api/auth/step-up', loginLimiter, authenticateToken, async (req, res) => {
+  const password = req.body?.password;
+  if (!password) return res.status(400).json({ error: 'Password is required' });
+
+  const user = db.findUserById(req.user.userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const ok = await bcrypt.compare(password, user.passwordHash || user.password_hash || '');
+  if (!ok) {
+    if (db.logActivity) db.logActivity(user.id, 'step_up_failed', 'user', user.id, getRequestMeta(req));
+    return res.status(401).json({ error: 'Incorrect password' });
+  }
+
+  const policy = getSecurityPolicy();
+  const stepUpToken = jwt.sign(
+    { userId: user.id, purpose: 'step-up' },
+    JWT_SECRET,
+    { expiresIn: `${policy.stepUpMinutes}m` }
+  );
+  if (db.logActivity) db.logActivity(user.id, 'step_up', 'user', user.id, getRequestMeta(req));
+  res.json({ stepUpToken, expiresInMinutes: policy.stepUpMinutes });
+});
+
+// Gate for actions that must prove the person is present, not merely that a
+// session exists. Must be used *after* authenticateToken.
+function requireStepUp(req, res, next) {
+  const proof = req.headers['x-step-up-token'];
+  if (!proof) {
+    return res.status(401).json({
+      error: 'Please confirm your password to continue',
+      code: 'STEP_UP_REQUIRED',
+    });
+  }
+  jwt.verify(proof, JWT_SECRET, (err, decoded) => {
+    if (err || decoded?.purpose !== 'step-up' || decoded?.userId !== req.user.userId) {
+      return res.status(401).json({
+        error: 'Please confirm your password to continue',
+        code: 'STEP_UP_REQUIRED',
+      });
+    }
+    next();
+  });
+}
+
+// ============ Refresh-token rotation (v2.75.0) ============
+//
+// Deliberately NOT behind authenticateToken: the entire point is to be usable
+// when the access token has already expired. The refresh token is the
+// credential here, and it is checked against the database, never trusted on
+// its face.
+app.post('/api/auth/token/refresh', refreshLimiter, (req, res) => {
+  const presented = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : null;
+  if (!presented) return res.status(400).json({ error: 'Refresh token required' });
+
+  let record;
+  try {
+    record = db.getRefreshTokenByHash(hashToken(presented));
+  } catch (err) {
+    console.error('[Auth] Refresh lookup failed:', err.message);
+    return res.status(500).json({ error: 'Refresh failed' });
+  }
+
+  // Unknown token. Nothing to revoke — this is a guess, a stale copy from a
+  // pruned family, or a token from another instance.
+  if (!record) {
+    return res.status(401).json({ error: 'Invalid refresh token', code: 'REFRESH_INVALID' });
+  }
+
+  // === Reuse detection ===
+  // This token was already redeemed. A well-behaved client discards a refresh
+  // token the moment it trades it in, so seeing it again means two parties hold
+  // the same credential. We cannot tell which caller is the legitimate one, so
+  // the whole family dies and everyone re-authenticates.
+  if (record.usedAt) {
+    try {
+      const killed = db.revokeRefreshFamily(record.familyId, 'reuse-detected');
+      console.warn(`🚨 [Auth] Refresh token reuse detected for user ${record.userId} — revoked ${killed} token(s) in family ${record.familyId}`);
+      if (db.logActivity) {
+        db.logActivity(record.userId, 'session_reuse_detected', 'user', record.userId, getRequestMeta(req));
+      }
+      // Kill the access tokens too, or the thief keeps working until theirs expires.
+      if (db.revokeAllUserSessions) db.revokeAllUserSessions(record.userId);
+    } catch (err) {
+      console.error('[Auth] Family revocation failed:', err.message);
+    }
+    return res.status(401).json({
+      error: 'This session was ended for security reasons. Please sign in again.',
+      code: 'SESSION_REVOKED',
+    });
+  }
+
+  if (record.revokedAt) {
+    return res.status(401).json({
+      error: record.revokedReason === 'reuse-detected'
+        ? 'This session was ended for security reasons. Please sign in again.'
+        : 'Session ended. Please sign in again.',
+      code: 'SESSION_REVOKED',
+    });
+  }
+
+  const now = Date.now();
+  if (new Date(record.expiresAt).getTime() < now) {
+    return res.status(401).json({ error: 'Session expired', code: 'SESSION_EXPIRED' });
+  }
+  if (record.absoluteExpiresAt && new Date(record.absoluteExpiresAt).getTime() < now) {
+    return res.status(401).json({ error: 'Session expired', code: 'SESSION_EXPIRED' });
+  }
+
+  const user = db.findUserById(record.userId);
+  if (!user) return res.status(401).json({ error: 'Account not found', code: 'REFRESH_INVALID' });
+
+  // A banned or disabled account must not be able to refresh its way onward.
+  if (db.getUserAccountStatus) {
+    const status = db.getUserAccountStatus(user.id);
+    if (status && (status.accountStatus === 'disabled' || status.accountStatus === 'banned')) {
+      db.revokeRefreshFamily(record.familyId, `account-${status.accountStatus}`);
+      return res.status(403).json({
+        error: `Account ${status.accountStatus}`,
+        code: status.accountStatus === 'disabled' ? 'ACCOUNT_DISABLED' : 'ACCOUNT_BANNED',
+        reason: status.moderationReason || 'No reason provided',
+      });
+    }
+  }
+
+  try {
+    const policy = getSecurityPolicy();
+
+    // Mint replacements BEFORE retiring the presented token. If the response is
+    // lost in transit the client still holds a token it can retry with, rather
+    // than being locked out by a rotation it never learned about.
+    const next = issueRefreshToken(user.id, req, {
+      familyId: record.familyId,
+      parentId: record.id,
+      absoluteExpiresAt: record.absoluteExpiresAt,
+    });
+
+    const accessToken = jwt.sign(
+      { userId: user.id, handle: user.handle, jti: crypto.randomUUID(), fam: record.familyId },
+      JWT_SECRET,
+      { expiresIn: `${policy.accessTokenMinutes}m` }
+    );
+    createSession(user.id, accessToken, req);
+
+    db.markRefreshTokenUsed(record.id);
+
+    res.json({
+      token: accessToken,
+      refreshToken: next.token,
+      sessionExpiresAt: next.expiresAt,
+      user: {
+        id: user.id, handle: user.handle, email: user.email, displayName: user.displayName,
+        avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null,
+        nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin,
+        role: user.role || (user.isAdmin ? 'admin' : 'user'),
+        preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {},
+      },
+    });
+  } catch (err) {
+    console.error('[Auth] Rotation failed:', err.message);
+    res.status(500).json({ error: 'Refresh failed' });
+  }
+});
+
+// What the client needs to pace its own refreshes, and what the operator's
+// policy actually is. Public because the login screen shows the session length.
+app.get('/api/auth/session-policy', (req, res) => {
+  const p = getSecurityPolicy();
+  res.json({
+    accessTokenMinutes: p.accessTokenMinutes,
+    sessionIdleDays: p.sessionIdleDays,
+    sessionAbsoluteDays: p.sessionAbsoluteDays,
+    stepUpMinutes: p.stepUpMinutes,
+  });
 });
 
 // Session refresh — extend session before token expires (v2.29.0)
@@ -4909,7 +5315,7 @@ app.get('/api/auth/sessions', authenticateToken, (req, res) => {
 });
 
 // Revoke a specific session
-app.post('/api/auth/sessions/:id/revoke', authenticateToken, (req, res) => {
+app.post('/api/auth/sessions/:id/revoke', authenticateToken, requireStepUp, (req, res) => {
   if (!SESSION_TRACKING_ENABLED || !db.revokeSession) {
     return res.status(400).json({ error: 'Session management not enabled' });
   }
@@ -4945,7 +5351,7 @@ app.post('/api/auth/sessions/:id/revoke', authenticateToken, (req, res) => {
 });
 
 // Revoke all sessions except current
-app.post('/api/auth/sessions/revoke-all', authenticateToken, (req, res) => {
+app.post('/api/auth/sessions/revoke-all', authenticateToken, requireStepUp, (req, res) => {
   if (!SESSION_TRACKING_ENABLED || !db.revokeAllUserSessions) {
     return res.status(400).json({ error: 'Session management not enabled' });
   }
@@ -6657,10 +7063,23 @@ app.post('/api/profile/password', authenticateToken, async (req, res) => {
   const result = await db.changePassword(req.user.userId, currentPassword, newPassword);
   if (!result.success) return res.status(400).json({ error: result.error });
 
+  // Changing the password ends every other signed-in session (v2.75.0). With
+  // sessions now lasting months, this is the one lever a user has to evict
+  // someone who already got in — it has to actually evict them.
+  let endedSessions = 0;
+  try {
+    if (db.revokeAllUserSessions) endedSessions = db.revokeAllUserSessions(req.user.userId, req.sessionId) || 0;
+    if (db.revokeAllRefreshTokensForUser) {
+      db.revokeAllRefreshTokensForUser(req.user.userId, 'password-changed', currentFamilyId(req));
+    }
+  } catch (err) {
+    console.error('[Auth] Session revocation after password change failed:', err.message);
+  }
+
   // Log activity
   if (db.logActivity) db.logActivity(req.user.userId, 'password_change', 'user', req.user.userId, getRequestMeta(req));
 
-  res.json({ success: true });
+  res.json({ success: true, otherSessionsEnded: endedSessions });
 });
 
 app.post('/api/profile/handle-request', authenticateToken, (req, res) => {
@@ -10161,6 +10580,10 @@ app.get('/api/admin/instance-config', authenticateToken, (req, res) => {
       availableFeatures: ALL_INSTANCE_FEATURES,
       codeDefaults: CODE_DEFAULT_PREFS,
       codeNotificationDefaults: CODE_DEFAULT_NOTIF_PREFS,
+      // Fallbacks for the session-policy fields, shown as placeholders so an
+      // admin can see what applies before overriding anything (v2.75.0).
+      securityDefaults: SECURITY_POLICY_DEFAULTS,
+      securityBounds: SECURITY_POLICY_BOUNDS,
     });
   } catch (error) {
     console.error('Failed to read instance config:', error);
@@ -10170,11 +10593,11 @@ app.get('/api/admin/instance-config', authenticateToken, (req, res) => {
 
 // Update instance config (admin only). Merge-patch: omit a namespace to leave it alone,
 // set a key to null to clear it back to the code default.
-app.put('/api/admin/instance-config', authenticateToken, (req, res) => {
+app.put('/api/admin/instance-config', authenticateToken, requireStepUp, (req, res) => {
   const admin = db.findUserById(req.user.userId);
   if (!requireRole(admin, ROLES.ADMIN, res)) return;
 
-  const { defaults, notificationDefaults, features, branding } = req.body || {};
+  const { defaults, notificationDefaults, features, branding, security } = req.body || {};
   const patch = {};
 
   // Whitelist every incoming key — never trust the client to stay inside the schema
@@ -10247,6 +10670,30 @@ app.put('/api/admin/instance-config', authenticateToken, (req, res) => {
         return res.status(400).json({ error: `publicTheme must be one of: ${PUBLIC_THEME_IDS.join(', ')}` });
       }
       patch.branding[key] = key === 'publicTheme' ? value : sanitizeInput(value).slice(0, 120);
+    }
+  }
+
+  // Session policy (v2.75.0). Clamped rather than rejected on out-of-range
+  // input, so an operator cannot lock the whole instance out with a typo — but
+  // the response reports what was actually stored, never what was asked for.
+  if (security && typeof security === 'object') {
+    patch.security = {};
+    for (const [key, value] of Object.entries(security)) {
+      if (!SECURITY_POLICY_KEYS.includes(key)) continue;
+      if (value === null) { patch.security[key] = null; continue; }
+      if (key === 'newDeviceAlerts') {
+        if (typeof value !== 'boolean') {
+          return res.status(400).json({ error: "Invalid type for 'newDeviceAlerts': expected boolean" });
+        }
+        patch.security[key] = value;
+        continue;
+      }
+      const n = Number(value);
+      if (!Number.isFinite(n)) {
+        return res.status(400).json({ error: `Invalid value for '${key}': expected a number` });
+      }
+      const b = SECURITY_POLICY_BOUNDS[key];
+      patch.security[key] = b ? Math.min(b.max, Math.max(b.min, Math.round(n))) : Math.round(n);
     }
   }
 
@@ -14557,7 +15004,7 @@ app.post('/api/admin/users/:id/disable-mfa', authenticateToken, (req, res) => {
 });
 
 // Update user role (admin only) - v1.20.0
-app.put('/api/admin/users/:id/role', authenticateToken, (req, res) => {
+app.put('/api/admin/users/:id/role', authenticateToken, requireStepUp, (req, res) => {
   try {
     const admin = db.findUserById(req.user.userId);
     if (!requireRole(admin, ROLES.ADMIN, res)) return;
