@@ -5,6 +5,41 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.74.0] - 2026-08-30
+
+### Added
+
+- **Pinned pings.** Any participant can pin a ping in a wave, and every participant sees it — a shared shelf for the things a wave keeps coming back to, not a private bookmark. Pin and unpin live in a ping's ⋮ menu; pinned pings carry a `📌 PINNED` marker in the timeline and are listed in the wave's context bar.
+- **Pinned pings and upcoming events moved out of the message scroller, into a always-visible bar under the wave header.** Both used to be strips rendered inside the scrolling message list, which put them above the *oldest loaded* ping — in a wave with thousands of messages you could never scroll far enough to see either one. Pins are for things you want to come back to, so being reachable only by scrolling to the very top defeated the point.
+  - The bar is one compact line: a `📌 N pinned` chip, a `📅 N upcoming` chip, the next event inline (so the common case needs no click at all), and `+ event`. Clicking a chip opens that list; only one opens at a time, capped at ~38vh with its own scroll, so fifty pins cannot push the conversation off screen.
+  - `WaveEventsBanner` and `WavePinsBanner` are replaced by a single `WaveContextBar`.
+
+  - Clicking a pin jumps to the ping. Pins outlive the loaded message window, so if the target is not loaded, the wave reloads centred on it first rather than failing silently.
+  - Anyone in the wave can unpin, including pins they did not create. That is the same symmetry the feature asks for; a 50-pin ceiling per wave keeps one participant from burying the banner.
+  - End-to-end encrypted waves work: the banner decrypts previews client-side with the wave key. A locked wave shows `🔒 Encrypted ping` rather than ciphertext — the server never sees plaintext and never tries to.
+  - Access is enforced server-side on all three endpoints (`POST`/`DELETE /api/pings/:id/pin`, `GET /api/waves/:id/pins`) with `canAccessWaveFromCache` — the same rule that governs posting a ping. Public waves are open to anyone signed in, crew waves go by crew membership, private waves by participation; anyone else gets 403, admins included. Changes broadcast over WebSocket as `ping_pinned`, so a pin lands for everyone in the wave without a refresh.
+  - `wave_participants.pinned` — pinning a whole *wave* in the list — is a separate, per-user feature and is unaffected.
+
+### Removed
+
+- **Wave playback ("Playback" in the wave menu) is gone.** It never worked, in any version: `Message` gated visibility on `message._index <= playbackIndex`, but `_index` was only ever assigned to the message *tree* (`data.messages`), while what actually renders is the flat `all_messages` list. Every rendered ping therefore had `_index === undefined`, `undefined <= 0` is `false`, and pressing play blanked the entire wave permanently — reproduced on dev: 49 pings before play, 0 during, 0 after. Broken since rendering moved to the flat list in v1.11.0.
+  - Removed `PlaybackControls.jsx`, the menu item, the playback state/timer/scroll effects, `handlePlaybackToggle` (which also loaded every ping in the wave into memory 100 at a time before starting), and the `_index` bookkeeping in three places — the last of which ran on every wave load purely to feed a feature that never functioned.
+  - `GET /api/waves/:id/messages` stays: "Load older pings" still uses it.
+
+### Changed
+
+- **Collapse/Expand All Messages is one menu item instead of two.** It now reads `Collapse All Messages` when the wave's long pings are expanded and `Expand All Messages` when they are collapsed, so the label says what the click will do. The state is derived from the pings actually loaded rather than from the stored collapse map, which keeps entries for pings scrolled out of the window and would have labelled the button wrong. The item is hidden entirely in a wave with nothing long enough to collapse, rather than offering a no-op.
+
+### Fixed
+
+- **Composer controls did not line up.** The attach (⋮), format (Aa), pop-out (⛶) and SEND controls each sized themselves from their own glyph, so the row was five boxes of five different heights — 28 / 29 / 37 / 31px around a 36px textarea — bottom-aligned on a shelf with ragged tops. Every control now shares one height that also scales with the FONT SIZE preference.
+  - The textarea sat 5px above the buttons even once the heights matched: a `textarea` is `inline-block` by default, so it rests on a text baseline and leaves descender space inside its wrapper. `display: block` removes it. All five controls now measure 36px with zero top spread.
+- **Low-bandwidth mode never sent `event_id`.** The minimal ping query selected explicit columns and `event_id` was not among them, though the mapper read it — so event cards could not render for anyone on low-bandwidth mode since v2.72.0.
+
+### Known issue (pre-existing, not introduced here)
+
+- Pings orphaned to `system-deleted-user` when their author deletes their account are invisible in the wave timeline: `getPingsForWave` inner-joins `users`, so they are dropped despite the deletion flow deliberately keeping their content. Pinning follows the same rule for consistency (such a ping cannot be pinned), rather than offering a banner entry that jumps nowhere.
+
 ## [2.73.0] - 2026-08-24
 
 ### Added

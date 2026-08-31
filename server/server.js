@@ -20425,6 +20425,76 @@ app.post('/api/pings/:id/react', authenticateToken, (req, res) => {
   res.json({ success: true, reactions: result.reactions });
 });
 
+// ===== Pinned pings (v2.74.0) =====
+// Pins are wave-wide: every participant sees them and every participant can add
+// or remove one. There is no owner check beyond wave membership — that is the
+// point of the feature, a shared shelf rather than a private bookmark.
+
+const requirePinAccess = (pingId, userId, res) => {
+  // getPing inner-joins users, so it returns null for a ping whose author has
+  // deleted their account. That matches getPingsForWave, which drops those
+  // pings from the timeline entirely — so they cannot be scrolled to, and
+  // pinning one would put a dead link in the banner. Pins follow visibility.
+  const waveId = db.getPing(pingId)?.waveId || null;
+  if (!waveId) {
+    res.status(404).json({ error: 'Ping not found' });
+    return null;
+  }
+  // canAccessWaveFromCache, not participation.isParticipant: a wave_participants
+  // row is only how *private* waves grant access. Public waves are open to
+  // everyone and crew waves go by group membership, so the narrower check
+  // refused to pin in exactly those two — the same rule posting a ping uses.
+  if (!canAccessWaveFromCache(waveId, userId)) {
+    res.status(403).json({ error: 'Access denied' });
+    return null;
+  }
+  return waveId;
+};
+
+const broadcastPinChange = (waveId, result, actor) => {
+  broadcastToWave(waveId, {
+    type: 'ping_pinned',
+    waveId,
+    pingId: result.pingId,
+    pinned: result.pinned,
+    pinnedAt: result.pinnedAt,
+    pinnedBy: result.pinnedBy,
+    pinnedByName: actor?.displayName || actor?.handle || null,
+  });
+};
+
+app.post('/api/pings/:id/pin', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.id);
+  const waveId = requirePinAccess(pingId, req.user.userId, res);
+  if (!waveId) return;
+
+  const result = db.setPingPinned(pingId, req.user.userId, true);
+  if (!result.success) return res.status(400).json({ error: result.error });
+
+  broadcastPinChange(waveId, result, db.findUserById(req.user.userId));
+  res.json({ success: true, pinned: true, pinnedAt: result.pinnedAt, pinnedBy: result.pinnedBy });
+});
+
+app.delete('/api/pings/:id/pin', authenticateToken, (req, res) => {
+  const pingId = sanitizeInput(req.params.id);
+  const waveId = requirePinAccess(pingId, req.user.userId, res);
+  if (!waveId) return;
+
+  const result = db.setPingPinned(pingId, req.user.userId, false);
+  if (!result.success) return res.status(400).json({ error: result.error });
+
+  broadcastPinChange(waveId, result, db.findUserById(req.user.userId));
+  res.json({ success: true, pinned: false });
+});
+
+app.get('/api/waves/:waveId/pins', authenticateToken, (req, res) => {
+  const waveId = sanitizeInput(req.params.waveId);
+  if (!canAccessWaveFromCache(waveId, req.user.userId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  res.json({ pins: db.getPinnedPings(waveId) });
+});
+
 // Mark individual ping as read
 app.post('/api/pings/:id/read', authenticateToken, (req, res) => {
   const pingId = sanitizeInput(req.params.id);
