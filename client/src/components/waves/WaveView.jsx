@@ -22,6 +22,7 @@ import PlexBrowserModal from '../media/PlexBrowserModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import WaveEventsBanner from './WaveEventsBanner.jsx';
+import WavePinsBanner from './WavePinsBanner.jsx';
 import EventDetailModal from '../calendar/EventDetailModal.jsx';
 import EventCreateModal from '../calendar/EventCreateModal.jsx';
 import { storage } from '../../utils/storage.js';
@@ -40,6 +41,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [selectedEvent, setSelectedEvent] = useState(null); // event opened from the banner (v2.71.0)
   const [showEventCreate, setShowEventCreate] = useState(false); // create in-wave (v2.72.0)
   const [eventsReload, setEventsReload] = useState(0);
+  const [pinsReload, setPinsReload] = useState(0);
   const [replyingTo, setReplyingTo] = useState(null);
   const [newMessage, setNewMessage] = useState('');
   const [collapsed, setCollapsed] = useState(() => {
@@ -360,6 +362,44 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   };
 
   // Share ping to external platforms
+  // Pin/unpin for the whole wave (v2.74.0). Pins are shared, so this is not a
+  // personal bookmark — the toast says so, because the two are easy to confuse.
+  const handleTogglePin = async (ping) => {
+    const wasPinned = !!ping.pinned_at;
+    try {
+      await fetchAPI(`/pings/${ping.id}/pin`, { method: wasPinned ? 'DELETE' : 'POST' });
+      setPinsReload(n => n + 1);
+      // Refresh the timeline so the ping's own 📌 marker updates. The websocket
+      // event does this for everyone else; the actor should not have to wait.
+      loadWave(true);
+      showToast(wasPinned ? 'Unpinned' : 'Pinned for everyone in this wave', 'success');
+    } catch (err) {
+      showToast(err.message || 'Could not update pin', 'error');
+    }
+  };
+
+  // Jump to a ping from the pins banner. A pin can easily be older than the
+  // loaded window, so fall back to reloading the wave centred on it.
+  const scrollToPing = async (pingId) => {
+    const flash = () => {
+      const el = messagesRef.current?.querySelector(`[data-message-id="${pingId}"]`);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.style.transition = 'background 0.1s';
+      el.style.background = 'var(--accent-amber)18';
+      setTimeout(() => { el.style.background = ''; }, 1200);
+      return true;
+    };
+    if (flash()) return;
+    await loadWave(false, { around: pingId });
+    // Give React a few frames to paint the new window before looking again.
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 150));
+      if (flash()) return;
+    }
+    showToast('Could not find that ping', 'error');
+  };
+
   const handleSharePing = async (ping) => {
     const shareUrl = `${BASE_URL}/share/${ping.id}`;
     const shareTitle = wave?.title || waveData?.title || 'Cortex';
@@ -2503,6 +2543,18 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           onCreateEvent={() => setShowEventCreate(true)}
         />
 
+        {/* Pinned pings (v2.74.0) — shared across the wave, not per-user. */}
+        <WavePinsBanner
+          waveId={wave?.id}
+          fetchAPI={fetchAPI}
+          isMobile={isMobile}
+          reloadTrigger={`${reloadTrigger}-${pinsReload}`}
+          decryptPins={decryptMessages}
+          onScrollToPing={scrollToPing}
+          onUnpin={() => loadWave(true)}
+          showToast={showToast}
+        />
+
         {/* Watch Party Banner (v2.14.0) */}
         {activeWatchParty && (
           <WatchPartyBanner
@@ -2558,6 +2610,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
               fetchAPI={fetchAPI}
               currentUser={currentUser} moveSource={moveSource} onStartMove={onStartMove} onCompleteMove={onCompleteMove}
+              onTogglePin={handleTogglePin}
               onScrollToMessage={(msgId) => {
                 const el = messagesRef.current?.querySelector(`[data-message-id="${msgId}"]`);
                 if (!el) return;

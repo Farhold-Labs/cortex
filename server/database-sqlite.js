@@ -2387,6 +2387,24 @@ export class DatabaseSQLite {
       console.log('✅ pings.event_id added');
     }
 
+    // v2.74.0 — Pinned pings. A pin is wave-wide, not personal: any participant
+    // can pin, and every participant sees it. That is deliberate — the ask was
+    // for a shared "save this for later" shelf, not a private bookmark. Note
+    // wave_participants.pinned is a different, per-user feature (pinning a whole
+    // wave in the list); these two do not interact.
+    const pingPinnedCol = this.db.prepare(
+      `SELECT name FROM pragma_table_info('pings') WHERE name = 'pinned_at'`
+    ).get();
+    if (!pingPinnedCol) {
+      console.log('📝 Adding pings.pinned_at / pinned_by (v2.74.0)...');
+      this.db.exec(`ALTER TABLE pings ADD COLUMN pinned_at TEXT;`);
+      // SET NULL, not CASCADE: a deleted account should not silently unpin
+      // things the rest of the wave is still relying on.
+      this.db.exec(`ALTER TABLE pings ADD COLUMN pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL;`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pings_pinned ON pings(wave_id, pinned_at) WHERE pinned_at IS NOT NULL;`);
+      console.log('✅ pings.pinned_at / pinned_by added');
+    }
+
     // v2.70.0 — Reminder bookkeeping for guest RSVPs. Cannot reuse
     // event_reminder_sent: its user_id is a NOT NULL reference to users, and a
     // guest has no account.
@@ -6534,6 +6552,9 @@ export class DatabaseSQLite {
         // Media fields (v2.7.0)
         // Event card (v2.72.0) — the client renders the card from this id.
         event_id: d.event_id || null,
+        // Pinned pings (v2.74.0) — wave-wide, so this ships to every participant.
+        pinned_at: d.pinned_at || null,
+        pinned_by: d.pinned_by || null,
         media_type: d.media_type,
         media_url: d.media_url,
         media_duration: d.media_duration,
@@ -6611,7 +6632,7 @@ export class DatabaseSQLite {
       SELECT d.id, d.wave_id, d.parent_id, d.author_id, d.content,
              d.created_at, d.edited_at, d.deleted, d.deleted_at, d.encrypted, d.nonce, d.key_version,
              d.broken_out_to, d.media_type, d.media_url, d.media_duration, d.media_encrypted,
-             d.threaded, d.is_thread_reply,
+             d.threaded, d.is_thread_reply, d.event_id, d.pinned_at, d.pinned_by,
              (SELECT COUNT(*) FROM pings WHERE parent_id = d.id) as reply_count,
              u.display_name as user_display_name, u.avatar as user_avatar, u.avatar_url as user_avatar_url, u.handle as user_handle,
              b.name as bot_name, b.id as bot_id,
@@ -6674,6 +6695,9 @@ export class DatabaseSQLite {
         // Media fields (v2.7.0)
         // Event card (v2.72.0) — the client renders the card from this id.
         event_id: d.event_id || null,
+        // Pinned pings (v2.74.0) — wave-wide, so this ships to every participant.
+        pinned_at: d.pinned_at || null,
+        pinned_by: d.pinned_by || null,
         media_type: d.media_type,
         media_url: d.media_url,
         media_duration: d.media_duration,
@@ -7056,6 +7080,85 @@ export class DatabaseSQLite {
   // Backward compatibility aliases
   toggleMessageReaction(id, userId, emoji) { return this.togglePingReaction(id, userId, emoji); }
   toggleDropletReaction(id, userId, emoji) { return this.togglePingReaction(id, userId, emoji); }
+
+  // ===== Pinned pings (v2.74.0) =====
+  // A pin belongs to the wave, not the pinner: anyone in the wave sees it and
+  // anyone in the wave can take it down. Participation is checked by the caller
+  // (server.js), which has the decrypted participation cache.
+
+  setPingPinned(pingId, userId, pinned) {
+    const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
+    if (!existing) return { success: false, error: 'Ping not found' };
+    if (existing.deleted) return { success: false, error: 'Cannot pin a deleted ping' };
+
+    // Already in the requested state — return success rather than an error so a
+    // double-click, or two people pinning at once, is not a failure.
+    const alreadyPinned = !!existing.pinned_at;
+    if (alreadyPinned === !!pinned) {
+      return {
+        success: true, pingId, waveId: existing.wave_id, pinned: alreadyPinned,
+        pinnedAt: existing.pinned_at, pinnedBy: existing.pinned_by, unchanged: true,
+      };
+    }
+
+    if (pinned) {
+      const cap = this.db.prepare(
+        'SELECT COUNT(*) AS n FROM pings WHERE wave_id = ? AND pinned_at IS NOT NULL AND deleted = 0'
+      ).get(existing.wave_id);
+      // A shared shelf anyone can add to needs a ceiling, or one participant can
+      // bury the wave under a banner nobody else can reasonably scan.
+      if (cap.n >= 50) {
+        return { success: false, error: 'This wave already has 50 pinned pings — unpin one first' };
+      }
+      const now = new Date().toISOString();
+      this.db.prepare('UPDATE pings SET pinned_at = ?, pinned_by = ? WHERE id = ?').run(now, userId, pingId);
+      return { success: true, pingId, waveId: existing.wave_id, pinned: true, pinnedAt: now, pinnedBy: userId };
+    }
+
+    this.db.prepare('UPDATE pings SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(pingId);
+    return { success: true, pingId, waveId: existing.wave_id, pinned: false, pinnedAt: null, pinnedBy: null };
+  }
+
+  getPinnedPings(waveId, limit = 50) {
+    const rows = this.db.prepare(`
+      SELECT p.id, p.wave_id, p.author_id, p.content, p.created_at,
+             p.encrypted, p.nonce, p.key_version, p.media_type, p.event_id,
+             p.pinned_at, p.pinned_by,
+             u.display_name AS author_name, u.handle AS author_handle,
+             b.name AS bot_name,
+             pu.display_name AS pinner_name, pu.handle AS pinner_handle
+      FROM pings p
+      JOIN users u ON p.author_id = u.id
+      LEFT JOIN bots b ON p.bot_id = b.id
+      LEFT JOIN users pu ON p.pinned_by = pu.id
+      WHERE p.wave_id = ? AND p.pinned_at IS NOT NULL AND p.deleted = 0
+      ORDER BY p.pinned_at DESC
+      LIMIT ?
+    `).all(waveId, limit);
+
+    return rows.map(r => ({
+      id: r.id,
+      waveId: r.wave_id,
+      authorId: r.author_id,
+      // Ciphertext in an encrypted wave — the client decrypts it, the server
+      // cannot and must not try.
+      content: r.content,
+      encrypted: r.encrypted === 1,
+      nonce: r.nonce,
+      keyVersion: r.key_version,
+      mediaType: r.media_type,
+      eventId: r.event_id || null,
+      createdAt: r.created_at,
+      authorName: r.bot_name ? `[Bot] ${r.bot_name}` : r.author_name,
+      authorHandle: r.author_handle,
+      pinnedAt: r.pinned_at,
+      pinnedBy: r.pinned_by,
+      // Null when the pinner has since deleted their account (pinned_by is
+      // ON DELETE SET NULL) — the pin itself survives.
+      pinnedByName: r.pinner_name || null,
+      pinnedByHandle: r.pinner_handle || null,
+    }));
+  }
 
   markPingAsRead(pingId, userId) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);

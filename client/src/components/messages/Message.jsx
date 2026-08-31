@@ -78,6 +78,7 @@ const Message = ({
   threadReplyCount = 0,
   onScrollToMessage = null,
   onOpenEvent = null,          // event card → full detail (v2.72.0)
+  onTogglePin = null,          // pin/unpin this ping for the whole wave (v2.74.0)
   waveEncrypted = false,
   showToast,
 }) => {
@@ -294,6 +295,15 @@ const Message = ({
 
         {/* Content column */}
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Pinned marker (v2.74.0) */}
+          {message.pinned_at && !isDeleted && (
+            <div style={{
+              color: 'var(--accent-amber)', fontFamily: 'monospace', fontSize: '0.58rem',
+              letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: '2px',
+            }}>
+              📌 Pinned
+            </div>
+          )}
           {/* Name + timestamp (first in group only) */}
           {isFirstInGroup && (
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '1px', position: 'relative' }}>
@@ -731,6 +741,14 @@ const Message = ({
                         <span>↳</span><span>{message.threaded ? 'Unthread' : 'Thread'}</span>
                       </MenuItem>
                     )}
+                    {onTogglePin && !isDeleted && (
+                      <MenuItem
+                        color="var(--accent-amber)"
+                        onClick={() => { onTogglePin(message); setShowMessageMenu(false); }}
+                      >
+                        <span>📌</span><span>{message.pinned_at ? 'Unpin' : 'Pin'}</span>
+                      </MenuItem>
+                    )}
                     {canMove && (
                       <MenuItem color="var(--accent-amber)" onClick={() => { onStartMove(message, wave?.id); setShowMessageMenu(false); }}>
                         <span>↕</span><span>Move</span>
@@ -810,6 +828,7 @@ const Message = ({
                 autoFocusMessages={autoFocusMessages}
                 fetchAPI={fetchAPI}
                 onOpenThread={onOpenThread}
+                onTogglePin={onTogglePin}
                 isInThreadPanel={isInThreadPanel}
                 currentUser={currentUser}
                 moveSource={moveSource}

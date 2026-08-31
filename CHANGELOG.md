@@ -5,6 +5,27 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.74.0] - 2026-08-30
+
+### Added
+
+- **Pinned pings.** Any participant can pin a ping in a wave, and every participant sees it — a shared shelf for the things a wave keeps coming back to, not a private bookmark. Pin and unpin live in a ping's ⋮ menu; pinned pings appear in a 📌 banner at the top of the wave, directly under the upcoming-events banner, and carry a `📌 PINNED` marker in the timeline.
+  - Clicking a pin jumps to the ping. Pins outlive the loaded message window, so if the target is not loaded, the wave reloads centred on it first rather than failing silently.
+  - Anyone in the wave can unpin, including pins they did not create. That is the same symmetry the feature asks for; a 50-pin ceiling per wave keeps one participant from burying the banner.
+  - End-to-end encrypted waves work: the banner decrypts previews client-side with the wave key. A locked wave shows `🔒 Encrypted ping` rather than ciphertext — the server never sees plaintext and never tries to.
+  - Wave membership is enforced server-side on all three endpoints (`POST`/`DELETE /api/pings/:id/pin`, `GET /api/waves/:id/pins`); non-participants get 403, admins included. Changes broadcast over WebSocket as `ping_pinned`, so a pin lands for everyone in the wave without a refresh.
+  - `wave_participants.pinned` — pinning a whole *wave* in the list — is a separate, per-user feature and is unaffected.
+
+### Fixed
+
+- **Composer controls did not line up.** The attach (⋮), format (Aa), pop-out (⛶) and SEND controls each sized themselves from their own glyph, so the row was five boxes of five different heights — 28 / 29 / 37 / 31px around a 36px textarea — bottom-aligned on a shelf with ragged tops. Every control now shares one height that also scales with the FONT SIZE preference.
+  - The textarea sat 5px above the buttons even once the heights matched: a `textarea` is `inline-block` by default, so it rests on a text baseline and leaves descender space inside its wrapper. `display: block` removes it. All five controls now measure 36px with zero top spread.
+- **Low-bandwidth mode never sent `event_id`.** The minimal ping query selected explicit columns and `event_id` was not among them, though the mapper read it — so event cards could not render for anyone on low-bandwidth mode since v2.72.0.
+
+### Known issue (pre-existing, not introduced here)
+
+- Pings orphaned to `system-deleted-user` when their author deletes their account are invisible in the wave timeline: `getPingsForWave` inner-joins `users`, so they are dropped despite the deletion flow deliberately keeping their content. Pinning follows the same rule for consistency (such a ping cannot be pinned), rather than offering a banner entry that jumps nowhere.
+
 ## [2.73.0] - 2026-08-24
 
 ### Added

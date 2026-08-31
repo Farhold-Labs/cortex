@@ -1,6 +1,6 @@
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.73.0';
+export const VERSION = '2.74.0';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
