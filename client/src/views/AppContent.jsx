@@ -12,6 +12,7 @@ import CrossPortAuthView from './CrossPortAuthView.jsx';
 import CrossPortCallbackView from './CrossPortCallbackView.jsx';
 import AuthProvider from './AuthProvider.jsx';
 import E2EEAuthenticatedApp from './E2EEAuthenticatedApp.jsx';
+import StepUpModal from '../components/session/StepUpModal.jsx';
 
 function AppContent() {
   const { user, token, logout } = useAuth();
@@ -216,7 +217,16 @@ function AppContent() {
   }
 
   // User is authenticated - wrap with E2EE flow
-  return <E2EEAuthenticatedApp sharePingId={sharePingId} logout={logout} />;
+  return (
+    <>
+      <E2EEAuthenticatedApp sharePingId={sharePingId} logout={logout} />
+      {/* Mounted above the E2EE gate on purpose: it registers itself as the
+          step-up prompt, and inside the gate it unmounted whenever E2EE
+          re-evaluated — taking the prompt with it exactly when a gated request
+          needed it (v2.75.0). */}
+      <StepUpModal />
+    </>
+  );
 }
 
 // E2EE authenticated app wrapper - handles E2EE setup/unlock before showing main app

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { API_URL } from '../config/constants.js';
 import { storage, getTokenExpiry, getTokenIssuedAt } from '../utils/storage.js';
+import { refreshAccessToken, hasRefreshToken, setSessionLostHandler } from '../utils/sessionRefresh.js';
 import { unsubscribeFromPush } from '../utils/pwa.js';
 import { AuthContext } from '../hooks/useAPI.js';
 import { LoadingSpinner } from '../components/ui/SimpleComponents.jsx';
@@ -38,19 +39,22 @@ function AuthProvider({ children }) {
   const [isAutoRenewing, setIsAutoRenewing] = useState(false);
   const isAutoRenewingRef = useRef(false); // Synchronous guard — state is async and can't prevent concurrent calls
   const tokenJustRenewedRef = useRef(false); // Skip /auth/me re-check after renewal (user data already fresh)
-  const [sessionExpiresAt, setSessionExpiresAt] = useState(() => getTokenExpiry(storage.getToken()));
+  // What the UI calls "session expires" must be the session's end, not the
+  // access token's — the latter is an hour away at all times once rotation is on.
+  const sessionEndOf = (tok) => storage.getSessionExpiresAt() ?? getTokenExpiry(tok);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState(() => sessionEndOf(storage.getToken()));
   const dismissedUntilRef = useRef(0);
   const lastAutoRenewalRef = useRef(0);
 
   useEffect(() => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    let timeoutId = setTimeout(() => controller.abort(), 10000);
 
     // Check for browser session timeout (24 hours for non-PWA browser tabs)
     if (token && storage.isSessionExpired()) {
       clearTimeout(timeoutId);
       console.log('⏰ Browser session expired. Logging out...');
-      storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
+      storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
       setToken(null); setUser(null);
       setLoading(false);
       return () => controller.abort();
@@ -66,16 +70,39 @@ function AuthProvider({ children }) {
     }
 
     if (token) {
-      fetch(`${API_URL}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal
-      })
+      // Start-up identity check. This is THE path that decides whether someone
+      // returning after a long gap is greeted by their waves or by a login form,
+      // so an expired access token must be rotated here rather than treated as
+      // the end of the session. It deliberately does not use fetchAPI: this runs
+      // before the provider exists, so the retry is written out by hand.
+      const checkMe = async (bearer) => fetch(`${API_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${bearer}` },
+        signal: controller.signal,
+      });
+
+      (async () => {
+        let res = await checkMe(token);
+        if (res.status === 401 && hasRefreshToken()) {
+          // The 10s budget was sized for one request; rotating needs two more.
+          // Without extending it, a slow network aborts mid-recovery and the
+          // user falls back to a cached session holding a dead token.
+          clearTimeout(timeoutId);
+          timeoutId = setTimeout(() => controller.abort(), 15000);
+          const fresh = await refreshAccessToken();
+          if (fresh) {
+            setToken(fresh);
+            res = await checkMe(fresh);
+          }
+        }
+        return res;
+      })()
         .then(res => {
           clearTimeout(timeoutId);
           if (res.ok) return res.json();
-          // Clear session on 401 (invalid/expired token/session)
+          // Still unauthorised after a rotation attempt: the session really is
+          // over (revoked, reused, or idle window elapsed).
           if (res.status === 401) {
-            storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
+            storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
             setToken(null); setUser(null);
           }
           // For other errors (network, 500, etc.), keep existing user data from localStorage
@@ -132,7 +159,7 @@ function AuthProvider({ children }) {
       storage.setToken(data.token, sessionOnly);
       storage.setUser(data.user);
       storage.setSessionStart(sessionOnly ? 'session' : storage.getSessionDuration());
-      setSessionExpiresAt(getTokenExpiry(data.token));
+      setSessionExpiresAt(sessionEndOf(data.token));
       setSessionExpiring(false);
       tokenJustRenewedRef.current = true; // suppress /auth/me re-check on token change
       setToken(data.token);
@@ -146,6 +173,32 @@ function AuthProvider({ children }) {
     }
   }, [token]);
 
+  // When rotation fails terminally (reuse detected, revoked, idle window over)
+  // there is nothing to recover — clear local state and show the login screen.
+  useEffect(() => {
+    setSessionLostHandler((code) => {
+      console.warn(`🔒 Session ended (${code}) — signing out.`);
+      pendingPasswordRef.current = null;
+      storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
+      storage.removeRefreshToken(); storage.removeSessionExpiresAt();
+      setSessionExpired(false); setSessionExpiring(false); setSessionExpiresAt(null);
+      setToken(null); setUser(null);
+    });
+    return () => setSessionLostHandler(null);
+  }, []);
+
+  // Adopt tokens rotated by other parts of the app (useAPI retries, the
+  // background timer) so React state does not keep serving a stale one.
+  useEffect(() => {
+    const onRefreshed = (e) => {
+      if (e.detail?.token) setToken(e.detail.token);
+      if (e.detail?.user) setUser(e.detail.user);
+      setSessionExpiresAt(sessionEndOf(e.detail?.token));
+    };
+    window.addEventListener('cortex:token-refreshed', onRefreshed);
+    return () => window.removeEventListener('cortex:token-refreshed', onRefreshed);
+  }, []);
+
   // Session expiry monitoring timer (v2.29.0)
   useEffect(() => {
     if (!token) return;
@@ -155,6 +208,19 @@ function AuthProvider({ children }) {
       if (expiry) {
         setSessionExpiresAt(expiry);
         const remaining = expiry - Date.now();
+
+        // With a refresh token the access token expiring is a non-event: rotate
+        // and carry on. None of the warning/grace/logout machinery below applies
+        // — that existed only because the access token *was* the session, so its
+        // expiry meant the user really was being thrown out. Start early enough
+        // that a brief outage has room to retry before anything is user-visible.
+        if (hasRefreshToken()) {
+          setSessionExpiring(false);
+          setSessionExpired(false);
+          const rotateAhead = Math.min(5 * 60 * 1000, Math.max(30 * 1000, (expiry - (getTokenIssuedAt(token) || 0)) * 0.15));
+          if (remaining <= rotateAhead) refreshAccessToken();
+          return;
+        }
 
         if (remaining <= 0) {
           const expiredAgo = -remaining;
@@ -170,7 +236,7 @@ function AuthProvider({ children }) {
             // Grace period over — full logout
             console.log('⏰ Session expired and grace period elapsed. Logging out...');
             pendingPasswordRef.current = null;
-            storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
+            storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
             setSessionExpired(false);
             setSessionExpiring(false);
             setSessionExpiresAt(null);
@@ -238,7 +304,10 @@ function AuthProvider({ children }) {
     const serverDuration = sessionOnly ? '24h' : sessionDuration;
     const res = await fetch(`${API_URL}/auth/login`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ handle, password, sessionDuration: serverDuration }),
+      // supportsRefresh tells the server this client can rotate tokens, so it
+      // is safe to hand out a short-lived access token. Without it the server
+      // keeps issuing the old long-lived JWT for clients running stale bundles.
+      body: JSON.stringify({ handle, password, sessionDuration: serverDuration, supportsRefresh: true, sessionOnly }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -263,8 +332,10 @@ function AuthProvider({ children }) {
     // Store password for E2EE unlock
     pendingPasswordRef.current = password;
     storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
+    if (data.refreshToken) storage.setRefreshToken(data.refreshToken, sessionOnly);
+    if (data.sessionExpiresAt) storage.setSessionExpiresAt(data.sessionExpiresAt, sessionOnly);
     storage.setSessionStart(sessionDuration); // Start browser session timer with user's selected duration
-    setSessionExpiresAt(getTokenExpiry(data.token));
+    setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpiring(false);
     dismissedUntilRef.current = 0;
     setToken(data.token); setUser(data.user);
@@ -283,7 +354,7 @@ function AuthProvider({ children }) {
     const duration = sessionOnly ? 'session' : (storage.getSessionDuration() || '7d');
     storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
     storage.setSessionStart(duration); // Start browser session timer
-    setSessionExpiresAt(getTokenExpiry(data.token));
+    setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpiring(false);
     dismissedUntilRef.current = 0;
     setToken(data.token); setUser(data.user);
@@ -301,7 +372,7 @@ function AuthProvider({ children }) {
     pendingPasswordRef.current = password;
     storage.setToken(data.token); storage.setUser(data.user);
     storage.setSessionStart(sessionDuration); // Start browser session timer with user's selected duration
-    setSessionExpiresAt(getTokenExpiry(data.token));
+    setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpiring(false);
     dismissedUntilRef.current = 0;
     setToken(data.token); setUser(data.user);
@@ -341,7 +412,7 @@ function AuthProvider({ children }) {
     }
     // Clear password and local storage
     pendingPasswordRef.current = null;
-    storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
+    storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
     setSessionExpiring(false);
     setSessionExpiresAt(null);
     setToken(null); setUser(null);
@@ -374,7 +445,7 @@ function AuthProvider({ children }) {
     // Update token and user state
     storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
     storage.setSessionStart(sessionOnly ? 'session' : (data.sessionDuration || duration));
-    setSessionExpiresAt(getTokenExpiry(data.token));
+    setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpiring(false);
     dismissedUntilRef.current = 0;
     setToken(data.token); setUser(data.user);
@@ -395,7 +466,7 @@ function AuthProvider({ children }) {
       if (data.code === 'GRACE_EXPIRED') {
         // Grace window closed — hard logout
         pendingPasswordRef.current = null;
-        storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
+        storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
         setSessionExpired(false);
         setSessionExpiresAt(null);
         setToken(null); setUser(null);
@@ -405,7 +476,7 @@ function AuthProvider({ children }) {
     }
     storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
     storage.setSessionStart(sessionOnly ? 'session' : (data.sessionDuration || duration));
-    setSessionExpiresAt(getTokenExpiry(data.token));
+    setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpired(false);
     setSessionExpiring(false);
     dismissedUntilRef.current = 0;

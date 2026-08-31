@@ -52,6 +52,42 @@ export const storage = {
     sessionStorage.removeItem('farhold_token');
   },
   isSessionOnly: () => !!sessionStorage.getItem('farhold_token') && !localStorage.getItem('farhold_token'),
+
+  // ===== Refresh token + session expiry (v2.75.0) =====
+  // The access token is now short-lived; the refresh token is what keeps you
+  // signed in for months. It lives beside the access token and follows the same
+  // session-only rule — a session-only login never receives one at all.
+  getRefreshToken: () => sessionStorage.getItem('farhold_refresh') || localStorage.getItem('farhold_refresh'),
+  setRefreshToken: (t, sessionOnly = false) => {
+    if (!t) return;
+    if (sessionOnly) {
+      sessionStorage.setItem('farhold_refresh', t);
+      localStorage.removeItem('farhold_refresh');
+    } else {
+      localStorage.setItem('farhold_refresh', t);
+      sessionStorage.removeItem('farhold_refresh');
+    }
+  },
+  removeRefreshToken: () => {
+    localStorage.removeItem('farhold_refresh');
+    sessionStorage.removeItem('farhold_refresh');
+  },
+  // When the *session* ends, as opposed to when the access token expires. E2EE
+  // "until my session expires" follows this, not the hourly access token.
+  getSessionExpiresAt: () => {
+    const v = localStorage.getItem('farhold_session_expires') || sessionStorage.getItem('farhold_session_expires');
+    const n = v ? Date.parse(v) : NaN;
+    return Number.isFinite(n) ? n : null;
+  },
+  setSessionExpiresAt: (iso, sessionOnly = false) => {
+    if (!iso) return;
+    if (sessionOnly) sessionStorage.setItem('farhold_session_expires', iso);
+    else localStorage.setItem('farhold_session_expires', iso);
+  },
+  removeSessionExpiresAt: () => {
+    localStorage.removeItem('farhold_session_expires');
+    sessionStorage.removeItem('farhold_session_expires');
+  },
   getUser: () => { try { return JSON.parse(localStorage.getItem('farhold_user')); } catch { return null; } },
   setUser: (user) => {
     localStorage.setItem('farhold_user', JSON.stringify(user));
@@ -87,8 +123,21 @@ export const storage = {
   getServerUrl: () => localStorage.getItem('farhold_server_url'),
   setServerUrl: (url) => localStorage.setItem('farhold_server_url', url),
   removeServerUrl: () => localStorage.removeItem('farhold_server_url'),
-  // Check if browser session has expired — uses JWT exp claim as source of truth (v2.29.0)
+  // Check if the SESSION has expired (v2.29.0; corrected v2.75.0).
+  //
+  // This used to read the access token's exp as "source of truth", which was
+  // right while the JWT *was* the session. With rotation the access token
+  // expires roughly hourly by design, so that reading logs the user out every
+  // hour — and worse, it runs before the start-up refresh, destroying the
+  // refresh token that would have recovered the session.
   isSessionExpired: () => {
+    if (storage.getRefreshToken()) {
+      const sessionEnd = storage.getSessionExpiresAt();
+      // No recorded end (older login, or the server did not send one): the
+      // refresh token itself is the authority, so let the server decide.
+      return sessionEnd ? Date.now() > sessionEnd : false;
+    }
+
     const token = storage.getToken();
     const expiry = getTokenExpiry(token);
     if (expiry) return Date.now() > expiry;
