@@ -141,11 +141,21 @@ class EmailService {
       async verify() {
         const { status, ok, payload } = await request('/domains');
         if (ok) return true;
-        // 403 = the key is real but scoped to sending only. That is a perfectly
-        // normal sending key, so it counts as reachable and authenticated.
+
+        // A send-only key — the kind Resend recommends, and the kind you should
+        // deploy — cannot read /domains. Resend reports that as **401 with
+        // name 'restricted_api_key'**, not the 403 you would expect, so status
+        // alone is indistinguishable from a bad key. Getting this wrong put a
+        // loud "EMAIL WILL NOT SEND" warning on two correctly configured
+        // servers. The key authenticated; that is all this probe can ask of it.
+        if (payload?.name === 'restricted_api_key') {
+          console.log('   (send-only API key — authenticated; domain verification is not checkable with this key)');
+          return true;
+        }
         if (status === 403) return true;
-        // Resend answers an invalid key on this endpoint with 400, not 401
-        // (observed), so status alone loses the reason — always prefer its text.
+
+        // An invalid key on this endpoint comes back 400, not 401 (observed),
+        // so always prefer Resend's own text over the status code.
         const detail = payload?.message || payload?.name || `HTTP ${status}`;
         throw new Error(`Resend rejected the API key — ${detail}`);
       },
@@ -286,7 +296,9 @@ class EmailService {
     if (!this.isConfigured() || typeof this.transporter?.verify !== 'function') return;
     try {
       await withTimeout(this.transporter.verify(), EmailService.TIMEOUTS.connectionTimeout + 2000, 'timed out');
-      console.log('✅ Email service reachable — SMTP connection verified');
+      console.log(this.provider === 'resend'
+        ? '✅ Email service reachable — Resend API responding over HTTPS'
+        : '✅ Email service reachable — SMTP connection verified');
     } catch (err) {
       console.warn(`⚠️  EMAIL WILL NOT SEND: ${err.message}`);
       // Only suggest the port block when the provider actually uses SMTP —
