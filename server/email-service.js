@@ -21,7 +21,18 @@ import nodemailer from 'nodemailer';
  * Common:
  * - EMAIL_FROM: Sender address (default: noreply@cortex.local)
  */
+// Reject after `ms` rather than waiting on a promise that may never settle.
+function withTimeout(promise, ms, message) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
+  ]);
+}
+
 class EmailService {
+  static SEND_TIMEOUT_MS = 25000;
+
   constructor() {
     this.provider = process.env.EMAIL_PROVIDER || 'smtp';
     this.fromAddress = process.env.EMAIL_FROM || 'noreply@cortex.local';
@@ -54,6 +65,19 @@ class EmailService {
     }
   }
 
+  // Nodemailer's defaults are far too patient for a request path: a blackholed
+  // TCP connect (a firewall DROP rather than a refusal) sits for ~2 minutes on
+  // connect and up to 10 on the socket. DigitalOcean blocks outbound SMTP by
+  // default, so this is the normal failure on a fresh droplet, not an edge case
+  // — it hung the "create invite" button on PMP indefinitely (v2.75.1).
+  static get TIMEOUTS() {
+    return {
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 20000,
+    };
+  }
+
   initializeSMTP() {
     const host = process.env.SMTP_HOST;
     const port = parseInt(process.env.SMTP_PORT || '587', 10);
@@ -71,6 +95,7 @@ class EmailService {
       port,
       secure,
       auth: user && pass ? { user, pass } : undefined,
+      ...EmailService.TIMEOUTS,
     });
 
     this.configured = true;
@@ -94,6 +119,7 @@ class EmailService {
         user: 'apikey',
         pass: apiKey,
       },
+      ...EmailService.TIMEOUTS,
     });
 
     this.configured = true;
@@ -118,6 +144,7 @@ class EmailService {
         user: `postmaster@${domain}`,
         pass: apiKey,
       },
+      ...EmailService.TIMEOUTS,
     });
 
     this.configured = true;
@@ -147,19 +174,45 @@ class EmailService {
     }
 
     try {
-      const info = await this.transporter.sendMail({
-        from: this.fromAddress,
-        to,
-        subject,
-        html,
-        text: text || this.stripHtml(html),
-      });
+      // Belt and braces over the transport timeouts. Some failure modes (a
+      // TLS handshake that stalls, a proxy that accepts and never speaks) slip
+      // past nodemailer's own limits, and this is awaited inside request
+      // handlers — no email is worth hanging a user's button on. sendEmail
+      // never throws and never blocks for long; callers branch on `success`.
+      const info = await withTimeout(
+        this.transporter.sendMail({
+          from: this.fromAddress,
+          to,
+          subject,
+          html,
+          text: text || this.stripHtml(html),
+        }),
+        EmailService.SEND_TIMEOUT_MS,
+        'SMTP send timed out'
+      );
 
       console.log(`Email sent to ${to}: ${info.messageId}`);
       return { success: true, messageId: info.messageId };
     } catch (err) {
       console.error(`Failed to send email to ${to}:`, err.message);
       return { success: false, error: err.message };
+    }
+  }
+
+  // One-off reachability probe, fired at startup and never awaited by boot.
+  //
+  // The service is lazily constructed and only ever logged "Email service
+  // enabled" — which reports that the CONFIG parsed, not that anything can be
+  // delivered. PMP ran for weeks with outbound SMTP blocked by DigitalOcean and
+  // nothing in the log said so; the first symptom was a hung button.
+  async verifyConnection() {
+    if (!this.isConfigured() || typeof this.transporter?.verify !== 'function') return;
+    try {
+      await withTimeout(this.transporter.verify(), EmailService.TIMEOUTS.connectionTimeout + 2000, 'timed out');
+      console.log('✅ Email service reachable — SMTP connection verified');
+    } catch (err) {
+      console.warn(`⚠️  EMAIL WILL NOT SEND: cannot reach the mail server (${err.message}).`);
+      console.warn('⚠️  Outbound SMTP is commonly blocked by default on cloud hosts (DigitalOcean, and others).');
     }
   }
 
