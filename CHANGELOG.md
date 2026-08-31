@@ -5,6 +5,30 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.76.0] - 2026-08-31
+
+### Added
+
+- **Resend as an email provider, over HTTPS instead of SMTP.** `EMAIL_PROVIDER=resend` + `RESEND_API_KEY`. Every provider Cortex had — `smtp`, `sendgrid`, `mailgun` — relays over SMTP port 587, which cloud hosts block by default to limit spam; DigitalOcean blackholes it on the PMP droplet, so *all* mail from that node had been failing silently. Port 443 is never blocked, so this path works on any host with no support ticket and no migration.
+  - Implemented as a transport duck-typed to the nodemailer surface `sendEmail()` already uses (`sendMail`, `verify`), so no call site changed and the send-timeout and startup-probe machinery applies to it unchanged.
+  - Errors surface Resend's own wording — "API key is invalid", "domain is not verified" — rather than a flattened generic failure. Those two are the failures that actually happen, and both are unactionable without the text.
+  - `EMAIL_FROM` must use a domain verified in Resend.
+
+### Fixed
+
+- **The startup warning no longer blames a firewall when the provider does not use one.** Suggesting a blocked SMTP port while running an HTTPS provider would send the next person chasing the wrong thing — which is how the PMP outage lasted as long as it did. The port-587 hint now appears only for SMTP-based providers.
+
+## [2.75.1] - 2026-08-31
+
+### Fixed
+
+- **"Create invite" hung forever when outbound SMTP was blocked.** Reported on the PMP node. The invite route `await`s the email send, and no timeout was configured on any nodemailer transport — so against a *blackholed* port (a firewall DROP rather than a refusal, which is how DigitalOcean blocks outbound SMTP by default) the connect sat for minutes and the HTTP response never came. The invite row is written before the email is attempted, so retries silently piled up usable-looking invitations while the button spun.
+  - All three transports (SMTP, SendGrid, Mailgun — all of which relay over port 587) now set `connectionTimeout` / `greetingTimeout` / `socketTimeout`.
+  - `sendEmail()` additionally caps the whole send, because some stalls slip past nodemailer's own limits and this is awaited inside request handlers. It never throws and never blocks for long; callers branch on `success`. Verified against a blackholed host: returns in **10s** with `Connection timeout` instead of hanging.
+  - The invite UI already surfaced both the link and the email error — it simply never received a response.
+
+- **Email failures were completely silent until someone noticed a symptom.** `Email service enabled (SMTP: host:port)` only ever meant the configuration parsed, not that anything could be delivered, and the service is constructed lazily. PMP ran for weeks with *all* email quietly failing — notifications, calendar reminders, invitations — and nothing in the log said so. The server now probes the mail server once at startup, in the background, and logs either `✅ Email service reachable` or a loud `⚠️ EMAIL WILL NOT SEND` with the reason. Never awaited: boot does not depend on a third party being reachable.
+
 ## [2.75.0] - 2026-08-31
 
 ### Added
