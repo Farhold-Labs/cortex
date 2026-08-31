@@ -20440,8 +20440,12 @@ const requirePinAccess = (pingId, userId, res) => {
     res.status(404).json({ error: 'Ping not found' });
     return null;
   }
-  if (!participation.isParticipant(waveId, userId)) {
-    res.status(403).json({ error: 'Not a participant in this wave' });
+  // canAccessWaveFromCache, not participation.isParticipant: a wave_participants
+  // row is only how *private* waves grant access. Public waves are open to
+  // everyone and crew waves go by group membership, so the narrower check
+  // refused to pin in exactly those two — the same rule posting a ping uses.
+  if (!canAccessWaveFromCache(waveId, userId)) {
+    res.status(403).json({ error: 'Access denied' });
     return null;
   }
   return waveId;
@@ -20485,8 +20489,8 @@ app.delete('/api/pings/:id/pin', authenticateToken, (req, res) => {
 
 app.get('/api/waves/:waveId/pins', authenticateToken, (req, res) => {
   const waveId = sanitizeInput(req.params.waveId);
-  if (!participation.isParticipant(waveId, req.user.userId)) {
-    return res.status(403).json({ error: 'Not a participant in this wave' });
+  if (!canAccessWaveFromCache(waveId, req.user.userId)) {
+    return res.status(403).json({ error: 'Access denied' });
   }
   res.json({ pins: db.getPinnedPings(waveId) });
 });

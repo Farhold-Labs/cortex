@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Clicking a pin jumps to the ping. Pins outlive the loaded message window, so if the target is not loaded, the wave reloads centred on it first rather than failing silently.
   - Anyone in the wave can unpin, including pins they did not create. That is the same symmetry the feature asks for; a 50-pin ceiling per wave keeps one participant from burying the banner.
   - End-to-end encrypted waves work: the banner decrypts previews client-side with the wave key. A locked wave shows `🔒 Encrypted ping` rather than ciphertext — the server never sees plaintext and never tries to.
-  - Wave membership is enforced server-side on all three endpoints (`POST`/`DELETE /api/pings/:id/pin`, `GET /api/waves/:id/pins`); non-participants get 403, admins included. Changes broadcast over WebSocket as `ping_pinned`, so a pin lands for everyone in the wave without a refresh.
+  - Access is enforced server-side on all three endpoints (`POST`/`DELETE /api/pings/:id/pin`, `GET /api/waves/:id/pins`) with `canAccessWaveFromCache` — the same rule that governs posting a ping. Public waves are open to anyone signed in, crew waves go by crew membership, private waves by participation; anyone else gets 403, admins included. Changes broadcast over WebSocket as `ping_pinned`, so a pin lands for everyone in the wave without a refresh.
   - `wave_participants.pinned` — pinning a whole *wave* in the list — is a separate, per-user feature and is unaffected.
 
 ### Fixed
