@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Pinned pings.** Any participant can pin a ping in a wave, and every participant sees it — a shared shelf for the things a wave keeps coming back to, not a private bookmark. Pin and unpin live in a ping's ⋮ menu; pinned pings appear in a 📌 banner at the top of the wave, directly under the upcoming-events banner, and carry a `📌 PINNED` marker in the timeline.
+- **Pinned pings.** Any participant can pin a ping in a wave, and every participant sees it — a shared shelf for the things a wave keeps coming back to, not a private bookmark. Pin and unpin live in a ping's ⋮ menu; pinned pings carry a `📌 PINNED` marker in the timeline and are listed in the wave's context bar.
+- **Pinned pings and upcoming events moved out of the message scroller, into a always-visible bar under the wave header.** Both used to be strips rendered inside the scrolling message list, which put them above the *oldest loaded* ping — in a wave with thousands of messages you could never scroll far enough to see either one. Pins are for things you want to come back to, so being reachable only by scrolling to the very top defeated the point.
+  - The bar is one compact line: a `📌 N pinned` chip, a `📅 N upcoming` chip, the next event inline (so the common case needs no click at all), and `+ event`. Clicking a chip opens that list; only one opens at a time, capped at ~38vh with its own scroll, so fifty pins cannot push the conversation off screen.
+  - `WaveEventsBanner` and `WavePinsBanner` are replaced by a single `WaveContextBar`.
+
   - Clicking a pin jumps to the ping. Pins outlive the loaded message window, so if the target is not loaded, the wave reloads centred on it first rather than failing silently.
   - Anyone in the wave can unpin, including pins they did not create. That is the same symmetry the feature asks for; a 50-pin ceiling per wave keeps one participant from burying the banner.
   - End-to-end encrypted waves work: the banner decrypts previews client-side with the wave key. A locked wave shows `🔒 Encrypted ping` rather than ciphertext — the server never sees plaintext and never tries to.

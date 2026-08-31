@@ -21,8 +21,7 @@ import CameraCapture from '../media/CameraCapture.jsx';
 import PlexBrowserModal from '../media/PlexBrowserModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
-import WaveEventsBanner from './WaveEventsBanner.jsx';
-import WavePinsBanner from './WavePinsBanner.jsx';
+import WaveContextBar from './WaveContextBar.jsx';
 import EventDetailModal from '../calendar/EventDetailModal.jsx';
 import EventCreateModal from '../calendar/EventCreateModal.jsx';
 import { storage } from '../../utils/storage.js';
@@ -2513,6 +2512,23 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           playbackSpeed={playbackSpeed} onSpeedChange={setPlaybackSpeed} isMobile={isMobile} />
       )}
 
+      {/* Pinned pings + upcoming events (v2.74.0). Deliberately OUTSIDE the
+          message scroller below: as strips inside it they sat above the oldest
+          loaded ping, so in a wave with thousands of messages you could never
+          scroll far enough to reach them. */}
+      <WaveContextBar
+        waveId={wave?.id}
+        fetchAPI={fetchAPI}
+        isMobile={isMobile}
+        reloadTrigger={`${reloadTrigger}-${eventsReload}-${pinsReload}`}
+        onOpenEvent={setSelectedEvent}
+        onCreateEvent={() => setShowEventCreate(true)}
+        decryptPins={decryptMessages}
+        onScrollToPing={scrollToPing}
+        onUnpin={() => loadWave(true)}
+        showToast={showToast}
+      />
+
       {/* Messages */}
       <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '12px' : '20px' }}>
         {/* E2EE: Show encryption status banners */}
@@ -2532,28 +2548,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             isContinuing={isEncryptingBatch}
           />
         )}
-        {/* Upcoming events for this wave (v2.71.0) — without this, arriving from
-            a reminder or a calendar entry showed no sign of the event at all. */}
-        <WaveEventsBanner
-          waveId={wave?.id}
-          fetchAPI={fetchAPI}
-          isMobile={isMobile}
-          reloadTrigger={`${reloadTrigger}-${eventsReload}`}
-          onOpenEvent={setSelectedEvent}
-          onCreateEvent={() => setShowEventCreate(true)}
-        />
-
-        {/* Pinned pings (v2.74.0) — shared across the wave, not per-user. */}
-        <WavePinsBanner
-          waveId={wave?.id}
-          fetchAPI={fetchAPI}
-          isMobile={isMobile}
-          reloadTrigger={`${reloadTrigger}-${pinsReload}`}
-          decryptPins={decryptMessages}
-          onScrollToPing={scrollToPing}
-          onUnpin={() => loadWave(true)}
-          showToast={showToast}
-        />
 
         {/* Watch Party Banner (v2.14.0) */}
         {activeWatchParty && (
