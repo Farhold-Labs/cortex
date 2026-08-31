@@ -22838,4 +22838,16 @@ server.listen(PORT, BIND_HOST, () => {
 
   setInterval(processEventReminders, REMINDER_CHECK_INTERVAL);
   console.log('📅 Calendar reminder job enabled (checking every 5 min)');
+
+  // Probe the mail server once, in the background (v2.75.1). "Email service
+  // enabled" only ever meant the config parsed — PMP ran for weeks with
+  // outbound SMTP blocked and nothing said so. Never awaited: boot must not
+  // depend on a third party being reachable.
+  setImmediate(() => {
+    try {
+      getEmailService().verifyConnection?.();
+    } catch (err) {
+      console.warn('Email reachability check could not run:', err.message);
+    }
+  });
 });
