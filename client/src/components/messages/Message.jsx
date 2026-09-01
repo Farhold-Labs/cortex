@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT, canAccess, BASE_URL } from '../../config/constants.js';
+import { useSwipeActions } from '../../hooks/useSwipeActions.js';
+import { useLongPress } from '../../hooks/useLongPress.js';
 
 const resolveMediaUrl = (url) => {
   if (!url || !BASE_URL) return url;
@@ -159,6 +161,25 @@ const Message = ({
   const isContentCollapsed = contentCollapsed[message.id];
   const quickReactions = ['👍', '☝️', '❤️', '😂', '🎉', '🤔', '👏', '😢', '🖕', '😮', '🤦'];
 
+  // ===== Touch gestures (v2.77.0) =====
+  // Every one of these mirrors a control that already exists; nothing here is
+  // the only way to do anything. Declared above the early return below, because
+  // hooks cannot be called conditionally.
+  // Disabled mid-move: while a move is in flight every tap is choosing a
+  // destination, and a swipe would hijack that.
+  const gesturesEnabled = isTouchDevice && !isDeleted && !moveSource;
+
+  const swipe = useSwipeActions({
+    enabled: gesturesEnabled,
+    onSwipeRight: onReply ? () => onReply(message) : null,
+    onSwipeLeft: onTogglePin ? () => onTogglePin(message) : null,
+  });
+
+  const longPress = useLongPress(() => {
+    document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id }));
+    setShowMessageMenu(true);
+  }, { enabled: gesturesEnabled });
+
   if (isDeleted && !hasChildren) return null;
 
   const isMoving = moveSource && moveSource.messageId === message.id;
@@ -196,15 +217,50 @@ const Message = ({
   const canShowActions = !isDeleted && !isEditing;
 
   return (
-    <div data-message-id={message.id}>
+    <div data-message-id={message.id} style={{ position: 'relative', overflow: swipe.offset ? 'hidden' : undefined }}>
+      {/* Swipe hint (v2.77.0) — sits behind the row and is revealed as it moves.
+          Purely decorative: aria-hidden, because the actions it mirrors are
+          already reachable from the ⋮ menu by keyboard and screen reader. */}
+      {swipe.offset !== 0 && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center',
+            justifyContent: swipe.direction === 'right' ? 'flex-start' : 'flex-end',
+            padding: '0 20px', pointerEvents: 'none',
+            color: swipe.armed ? 'var(--accent-amber)' : 'var(--text-muted)',
+            fontFamily: 'monospace', fontSize: '0.72rem', letterSpacing: '0.08em',
+            opacity: swipe.progress,
+          }}
+        >
+          {swipe.direction === 'right'
+            ? `↩ ${swipe.armed ? 'RELEASE TO REPLY' : 'REPLY'}`
+            : `📌 ${swipe.armed ? (message.pinned_at ? 'RELEASE TO UNPIN' : 'RELEASE TO PIN') : (message.pinned_at ? 'UNPIN' : 'PIN')}`}
+        </div>
+      )}
       {/* Message row */}
       <div
         className="cortex-msg-row"
         onClickCapture={isMoveTarget ? (e) => { e.stopPropagation(); e.preventDefault(); onCompleteMove(message.id); } : undefined}
-        onClick={handleMessageClick}
+        onClick={(e) => {
+          // A long-press that fired already opened the menu; the click the
+          // browser synthesises afterwards must not also count as a tap.
+          if (longPress.didFire()) { e.stopPropagation(); return; }
+          handleMessageClick(e);
+        }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        {...(gesturesEnabled ? {
+          onTouchStart: (e) => { swipe.handlers.onTouchStart(e); longPress.onTouchStart(e); },
+          onTouchMove: (e) => { swipe.handlers.onTouchMove(e); longPress.onTouchMove(e); },
+          onTouchEnd: (e) => { swipe.handlers.onTouchEnd(e); longPress.onTouchEnd(e); },
+          onTouchCancel: (e) => { swipe.handlers.onTouchCancel(e); longPress.onTouchCancel(e); },
+        } : {})}
         style={{
+          ...(gesturesEnabled ? swipe.style : {}),
+          transform: swipe.offset ? `translateX(${swipe.offset}px)` : undefined,
+          transition: swipe.settling ? 'transform 180ms ease-out' : undefined,
           position: 'relative',
           display: 'flex',
           gap: '8px',

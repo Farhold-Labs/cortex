@@ -1653,6 +1653,7 @@ function MainApp({ sharePingId }) {
                 flexShrink: 0,
               }}>
                 <WaveList
+                  onRefresh={loadWaves}
                   waves={waves}
                   categories={waveCategories}
                   selectedWave={selectedWave}

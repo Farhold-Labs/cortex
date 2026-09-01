@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { useVoiceCall } from '../../hooks/useVoiceCall.js';
+import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
+import { useEdgeSwipeBack } from '../../hooks/useEdgeSwipeBack.js';
 import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL } from '../../../messages.js';
 import { PRIVACY_LEVELS, API_URL, BASE_URL } from '../../config/constants.js';
 import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComponents.jsx';
@@ -435,6 +437,20 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   const composeRef = useRef(null);
   const messagesRef = useRef(null);
+  const waveRootRef = useRef(null);
+
+  // ===== Wave gestures (v2.77.0) =====
+  // Pull down at the top of a wave to reload it, and swipe in from the left
+  // edge to go back to the list. Both mirror controls that already exist (the
+  // ← button, and the wave reloading on its own); neither is the only way.
+  const { pulling, pullDistance, refreshing } = usePullToRefresh(
+    messagesRef,
+    () => loadWave(true),
+    { enabled: isMobile }
+  );
+  // Edge-anchored on purpose: a back-swipe that worked anywhere would fight the
+  // per-ping swipe actions for the same finger. The left strip is reserved.
+  useEdgeSwipeBack(waveRootRef, onBack, { enabled: isMobile });
   const textareaRef = useRef(null);
   const composerRef = useRef(null);
   const hasMarkedAsReadRef = useRef(false);
@@ -1575,7 +1591,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const total = allPings.length;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+    <div ref={waveRootRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       {/* Header */}
       <div style={{
         padding: isMobile ? '12px' : '16px 20px', background: 'linear-gradient(90deg, var(--bg-surface), var(--bg-hover), var(--bg-surface))',
@@ -2321,6 +2337,24 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         onUnpin={() => loadWave(true)}
         showToast={showToast}
       />
+
+      {/* Pull-to-refresh indicator (v2.77.0). Rendered outside the scroller so
+          it stays put while the list moves under it. */}
+      {isMobile && (pullDistance > 0 || refreshing) && (
+        <div
+          aria-hidden="true"
+          style={{
+            height: refreshing ? 28 : Math.min(pullDistance, 40),
+            flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--accent-green)', fontFamily: 'monospace', fontSize: '0.65rem',
+            letterSpacing: '0.1em', overflow: 'hidden',
+            opacity: refreshing ? 1 : Math.min(pullDistance / 60, 1),
+          }}
+        >
+          {refreshing ? '⟳ REFRESHING…' : (pullDistance >= 60 ? '↻ RELEASE TO REFRESH' : '↓ PULL TO REFRESH')}
+        </div>
+      )}
 
       {/* Messages */}
       <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '12px' : '20px' }}>
