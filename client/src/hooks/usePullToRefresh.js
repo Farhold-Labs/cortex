@@ -10,7 +10,12 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 // the wave list and an open wave. State the UI renders still lives in state;
 // state the *handlers* need lives in refs.
 
-export function usePullToRefresh(ref, onRefresh, { enabled = true } = {}) {
+// `edge` picks which end of the list arms the gesture (v2.78.0):
+//   'top'    — pull DOWN at the top (a list newest-first, like the wave list)
+//   'bottom' — pull UP at the bottom (a wave, which is newest-LAST and where you
+//              are already sitting; requiring a scroll to the top of a
+//              thousand-message wave made the gesture unreachable in practice)
+export function usePullToRefresh(ref, onRefresh, { enabled = true, edge = 'top' } = {}) {
   const [pulling, setPulling] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -21,8 +26,10 @@ export function usePullToRefresh(ref, onRefresh, { enabled = true } = {}) {
   const refreshingRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
   const enabledRef = useRef(enabled);
+  const edgeRef = useRef(edge);
   useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
+  useEffect(() => { edgeRef.current = edge; }, [edge]);
 
   const threshold = 60;
 
@@ -45,10 +52,16 @@ export function usePullToRefresh(ref, onRefresh, { enabled = true } = {}) {
     const el = node;
     if (!el) return undefined;
 
+    // Armed only at the relevant end, or the gesture would hijack ordinary
+    // scrolling. Bottom needs a tolerance: fractional scroll heights mean
+    // scrollTop rarely lands exactly on the maximum.
+    const atEdge = () => (edgeRef.current === 'bottom'
+      ? (el.scrollHeight - el.scrollTop - el.clientHeight) <= 2
+      : el.scrollTop === 0);
+
     const handleTouchStart = (e) => {
       if (!enabledRef.current || refreshingRef.current) return;
-      // Only arm at the very top, or the gesture would hijack ordinary scrolling.
-      if (el.scrollTop === 0) {
+      if (atEdge()) {
         startY.current = e.touches[0].clientY;
         pullingRef.current = true;
         setPulling(true);
@@ -56,8 +69,11 @@ export function usePullToRefresh(ref, onRefresh, { enabled = true } = {}) {
     };
 
     const handleTouchMove = (e) => {
-      if (!pullingRef.current || el.scrollTop !== 0) return;
-      const distance = e.touches[0].clientY - startY.current;
+      if (!pullingRef.current || !atEdge()) return;
+      const raw = e.touches[0].clientY - startY.current;
+      // At the bottom the pull travels upward, so the sign flips. Everything
+      // downstream works in "distance pulled", never in screen direction.
+      const distance = edgeRef.current === 'bottom' ? -raw : raw;
       if (distance > 0) {
         setDistance(Math.min(distance * 0.5, threshold + 20)); // resistance
         // Non-passive listener below, so this genuinely suppresses the bounce.
