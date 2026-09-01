@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.78.1] - 2026-09-01
+
+### Fixed
+
+- **Pull-to-refresh in a wave showed its label but never actually refreshed.** Reported as cosmetic — "the functionality is there, you just don't see the words every time" — but the words were the visible half of a real failure.
+  - The indicator's height was tied to `pullDistance` with `overflow: hidden`, so early in a pull the box was shorter than its own text and sliced the label in half. That was the visible symptom.
+  - Underneath it, the gesture **disqualified itself the moment it rendered**. The at-edge condition was re-checked on every touch move, and showing the indicator adds its own 26px to the column — which pushes the list 26px off the bottom, so `atEdge()` went false on the very next move and the pulled distance froze about five pixels in. It never reached the 60px threshold, so the refresh never fired. Measured: `atBottom: 26`, opacity pinned at its floor, label stuck on `PULL UP TO REFRESH`.
+  - The edge is now checked only when arming the gesture, never again mid-gesture; reversing the drag hands the touch back so the list scrolls normally. The indicator is a fixed height and fades in rather than growing, so it cannot clip its own text.
+  - The wave list's pull-down had the same clipping bug and the same fix.
+
 ## [2.78.0] - 2026-09-01
 
 ### Fixed

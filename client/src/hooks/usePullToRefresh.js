@@ -69,7 +69,14 @@ export function usePullToRefresh(ref, onRefresh, { enabled = true, edge = 'top' 
     };
 
     const handleTouchMove = (e) => {
-      if (!pullingRef.current || !atEdge()) return;
+      // Edge is checked ONLY when arming, never again mid-gesture. Re-checking
+      // is self-defeating at the bottom: showing the indicator adds its own
+      // height to the column, which pushes the list ~26px off the bottom, so
+      // atEdge() went false on the very next move and the distance froze a few
+      // pixels in — the label appeared but the threshold was never reached and
+      // the refresh never fired. Once armed, the gesture owns the touch until
+      // it is released or reversed.
+      if (!pullingRef.current) return;
       const raw = e.touches[0].clientY - startY.current;
       // At the bottom the pull travels upward, so the sign flips. Everything
       // downstream works in "distance pulled", never in screen direction.
@@ -78,8 +85,13 @@ export function usePullToRefresh(ref, onRefresh, { enabled = true, edge = 'top' 
         setDistance(Math.min(distance * 0.5, threshold + 20)); // resistance
         // Non-passive listener below, so this genuinely suppresses the bounce.
         if (distance > 10 && e.cancelable) e.preventDefault();
-      } else if (distanceRef.current !== 0) {
-        setDistance(0);
+      } else {
+        // Reversed past the start: hand the touch back so the list scrolls
+        // normally again. This is what the removed edge re-check was really
+        // protecting against.
+        if (distanceRef.current !== 0) setDistance(0);
+        pullingRef.current = false;
+        setPulling(false);
       }
     };
 

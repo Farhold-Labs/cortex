@@ -450,11 +450,13 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
       <div
         aria-hidden="true"
         style={{
-          height: refreshing ? 26 : Math.min(pullDistance, 38), flexShrink: 0,
+          // Fixed height for the same reason as the wave's indicator: a height
+          // driven by pullDistance clips its own label mid-pull.
+          height: 26, flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: 'var(--accent-green)', fontFamily: 'monospace', fontSize: '0.62rem',
-          letterSpacing: '0.1em', overflow: 'hidden',
-          opacity: refreshing ? 1 : Math.min(pullDistance / 60, 1),
+          letterSpacing: '0.1em', whiteSpace: 'nowrap',
+          opacity: refreshing ? 1 : Math.max(0.45, Math.min(pullDistance / 60, 1)),
         }}
       >
         {refreshing ? '⟳ REFRESHING…' : (pullDistance >= 60 ? '↻ RELEASE TO REFRESH' : '↓ PULL TO REFRESH')}

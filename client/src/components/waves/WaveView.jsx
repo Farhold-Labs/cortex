@@ -2433,12 +2433,18 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         <div
           aria-hidden="true"
           style={{
-            height: refreshing ? 28 : Math.min(pullDistance, 40),
+            // Fixed height, not one that grows with the pull. Tying it to
+            // pullDistance meant that early in a gesture the box was shorter
+            // than its own text and `overflow: hidden` sliced the label in
+            // half — the words only appeared if you happened to pull far
+            // enough. Progress is shown by fading in instead, which cannot
+            // clip anything.
+            height: 26,
             flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: 'var(--accent-green)', fontFamily: 'monospace', fontSize: '0.65rem',
-            letterSpacing: '0.1em', overflow: 'hidden',
-            opacity: refreshing ? 1 : Math.min(pullDistance / 60, 1),
+            letterSpacing: '0.1em', whiteSpace: 'nowrap',
+            opacity: refreshing ? 1 : Math.max(0.45, Math.min(pullDistance / 60, 1)),
           }}
         >
           {refreshing ? '⟳ REFRESHING…' : (pullDistance >= 60 ? '↻ RELEASE TO REFRESH' : '↑ PULL UP TO REFRESH')}
