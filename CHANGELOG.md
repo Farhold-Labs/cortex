@@ -5,6 +5,20 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.78.0] - 2026-09-01
+
+### Fixed
+
+- **The left-edge back-swipe quit the app on Android.** That strip is not ours to reserve — **Android's system back gesture owns both screen edges**. In the installed PWA the system took the gesture and navigated back out of Cortex entirely; in the Capacitor build it was swallowed too, with the back gesture's haptic tick as the only sign anything had happened. It was an iOS idiom applied to the wrong platform.
+  - The edge swipe is **removed**. Android already has a back gesture and a back button that people know, so the fix is to make those mean "close this wave" rather than "quit". `useSystemBack` pushes one history entry when a wave opens and closes the wave when it is popped. iOS Safari's own edge swipe drives history too, so both platforms are served by one mechanism and no screen edge has to be reserved.
+
+- **Scrolling the emoji reaction picker triggered a swipe on the ping underneath.** v2.77.0 claimed horizontal movement with `touch-action: pan-y` on the message row, and `touch-action` **intersects down the ancestor chain** — so it disabled horizontal panning for everything inside the row, the picker (`overflow-x: auto`) included, and then the swipe handler captured the movement the browser had just been forbidden from using. Code blocks and tables inside messages were affected the same way, unreported.
+  - `useSwipeActions` no longer uses `touch-action` at all. A declarative property cannot express "claim horizontal movement, except where it starts somewhere that scrolls horizontally" — that is a per-gesture decision. Listeners are now attached natively with `{ passive: false }` and the gesture is **declined at touchstart** when it begins inside a horizontal scroller, a text field, or anything marked `data-no-swipe`.
+
+### Changed
+
+- **A wave now refreshes by pulling UP from the bottom**, not down from the top. A wave is newest-last and you are already sitting at its bottom, so the pull-down gesture required scrolling back through the entire history to reach it — unusable in a wave with thousands of messages. The wave list, which is top-anchored, keeps pull-down. `usePullToRefresh` takes an `edge: 'top' | 'bottom'` option and the indicator renders at the end the gesture belongs to.
+
 ## [2.77.0] - 2026-08-31
 
 ### Added
