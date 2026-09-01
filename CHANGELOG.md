@@ -5,6 +5,26 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.77.0] - 2026-08-31
+
+### Added
+
+- **Touch gestures across the app.** Until now gestures existed only in the video feed, plus one back-swipe in the focus view — the surfaces people actually live in had none, so every action on a ping meant hitting the small ⋮ target.
+  - **Swipe a ping right to reply, left to pin/unpin.** The row follows your finger, names the action as it goes, and says `RELEASE TO …` once you're past the trigger point.
+  - **Long-press a ping** to open its action menu.
+  - **Swipe in from the left edge** of a wave to return to the wave list.
+  - **Pull down to refresh** the wave list or an open wave.
+  - **Every gesture mirrors a control that already exists** — the ⋮ menu, the ← button, and automatic refresh all still work exactly as before. Nothing is gesture-only, nothing was removed, and none of it is reachable only by swiping. Motion is dropped under `prefers-reduced-motion`, and the swipe hint is `aria-hidden` because the actions behind it are already in the menu for keyboard and screen-reader users.
+
+### Fixed
+
+- **`usePullToRefresh` re-bound its touch listeners on every frame of a pull.** `pulling`, `pullDistance` and `refreshing` were all in the effect's dependency array, so the non-passive `touchmove` listener the gesture depends on was torn down and re-attached continuously. It happened to work in the video feed; it is not something to extend to two more surfaces. State the handlers need now lives in refs and the listeners bind once. The public API is unchanged.
+- **Hooks keyed on `[ref]` bound to nothing and never retried.** A ref object's identity never changes, so such an effect runs exactly once — and `WaveView` renders a loading spinner first, so `ref.current` was still `null` at that moment. Both wave gestures failed silently because of it. The hooks now promote `ref.current` into state so the binding effect re-runs when the element actually mounts.
+
+### Technical note
+
+Nothing here calls `preventDefault` on `touchmove`. React 18 attaches that listener as **passive** at the root, so `preventDefault` inside a synthetic handler is a silent no-op — code relying on it would review as correct and fight the scroller on a real device. Horizontal gestures are claimed with `touch-action: pan-y` instead, plus an axis lock that commits a gesture to one direction for its whole life. Verified with real touch input: a straight vertical swipe scrolls, and so does one with 40px of horizontal drift.
+
 ## [2.76.1] - 2026-08-31
 
 ### Fixed

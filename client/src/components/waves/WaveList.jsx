@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
 import { PRIVACY_LEVELS, NOTIFICATION_BADGE_COLORS, WAVE_DENSITY, DEFAULT_WAVE_DENSITY } from '../../config/constants.js';
 import { EMPTY, GHOST_PROTOCOL } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
-const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY }) => {
+const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
@@ -302,7 +303,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
   };
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto' }}>
+    <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto' }}>
       {/* Pinned Section */}
       {groupedWaves.pinned.length > 0 && (
         <div style={{ marginBottom: '1px' }}>
@@ -382,7 +383,16 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
   );
 };
 
-const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY }) => {
+const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh }) => {
+  // Pull down at the top of the list to reload it (v2.77.0). Additive: the list
+  // already refreshes itself on websocket events; this is for the moments when
+  // someone wants to be sure.
+  const listScrollRef = useRef(null);
+  const { pullDistance, refreshing } = usePullToRefresh(
+    listScrollRef,
+    () => onRefresh?.(),
+    { enabled: isMobile && !!onRefresh }
+  );
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [showWaveMenu, setShowWaveMenu] = React.useState(false);
   return (
@@ -436,8 +446,23 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
         )}
       </div>
     </div>
+    {isMobile && (pullDistance > 0 || refreshing) && (
+      <div
+        aria-hidden="true"
+        style={{
+          height: refreshing ? 26 : Math.min(pullDistance, 38), flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--accent-green)', fontFamily: 'monospace', fontSize: '0.62rem',
+          letterSpacing: '0.1em', overflow: 'hidden',
+          opacity: refreshing ? 1 : Math.min(pullDistance / 60, 1),
+        }}
+      >
+        {refreshing ? '⟳ REFRESHING…' : (pullDistance >= 60 ? '↻ RELEASE TO REFRESH' : '↓ PULL TO REFRESH')}
+      </div>
+    )}
     {categories.length > 0 ? (
       <WaveCategoryList
+        scrollRef={listScrollRef}
         waves={waves}
         categories={categories}
         selectedWave={selectedWave}
@@ -451,7 +476,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
         density={density}
       />
     ) : (
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div ref={listScrollRef} style={{ flex: 1, overflowY: 'auto' }}>
         {waves.length === 0 ? (
           <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
             {showArchived ? 'No archived waves' : EMPTY.noWavesCreate}
