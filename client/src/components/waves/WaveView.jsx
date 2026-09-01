@@ -2,7 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { useVoiceCall } from '../../hooks/useVoiceCall.js';
 import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
-import { useEdgeSwipeBack } from '../../hooks/useEdgeSwipeBack.js';
+import { useSystemBack } from '../../hooks/useSystemBack.js';
 import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL } from '../../../messages.js';
 import { PRIVACY_LEVELS, API_URL, BASE_URL } from '../../config/constants.js';
 import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComponents.jsx';
@@ -437,20 +437,20 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   const composeRef = useRef(null);
   const messagesRef = useRef(null);
-  const waveRootRef = useRef(null);
 
-  // ===== Wave gestures (v2.77.0) =====
-  // Pull down at the top of a wave to reload it, and swipe in from the left
-  // edge to go back to the list. Both mirror controls that already exist (the
-  // ← button, and the wave reloading on its own); neither is the only way.
-  const { pulling, pullDistance, refreshing } = usePullToRefresh(
+  // ===== Wave gestures (v2.77.0, revised v2.78.0) =====
+  // Pull UP at the BOTTOM to reload. A wave is newest-last and you are already
+  // sitting at the bottom, so the usual pull-down-at-the-top would have meant
+  // scrolling back through a thousand messages to reach the gesture.
+  const { pullDistance, refreshing } = usePullToRefresh(
     messagesRef,
     () => loadWave(true),
-    { enabled: isMobile }
+    { enabled: isMobile, edge: 'bottom' }
   );
-  // Edge-anchored on purpose: a back-swipe that worked anywhere would fight the
-  // per-ping swipe actions for the same finger. The left strip is reserved.
-  useEdgeSwipeBack(waveRootRef, onBack, { enabled: isMobile });
+  // The system's own back — gesture or button — closes the wave instead of the
+  // app. Replaces the v2.77.0 left-edge swipe, which collided with Android's
+  // back gesture and quit the PWA outright.
+  useSystemBack(isMobile, onBack);
   const textareaRef = useRef(null);
   const composerRef = useRef(null);
   const hasMarkedAsReadRef = useRef(false);
@@ -1591,7 +1591,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const total = allPings.length;
 
   return (
-    <div ref={waveRootRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       {/* Header */}
       <div style={{
         padding: isMobile ? '12px' : '16px 20px', background: 'linear-gradient(90deg, var(--bg-surface), var(--bg-hover), var(--bg-surface))',
@@ -2338,24 +2338,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         showToast={showToast}
       />
 
-      {/* Pull-to-refresh indicator (v2.77.0). Rendered outside the scroller so
-          it stays put while the list moves under it. */}
-      {isMobile && (pullDistance > 0 || refreshing) && (
-        <div
-          aria-hidden="true"
-          style={{
-            height: refreshing ? 28 : Math.min(pullDistance, 40),
-            flexShrink: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: 'var(--accent-green)', fontFamily: 'monospace', fontSize: '0.65rem',
-            letterSpacing: '0.1em', overflow: 'hidden',
-            opacity: refreshing ? 1 : Math.min(pullDistance / 60, 1),
-          }}
-        >
-          {refreshing ? '⟳ REFRESHING…' : (pullDistance >= 60 ? '↻ RELEASE TO REFRESH' : '↓ PULL TO REFRESH')}
-        </div>
-      )}
-
       {/* Messages */}
       <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '12px' : '20px' }}>
         {/* E2EE: Show encryption status banners */}
@@ -2443,6 +2425,25 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           );
         })}
       </div>
+
+      {/* Pull-to-refresh indicator (v2.78.0). Below the list, because the
+          gesture is a pull UP from the bottom — an indicator at the top would
+          be pointing at the wrong end of the wave. */}
+      {isMobile && (pullDistance > 0 || refreshing) && (
+        <div
+          aria-hidden="true"
+          style={{
+            height: refreshing ? 28 : Math.min(pullDistance, 40),
+            flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--accent-green)', fontFamily: 'monospace', fontSize: '0.65rem',
+            letterSpacing: '0.1em', overflow: 'hidden',
+            opacity: refreshing ? 1 : Math.min(pullDistance / 60, 1),
+          }}
+        >
+          {refreshing ? '⟳ REFRESHING…' : (pullDistance >= 60 ? '↻ RELEASE TO REFRESH' : '↑ PULL UP TO REFRESH')}
+        </div>
+      )}
 
       {/* Typing Indicator */}
       {typingUsers && Object.keys(typingUsers).length > 0 && (

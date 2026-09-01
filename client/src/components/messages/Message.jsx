@@ -169,7 +169,8 @@ const Message = ({
   // destination, and a swipe would hijack that.
   const gesturesEnabled = isTouchDevice && !isDeleted && !moveSource;
 
-  const swipe = useSwipeActions({
+  const swipeRowRef = useRef(null);
+  const swipe = useSwipeActions(swipeRowRef, {
     enabled: gesturesEnabled,
     onSwipeRight: onReply ? () => onReply(message) : null,
     onSwipeLeft: onTogglePin ? () => onTogglePin(message) : null,
@@ -251,14 +252,14 @@ const Message = ({
         }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        ref={swipeRowRef}
         {...(gesturesEnabled ? {
-          onTouchStart: (e) => { swipe.handlers.onTouchStart(e); longPress.onTouchStart(e); },
-          onTouchMove: (e) => { swipe.handlers.onTouchMove(e); longPress.onTouchMove(e); },
-          onTouchEnd: (e) => { swipe.handlers.onTouchEnd(e); longPress.onTouchEnd(e); },
-          onTouchCancel: (e) => { swipe.handlers.onTouchCancel(e); longPress.onTouchCancel(e); },
+          onTouchStart: longPress.onTouchStart,
+          onTouchMove: longPress.onTouchMove,
+          onTouchEnd: longPress.onTouchEnd,
+          onTouchCancel: longPress.onTouchCancel,
         } : {})}
         style={{
-          ...(gesturesEnabled ? swipe.style : {}),
           transform: swipe.offset ? `translateX(${swipe.offset}px)` : undefined,
           transition: swipe.settling ? 'transform 180ms ease-out' : undefined,
           position: 'relative',
@@ -688,6 +689,10 @@ const Message = ({
               {showReactionPicker && (
                 <div
                   onClick={(e) => e.stopPropagation()}
+                  // Explicit opt-out as well as the scroll detection: scrolling
+                  // this row sideways to reach an emoji must never be read as a
+                  // swipe on the ping underneath it (v2.78.0).
+                  data-no-swipe=""
                   style={{
                     position: 'absolute', bottom: '100%', right: 0, marginBottom: '4px', zIndex: 30,
                     background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
