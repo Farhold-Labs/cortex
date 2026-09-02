@@ -1081,7 +1081,7 @@ CREATE TABLE IF NOT EXISTS instance_config (
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
-        , security TEXT NOT NULL DEFAULT '{}');
+        , security TEXT NOT NULL DEFAULT '{}', locale TEXT NOT NULL DEFAULT '{}');
 
 CREATE TABLE IF NOT EXISTS user_invitations (
           id         TEXT PRIMARY KEY,

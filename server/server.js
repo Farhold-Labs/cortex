@@ -10584,6 +10584,10 @@ app.get('/api/admin/instance-config', authenticateToken, (req, res) => {
       // admin can see what applies before overriding anything (v2.75.0).
       securityDefaults: SECURITY_POLICY_DEFAULTS,
       securityBounds: SECURITY_POLICY_BOUNDS,
+      // What event times are currently interpreted in, so an admin can see the
+      // effective value before overriding it (v2.79.0).
+      effectiveTimezone: db.getInstanceTimezone ? db.getInstanceTimezone() : null,
+      serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
   } catch (error) {
     console.error('Failed to read instance config:', error);
@@ -10597,7 +10601,7 @@ app.put('/api/admin/instance-config', authenticateToken, requireStepUp, (req, re
   const admin = db.findUserById(req.user.userId);
   if (!requireRole(admin, ROLES.ADMIN, res)) return;
 
-  const { defaults, notificationDefaults, features, branding, security } = req.body || {};
+  const { defaults, notificationDefaults, features, branding, security, locale } = req.body || {};
   const patch = {};
 
   // Whitelist every incoming key — never trust the client to stay inside the schema
@@ -10694,6 +10698,28 @@ app.put('/api/admin/instance-config', authenticateToken, requireStepUp, (req, re
       }
       const b = SECURITY_POLICY_BOUNDS[key];
       patch.security[key] = b ? Math.min(b.max, Math.max(b.min, Math.round(n))) : Math.round(n);
+    }
+  }
+
+  // Instance locale (v2.79.0). The timezone is validated by asking Intl to use
+  // it — an unknown zone throws, and storing one would silently break every
+  // reminder time on the instance.
+  if (locale && typeof locale === 'object') {
+    patch.locale = {};
+    if ('timezone' in locale) {
+      const tz = locale.timezone;
+      if (tz === null || tz === '') {
+        patch.locale.timezone = null;
+      } else if (typeof tz !== 'string') {
+        return res.status(400).json({ error: "Invalid type for 'timezone': expected string" });
+      } else {
+        try {
+          new Intl.DateTimeFormat('en-US', { timeZone: tz });
+        } catch {
+          return res.status(400).json({ error: `Unknown timezone '${tz}' — use an IANA name such as America/New_York` });
+        }
+        patch.locale.timezone = tz;
+      }
     }
   }
 
