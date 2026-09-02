@@ -106,6 +106,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
   const [saving, setSaving] = useState(false);
   const [branding, setBranding] = useState({});
   const [security, setSecurity] = useState({});
+  const [timezone, setTimezone] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -115,6 +116,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
       setCodeDefaults(data.codeDefaults || {});
       setBranding(data.branding || {});
       setSecurity(data.security || {});
+      setTimezone((data.locale && data.locale.timezone) || '');
     } catch (err) {
       showToast(err.message || 'Failed to load instance configuration', 'error');
     } finally {
@@ -397,6 +399,40 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
               style={{ ...pillStyle(true, 'var(--accent-purple)'), padding: '8px 20px' }}
             >
               {saving ? 'SAVING…' : 'SAVE BRANDING'}
+            </button>
+          </div>
+
+          {/* ▸ TIMEZONE (v2.79.0) */}
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
+            <div style={{ color: 'var(--accent-teal)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ TIMEZONE</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '10px', lineHeight: 1.5 }}>
+              Event times are stored without a timezone — "6:00 PM" means six in the evening where the
+              event happens. This is the zone they are interpreted in when working out <em>when</em> that is,
+              which drives reminder emails and crawl-bar alerts. If your server's clock is UTC but your
+              people are not, leaving this unset sends reminders hours early.
+            </div>
+            <input
+              type="text"
+              value={timezone}
+              placeholder={config.effectiveTimezone || 'America/New_York'}
+              onChange={(e) => setTimezone(e.target.value)}
+              style={{
+                width: '100%', maxWidth: 320, padding: '7px 9px', background: 'var(--bg-surface)',
+                border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
+                fontFamily: 'monospace', fontSize: '0.8rem',
+              }}
+            />
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', margin: '6px 0 12px', lineHeight: 1.5 }}>
+              IANA name, e.g. <code>America/New_York</code>. Currently using <strong>{config.effectiveTimezone || 'unknown'}</strong>
+              {config.serverTimezone && config.serverTimezone !== config.effectiveTimezone
+                ? <> (this server's own clock is <code>{config.serverTimezone}</code>)</> : null}. Leave blank to follow the server.
+            </div>
+            <button
+              disabled={saving}
+              onClick={() => save({ locale: { timezone: timezone.trim() || null } }, 'Timezone saved')}
+              style={{ ...pillStyle(true, 'var(--accent-teal)'), padding: '8px 20px' }}
+            >
+              {saving ? 'SAVING…' : 'SAVE TIMEZONE'}
             </button>
           </div>
 

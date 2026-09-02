@@ -31,13 +31,66 @@ const EMAIL_ENCRYPTION_KEY = process.env.EMAIL_ENCRYPTION_KEY || null;
  * @param {string} email - Email address
  * @returns {string|null} SHA-256 hash (hex)
  */
-// YYYY-MM-DD in the server's own timezone (toISOString would give UTC).
+// ============ Instance timezone (v2.79.0) ============
+//
+// Events are stored as a plain date + a plain time with **no zone** — "6:00 PM"
+// means six in the evening where the event happens. Turning that into an actual
+// instant needs a timezone, and the code used to take the *server's*.
+//
+// Both production droplets run UTC, so a 6:00 PM Eastern rehearsal was read as
+// 6:00 PM UTC — 2:00 PM Eastern — and every reminder fired four hours early.
+// The "in 1 hour" email arrived at 1:04 PM for a 6:00 PM event. It was invisible
+// in development because the dev box runs America/New_York, where server time
+// and user time happen to agree.
+//
+// The instance therefore states its own timezone, and naive event times are
+// interpreted in it. Unset, it falls back to the environment and then the
+// system zone, which is exactly the old behaviour.
+let cachedTimezone;
+function setInstanceTimezone(tz) { cachedTimezone = tz || null; }
+function instanceTimezone() {
+  return cachedTimezone
+    || process.env.INSTANCE_TIMEZONE
+    || Intl.DateTimeFormat().resolvedOptions().timeZone
+    || 'UTC';
+}
+
+// How far `tz` is from UTC at a given instant, in ms. DST-aware because it asks
+// the zone what the wall clock actually reads then.
+function zoneOffsetMs(utcMs, tz) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(utcMs));
+  const p = Object.fromEntries(parts.map(x => [x.type, x.value]));
+  const asIfUTC = Date.UTC(+p.year, +p.month - 1, +p.day, (+p.hour) % 24, +p.minute, +p.second);
+  return asIfUTC - utcMs;
+}
+
+// Wall-clock date+time in `tz` → absolute ms.
+function zonedToMs(dateStr, timeStr, tz) {
+  const [y, mo, d] = String(dateStr).split('-').map(Number);
+  const [h, mi] = String(timeStr).split(':').map(Number);
+  if (!y || !mo || !d || Number.isNaN(h) || Number.isNaN(mi)) return null;
+  const guess = Date.UTC(y, mo - 1, d, h, mi, 0);
+  // Two passes: the first offset is sampled at the wrong instant, which only
+  // matters within an hour of a DST change — the second pass settles it.
+  let ms = guess - zoneOffsetMs(guess, tz);
+  ms = guess - zoneOffsetMs(ms, tz);
+  return ms;
+}
+
+// YYYY-MM-DD as it reads in the instance's timezone. Previously the server's
+// own zone, so on a UTC box "today" rolled over at 8pm Eastern and evening
+// events fell off the day they belonged to.
 function localDateString(d = new Date()) {
-  return [
-    d.getFullYear(),
-    String(d.getMonth() + 1).padStart(2, '0'),
-    String(d.getDate()).padStart(2, '0'),
-  ].join('-');
+  const tz = instanceTimezone();
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .formatToParts(d).map(x => [x.type, x.value])
+  );
+  return `${p.year}-${p.month}-${p.day}`;
 }
 
 // Expand recurring events into their occurrences within [from, to].
@@ -2486,6 +2539,16 @@ export class DatabaseSQLite {
       console.log('📝 Adding instance_config.security (v2.75.0)...');
       this.db.exec(`ALTER TABLE instance_config ADD COLUMN security TEXT NOT NULL DEFAULT '{}';`);
       console.log('✅ instance_config.security added');
+    }
+
+    // v2.79.0 — instance locale. Holds the timezone that naive event times are
+    // interpreted in; see the note on instanceTimezone(). Its own namespace
+    // because it is a property of the instance, not a user preference default.
+    const instColsV279 = this.db.prepare(`PRAGMA table_info(instance_config)`).all();
+    if (instColsV279.length > 0 && !instColsV279.some(c => c.name === 'locale')) {
+      console.log('📝 Adding instance_config.locale (v2.79.0)...');
+      this.db.exec(`ALTER TABLE instance_config ADD COLUMN locale TEXT NOT NULL DEFAULT '{}';`);
+      console.log('✅ instance_config.locale added');
     }
 
     // v2.70.0 — Reminder bookkeeping for guest RSVPs. Cannot reuse
@@ -8541,6 +8604,9 @@ export class DatabaseSQLite {
       }
     };
 
+    const localeNs = parse(config.locale);
+    if (localeNs.timezone) setInstanceTimezone(localeNs.timezone);
+
     return {
       defaults: parse(config.defaults),
       notificationDefaults: parse(config.notification_defaults),
@@ -8550,6 +8616,8 @@ export class DatabaseSQLite {
       // Deliberately its own namespace: never resolved through the per-user
       // preference layer the way `defaults` is.
       security: parse(config.security),
+      // Instance locale (v2.79.0) — currently just `timezone`.
+      locale: localeNs,
       createdAt: config.created_at,
       updatedAt: config.updated_at,
       updatedBy: config.updated_by || null,
@@ -8562,7 +8630,7 @@ export class DatabaseSQLite {
     const current = this.getInstanceConfig();
     const merged = {};
 
-    for (const ns of ['defaults', 'notificationDefaults', 'features', 'branding', 'security']) {
+    for (const ns of ['defaults', 'notificationDefaults', 'features', 'branding', 'security', 'locale']) {
       if (patch[ns] === undefined) {
         merged[ns] = current[ns];
         continue;
@@ -8577,7 +8645,7 @@ export class DatabaseSQLite {
 
     this.db.prepare(`
       UPDATE instance_config
-      SET defaults = ?, notification_defaults = ?, features = ?, branding = ?, security = ?, updated_at = ?, updated_by = ?
+      SET defaults = ?, notification_defaults = ?, features = ?, branding = ?, security = ?, locale = ?, updated_at = ?, updated_by = ?
       WHERE id = 1
     `).run(
       JSON.stringify(merged.defaults),
@@ -8585,10 +8653,14 @@ export class DatabaseSQLite {
       JSON.stringify(merged.features),
       JSON.stringify(merged.branding),
       JSON.stringify(merged.security),
+      JSON.stringify(merged.locale),
       new Date().toISOString(),
       updatedBy
     );
 
+    // Keep the cached timezone in step, or reminders would keep using the old
+    // zone until the process restarted.
+    setInstanceTimezone(merged.locale?.timezone);
     return this.getInstanceConfig();
   }
 
@@ -12016,10 +12088,16 @@ export class DatabaseSQLite {
     return result;
   }
 
+  // The timezone naive event times are currently interpreted in.
+  getInstanceTimezone() { return instanceTimezone(); }
+
   eventToMs(ev) {
     if (!ev.eventDate || !ev.eventTime) return null;
-    const ms = new Date(`${ev.eventDate}T${ev.eventTime}:00`).getTime();
-    return isNaN(ms) ? null : ms;
+    // Interpreted in the INSTANCE's timezone, not the server's — see the note
+    // on instanceTimezone(). `new Date('...T18:00:00')` uses the server's zone,
+    // which is what fired every reminder four hours early on the UTC droplets.
+    const ms = zonedToMs(ev.eventDate, ev.eventTime, instanceTimezone());
+    return (ms === null || isNaN(ms)) ? null : ms;
   }
 
   getEventParticipants(event) {
