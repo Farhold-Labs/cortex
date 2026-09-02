@@ -5,6 +5,26 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.79.0] - 2026-09-02
+
+### Fixed
+
+- **Event reminders fired hours early on any server whose clock is not the users' own.** Reported on the PMP node: emails saying "in 1 hour" arrived at 1pm and 2pm Eastern for evening rehearsals.
+  - Events are stored as a plain date and a plain time with **no timezone** — "6:00 PM" means six in the evening where the event happens. Turning that into an actual instant requires a timezone, and `eventToMs` used `new Date('2026-09-02T18:00:00')`, which JavaScript interprets in the **server's** zone. Both production droplets run UTC, so a 6:00 PM Eastern rehearsal was read as 6:00 PM UTC — 2:00 PM Eastern — and every reminder fired exactly four hours early.
+  - The two emails were not duplicates and the de-duplication was working correctly. They were two different rehearsals (6pm and 7pm), each getting its single, correct "1 hour" reminder four hours too soon. Confirmed against the sent-reminder log: `17:04Z 1hour → 18:00 event` and `18:04Z 1hour → 19:00 event`.
+  - It was invisible in development because the dev box runs `America/New_York`, where server time and user time happen to agree.
+- **"Today" rolled over at the wrong moment for the same reason.** `localDateString` used the server's zone, so on a UTC box the day changed at 8pm Eastern and evening events fell off the day they belonged to — affecting crawl-bar alerts and upcoming-event queries.
+
+### Added
+
+- **An instance timezone setting**, under INSTANCE DEFAULTS → TIMEZONE. Naive event times are interpreted in it. It accepts an IANA name, validated by asking `Intl` to use it, so an unknown zone is rejected rather than silently breaking every reminder on the instance. The panel shows the effective zone and the server's own clock alongside it, since the two differing is precisely the condition that caused this.
+  - Unset, it falls back to `INSTANCE_TIMEZONE` and then the system zone — exactly the previous behaviour, so nothing changes for an instance whose server clock already matches its people.
+  - Conversion is DST-aware: the zone's offset is sampled at the instant in question, with a second pass so times within an hour of a DST change resolve correctly.
+
+### Not changed
+
+`.ics` downloads and "Add to Google Calendar" links emit **floating** local times (`DTSTART:20260902T180000`, no `Z`), which calendar applications render in the viewer's own zone. A 6:00 PM event therefore shows as 6:00 PM. That was already right and was deliberately left alone.
+
 ## [2.78.1] - 2026-09-01
 
 ### Fixed
