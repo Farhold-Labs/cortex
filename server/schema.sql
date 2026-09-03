@@ -697,7 +697,7 @@ CREATE TABLE IF NOT EXISTS crawl_config (
     news_enabled INTEGER DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-);
+, provider_keys_blob TEXT, provider_keys_iv TEXT);
 
 CREATE TABLE IF NOT EXISTS crawl_cache (
     id TEXT PRIMARY KEY,

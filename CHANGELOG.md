@@ -5,6 +5,27 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.80.0] - 2026-09-03
+
+### Added
+
+- **The crawl bar is now configured from the admin panel instead of `.env`.** RSS feeds, provider API keys, stock symbols, weather location, refresh intervals and per-section toggles all live in the database and are edited under ADMIN → CRAWL BAR CONFIG. No shell access, no restart.
+  - **API keys are encrypted at rest** with AES-256-GCM, the same posture already used for emails, wave participation and push subscriptions — a database backup must not hand over billable third-party credentials. Requires `CRAWL_SECRET_KEY` (`openssl rand -hex 32`).
+  - **Without that key the server refuses to store API keys at all** and keeps reading them from `.env`. Writing secrets in plaintext would silently remove the property the encryption exists to provide, so it declines instead of degrading, and says so at startup and in the panel.
+  - **Keys never leave the server.** The panel receives only a masked hint (`••••95d8`), whether each key is set, and whether it comes from the database or is still being read from `.env` — the last one matters, because otherwise an admin cannot tell whether editing the field will change anything.
+  - Key inputs are write-only: blank means "leave this one alone", never "clear it". Clearing is a separate explicit action. Updates are merged, so saving one key cannot wipe the others.
+  - Settings resolve per request rather than at import, so an edit takes effect on the next fetch instead of the next restart.
+
+### Fixed
+
+- **RSS feeds configured in the admin panel did nothing.** `crawl_config.news_sources` was written by the admin API and read back by it, but `fetchNewsFromRSS()` only ever looked at the `NEWS_RSS_FEEDS` environment variable. Feeds "configured" through the API were silently ignored — a setting that existed, appeared to save, and had no effect. The fetcher now reads the stored sources, falling back to the environment variable.
+
+### Migration
+
+On first start after upgrading, existing `NEWS_RSS_FEEDS` and provider keys are copied into the database once and used from then on; the `.env` values become inert. Nothing goes dark on deploy. If `CRAWL_SECRET_KEY` is absent, feeds still migrate, keys are left in `.env`, and the startup log says exactly that rather than claiming a migration that did not happen.
+
+Adds `crawl_config.provider_keys_blob` / `provider_keys_iv`.
+
 ## [2.79.0] - 2026-09-02
 
 ### Fixed
