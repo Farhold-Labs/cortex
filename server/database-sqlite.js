@@ -18,6 +18,7 @@ import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import sanitizeHtml from 'sanitize-html';
 import crypto from 'crypto';
+import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2549,6 +2550,18 @@ export class DatabaseSQLite {
       console.log('📝 Adding instance_config.locale (v2.79.0)...');
       this.db.exec(`ALTER TABLE instance_config ADD COLUMN locale TEXT NOT NULL DEFAULT '{}';`);
       console.log('✅ instance_config.locale added');
+    }
+
+    // v2.80.0 — crawl provider API keys move out of .env and into the database
+    // so an admin can configure the crawl bar without shell access. Encrypted
+    // at rest: these are billable third-party credentials and a database backup
+    // must not hand them over.
+    const crawlCols = this.db.prepare(`PRAGMA table_info(crawl_config)`).all();
+    if (crawlCols.length > 0 && !crawlCols.some(c => c.name === 'provider_keys_blob')) {
+      console.log('📝 Adding crawl_config provider key storage (v2.80.0)...');
+      this.db.exec(`ALTER TABLE crawl_config ADD COLUMN provider_keys_blob TEXT;`);
+      this.db.exec(`ALTER TABLE crawl_config ADD COLUMN provider_keys_iv TEXT;`);
+      console.log('✅ crawl_config provider key storage added');
     }
 
     // v2.70.0 — Reminder bookkeeping for guest RSVPs. Cannot reuse
@@ -8798,6 +8811,9 @@ export class DatabaseSQLite {
 
     return {
       stockSymbols: JSON.parse(config.stock_symbols || '[]'),
+      // Decrypted only in memory; never returned to a browser (see the admin
+      // route, which masks them).
+      providerKeys: crawlSecrets.decryptSecrets(config.provider_keys_blob, config.provider_keys_iv) || {},
       newsSources: JSON.parse(config.news_sources || '[]'),
       defaultLocation: JSON.parse(config.default_location || '{}'),
       stockRefreshInterval: config.stock_refresh_interval,
@@ -8809,6 +8825,57 @@ export class DatabaseSQLite {
       createdAt: config.created_at,
       updatedAt: config.updated_at,
     };
+  }
+
+  // One-time migration of crawl settings out of .env (v2.80.0). Runs when the
+  // database has no provider keys yet, so an upgrade keeps working with the
+  // operator's existing configuration and .env quietly becomes inert. Never
+  // overwrites anything already set in the database.
+  seedCrawlConfigFromEnv() {
+    const row = this.db.prepare('SELECT provider_keys_blob, news_sources FROM crawl_config WHERE id = 1').get();
+    if (!row) return null;
+    if (row.provider_keys_blob) return null;   // already migrated
+
+    const envKeys = {
+      finnhub: process.env.FINNHUB_API_KEY,
+      openweathermap: process.env.OPENWEATHERMAP_API_KEY,
+      weatherapi: process.env.WEATHERAPI_KEY,
+      tomorrowio: process.env.TOMORROWIO_API_KEY,
+      newsapi: process.env.NEWSAPI_KEY,
+      gnews: process.env.GNEWS_API_KEY,
+      mediastack: process.env.MEDIASTACK_API_KEY,
+      ipinfo: process.env.IPINFO_TOKEN,
+    };
+    const present = Object.fromEntries(Object.entries(envKeys).filter(([, v]) => v));
+
+    // RSS feeds were env-only and the stored news_sources was never read, so a
+    // fresh instance can have feeds configured that do nothing. Carry them over.
+    let feeds = [];
+    try { feeds = JSON.parse(row.news_sources || '[]'); } catch { feeds = []; }
+    const envFeeds = (process.env.NEWS_RSS_FEEDS || '')
+      .split(',').map(x => x.trim()).filter(Boolean)
+      .map(url => ({ type: 'rss', url, name: (() => { try { return new URL(url).hostname; } catch { return url; } })() }));
+    const haveUrls = new Set(feeds.map(f => f && f.url));
+    const addedFeeds = envFeeds.filter(f => !haveUrls.has(f.url));
+
+    // Without CRAWL_SECRET_KEY nothing can be stored, so do not pretend to have
+    // migrated the keys — the first cut logged "migrated 2 API keys" while
+    // writing none of them, and repeated it on every restart because the guard
+    // above never became true.
+    const canStoreKeys = crawlSecrets.isEnabled();
+    const keysToStore = canStoreKeys ? present : {};
+    const pendingInEnv = canStoreKeys ? [] : Object.keys(present);
+
+    if (Object.keys(keysToStore).length === 0 && addedFeeds.length === 0) {
+      return pendingInEnv.length ? { keys: [], feeds: 0, pendingInEnv } : null;
+    }
+
+    const updates = {};
+    if (addedFeeds.length) updates.newsSources = [...feeds, ...addedFeeds];
+    if (Object.keys(keysToStore).length) updates.providerKeys = keysToStore;
+    this.updateCrawlConfig(updates);
+
+    return { keys: Object.keys(keysToStore), feeds: addedFeeds.length, pendingInEnv };
   }
 
   updateCrawlConfig(updates) {
@@ -8826,6 +8893,26 @@ export class DatabaseSQLite {
       weatherEnabled: updates.weatherEnabled !== undefined ? updates.weatherEnabled : config.weatherEnabled,
       newsEnabled: updates.newsEnabled !== undefined ? updates.newsEnabled : config.newsEnabled,
     };
+
+    // Provider keys are merged, not replaced: the admin form only ever sends
+    // the fields that were edited, because it never receives the real values
+    // back to send again. An empty string clears one.
+    let keyCols = null;
+    if (updates.providerKeys !== undefined) {
+      const merged = { ...config.providerKeys };
+      for (const [name, value] of Object.entries(updates.providerKeys || {})) {
+        if (value === null || value === '') delete merged[name];
+        else merged[name] = String(value).trim();
+      }
+      const enc = crawlSecrets.encryptSecrets(merged);
+      // Without CRAWL_SECRET_KEY we refuse rather than writing plaintext.
+      if (enc) keyCols = enc;
+    }
+
+    if (keyCols) {
+      this.db.prepare('UPDATE crawl_config SET provider_keys_blob = ?, provider_keys_iv = ? WHERE id = 1')
+        .run(keyCols.blob, keyCols.iv);
+    }
 
     this.db.prepare(`
       UPDATE crawl_config SET

@@ -19,6 +19,13 @@ versions/
 .env
 .env.local
 .env.production
+# Any .env variant, anywhere — a stray `.env.bak-*` copy was staged once while
+# working on v2.80.0 and contained 26 live secrets. Catch the whole family.
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
 
 # Build outputs
 client/dist/
