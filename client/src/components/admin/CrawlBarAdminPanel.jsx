@@ -8,6 +8,12 @@ const CrawlBarAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle })
   const [saving, setSaving] = useState(false);
   const [stockSymbols, setStockSymbols] = useState('');
   const [defaultLocation, setDefaultLocation] = useState('');
+  // Feeds and keys became editable here in v2.80.0. Key inputs start empty and
+  // are write-only: the server never sends the real values back, so an empty
+  // box means "leave this one alone", not "clear it".
+  const [feeds, setFeeds] = useState([]);
+  const [newFeed, setNewFeed] = useState('');
+  const [keyDrafts, setKeyDrafts] = useState({});
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -16,6 +22,8 @@ const CrawlBarAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle })
       setConfig(data.config);
       setStockSymbols((data.config?.stock_symbols || []).join(', '));
       setDefaultLocation(data.config?.default_location?.name || '');
+      setFeeds(data.config?.news_sources || []);
+      setKeyDrafts({});
     } catch (err) {
       if (!err.message?.includes('401')) {
         showToast(err.message || formatError('Failed to load crawl config'), 'error');
@@ -311,26 +319,133 @@ const CrawlBarAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle })
                 </div>
               </div>
 
-              {/* API Key Status */}
+              {/* ===== NEWS FEEDS (v2.80.0) ===== */}
               <div style={{ padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', marginTop: '12px' }}>
-                <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>API KEY STATUS</div>
-                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '0.75rem' }}>
-                  <span style={{ color: config?.apiKeys?.finnhub ? 'var(--accent-green)' : 'var(--text-muted)' }}>
-                    {config?.apiKeys?.finnhub ? '✓' : '✗'} Finnhub
-                  </span>
-                  <span style={{ color: config?.apiKeys?.openweathermap ? 'var(--accent-green)' : 'var(--text-muted)' }}>
-                    {config?.apiKeys?.openweathermap ? '✓' : '✗'} OpenWeather
-                  </span>
-                  <span style={{ color: config?.apiKeys?.newsapi ? 'var(--accent-green)' : 'var(--text-muted)' }}>
-                    {config?.apiKeys?.newsapi ? '✓' : '✗'} NewsAPI
-                  </span>
-                  <span style={{ color: config?.apiKeys?.gnews ? 'var(--accent-green)' : 'var(--text-muted)' }}>
-                    {config?.apiKeys?.gnews ? '✓' : '✗'} GNews
-                  </span>
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '4px' }}>NEWS FEEDS (RSS)</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginBottom: '10px', lineHeight: 1.5 }}>
+                  Headlines shown in the crawl bar. Before v2.80.0 these lived in <code>NEWS_RSS_FEEDS</code> and
+                  anything set here was silently ignored; they are now what the server actually fetches.
                 </div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '8px' }}>
-                  Configure API keys in server/.env file
+
+                {feeds.length === 0 && (
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '8px' }}>No feeds configured.</div>
+                )}
+                {feeds.map((f, i) => (
+                  <div key={f.url + i} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '5px' }}>
+                    <span style={{ flex: 1, minWidth: 0, color: 'var(--text-secondary)', fontSize: '0.72rem',
+                                   fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {f.name ? `${f.name} — ` : ''}{f.url}
+                    </span>
+                    <button
+                      disabled={saving}
+                      onClick={() => {
+                        const next = feeds.filter((_, j) => j !== i);
+                        setFeeds(next);
+                        handleSave({ news_sources: next });
+                      }}
+                      style={{ background: 'none', border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)',
+                               cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.65rem', padding: '3px 8px' }}
+                    >REMOVE</button>
+                  </div>
+                ))}
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                  <input
+                    type="url"
+                    value={newFeed}
+                    placeholder="https://example.com/feed.xml"
+                    onChange={(e) => setNewFeed(e.target.value)}
+                    style={{ flex: 1, minWidth: 0, padding: '6px 8px', background: 'var(--bg-surface)',
+                             border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
+                             fontFamily: 'monospace', fontSize: '0.75rem' }}
+                  />
+                  <button
+                    disabled={saving || !newFeed.trim()}
+                    onClick={() => {
+                      const url = newFeed.trim();
+                      let name = url;
+                      try { name = new URL(url).hostname; } catch { /* keep the raw string */ }
+                      const next = [...feeds, { type: 'rss', url, name }];
+                      setFeeds(next);
+                      setNewFeed('');
+                      handleSave({ news_sources: next });
+                    }}
+                    style={{ background: 'var(--accent-green)20', border: '1px solid var(--accent-green)',
+                             color: 'var(--accent-green)', cursor: 'pointer', fontFamily: 'monospace',
+                             fontSize: '0.7rem', padding: '6px 14px' }}
+                  >ADD</button>
                 </div>
+              </div>
+
+              {/* ===== PROVIDER API KEYS (v2.80.0) ===== */}
+              <div style={{ padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', marginTop: '12px' }}>
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '4px' }}>PROVIDER API KEYS</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginBottom: '10px', lineHeight: 1.5 }}>
+                  Stored encrypted in the database. The server never sends a key back, so these boxes stay
+                  empty — type to replace one, leave blank to keep it as it is.
+                </div>
+
+                {config?.secretStorage && !config.secretStorage.available && (
+                  <div style={{ padding: '8px 10px', marginBottom: '10px', border: '1px solid var(--accent-orange)',
+                                color: 'var(--accent-orange)', fontSize: '0.68rem', lineHeight: 1.5 }}>
+                    ⚠️ {config.secretStorage.reason} Until then keys are read from <code>.env</code> and cannot be edited here.
+                  </div>
+                )}
+
+                {(config?.providers || []).map(p => (
+                  <div key={p.name} style={{ marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '3px' }}>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem', minWidth: 118 }}>{p.name}</span>
+                      <span style={{ fontSize: '0.65rem', color: p.configured ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                        {p.configured ? `set ${p.hint}` : 'not set'}
+                      </span>
+                      {p.source === 'env' && (
+                        <span style={{ fontSize: '0.62rem', color: 'var(--accent-amber)' }}>
+                          from {p.envVar} — saving here takes over
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        value={keyDrafts[p.name] ?? ''}
+                        placeholder={p.configured ? 'unchanged' : 'paste key'}
+                        disabled={config?.secretStorage && !config.secretStorage.available}
+                        onChange={(e) => setKeyDrafts(d => ({ ...d, [p.name]: e.target.value }))}
+                        style={{ flex: 1, minWidth: 0, padding: '5px 8px', background: 'var(--bg-surface)',
+                                 border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
+                                 fontFamily: 'monospace', fontSize: '0.72rem' }}
+                      />
+                      {p.configured && p.source === 'database' && (
+                        <button
+                          disabled={saving}
+                          onClick={() => handleSave({ providerKeys: { [p.name]: null } }).then(loadConfig)}
+                          style={{ background: 'none', border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)',
+                                   cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.62rem', padding: '3px 8px' }}
+                        >CLEAR</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                <button
+                  disabled={saving || Object.values(keyDrafts).every(v => !v || !v.trim())}
+                  onClick={async () => {
+                    // Only send what was actually typed — anything else would
+                    // overwrite a stored key with an empty string.
+                    const payload = {};
+                    for (const [name, v] of Object.entries(keyDrafts)) {
+                      if (v && v.trim()) payload[name] = v.trim();
+                    }
+                    await handleSave({ providerKeys: payload });
+                    setKeyDrafts({});
+                    loadConfig();
+                  }}
+                  style={{ marginTop: '6px', background: 'var(--accent-green)20', border: '1px solid var(--accent-green)',
+                           color: 'var(--accent-green)', cursor: 'pointer', fontFamily: 'monospace',
+                           fontSize: '0.7rem', padding: '7px 16px' }}
+                >{saving ? 'SAVING…' : 'SAVE KEYS'}</button>
               </div>
             </>
           )}

@@ -26,6 +26,7 @@ import { getEmailService } from './email-service.js';
 import { storage } from './storage.js';
 import * as waveParticipationCrypto from './lib/wave-participation-crypto.js';
 import * as pushSubscriptionCrypto from './lib/push-subscription-crypto.js';
+import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import { getCurrentHoliday } from './holidays.js';
 import admin from 'firebase-admin';
@@ -302,25 +303,73 @@ const TENOR_API_KEY = process.env.TENOR_API_KEY || null; // legacy — Tenor API
 const KLIPY_API_KEY = process.env.KLIPY_API_KEY || null;
 const GIF_PROVIDER = process.env.GIF_PROVIDER || 'giphy'; // 'giphy', 'klipy', 'tenor', or 'both' (both = giphy + klipy)
 
-// Crawl Bar API configuration (v1.15.0)
-const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || null;
-// Weather providers (tried in order: OpenWeatherMap → WeatherAPI → Tomorrow.io)
-const OPENWEATHERMAP_API_KEY = process.env.OPENWEATHERMAP_API_KEY || null;
-const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY || null;
-const TOMORROWIO_API_KEY = process.env.TOMORROWIO_API_KEY || null;
-// News providers (tried in order, results combined)
-const NEWSAPI_KEY = process.env.NEWSAPI_KEY || null;
-const GNEWS_API_KEY = process.env.GNEWS_API_KEY || null;
-const MEDIASTACK_API_KEY = process.env.MEDIASTACK_API_KEY || null;
-const NEWS_RSS_FEEDS = process.env.NEWS_RSS_FEEDS ? process.env.NEWS_RSS_FEEDS.split(',').map(s => s.trim()).filter(Boolean) : [];
-const IPINFO_TOKEN = process.env.IPINFO_TOKEN || null;
+// Crawl Bar API configuration (v1.15.0; moved to the database in v2.80.0)
+//
+// These used to be module constants read once at boot, which meant every
+// setting lived in .env and changing one required shell access and a restart.
+// They now resolve per call: the database first, the environment second. An
+// admin editing a key in the panel takes effect on the next fetch, and an
+// instance that has not migrated keeps working from .env exactly as before.
+//
+// Deliberately a function rather than constants — a `const` captured at import
+// time cannot see a later edit, which is the whole point of moving them.
+function crawlKey(name) {
+  try {
+    const fromDb = db.getCrawlConfig?.().providerKeys?.[name];
+    if (fromDb) return fromDb;
+  } catch { /* fall through to env */ }
+  const ENV = {
+    finnhub: 'FINNHUB_API_KEY',
+    openweathermap: 'OPENWEATHERMAP_API_KEY',
+    weatherapi: 'WEATHERAPI_KEY',
+    tomorrowio: 'TOMORROWIO_API_KEY',
+    newsapi: 'NEWSAPI_KEY',
+    gnews: 'GNEWS_API_KEY',
+    mediastack: 'MEDIASTACK_API_KEY',
+    ipinfo: 'IPINFO_TOKEN',
+  };
+  return process.env[ENV[name]] || null;
+}
 
-// Log crawl bar configuration status
-if (FINNHUB_API_KEY) console.log('📈 Stock data enabled (Finnhub)');
-const weatherProviders = [OPENWEATHERMAP_API_KEY && 'OpenWeatherMap', WEATHERAPI_KEY && 'WeatherAPI', TOMORROWIO_API_KEY && 'Tomorrow.io'].filter(Boolean);
-if (weatherProviders.length > 0) console.log(`🌤️  Weather data enabled (${weatherProviders.join(', ')})`);
-const newsProviders = [NEWSAPI_KEY && 'NewsAPI', GNEWS_API_KEY && 'GNews', MEDIASTACK_API_KEY && 'MediaStack', NEWS_RSS_FEEDS.length > 0 && `${NEWS_RSS_FEEDS.length} RSS feeds`].filter(Boolean);
-if (newsProviders.length > 0) console.log(`📰 News data enabled (${newsProviders.join(', ')})`);
+// Per-provider status for the admin panel: is a key present, is it masked, and
+// crucially WHERE it comes from — an operator needs to know whether editing the
+// panel will actually change anything or whether .env is still winning.
+const CRAWL_PROVIDERS = ['finnhub', 'openweathermap', 'weatherapi', 'tomorrowio', 'newsapi', 'gnews', 'mediastack', 'ipinfo'];
+const CRAWL_PROVIDER_ENV = {
+  finnhub: 'FINNHUB_API_KEY', openweathermap: 'OPENWEATHERMAP_API_KEY',
+  weatherapi: 'WEATHERAPI_KEY', tomorrowio: 'TOMORROWIO_API_KEY',
+  newsapi: 'NEWSAPI_KEY', gnews: 'GNEWS_API_KEY',
+  mediastack: 'MEDIASTACK_API_KEY', ipinfo: 'IPINFO_TOKEN',
+};
+function crawlProviderStatus() {
+  let stored = {};
+  try { stored = db.getCrawlConfig?.().providerKeys || {}; } catch { stored = {}; }
+  return CRAWL_PROVIDERS.map(name => {
+    const inDb = !!stored[name];
+    const inEnv = !!process.env[CRAWL_PROVIDER_ENV[name]];
+    return {
+      name,
+      configured: inDb || inEnv,
+      source: inDb ? 'database' : (inEnv ? 'env' : null),
+      hint: crawlSecrets.maskSecret(inDb ? stored[name] : process.env[CRAWL_PROVIDER_ENV[name]]),
+      envVar: CRAWL_PROVIDER_ENV[name],
+    };
+  });
+}
+
+// RSS feeds now come from crawl_config.news_sources. Before v2.80.0 that column
+// was written by the admin API and then ignored by the fetcher, which read only
+// NEWS_RSS_FEEDS — so feeds "configured" in the panel did nothing at all.
+function crawlFeeds() {
+  try {
+    const sources = db.getCrawlConfig?.().newsSources || [];
+    const urls = sources
+      .filter(src => src && (src.type === 'rss' || !src.type) && src.url)
+      .map(src => src.url);
+    if (urls.length) return urls;
+  } catch { /* fall through to env */ }
+  return (process.env.NEWS_RSS_FEEDS || '').split(',').map(x => x.trim()).filter(Boolean);
+}
 
 // Web Push (VAPID) configuration
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || null;
@@ -1327,13 +1376,13 @@ function setCrawlCache(type, key, data) {
 
 // Fetch stock quote from Finnhub
 async function fetchStockQuote(symbol) {
-  if (!FINNHUB_API_KEY) return null;
+  if (!crawlKey('finnhub')) return null;
 
   const cached = getCrawlCache('stocks', symbol);
   if (cached) return cached;
 
   try {
-    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_API_KEY}`;
+    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${crawlKey('finnhub')}`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
@@ -1372,7 +1421,7 @@ async function fetchStockQuote(symbol) {
 
 // Geocode location name to coordinates using OpenWeatherMap
 async function geocodeLocation(locationName) {
-  if (!OPENWEATHERMAP_API_KEY || !locationName) return null;
+  if (!crawlKey('openweathermap') || !locationName) return null;
 
   const cacheKey = locationName.toLowerCase().trim();
   const cached = getCrawlCache('geocode', cacheKey);
@@ -1380,7 +1429,7 @@ async function geocodeLocation(locationName) {
 
   try {
     // OpenWeatherMap Geocoding API - supports "City, Country" format
-    const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(locationName)}&limit=1&appid=${OPENWEATHERMAP_API_KEY}`;
+    const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(locationName)}&limit=1&appid=${crawlKey('openweathermap')}`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
@@ -1412,10 +1461,10 @@ async function geocodeLocation(locationName) {
 
 // Fetch weather from OpenWeatherMap
 async function fetchWeatherFromOpenWeatherMap(lat, lon) {
-  if (!OPENWEATHERMAP_API_KEY) return null;
+  if (!crawlKey('openweathermap')) return null;
 
   try {
-    const currentUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=imperial&appid=${OPENWEATHERMAP_API_KEY}`;
+    const currentUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=imperial&appid=${crawlKey('openweathermap')}`;
     const currentResponse = await fetch(currentUrl, {
       signal: AbortSignal.timeout(5000),
     });
@@ -1430,7 +1479,7 @@ async function fetchWeatherFromOpenWeatherMap(lat, lon) {
     // Try to get alerts from One Call API if available (may require subscription)
     let alerts = [];
     try {
-      const alertsUrl = `https://api.openweathermap.org/data/3.0/onecall?lat=${lat}&lon=${lon}&exclude=minutely,hourly,daily&appid=${OPENWEATHERMAP_API_KEY}`;
+      const alertsUrl = `https://api.openweathermap.org/data/3.0/onecall?lat=${lat}&lon=${lon}&exclude=minutely,hourly,daily&appid=${crawlKey('openweathermap')}`;
       const alertsResponse = await fetch(alertsUrl, {
         signal: AbortSignal.timeout(3000),
       });
@@ -1466,10 +1515,10 @@ async function fetchWeatherFromOpenWeatherMap(lat, lon) {
 
 // Fetch weather from WeatherAPI.com
 async function fetchWeatherFromWeatherAPI(lat, lon) {
-  if (!WEATHERAPI_KEY) return null;
+  if (!crawlKey('weatherapi')) return null;
 
   try {
-    const url = `https://api.weatherapi.com/v1/current.json?key=${WEATHERAPI_KEY}&q=${lat},${lon}&aqi=no`;
+    const url = `https://api.weatherapi.com/v1/current.json?key=${crawlKey('weatherapi')}&q=${lat},${lon}&aqi=no`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
@@ -1501,10 +1550,10 @@ async function fetchWeatherFromWeatherAPI(lat, lon) {
 
 // Fetch weather from Tomorrow.io
 async function fetchWeatherFromTomorrowIO(lat, lon) {
-  if (!TOMORROWIO_API_KEY) return null;
+  if (!crawlKey('tomorrowio')) return null;
 
   try {
-    const url = `https://api.tomorrow.io/v4/weather/realtime?location=${lat},${lon}&units=imperial&apikey=${TOMORROWIO_API_KEY}`;
+    const url = `https://api.tomorrow.io/v4/weather/realtime?location=${lat},${lon}&units=imperial&apikey=${crawlKey('tomorrowio')}`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
@@ -1566,10 +1615,10 @@ async function fetchWeather(lat, lon) {
 
 // Fetch news from NewsAPI
 async function fetchNewsFromNewsAPI() {
-  if (!NEWSAPI_KEY) return [];
+  if (!crawlKey('newsapi')) return [];
 
   try {
-    const url = `https://newsapi.org/v2/top-headlines?country=us&apiKey=${NEWSAPI_KEY}`;
+    const url = `https://newsapi.org/v2/top-headlines?country=us&apiKey=${crawlKey('newsapi')}`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
@@ -1592,10 +1641,10 @@ async function fetchNewsFromNewsAPI() {
 
 // Fetch news from GNews
 async function fetchNewsFromGNews() {
-  if (!GNEWS_API_KEY) return [];
+  if (!crawlKey('gnews')) return [];
 
   try {
-    const url = `https://gnews.io/api/v4/top-headlines?category=general&lang=en&country=us&max=10&apikey=${GNEWS_API_KEY}`;
+    const url = `https://gnews.io/api/v4/top-headlines?category=general&lang=en&country=us&max=10&apikey=${crawlKey('gnews')}`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
@@ -1618,10 +1667,10 @@ async function fetchNewsFromGNews() {
 
 // Fetch news from MediaStack
 async function fetchNewsFromMediaStack() {
-  if (!MEDIASTACK_API_KEY) return [];
+  if (!crawlKey('mediastack')) return [];
 
   try {
-    const url = `http://api.mediastack.com/v1/news?access_key=${MEDIASTACK_API_KEY}&languages=en&limit=10`;
+    const url = `http://api.mediastack.com/v1/news?access_key=${crawlKey('mediastack')}&languages=en&limit=10`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
@@ -1644,11 +1693,11 @@ async function fetchNewsFromMediaStack() {
 
 // Fetch news from RSS feeds (simple XML parsing without external deps)
 async function fetchNewsFromRSS() {
-  if (NEWS_RSS_FEEDS.length === 0) return [];
+  if (crawlFeeds().length === 0) return [];
 
   const headlines = [];
 
-  for (const feedUrl of NEWS_RSS_FEEDS.slice(0, 5)) { // Limit to 5 feeds
+  for (const feedUrl of crawlFeeds().slice(0, 5)) { // Limit to 5 feeds
     try {
       const response = await fetch(feedUrl, {
         signal: AbortSignal.timeout(5000),
@@ -4388,6 +4437,38 @@ class Database {
 
 // Initialize database - use SQLite or JSON based on USE_SQLITE environment variable
 const db = USE_SQLITE ? new DatabaseSQLite() : new Database();
+
+// Move crawl settings out of .env and into the database, once (v2.80.0). Only
+// runs when the database has no provider keys yet, so an upgrade inherits the
+// operator's existing configuration and nothing goes dark on deploy.
+try {
+  const seeded = db.seedCrawlConfigFromEnv?.();
+  if (seeded) {
+    const parts = [];
+    if (seeded.keys.length) parts.push(`${seeded.keys.length} API key(s): ${seeded.keys.join(', ')}`);
+    if (seeded.feeds) parts.push(`${seeded.feeds} RSS feed(s)`);
+    if (parts.length) {
+      console.log(`📦 Migrated crawl settings from .env into the database — ${parts.join('; ')}`);
+      console.log('   Now editable under ADMIN → CRAWL BAR; the .env values for these are no longer used.');
+    }
+    // A standing condition, not a migration: keys exist in .env but cannot be
+    // taken over until the operator provides a key to encrypt them with.
+    if (seeded.pendingInEnv?.length) {
+      console.warn(`⚠️  ${seeded.pendingInEnv.length} crawl API key(s) are still read from .env and cannot be managed in the admin panel.`);
+      console.warn('⚠️  Set CRAWL_SECRET_KEY (openssl rand -hex 32) in server/.env to store them encrypted in the database.');
+    }
+  }
+} catch (err) {
+  console.error('Crawl config migration failed (continuing on .env):', err.message);
+}
+
+// Crawl bar status — logged here rather than at import time, because it reads
+// the database and `db` does not exist further up the file.
+if (crawlKey('finnhub')) console.log('📈 Stock data enabled (Finnhub)');
+const weatherProviders = [crawlKey('openweathermap') && 'OpenWeatherMap', crawlKey('weatherapi') && 'WeatherAPI', crawlKey('tomorrowio') && 'Tomorrow.io'].filter(Boolean);
+if (weatherProviders.length > 0) console.log(`🌤️  Weather data enabled (${weatherProviders.join(', ')})`);
+const newsProviders = [crawlKey('newsapi') && 'NewsAPI', crawlKey('gnews') && 'GNews', crawlKey('mediastack') && 'MediaStack', crawlFeeds().length > 0 && `${crawlFeeds().length} RSS feeds`].filter(Boolean);
+if (newsProviders.length > 0) console.log(`📰 News data enabled (${newsProviders.join(', ')})`);
 if (USE_SQLITE) {
   console.log('🗄️  Using SQLite database');
   // Initialize wave participation cache (v2.21.0 - Privacy Hardening)
@@ -10759,14 +10840,22 @@ app.get('/api/admin/crawl/config', authenticateToken, (req, res) => {
       weather_enabled: config.weatherEnabled,
       news_enabled: config.newsEnabled,
       apiKeys: {
-        finnhub: !!FINNHUB_API_KEY,
-        openweathermap: !!OPENWEATHERMAP_API_KEY,
-        weatherapi: !!WEATHERAPI_KEY,
-        tomorrowio: !!TOMORROWIO_API_KEY,
-        newsapi: !!NEWSAPI_KEY,
-        gnews: !!GNEWS_API_KEY,
-        mediastack: !!MEDIASTACK_API_KEY,
-        rss_feeds: NEWS_RSS_FEEDS.length,
+        finnhub: !!crawlKey('finnhub'),
+        openweathermap: !!crawlKey('openweathermap'),
+        weatherapi: !!crawlKey('weatherapi'),
+        tomorrowio: !!crawlKey('tomorrowio'),
+        newsapi: !!crawlKey('newsapi'),
+        gnews: !!crawlKey('gnews'),
+        mediastack: !!crawlKey('mediastack'),
+        rss_feeds: crawlFeeds().length,
+      },
+      // The real values NEVER leave the server. This is enough to recognise a
+      // key and to see whether it is now managed in the database or still
+      // coming from .env — nothing more.
+      providers: crawlProviderStatus(),
+      secretStorage: {
+        available: crawlSecrets.isEnabled(),
+        reason: crawlSecrets.unavailableReason(),
       }
     }
   });
@@ -10787,8 +10876,33 @@ app.put('/api/admin/crawl/config', authenticateToken, async (req, res) => {
     news_refresh_interval, newsRefreshInterval,
     stocks_enabled, stocksEnabled,
     weather_enabled, weatherEnabled,
-    news_enabled, newsEnabled
+    news_enabled, newsEnabled,
+    providerKeys, provider_keys
   } = req.body;
+
+  // Provider API keys (v2.80.0). Refused outright without CRAWL_SECRET_KEY
+  // rather than silently written in plaintext — these are billable credentials
+  // and a database backup must not hand them over.
+  const keysIn = providerKeys || provider_keys;
+  if (keysIn !== undefined) {
+    if (typeof keysIn !== 'object' || keysIn === null || Array.isArray(keysIn)) {
+      return res.status(400).json({ error: 'providerKeys must be an object' });
+    }
+    if (!crawlSecrets.isEnabled()) {
+      return res.status(400).json({ error: crawlSecrets.unavailableReason(), code: 'SECRET_STORAGE_UNAVAILABLE' });
+    }
+    for (const [name, value] of Object.entries(keysIn)) {
+      if (!CRAWL_PROVIDERS.includes(name)) {
+        return res.status(400).json({ error: `Unknown provider '${name}'` });
+      }
+      if (value !== null && typeof value !== 'string') {
+        return res.status(400).json({ error: `Key for '${name}' must be a string, or null to clear it` });
+      }
+      if (typeof value === 'string' && value.length > 500) {
+        return res.status(400).json({ error: `Key for '${name}' is implausibly long` });
+      }
+    }
+  }
 
   // Handle location - geocode if only name provided
   let locationInput = default_location || defaultLocation;
@@ -10813,8 +10927,14 @@ app.put('/api/admin/crawl/config', authenticateToken, async (req, res) => {
     newsRefreshInterval: news_refresh_interval ?? newsRefreshInterval,
     stocksEnabled: stocks_enabled !== undefined ? stocks_enabled : stocksEnabled,
     weatherEnabled: weather_enabled !== undefined ? weather_enabled : weatherEnabled,
-    newsEnabled: news_enabled !== undefined ? news_enabled : newsEnabled
+    newsEnabled: news_enabled !== undefined ? news_enabled : newsEnabled,
+    providerKeys: keysIn,
   });
+
+  if (db.logActivity && keysIn !== undefined) {
+    // Provider names only — never the key values.
+    db.logActivity(admin.id, 'crawl_keys_updated', 'crawl_config', '1', { providers: Object.keys(keysIn) });
+  }
 
   // Return config in snake_case format for client compatibility
   res.json({
@@ -10829,14 +10949,22 @@ app.put('/api/admin/crawl/config', authenticateToken, async (req, res) => {
       weather_enabled: config.weatherEnabled,
       news_enabled: config.newsEnabled,
       apiKeys: {
-        finnhub: !!FINNHUB_API_KEY,
-        openweathermap: !!OPENWEATHERMAP_API_KEY,
-        weatherapi: !!WEATHERAPI_KEY,
-        tomorrowio: !!TOMORROWIO_API_KEY,
-        newsapi: !!NEWSAPI_KEY,
-        gnews: !!GNEWS_API_KEY,
-        mediastack: !!MEDIASTACK_API_KEY,
-        rss_feeds: NEWS_RSS_FEEDS.length,
+        finnhub: !!crawlKey('finnhub'),
+        openweathermap: !!crawlKey('openweathermap'),
+        weatherapi: !!crawlKey('weatherapi'),
+        tomorrowio: !!crawlKey('tomorrowio'),
+        newsapi: !!crawlKey('newsapi'),
+        gnews: !!crawlKey('gnews'),
+        mediastack: !!crawlKey('mediastack'),
+        rss_feeds: crawlFeeds().length,
+      },
+      // The real values NEVER leave the server. This is enough to recognise a
+      // key and to see whether it is now managed in the database or still
+      // coming from .env — nothing more.
+      providers: crawlProviderStatus(),
+      secretStorage: {
+        available: crawlSecrets.isEnabled(),
+        reason: crawlSecrets.unavailableReason(),
       }
     }
   });
@@ -10844,7 +10972,7 @@ app.put('/api/admin/crawl/config', authenticateToken, async (req, res) => {
 
 // Get stock quotes
 app.get('/api/crawl/stocks', authenticateToken, crawlLimiter, async (req, res) => {
-  if (!FINNHUB_API_KEY) {
+  if (!crawlKey('finnhub')) {
     return res.json({
       enabled: false,
       stocks: [],
@@ -10873,7 +11001,7 @@ app.get('/api/crawl/stocks', authenticateToken, crawlLimiter, async (req, res) =
 
 // Get weather data
 app.get('/api/crawl/weather', authenticateToken, crawlLimiter, async (req, res) => {
-  if (!OPENWEATHERMAP_API_KEY && !WEATHERAPI_KEY && !TOMORROWIO_API_KEY) {
+  if (!crawlKey('openweathermap') && !crawlKey('weatherapi') && !crawlKey('tomorrowio')) {
     return res.json({
       enabled: false,
       weather: null,
@@ -10927,7 +11055,7 @@ app.get('/api/crawl/weather', authenticateToken, crawlLimiter, async (req, res) 
 
 // Get news headlines
 app.get('/api/crawl/news', authenticateToken, crawlLimiter, async (req, res) => {
-  if (!NEWSAPI_KEY && !GNEWS_API_KEY && !MEDIASTACK_API_KEY && NEWS_RSS_FEEDS.length === 0) {
+  if (!crawlKey('newsapi') && !crawlKey('gnews') && !crawlKey('mediastack') && crawlFeeds().length === 0) {
     return res.json({
       enabled: false,
       headlines: [],
@@ -10987,7 +11115,7 @@ app.get('/api/crawl/all', authenticateToken, crawlLimiter, async (req, res) => {
   const promises = [];
 
   // Stocks
-  if (FINNHUB_API_KEY && config.stocksEnabled && crawlPrefs.showStocks !== false) {
+  if (crawlKey('finnhub') && config.stocksEnabled && crawlPrefs.showStocks !== false) {
     const symbols = config.stockSymbols || [];
     promises.push(
       Promise.all(symbols.slice(0, 10).map(s => fetchStockQuote(s)))
@@ -11001,7 +11129,7 @@ app.get('/api/crawl/all', authenticateToken, crawlLimiter, async (req, res) => {
   }
 
   // Weather (any provider)
-  const hasWeatherProvider = OPENWEATHERMAP_API_KEY || WEATHERAPI_KEY || TOMORROWIO_API_KEY;
+  const hasWeatherProvider = crawlKey('openweathermap') || crawlKey('weatherapi') || crawlKey('tomorrowio');
   if (hasWeatherProvider && config.weatherEnabled && crawlPrefs.showWeather !== false) {
     promises.push(
       (async () => {
@@ -11041,7 +11169,7 @@ app.get('/api/crawl/all', authenticateToken, crawlLimiter, async (req, res) => {
   }
 
   // News (any provider)
-  const hasNewsProvider = NEWSAPI_KEY || GNEWS_API_KEY || MEDIASTACK_API_KEY || NEWS_RSS_FEEDS.length > 0;
+  const hasNewsProvider = crawlKey('newsapi') || crawlKey('gnews') || crawlKey('mediastack') || crawlFeeds().length > 0;
   if (hasNewsProvider && config.newsEnabled && crawlPrefs.showNews !== false) {
     promises.push(
       fetchNews()
