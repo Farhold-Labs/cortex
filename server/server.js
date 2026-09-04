@@ -360,15 +360,19 @@ function crawlProviderStatus() {
 // RSS feeds now come from crawl_config.news_sources. Before v2.80.0 that column
 // was written by the admin API and then ignored by the fetcher, which read only
 // NEWS_RSS_FEEDS — so feeds "configured" in the panel did nothing at all.
-function crawlFeeds() {
+function crawlFeedSources() {
   try {
-    const sources = db.getCrawlConfig?.().newsSources || [];
-    const urls = sources
-      .filter(src => src && (src.type === 'rss' || !src.type) && src.url)
-      .map(src => src.url);
-    if (urls.length) return urls;
+    const sources = (db.getCrawlConfig?.().newsSources || [])
+      .filter(src => src && (src.type === 'rss' || !src.type) && src.url);
+    if (sources.length) return sources.map(s => ({ url: s.url, name: s.name || null }));
   } catch { /* fall through to env */ }
-  return (process.env.NEWS_RSS_FEEDS || '').split(',').map(x => x.trim()).filter(Boolean);
+  return (process.env.NEWS_RSS_FEEDS || '').split(',').map(x => x.trim()).filter(Boolean)
+    .map(url => ({ url, name: null }));
+}
+
+// Kept for the places that only need the URLs (status logging, counts).
+function crawlFeeds() {
+  return crawlFeedSources().map(s => s.url);
 }
 
 // Web Push (VAPID) configuration
@@ -576,6 +580,16 @@ const refreshLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
   message: { error: 'Too many refresh attempts. Please try again shortly.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Each call makes a real outbound request, so this needs a bound — but it is an
+// admin pressing a button, not a hot path.
+const crawlTestLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 40,
+  message: { error: 'Too many test requests. Please wait a moment.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -1691,54 +1705,78 @@ async function fetchNewsFromMediaStack() {
   return [];
 }
 
-// Fetch news from RSS feeds (simple XML parsing without external deps)
+// Parse an RSS/Atom document (regex-based; no external dependency).
+//
+// Extracted in v2.81.0 so the admin "test feed" button and the real fetch use
+// the same parser. Two copies of a hand-rolled RSS regex would drift, and a
+// test that passes while the fetcher fails is worse than no test.
+function parseRssFeed(xml, { limit = 5 } = {}) {
+  const itemRegex = /<item[^>]*>([\s\S]*?)<\/item>|<entry[^>]*>([\s\S]*?)<\/entry>/gi;
+  const titleRegex = /<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i;
+  const linkRegex = /<link[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>|<link[^>]*href=["']([^"']+)["']/i;
+  const pubDateRegex = /<pubDate[^>]*>([\s\S]*?)<\/pubDate>|<published[^>]*>([\s\S]*?)<\/published>/i;
+
+  // The channel's own title. Deliberately taken from the text BEFORE the first
+  // item: matching the first <title> in the whole document only finds the
+  // channel by luck of ordering, and would otherwise label every headline with
+  // another headline.
+  const firstItemAt = xml.search(/<item[^>]*>|<entry[^>]*>/i);
+  const head = firstItemAt > 0 ? xml.slice(0, firstItemAt) : xml;
+  const feedTitleMatch = head.match(titleRegex);
+  const feedTitle = feedTitleMatch ? feedTitleMatch[1].trim().replace(/<[^>]+>/g, '') : null;
+
+  const items = [];
+  let match;
+  while ((match = itemRegex.exec(xml)) !== null && items.length < limit) {
+    const itemXml = match[1] || match[2];
+    const titleMatch = itemXml.match(titleRegex);
+    if (!titleMatch) continue;
+    const linkMatch = itemXml.match(linkRegex);
+    const pubDateMatch = itemXml.match(pubDateRegex);
+    items.push({
+      title: titleMatch[1].trim().replace(/<[^>]+>/g, ''),
+      url: linkMatch ? (linkMatch[1] || linkMatch[2]).trim() : null,
+      publishedAt: pubDateMatch ? (pubDateMatch[1] || pubDateMatch[2]).trim() : null,
+    });
+  }
+  return { feedTitle, items };
+}
+
+// Fetch news from RSS feeds
 async function fetchNewsFromRSS() {
-  if (crawlFeeds().length === 0) return [];
+  const sources = crawlFeedSources();
+  if (sources.length === 0) return [];
 
   const headlines = [];
 
-  for (const feedUrl of crawlFeeds().slice(0, 5)) { // Limit to 5 feeds
+  for (const src of sources.slice(0, 5)) { // Limit to 5 feeds
     try {
-      const response = await fetch(feedUrl, {
+      const response = await fetch(src.url, {
         signal: AbortSignal.timeout(5000),
         headers: { 'User-Agent': 'Cortex/2.12.0' },
       });
 
       if (!response.ok) continue;
 
-      const xml = await response.text();
+      const { feedTitle, items } = parseRssFeed(await response.text(), { limit: 5 });
 
-      // Simple regex-based RSS parsing (handles most common RSS/Atom formats)
-      const itemRegex = /<item[^>]*>([\s\S]*?)<\/item>|<entry[^>]*>([\s\S]*?)<\/entry>/gi;
-      const titleRegex = /<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i;
-      const linkRegex = /<link[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>|<link[^>]*href=["']([^"']+)["']/i;
-      const pubDateRegex = /<pubDate[^>]*>([\s\S]*?)<\/pubDate>|<published[^>]*>([\s\S]*?)<\/published>/i;
+      // The admin's own label wins. Playbill's feed calls itself "News", which
+      // in a ticker beside another theatre feed reads as if only one source is
+      // contributing — the operator named it "playbill.com" and that is the
+      // useful label.
+      const source = src.name || feedTitle || 'RSS';
 
-      // Get feed title for source name
-      const feedTitleMatch = xml.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
-      const feedTitle = feedTitleMatch ? feedTitleMatch[1].trim() : 'RSS';
-
-      let match;
-      let count = 0;
-      while ((match = itemRegex.exec(xml)) !== null && count < 5) {
-        const itemXml = match[1] || match[2];
-        const titleMatch = itemXml.match(titleRegex);
-        const linkMatch = itemXml.match(linkRegex);
-        const pubDateMatch = itemXml.match(pubDateRegex);
-
-        if (titleMatch) {
-          headlines.push({
-            title: titleMatch[1].trim().replace(/<[^>]+>/g, ''), // Strip any HTML
-            source: feedTitle,
-            url: linkMatch ? (linkMatch[1] || linkMatch[2]).trim() : feedUrl,
-            publishedAt: pubDateMatch ? (pubDateMatch[1] || pubDateMatch[2]).trim() : null,
-            provider: 'RSS',
-          });
-          count++;
-        }
+      for (const item of items) {
+        headlines.push({
+          title: item.title,
+          source,
+          url: item.url || src.url,
+          publishedAt: item.publishedAt,
+          provider: 'RSS',
+        });
       }
     } catch (err) {
-      console.error(`RSS feed error (${feedUrl}):`, err.message);
+      console.error(`RSS feed error (${src.url}):`, err.message);
     }
   }
 
@@ -10859,6 +10897,124 @@ app.get('/api/admin/crawl/config', authenticateToken, (req, res) => {
       }
     }
   });
+});
+
+// ============ Crawl provider / feed tests (v2.81.0) ============
+//
+// Moving API keys into the admin panel took the feedback away with them: before
+// this, a wrong key surfaced in the server log; afterwards the panel showed a
+// confident `set ••••7252` while every request failed. That is how a valid
+// OpenWeatherMap key pasted into the WeatherAPI box went unnoticed on PMP — a
+// key in the wrong slot fails exactly like an invalid one.
+//
+// Each probe hits the SAME endpoint the real fetcher uses, so a pass here means
+// the feature works, not merely that some URL responded.
+const CRAWL_PROBES = {
+  finnhub: (k) => ({
+    url: `https://finnhub.io/api/v1/quote?symbol=AAPL&token=${encodeURIComponent(k)}`,
+    // Finnhub answers 200 with an empty quote for a bad key rather than 401.
+    verify: (body) => (body && typeof body.c === 'number' && body.c !== 0)
+      ? null : 'Key rejected — Finnhub returned no quote data',
+  }),
+  openweathermap: (k) => ({
+    url: `https://api.openweathermap.org/data/2.5/weather?lat=40.7128&lon=-74.0060&units=imperial&appid=${encodeURIComponent(k)}`,
+  }),
+  weatherapi: (k) => ({
+    url: `https://api.weatherapi.com/v1/current.json?key=${encodeURIComponent(k)}&q=40.7128,-74.0060&aqi=no`,
+  }),
+  tomorrowio: (k) => ({
+    url: `https://api.tomorrow.io/v4/weather/realtime?location=40.7128,-74.0060&units=imperial&apikey=${encodeURIComponent(k)}`,
+  }),
+  newsapi: (k) => ({
+    url: `https://newsapi.org/v2/top-headlines?country=us&pageSize=1&apiKey=${encodeURIComponent(k)}`,
+  }),
+  gnews: (k) => ({
+    url: `https://gnews.io/api/v4/top-headlines?category=general&lang=en&country=us&max=1&apikey=${encodeURIComponent(k)}`,
+  }),
+  mediastack: (k) => ({
+    url: `http://api.mediastack.com/v1/news?access_key=${encodeURIComponent(k)}&limit=1`,
+    verify: (body) => body?.error ? `Key rejected — ${body.error.message || body.error.code}` : null,
+  }),
+  ipinfo: (k) => ({ url: `https://ipinfo.io/json?token=${encodeURIComponent(k)}` }),
+};
+
+// Turn a status code into something an operator can act on.
+function describeProbeFailure(status) {
+  if (status === 401 || status === 403) {
+    return 'Key rejected (HTTP ' + status + ') — wrong key, wrong provider, or not activated yet';
+  }
+  if (status === 429) return 'Rate limited (HTTP 429) — the key works but the quota is spent';
+  if (status >= 500) return `Provider error (HTTP ${status}) — their side, try again later`;
+  return `Unexpected response (HTTP ${status})`;
+}
+
+app.post('/api/admin/crawl/test', authenticateToken, crawlTestLimiter, async (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+
+  const { provider, feedUrl } = req.body || {};
+
+  // ---- RSS feed ----
+  if (feedUrl) {
+    if (typeof feedUrl !== 'string' || !/^https?:\/\//i.test(feedUrl)) {
+      return res.status(400).json({ error: 'feedUrl must be an http(s) URL' });
+    }
+    try {
+      const r = await fetch(feedUrl, {
+        signal: AbortSignal.timeout(8000),
+        headers: { 'User-Agent': 'Cortex/2.12.0' },
+      });
+      if (!r.ok) {
+        return res.json({ ok: false, detail: `Feed returned HTTP ${r.status}` });
+      }
+      const xml = await r.text();
+      const { feedTitle, items } = parseRssFeed(xml, { limit: 5 });
+      if (items.length === 0) {
+        return res.json({
+          ok: false,
+          detail: 'Fetched, but no items could be read — is this an RSS or Atom feed?',
+        });
+      }
+      return res.json({
+        ok: true,
+        detail: `${items.length} item(s) read`,
+        feedTitle,
+        sample: items[0]?.title?.slice(0, 80) || null,
+      });
+    } catch (err) {
+      return res.json({
+        ok: false,
+        detail: err.name === 'TimeoutError' ? 'Timed out after 8s' : `Could not fetch: ${err.message}`,
+      });
+    }
+  }
+
+  // ---- provider key ----
+  if (!provider || !CRAWL_PROBES[provider]) {
+    return res.status(400).json({ error: 'Unknown provider' });
+  }
+  const key = crawlKey(provider);
+  if (!key) return res.json({ ok: false, detail: 'No key configured' });
+
+  try {
+    const { url, verify } = CRAWL_PROBES[provider](key);
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    let body = null;
+    try { body = await r.json(); } catch { /* some providers return non-JSON on error */ }
+
+    if (!r.ok) return res.json({ ok: false, detail: describeProbeFailure(r.status) });
+
+    // A 200 does not always mean success — see Finnhub and MediaStack above.
+    const problem = verify ? verify(body) : null;
+    if (problem) return res.json({ ok: false, detail: problem });
+
+    return res.json({ ok: true, detail: 'Responding normally' });
+  } catch (err) {
+    return res.json({
+      ok: false,
+      detail: err.name === 'TimeoutError' ? 'Timed out after 8s' : `Could not reach provider: ${err.message}`,
+    });
+  }
 });
 
 // Update crawl bar configuration (admin only)
