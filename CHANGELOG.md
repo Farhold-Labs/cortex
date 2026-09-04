@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.81.1] - 2026-09-04
+
+### Fixed
+
+- **Only the first few RSS feeds appeared, however many were configured.** Three limits stacked up: at most 5 feeds were fetched, each contributed at most 5 headlines, and the combined list was then truncated to 15 — **in feed order**. So with seven feeds configured, the first three filled the cap and the remaining four contributed nothing at all. They looked broken while working perfectly. Reproduced before fixing: `1-BBC 5, 2-Slashdot 5, 3-Ars 5, 4-Playbill 0, 5-TheatreNews 0, 6-HN 0, 7-NPR 0`.
+  - Headlines are now **interleaved round-robin** — one from each feed, then a second from each — so the cap trims every feed's tail evenly instead of dropping whole sources. Verified: the same seven feeds now give 5 each.
+  - Feeds are fetched **concurrently** rather than one after another. The old limit of 5 was really protecting against stacked 5-second timeouts; with that gone the ceiling rises to 20, and exceeding it logs a warning instead of silently ignoring the extras.
+  - The combined cap rises from 15 to 40, so more than three feeds can be shown at once. Eight distinct feeds now split it exactly evenly.
+- **Changing crawl settings had no visible effect for up to three minutes.** Results are cached per section (news 3 min, weather 5 min, stocks 1 min) and saving the config did not invalidate them, so an admin would add a feed, see no change, and reasonably conclude it had not worked. Saving now clears the cached results for news, weather and stocks.
+
 ## [2.81.0] - 2026-09-04
 
 ### Added
