@@ -1377,6 +1377,15 @@ function getCrawlCache(type, key) {
   return null;
 }
 
+// Drop cached results for a section so a settings change is visible now rather
+// than up to a TTL later (v2.81.1). Without this an admin adds a feed, sees the
+// ticker unchanged for three minutes, and reasonably concludes it did not work.
+function clearCrawlCache(...types) {
+  for (const type of (types.length ? types : Object.keys(crawlCache))) {
+    crawlCache[type]?.clear();
+  }
+}
+
 function setCrawlCache(type, key, data) {
   const cache = crawlCache[type];
   if (!cache) return;
@@ -1742,23 +1751,33 @@ function parseRssFeed(xml, { limit = 5 } = {}) {
   return { feedTitle, items };
 }
 
+// How many feeds are fetched, and how much each may contribute (v2.81.1).
+// Feeds are fetched concurrently, so adding one costs bandwidth rather than
+// another 5 seconds of waiting — which is what the old limit of 5 was really
+// protecting against.
+const RSS_MAX_FEEDS = 20;
+const RSS_ITEMS_PER_FEED = 5;
+
 // Fetch news from RSS feeds
 async function fetchNewsFromRSS() {
   const sources = crawlFeedSources();
   if (sources.length === 0) return [];
 
-  const headlines = [];
+  if (sources.length > RSS_MAX_FEEDS) {
+    console.warn(`⚠️  ${sources.length} RSS feeds configured; only the first ${RSS_MAX_FEEDS} are fetched.`);
+  }
 
-  for (const src of sources.slice(0, 5)) { // Limit to 5 feeds
+  // Concurrent, not sequential: a slow feed used to delay every feed behind it,
+  // and with a 5s timeout each the wait grew with the list.
+  const perFeed = await Promise.all(sources.slice(0, RSS_MAX_FEEDS).map(async (src) => {
     try {
       const response = await fetch(src.url, {
         signal: AbortSignal.timeout(5000),
         headers: { 'User-Agent': 'Cortex/2.12.0' },
       });
+      if (!response.ok) return [];
 
-      if (!response.ok) continue;
-
-      const { feedTitle, items } = parseRssFeed(await response.text(), { limit: 5 });
+      const { feedTitle, items } = parseRssFeed(await response.text(), { limit: RSS_ITEMS_PER_FEED });
 
       // The admin's own label wins. Playbill's feed calls itself "News", which
       // in a ticker beside another theatre feed reads as if only one source is
@@ -1766,21 +1785,36 @@ async function fetchNewsFromRSS() {
       // useful label.
       const source = src.name || feedTitle || 'RSS';
 
-      for (const item of items) {
-        headlines.push({
-          title: item.title,
-          source,
-          url: item.url || src.url,
-          publishedAt: item.publishedAt,
-          provider: 'RSS',
-        });
-      }
+      return items.map(item => ({
+        title: item.title,
+        source,
+        url: item.url || src.url,
+        publishedAt: item.publishedAt,
+        provider: 'RSS',
+      }));
     } catch (err) {
       console.error(`RSS feed error (${src.url}):`, err.message);
+      return [];
+    }
+  }));
+
+  // Interleave round-robin — one headline from each feed, then a second from
+  // each, and so on.
+  //
+  // Concatenating feed-by-feed put every headline from feed 1 ahead of every
+  // headline from feed 2, so the total cap downstream always truncated the
+  // LAST feeds. With seven feeds configured, three of them filled the cap and
+  // the other four never appeared at all — they looked broken while working
+  // perfectly. Interleaving means the cap costs each feed its tail rather than
+  // costing later feeds everything.
+  const interleaved = [];
+  const deepest = Math.max(0, ...perFeed.map(list => list.length));
+  for (let round = 0; round < deepest; round++) {
+    for (const list of perFeed) {
+      if (list[round]) interleaved.push(list[round]);
     }
   }
-
-  return headlines;
+  return interleaved;
 }
 
 // Main news fetch - combines results from all configured providers
@@ -1805,7 +1839,11 @@ async function fetchNews() {
     if (seen.has(normalized)) return false;
     seen.add(normalized);
     return true;
-  }).slice(0, 15); // Limit total headlines
+  // Was 15, which with 5 headlines per feed meant three feeds filled the entire
+  // ticker. RSS is now interleaved so this trims each feed's tail evenly rather
+  // than dropping whole sources, but the ceiling still has to leave room for
+  // more than three of them.
+  }).slice(0, 40); // Limit total headlines
 
   const result = { headlines, timestamp: Date.now() };
   if (headlines.length > 0) {
@@ -11091,6 +11129,11 @@ app.put('/api/admin/crawl/config', authenticateToken, async (req, res) => {
     // Provider names only — never the key values.
     db.logActivity(admin.id, 'crawl_keys_updated', 'crawl_config', '1', { providers: Object.keys(keysIn) });
   }
+
+  // Anything that changes what gets fetched invalidates the cached results.
+  // A new feed or a corrected API key should show up on the next poll, not
+  // after the TTL quietly expires.
+  clearCrawlCache('news', 'weather', 'stocks');
 
   // Return config in snake_case format for client compatibility
   res.json({
