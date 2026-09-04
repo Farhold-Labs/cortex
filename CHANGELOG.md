@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.81.0] - 2026-09-04
+
+### Added
+
+- **TEST buttons for every API key and RSS feed**, in ADMIN → CRAWL BAR CONFIG. Moving the keys into the panel in v2.80.0 took the feedback away with them: a wrong key showed a confident `set ••••7252` while every request silently failed. Each probe hits the **same endpoint the real fetcher uses**, so a pass means the feature works rather than that some URL responded.
+  - Keys report `✓ Responding normally`, or a reason worth acting on: `Key rejected (HTTP 401) — wrong key, wrong provider, or not activated yet`, `Rate limited (HTTP 429) — the key works but the quota is spent`, `Provider error (HTTP 5xx) — their side`.
+  - Feeds report `✓ 5 item(s) read` along with the title the feed gives itself, or `Feed returned HTTP 404`, `Fetched, but no items could be read — is this an RSS or Atom feed?`, or a timeout.
+  - Some providers answer `200` to a bad key (Finnhub returns an empty quote, MediaStack an error object), so the probe checks the body rather than trusting the status code.
+
+### Fixed
+
+- **RSS headlines ignored the name you gave the feed.** The source label came from the feed's own `<title>`, so Playbill's feed — which calls itself simply `News` — appeared beside `Theatre News RSS feed` and looked as though only one of two configured feeds was working. Both were. The configured name now wins, falling back to the feed's title.
+- **The feed's title was matched from anywhere in the document**, so the first `<title>` found was the channel's only by luck of ordering; a feed whose first item preceded the channel title would have labelled every headline with a headline. It is now read from the text before the first item.
+- The RSS parser is extracted into one function shared by the fetcher and the test button, so the two cannot drift.
+
 ## [2.80.0] - 2026-09-03
 
 ### Added
