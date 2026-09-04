@@ -14,6 +14,34 @@ const CrawlBarAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle })
   const [feeds, setFeeds] = useState([]);
   const [newFeed, setNewFeed] = useState('');
   const [keyDrafts, setKeyDrafts] = useState({});
+  // Results of the TEST buttons, keyed by provider name or feed URL. Moving the
+  // keys into this panel took the feedback with them — a wrong key showed as a
+  // confident `set ••••7252` while every request failed.
+  const [testing, setTesting] = useState({});
+  const [testResults, setTestResults] = useState({});
+
+  const runTest = async (id, body) => {
+    setTesting(t => ({ ...t, [id]: true }));
+    setTestResults(r => ({ ...r, [id]: null }));
+    try {
+      const res = await fetchAPI('/admin/crawl/test', { method: 'POST', body });
+      setTestResults(r => ({ ...r, [id]: res }));
+    } catch (err) {
+      setTestResults(r => ({ ...r, [id]: { ok: false, detail: err.message || 'Test failed' } }));
+    }
+    setTesting(t => ({ ...t, [id]: false }));
+  };
+
+  const TestResult = ({ id }) => {
+    if (testing[id]) return <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>testing…</span>;
+    const r = testResults[id];
+    if (!r) return null;
+    return (
+      <span style={{ fontSize: '0.65rem', color: r.ok ? 'var(--accent-green)' : 'var(--accent-orange)' }}>
+        {r.ok ? '✓' : '✗'} {r.detail}{r.feedTitle ? ` — feed calls itself "${r.feedTitle}"` : ''}
+      </span>
+    );
+  };
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -337,6 +365,12 @@ const CrawlBarAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle })
                       {f.name ? `${f.name} — ` : ''}{f.url}
                     </span>
                     <button
+                      disabled={!!testing[f.url]}
+                      onClick={() => runTest(f.url, { feedUrl: f.url })}
+                      style={{ background: 'none', border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)',
+                               cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.65rem', padding: '3px 8px' }}
+                    >TEST</button>
+                    <button
                       disabled={saving}
                       onClick={() => {
                         const next = feeds.filter((_, j) => j !== i);
@@ -347,6 +381,11 @@ const CrawlBarAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle })
                                cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.65rem', padding: '3px 8px' }}
                     >REMOVE</button>
                   </div>
+                ))}
+                {feeds.map((f, i) => (
+                  testResults[f.url] || testing[f.url]
+                    ? <div key={'res-' + f.url + i} style={{ margin: '-2px 0 6px 2px' }}><TestResult id={f.url} /></div>
+                    : null
                 ))}
 
                 <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
@@ -417,6 +456,14 @@ const CrawlBarAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle })
                                  border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
                                  fontFamily: 'monospace', fontSize: '0.72rem' }}
                       />
+                      {p.configured && (
+                        <button
+                          disabled={!!testing[p.name]}
+                          onClick={() => runTest(p.name, { provider: p.name })}
+                          style={{ background: 'none', border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)',
+                                   cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.62rem', padding: '3px 8px' }}
+                        >TEST</button>
+                      )}
                       {p.configured && p.source === 'database' && (
                         <button
                           disabled={saving}
@@ -426,6 +473,9 @@ const CrawlBarAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle })
                         >CLEAR</button>
                       )}
                     </div>
+                    {(testResults[p.name] || testing[p.name]) && (
+                      <div style={{ marginTop: '3px' }}><TestResult id={p.name} /></div>
+                    )}
                   </div>
                 ))}
 
