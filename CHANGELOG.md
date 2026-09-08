@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.81.2] - 2026-09-07
+
+### Fixed
+
+- **Most people never received the rotating session v2.75.0 introduced.** `issueAuthCredentials` — the function that grants a 90-day sliding session with a rotating refresh token — was wired into `/api/auth/login` and nowhere else. Every other path that completes an authentication kept minting a legacy long-lived JWT, and the client only announced rotation support on the plain login call.
+  - Affected: **MFA verification**, registration, grace-period re-auth, and the password-based session refresh. Anyone with MFA enabled had *never once* held a rotating session.
+  - The symptom reached users as an E2EE prompt. "Until my session expires" resolves the session's end from the refresh token, falling back to the JWT when there isn't one — so on a legacy session the E2EE cache expired with the 30-day token instead of following the 90-day session, and people were asked to unlock their keys again.
+  - Measured before the fix: farhold had **8 live sessions and 0 rotating**; PMP had 7 and 2. Sessions created a week after v2.75.0 shipped still showed a 30-day span with no refresh token.
+  - All four paths now issue the same credentials as a plain login, and the client announces support on each.
+  - `/api/auth/refresh` (password-based extend) doubles as an **upgrade point**: it is where a legacy session lands as its token nears expiry, and the user has just proved their password, so it now converts them to a rotating session without a full logout.
+  - Clients that do not announce support still receive the previous long-lived JWT, unchanged.
+  - `/api/cross-port/session` is deliberately left alone: it mints a fixed 24-hour token for a *stub* user representing a federated identity from another node, which is not the same thing as a local login.
+
+**Existing sessions are not converted retroactively.** They upgrade on the next sign-in, or when a session refresh prompts for a password.
+
 ## [2.81.1] - 2026-09-04
 
 ### Fixed

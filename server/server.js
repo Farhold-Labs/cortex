@@ -4942,14 +4942,14 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
       nodeName: 'Local', status: 'online',
     });
 
-    const token = jwt.sign({ userId: id, handle: user.handle, jti: crypto.randomUUID() }, JWT_SECRET, { expiresIn: sessionDuration });
-    console.log(`✅ New user registered: ${handle}`);
-
-    // Create session for the new user
-    const session = createSession(user.id, token, req);
-    if (session) {
-      console.log(`📱 Session created for new user: ${handle}`);
-    }
+    // A new account is a completed login too (v2.81.2).
+    const creds = issueAuthCredentials(user, req, {
+      sessionDuration,
+      supportsRefresh: req.body.supportsRefresh === true,
+      sessionOnly: req.body.sessionOnly === true,
+    });
+    const token = creds.token;
+    console.log(`✅ New user registered: ${handle}${creds.refreshToken ? ' (rotating session)' : ''}`);
 
     // Consume the invite now that the account exists. If two people race the same link,
     // consumeInvitation() reports 0 changes for the loser and only the winner keeps the
@@ -4970,6 +4970,8 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
     res.status(201).json({
       token,
+      refreshToken: creds.refreshToken,
+      sessionExpiresAt: creds.sessionExpiresAt || null,
       user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, birthday: user.birthday, birthdayVisibility: user.birthdayVisibility },
     });
   } catch (err) {
@@ -5331,14 +5333,23 @@ app.post('/api/auth/refresh', loginLimiter, authenticateToken, async (req, res) 
     }
 
     // Issue new token
-    const token = jwt.sign({ userId: user.id, handle: user.handle, jti: crypto.randomUUID() }, JWT_SECRET, { expiresIn: sessionDuration });
-    const session = createSession(user.id, token, req);
-    console.log(`🔄 Session refreshed for: ${user.handle} with ${sessionDuration} session`);
+    // Also an upgrade point (v2.81.2): this is where a legacy session lands
+    // when its token nears expiry, and the user has just proved their password.
+    // Issuing rotating credentials here migrates them without a full logout.
+    const creds = issueAuthCredentials(user, req, {
+      sessionDuration,
+      supportsRefresh: req.body.supportsRefresh === true,
+      sessionOnly: req.body.sessionOnly === true,
+    });
+    const token = creds.token;
+    console.log(`🔄 Session refreshed for: ${user.handle}${creds.refreshToken ? ' (rotating)' : ` with ${sessionDuration} session`}`);
 
     if (db.logActivity) db.logActivity(user.id, 'session_refresh', 'user', user.id, getRequestMeta(req));
 
     res.json({
       token,
+      refreshToken: creds.refreshToken,
+      sessionExpiresAt: creds.sessionExpiresAt || null,
       sessionDuration,
       user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {} },
     });
@@ -5418,13 +5429,17 @@ app.post('/api/auth/reauth', loginLimiter, async (req, res) => {
 
     revokeSessionByToken(expiredToken);
 
+    // Grace-period re-auth re-establishes a session from a password, so it
+    // hands back the same credentials a fresh login would (v2.81.2). Otherwise
+    // a user who let their token lapse dropped back to a legacy JWT and lost
+    // the rotating session they had.
+    const creds = issueAuthCredentials(user, req, {
+      sessionDuration: getSessionDuration(requestedDuration),
+      supportsRefresh: req.body.supportsRefresh === true,
+      sessionOnly: req.body.sessionOnly === true,
+    });
+    const newToken = creds.token;
     const sessionDuration = getSessionDuration(requestedDuration);
-    const newToken = jwt.sign(
-      { userId: user.id, handle: user.handle, jti: crypto.randomUUID() },
-      JWT_SECRET,
-      { expiresIn: sessionDuration }
-    );
-    createSession(user.id, newToken, req);
     db.updateUserStatus(user.id, 'online');
 
     if (db.logActivity) db.logActivity(user.id, 'session_reauth', 'user', user.id, getRequestMeta(req));
@@ -5432,6 +5447,8 @@ app.post('/api/auth/reauth', loginLimiter, async (req, res) => {
 
     res.json({
       token: newToken,
+      refreshToken: creds.refreshToken,
+      sessionExpiresAt: creds.sessionExpiresAt || null,
       sessionDuration,
       user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {} }
     });
@@ -6316,19 +6333,19 @@ app.post('/api/auth/mfa/verify', mfaLimiter, (req, res) => {
     // Mark challenge as verified
     db.markMfaChallengeVerified(challengeId);
 
-    // Generate JWT token with session duration from challenge
+    // Completing MFA finishes a login, so it must grant the same credentials
+    // the plain login path does (v2.81.2). It used to mint its own long-lived
+    // JWT, which meant anyone with MFA enabled never received a rotating
+    // session at all — and their E2EE unlock therefore expired with the JWT.
     const sessionDuration = challenge.sessionDuration || '24h';
-    const token = jwt.sign(
-      { userId: user.id, handle: user.handle, jti: crypto.randomUUID() },
-      JWT_SECRET,
-      { expiresIn: sessionDuration }
-    );
-
-    // Create session for the MFA login
-    const session = createSession(user.id, token, req);
-    if (session) {
-      console.log(`📱 Session created for MFA login: ${user.handle}`);
-    }
+    const creds = issueAuthCredentials(user, req, {
+      sessionDuration,
+      supportsRefresh: req.body.supportsRefresh === true,
+      sessionOnly: req.body.sessionOnly === true,
+    });
+    const token = creds.token;
+    console.log(`📱 Session created for MFA login: ${user.handle}${creds.refreshToken ? ' (rotating)' : ''}`);
+    notifyIfNewDevice(user, req);
 
     // Clear any failed login attempts
     if (db.clearFailedLogins) {
@@ -6341,6 +6358,8 @@ app.post('/api/auth/mfa/verify', mfaLimiter, (req, res) => {
     res.json({
       success: true,
       token,
+      refreshToken: creds.refreshToken,
+      sessionExpiresAt: creds.sessionExpiresAt || null,
       user: {
         id: user.id,
         handle: user.handle,
