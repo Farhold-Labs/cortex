@@ -345,7 +345,10 @@ function AuthProvider({ children }) {
   const completeMfaLogin = useCallback(async (challengeId, method, code) => {
     const res = await fetch(`${API_URL}/auth/mfa/verify`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ challengeId, method, code }),
+      // Announce rotation support here too (v2.81.2). Only the plain login
+      // sent it, so anyone completing login through MFA silently stayed on a
+      // legacy long-lived token and never got a rotating session.
+      body: JSON.stringify({ challengeId, method, code, supportsRefresh: true, sessionOnly: pendingSessionOnlyRef.current }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'MFA verification failed');
@@ -353,6 +356,8 @@ function AuthProvider({ children }) {
     pendingSessionOnlyRef.current = false;
     const duration = sessionOnly ? 'session' : (storage.getSessionDuration() || '7d');
     storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
+    if (data.refreshToken) storage.setRefreshToken(data.refreshToken, sessionOnly);
+    if (data.sessionExpiresAt) storage.setSessionExpiresAt(data.sessionExpiresAt, sessionOnly);
     storage.setSessionStart(duration); // Start browser session timer
     setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpiring(false);
@@ -364,13 +369,15 @@ function AuthProvider({ children }) {
   const register = useCallback(async (handle, email, password, displayName, sessionDuration = '7d', inviteToken = null) => {
     const res = await fetch(`${API_URL}/auth/register`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ handle, email, password, displayName, sessionDuration, inviteToken }),
+      body: JSON.stringify({ handle, email, password, displayName, sessionDuration, inviteToken, supportsRefresh: true }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Registration failed');
     // Store password for E2EE setup
     pendingPasswordRef.current = password;
     storage.setToken(data.token); storage.setUser(data.user);
+    if (data.refreshToken) storage.setRefreshToken(data.refreshToken);
+    if (data.sessionExpiresAt) storage.setSessionExpiresAt(data.sessionExpiresAt);
     storage.setSessionStart(sessionDuration); // Start browser session timer with user's selected duration
     setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpiring(false);
@@ -437,13 +444,15 @@ function AuthProvider({ children }) {
     const res = await fetch(`${API_URL}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ password, sessionDuration: duration }),
+      body: JSON.stringify({ password, sessionDuration: duration, supportsRefresh: true, sessionOnly }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Session refresh failed');
 
     // Update token and user state
     storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
+    if (data.refreshToken) storage.setRefreshToken(data.refreshToken, sessionOnly);
+    if (data.sessionExpiresAt) storage.setSessionExpiresAt(data.sessionExpiresAt, sessionOnly);
     storage.setSessionStart(sessionOnly ? 'session' : (data.sessionDuration || duration));
     setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpiring(false);
@@ -459,7 +468,7 @@ function AuthProvider({ children }) {
     const res = await fetch(`${API_URL}/auth/reauth`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ password, sessionDuration: duration }),
+      body: JSON.stringify({ password, sessionDuration: duration, supportsRefresh: true, sessionOnly }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -475,6 +484,8 @@ function AuthProvider({ children }) {
       throw new Error(data.error || 'Re-authentication failed');
     }
     storage.setToken(data.token, sessionOnly); storage.setUser(data.user);
+    if (data.refreshToken) storage.setRefreshToken(data.refreshToken, sessionOnly);
+    if (data.sessionExpiresAt) storage.setSessionExpiresAt(data.sessionExpiresAt, sessionOnly);
     storage.setSessionStart(sessionOnly ? 'session' : (data.sessionDuration || duration));
     setSessionExpiresAt(sessionEndOf(data.token));
     setSessionExpired(false);
