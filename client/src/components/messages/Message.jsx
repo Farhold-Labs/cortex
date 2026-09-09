@@ -100,6 +100,7 @@ const Message = ({
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showMessageMenu, setShowMessageMenu] = useState(false);
   const [menuDropUp, setMenuDropUp] = useState(true); // flip the ⋮ menu up/down to fit
+  const [menuMaxHeight, setMenuMaxHeight] = useState(null); // room actually available on the chosen side
   const menuBtnRef = useRef(null);
   const [lightboxImage, setLightboxImage] = useState(null);
   const [showReaderList, setShowReaderList] = useState(false);
@@ -748,14 +749,30 @@ const Message = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!showMessageMenu) {
-                    // Flip the menu to fit: dodge down near the top of the wave
-                    // (little room above / more room below), else dodge up.
+                    // Flip the menu to fit. Measure against the scrolling
+                    // container that CLIPS this menu, not the viewport: the wave
+                    // header/context bar and the compose bar sit inside the
+                    // viewport but outside the scroller, so viewport maths hands
+                    // the menu space it cannot use and it opens underneath them.
                     const rect = menuBtnRef.current?.getBoundingClientRect();
                     if (rect) {
+                      let clip = null;
+                      for (let el = menuBtnRef.current.parentElement; el; el = el.parentElement) {
+                        const oy = window.getComputedStyle(el).overflowY;
+                        if (oy === 'auto' || oy === 'scroll') { clip = el; break; }
+                      }
+                      const bounds = clip
+                        ? clip.getBoundingClientRect()
+                        : { top: 0, bottom: window.innerHeight };
+                      const MARGIN = 8;
                       const MENU_EST = 240; // generous estimate of menu height (px)
-                      const spaceAbove = rect.top;
-                      const spaceBelow = window.innerHeight - rect.bottom;
-                      setMenuDropUp(spaceAbove >= MENU_EST || spaceAbove >= spaceBelow);
+                      const spaceAbove = rect.top - bounds.top - MARGIN;
+                      const spaceBelow = bounds.bottom - rect.bottom - MARGIN;
+                      const dropUp = spaceAbove >= MENU_EST || spaceAbove >= spaceBelow;
+                      setMenuDropUp(dropUp);
+                      // Cap to the room that exists, so a menu fitting neither
+                      // side scrolls internally instead of hiding behind chrome.
+                      setMenuMaxHeight(Math.max(120, Math.floor(dropUp ? spaceAbove : spaceBelow)));
                     }
                     document.dispatchEvent(new CustomEvent('cortex:message-menu-open', { detail: message.id }));
                   }
@@ -777,6 +794,7 @@ const Message = ({
                     background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
                     borderRadius: '4px', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
                     minWidth: '150px', zIndex: 1000,
+                    ...(menuMaxHeight ? { maxHeight: `${menuMaxHeight}px`, overflowY: 'auto' } : {}),
                   }}
                   onClick={(e) => e.stopPropagation()}
                 >
