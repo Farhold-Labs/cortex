@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { API_URL } from '../config/constants.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
+import { T } from '../config/terminology.js';
 
 const isEmbed = new URLSearchParams(window.location.search).get('embed') === '1';
 const preselectedWave = new URLSearchParams(window.location.search).get('wave');
@@ -195,7 +196,7 @@ const PublicPortalView = ({ onLogin }) => {
   if (error || waves.length === 0) {
     return (
       <div style={{ minHeight: '100vh', background: 'var(--bg-base, #050805)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Courier New, monospace' }}>
-        <div style={{ color: 'var(--text-muted, #4a7a4a)' }}>{error || 'No public waves available.'}</div>
+        <div style={{ color: 'var(--text-muted, #4a7a4a)' }}>{error || `No public ${T.waves} available.`}</div>
       </div>
     );
   }

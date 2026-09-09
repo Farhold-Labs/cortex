@@ -9,6 +9,7 @@ import { mediaEmbedHtml } from '../../utils/embed.js';
 import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import GifSearchModal from '../search/GifSearchModal.jsx';
+import { T } from '../../config/terminology.js';
 
 const FocusView = ({
   wave,
@@ -379,7 +380,7 @@ const FocusView = ({
     const maxLabelLength = isMobile ? 15 : 30;
     const truncateThreshold = isMobile ? 3 : 4;
 
-    const waveName = wave?.name || wave?.title || 'Wave';
+    const waveName = wave?.name || wave?.title || `${T.Wave}`;
     const items = [
       { label: isMobile ? (waveName.substring(0, 12) + (waveName.length > 12 ? '…' : '')) : waveName, onClick: onClose, isWave: true }
     ];
@@ -392,7 +393,7 @@ const FocusView = ({
       if (index < focusStack.length - 1) {
         // Previous items are clickable
         items.push({
-          label: truncatedContent || 'Ping',
+          label: truncatedContent || `${T.Ping}`,
           onClick: () => {
             // Pop stack back to this level
             for (let i = focusStack.length - 1; i > index; i--) {
@@ -402,7 +403,7 @@ const FocusView = ({
         });
       } else {
         // Current item is not clickable
-        items.push({ label: truncatedContent || 'Ping', current: true });
+        items.push({ label: truncatedContent || `${T.Ping}`, current: true });
       }
     });
 
@@ -473,7 +474,7 @@ const FocusView = ({
             fontSize: isMobile ? '0.85rem' : '0.75rem',
           }}
         >
-          ← {focusStack.length > 1 ? 'BACK' : 'WAVE'}
+          ← {focusStack.length > 1 ? 'BACK' : `${T.WAVE}`}
         </button>
 
         {/* Breadcrumb trail */}
@@ -540,7 +541,7 @@ const FocusView = ({
             fontFamily: 'monospace',
             fontSize: isMobile ? '0.85rem' : '0.75rem',
           }}
-          title="Return to wave"
+          title={`Return to ${T.wave}`}
         >
           ✕
         </button>

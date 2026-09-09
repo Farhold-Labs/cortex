@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { VERSION, API_URL } from '../config/constants.js';
+import { setTerminology } from '../config/terminology.js';
 import { storage } from '../utils/storage.js';
 import { useAuth } from '../hooks/useAPI.js';
 import LoginScreen from './LoginScreen.jsx';
@@ -153,6 +154,18 @@ function AppContent() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [currentPath]);
+
+  // v2.82.0 — instance vocabulary, fetched on every route. The theme effect
+  // above runs only on public pages; the nouns are needed everywhere, the
+  // login screen included, so this is a separate effect.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_URL}/instance-config`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.terminology && !cancelled) setTerminology(data.terminology); })
+      .catch(() => { /* cached vocabulary stays in force */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // Public routes (accessible without login)
   if (currentPath === '/cross-port-auth') {

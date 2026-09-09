@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { formatError, FEDERATION } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
+import { T } from '../../config/terminology.js';
 
 const InviteFederatedModal = ({ isOpen, onClose, wave, fetchAPI, showToast, isMobile }) => {
   const [federatedInput, setFederatedInput] = useState('');

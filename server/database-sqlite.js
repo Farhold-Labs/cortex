@@ -2459,6 +2459,30 @@ export class DatabaseSQLite {
       console.log('✅ pings.pinned_at / pinned_by added');
     }
 
+    // v2.82.0 — Announcement waves.
+    //
+    // Deliberately three orthogonal flags rather than a fourth `privacy`
+    // value: announcement-ness is about WHO MAY WRITE, while privacy is about
+    // WHO MAY SEE. Folding them into one enum makes "crew-only announcement"
+    // inexpressible and forces a new branch into every privacy check. As
+    // separate columns, any existing wave converts in place without touching
+    // its visibility.
+    //
+    // Defaults reproduce today's behaviour exactly, so every existing wave is
+    // unchanged by the migration.
+    const wavePostPolicyCol = this.db.prepare(
+      `SELECT name FROM pragma_table_info('waves') WHERE name = 'post_policy'`
+    ).get();
+    if (!wavePostPolicyCol) {
+      console.log('📝 Adding waves.post_policy / allow_replies / allow_reactions (v2.82.0)...');
+      // 'all'   — any participant may post (current behaviour, the default)
+      // 'staff' — only the wave creator and instance admins/moderators
+      this.db.exec(`ALTER TABLE waves ADD COLUMN post_policy TEXT NOT NULL DEFAULT 'all';`);
+      this.db.exec(`ALTER TABLE waves ADD COLUMN allow_replies INTEGER NOT NULL DEFAULT 1;`);
+      this.db.exec(`ALTER TABLE waves ADD COLUMN allow_reactions INTEGER NOT NULL DEFAULT 1;`);
+      console.log('✅ waves.post_policy / allow_replies / allow_reactions added');
+    }
+
     // v2.75.0 — Long-lived sessions via refresh-token rotation.
     //
     // Before this, the JWT *was* the session: its exp carried the whole
@@ -5265,6 +5289,11 @@ export class DatabaseSQLite {
       category_id: categoryId,
       category_name: categoryId ? (catNameMap.get(categoryId) || null) : null,
       pinned: pinned === 1,
+      // Announcement waves (v2.82.0) — the list needs these to badge a wave
+      // and suppress its composer without a second round trip.
+      postPolicy: r.post_policy || 'all',
+      allowReplies: r.allow_replies == null ? true : r.allow_replies === 1,
+      allowReactions: r.allow_reactions == null ? true : r.allow_reactions === 1,
     }));
   }
 
@@ -5311,6 +5340,7 @@ export class DatabaseSQLite {
     const placeholders = waveIds.map(() => '?').join(',');
     const rows = this.db.prepare(`
       SELECT w.id, w.title, w.topic, w.privacy, w.updated_at, w.created_by, w.encrypted,
+        w.post_policy, w.allow_replies, w.allow_reactions,
         (SELECT COUNT(*) FROM pings WHERE wave_id = w.id AND deleted = 0) as ping_count,
         (SELECT COUNT(*) FROM wave_participants WHERE wave_id = w.id) as participant_count
       FROM waves w
@@ -5394,6 +5424,9 @@ export class DatabaseSQLite {
       id: r.id,
       title: r.title,
       privacy: r.privacy,
+      postPolicy: r.post_policy || 'all',
+      allowReplies: r.allow_replies == null ? true : r.allow_replies === 1,
+      allowReactions: r.allow_reactions == null ? true : r.allow_reactions === 1,
       updatedAt: r.updated_at,
       encrypted: r.encrypted === 1,
       ping_count: r.ping_count,
@@ -5433,6 +5466,11 @@ export class DatabaseSQLite {
       profileOwnerId: row.profile_owner_id || null,
       // Topic (v2.36.0)
       topic: row.topic || null,
+      // Announcement waves (v2.82.0). Orthogonal to privacy: these govern who
+      // may WRITE; privacy governs who may SEE.
+      postPolicy: row.post_policy || 'all',
+      allowReplies: row.allow_replies == null ? true : row.allow_replies === 1,
+      allowReactions: row.allow_reactions == null ? true : row.allow_reactions === 1,
     };
   }
 
@@ -5566,6 +5604,23 @@ export class DatabaseSQLite {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE waves SET topic = ?, updated_at = ? WHERE id = ?').run(topic || null, now, waveId);
 
+    return this.getWave(waveId);
+  }
+
+  // v2.82.0 — announcement settings. Every field is optional; only what is
+  // passed gets written, so a caller toggling replies cannot clobber the
+  // posting policy it never sent.
+  updateWaveAnnouncementSettings(waveId, { postPolicy, allowReplies, allowReactions } = {}) {
+    const sets = [], vals = [];
+    if (postPolicy !== undefined) {
+      if (!['all', 'staff'].includes(postPolicy)) throw new Error('Invalid post policy');
+      sets.push('post_policy = ?'); vals.push(postPolicy);
+    }
+    if (allowReplies !== undefined) { sets.push('allow_replies = ?'); vals.push(allowReplies ? 1 : 0); }
+    if (allowReactions !== undefined) { sets.push('allow_reactions = ?'); vals.push(allowReactions ? 1 : 0); }
+    if (!sets.length) return this.getWave(waveId);
+    sets.push('updated_at = ?'); vals.push(new Date().toISOString());
+    this.db.prepare(`UPDATE waves SET ${sets.join(', ')} WHERE id = ?`).run(...vals, waveId);
     return this.getWave(waveId);
   }
 

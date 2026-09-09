@@ -5,6 +5,7 @@ import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { BASE_URL } from '../../config/constants.js';
 import GroupInvitationsPanel from './GroupInvitationsPanel.jsx';
 import InviteToGroupModal from './InviteToGroupModal.jsx';
+import { T } from '../../config/terminology.js';
 
 const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitations, onInvitationsChange, contacts }) => {
   const [showNewGroup, setShowNewGroup] = useState(false);
@@ -23,7 +24,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
     if (selectedGroup) {
       fetchAPI(`/groups/${selectedGroup}`)
         .then(setGroupDetails)
-        .catch(() => showToast(formatError('Failed to load crew'), 'error'));
+        .catch(() => showToast(formatError(`Failed to load ${T.crew}`), 'error'));
     }
   }, [selectedGroup, fetchAPI, showToast]);
 
@@ -58,7 +59,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
       setShowNewGroup(false);
       onGroupsChange();
     } catch (err) {
-      showToast(err.message || formatError('Failed to create crew'), 'error');
+      showToast(err.message || formatError(`Failed to create ${T.crew}`), 'error');
     }
   };
 
@@ -71,7 +72,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
       setGroupDetails(null);
       onGroupsChange();
     } catch (err) {
-      showToast(err.message || formatError('Failed to delete crew'), 'error');
+      showToast(err.message || formatError(`Failed to delete ${T.crew}`), 'error');
     }
   };
 
@@ -103,7 +104,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
       setGroupDetails(null);
       onGroupsChange();
     } catch (err) {
-      showToast(err.message || formatError('Failed to leave crew'), 'error');
+      showToast(err.message || formatError(`Failed to leave ${T.crew}`), 'error');
     }
   };
 
@@ -144,7 +145,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
           <button onClick={() => setShowNewGroup(true)} style={{
             width: '100%', padding: '10px', background: 'var(--accent-amber)15', border: '1px solid var(--accent-amber)50',
             color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'monospace',
-          }}>+ NEW CREW</button>
+          }}>+ NEW {T.CREW}</button>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: groupInvitations?.length > 0 ? '12px' : '0' }}>
           {/* Group Invitations */}
@@ -177,7 +178,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--border-primary)' }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '3rem', marginBottom: '16px' }}>◈</div>
-              <div>Select a crew or create a new one</div>
+              <div>Select a {T.crew} or create a new one</div>
             </div>
           </div>
         ) : !groupDetails ? (
@@ -189,7 +190,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
                 <button onClick={() => setSelectedGroup(null)} style={{
                   background: 'none', border: 'none', color: 'var(--accent-amber)',
                   cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.85rem', padding: 0,
-                }}>← Crews</button>
+                }}>← {T.Crews}</button>
               </div>
             )}
             <div style={{
@@ -214,12 +215,12 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
                   <button onClick={handleLeaveGroup} style={{
                     padding: '6px 12px', background: 'var(--accent-amber)15', border: '1px solid var(--accent-amber)50',
                     color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',
-                  }}>LEAVE CREW</button>
+                  }}>LEAVE {T.CREW}</button>
                   {groupDetails.isAdmin && (
                     <button onClick={handleDeleteGroup} style={{
                       padding: '6px 12px', background: 'var(--accent-orange)20', border: '1px solid var(--accent-orange)',
                       color: 'var(--accent-orange)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',
-                    }}>DELETE CREW</button>
+                    }}>DELETE {T.CREW}</button>
                   )}
                 </div>
               </div>
@@ -315,7 +316,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
                         <button onClick={async () => {
                           try {
                             await fetchAPI(`/crews/invitations/${inv.id}`, { method: 'DELETE' });
-                            showToast('Crew invitation cancelled', 'info');
+                            showToast(`${T.Crew} invitation cancelled`, 'info');
                             loadSentInvitations();
                           } catch (err) {
                             showToast(err.message || formatError('Failed to cancel invitation'), 'error');
@@ -345,13 +346,13 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
             border: '2px solid var(--accent-amber)40', padding: '24px',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-              <GlowText color="var(--accent-amber)" size="1.1rem">Create Crew</GlowText>
+              <GlowText color="var(--accent-amber)" size="1.1rem">Create {T.Crew}</GlowText>
               <button onClick={() => setShowNewGroup(false)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>✕</button>
             </div>
             <div style={{ marginBottom: '16px' }}>
               <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>NAME</div>
               <input type="text" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)}
-                placeholder="Crew name..."
+                placeholder={`${T.Crew} name...`}
                 style={{
                   width: '100%', padding: '10px', boxSizing: 'border-box',
                   background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'inherit',
@@ -781,11 +782,11 @@ const ActivityLogPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
     admin_password_reset: { label: 'Admin Password Reset', color: 'var(--accent-purple)' },
     admin_force_logout: { label: 'Admin Force Logout', color: 'var(--accent-purple)' },
     admin_disable_mfa: { label: 'Admin MFA Disabled', color: 'var(--accent-purple)' },
-    create_wave: { label: 'Wave Created', color: 'var(--accent-teal)' },
-    delete_wave: { label: 'Wave Deleted', color: 'var(--accent-orange)' },
-    create_ping: { label: 'Ping Created', color: 'var(--text-secondary)' },
-    edit_ping: { label: 'Ping Edited', color: 'var(--text-secondary)' },
-    delete_ping: { label: 'Ping Deleted', color: 'var(--accent-orange)' },
+    create_wave: { label: `${T.Wave} Created`, color: 'var(--accent-teal)' },
+    delete_wave: { label: `${T.Wave} Deleted`, color: 'var(--accent-orange)' },
+    create_ping: { label: `${T.Ping} Created`, color: 'var(--text-secondary)' },
+    edit_ping: { label: `${T.Ping} Edited`, color: 'var(--text-secondary)' },
+    delete_ping: { label: `${T.Ping} Deleted`, color: 'var(--accent-orange)' },
   };
 
   const loadActivities = useCallback(async (newOffset = 0) => {
@@ -925,8 +926,8 @@ const ActivityLogPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
           <option value="admin_warn">Admin Warnings</option>
           <option value="admin_password_reset">Admin Password Resets</option>
           <option value="admin_disable_mfa">Admin MFA Disabled</option>
-          <option value="create_wave">Waves Created</option>
-          <option value="delete_wave">Waves Deleted</option>
+          <option value="create_wave">{T.Waves} Created</option>
+          <option value="delete_wave">{T.Waves} Deleted</option>
         </select>
       </div>
 
@@ -3341,7 +3342,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                         </div>
                         {bot.wave_count > 0 && (
                           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
-                            Waves: {bot.wave_titles || `${bot.wave_count} wave(s)`}
+                            Waves: {bot.wave_titles || `${bot.wave_count} ${T.wave}(s)`}
                           </div>
                         )}
                       </div>
@@ -3707,7 +3708,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
 
   const handleGrantPermission = async () => {
     if (!selectedWaveId) {
-      showToast('Select a wave', 'error');
+      showToast(`Select a ${T.wave}`, 'error');
       return;
     }
 
@@ -3715,7 +3716,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
       // Check if wave is encrypted - if so, we need to handle E2EE key distribution
       const wave = waves.find(w => w.id === selectedWaveId);
       if (wave?.encrypted) {
-        showToast('E2EE waves require key distribution - feature coming soon', 'error');
+        showToast(`E2EE ${T.waves} require key distribution - feature coming soon`, 'error');
         return;
       }
 
@@ -3893,7 +3894,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                 >
                   <div style={{ flex: 1 }}>
                     <div style={{ color: 'var(--text-primary)', fontSize: '0.8rem', marginBottom: '4px' }}>
-                      {perm.wave_title || 'Unknown Wave'}
+                      {perm.wave_title || `Unknown ${T.Wave}`}
                     </div>
                     <div style={{
                       color: 'var(--text-dim)',
@@ -3909,7 +3910,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                         onClick={(e) => {
                           e.stopPropagation();
                           navigator.clipboard.writeText(perm.wave_id);
-                          showToast('Wave ID copied!', 'success');
+                          showToast(`${T.Wave} ID copied!`, 'success');
                         }}
                         style={{
                           padding: '2px 4px',
@@ -3975,7 +3976,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
             border: '2px solid var(--accent-green)80', padding: isMobile ? '20px' : '24px',
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ marginBottom: '20px' }}>
-              <GlowText color="var(--accent-green)" size={isMobile ? '1rem' : '1.1rem'}>Grant Wave Access</GlowText>
+              <GlowText color="var(--accent-green)" size={isMobile ? '1rem' : '1.1rem'}>Grant {T.Wave} Access</GlowText>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
@@ -3994,7 +3995,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                   fontSize: '0.85rem',
                 }}
               >
-                <option value="">-- Choose a wave --</option>
+                <option value="">-- Choose a {T.wave} --</option>
                 {waves.map(wave => (
                   <option key={wave.id} value={wave.id}>
                     {wave.title} {wave.encrypted ? '🔒' : ''}

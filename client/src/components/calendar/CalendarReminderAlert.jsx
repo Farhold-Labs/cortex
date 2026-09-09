@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { T } from '../../config/terminology.js';
 
 // Event reminders escalate as the event approaches (v2.71.0). A day out, a
 // corner card is enough. Fifteen minutes out, a corner card is easy to miss
@@ -98,7 +99,7 @@ const CalendarReminderAlert = ({ reminders, onDismiss, onOpen }) => {
   const Actions = ({ r, color }) => (
     <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
       {r.waveId && onOpen && (
-        <button onClick={() => onOpen(r)} style={btn(color)}>Open wave</button>
+        <button onClick={() => onOpen(r)} style={btn(color)}>Open {T.wave}</button>
       )}
       <button onClick={() => onDismiss(r.id)} style={btn('var(--text-dim, #8aa08a)')}>Dismiss</button>
     </div>

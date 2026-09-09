@@ -5,6 +5,7 @@
  */
 
 import { useState } from 'react';
+import { T } from './src/config/terminology.js';
 
 // ============ E2EE Setup Modal ============
 // Shown to new users or users who haven't set up E2EE
@@ -551,7 +552,7 @@ export function EncryptedWaveBadge({ small }) {
   };
 
   return (
-    <span style={style} title="This wave is end-to-end encrypted">
+    <span style={style} title={`This ${T.wave} is end-to-end encrypted`}>
       🔐 {!small && 'Encrypted'}
     </span>
   );

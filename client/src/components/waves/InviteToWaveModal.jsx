@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { formatError } from '../../../messages.js';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
+import { T } from '../../config/terminology.js';
 
 const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetchAPI, showToast, isMobile, onParticipantsChange }) => {
   const e2ee = useE2EE();
@@ -101,7 +102,7 @@ const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetc
     setLoading(false);
 
     if (successCount > 0) {
-      showToast(`Added ${successCount} participant${successCount > 1 ? 's' : ''} to wave`, 'success');
+      showToast(`Added ${successCount} participant${successCount > 1 ? 's' : ''} to ${T.wave}`, 'success');
       if (onParticipantsChange) onParticipantsChange();
       onClose();
     }
@@ -124,7 +125,7 @@ const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetc
         border: '2px solid var(--accent-teal)40', padding: '24px',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <GlowText color="var(--accent-teal)" size="1.1rem">Invite to Wave</GlowText>
+          <GlowText color="var(--accent-teal)" size="1.1rem">Invite to {T.Wave}</GlowText>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
         </div>
 

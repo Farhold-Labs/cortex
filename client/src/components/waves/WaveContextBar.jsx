@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { T } from '../../config/terminology.js';
 
 // Upcoming events + pinned pings for the wave you're reading (v2.74.0).
 //
@@ -66,7 +67,7 @@ const previewOf = (pin) => {
   // Ciphertext is never shown. decryptPins marks what it managed to open; an
   // encrypted pin that isn't marked means the wave is still locked, so the pin
   // is announced rather than rendered.
-  if (pin.encrypted && !pin._decrypted) return '🔒 Encrypted ping';
+  if (pin.encrypted && !pin._decrypted) return `🔒 Encrypted ${T.ping}`;
   if (pin.eventId) return '📅 Event';
   const text = plainPreview(pin.content);
   if (text) return text;
@@ -170,7 +171,7 @@ const WaveContextBar = ({
         <Chip
           active={open === 'pins'}
           accent="var(--accent-amber)"
-          title={pins.length ? 'Show pinned pings' : 'Nothing pinned in this wave yet'}
+          title={pins.length ? `Show pinned ${T.pings}` : `Nothing pinned in this ${T.wave} yet`}
           onClick={() => setOpen(o => (o === 'pins' ? null : 'pins'))}
         >
           📌 {pins.length ? `${pins.length} pinned` : 'No pins'}
@@ -180,7 +181,7 @@ const WaveContextBar = ({
         <Chip
           active={open === 'events'}
           accent="var(--accent-teal)"
-          title={events.length ? 'Show upcoming events' : 'No upcoming events in this wave'}
+          title={events.length ? 'Show upcoming events' : `No upcoming events in this ${T.wave}`}
           onClick={() => setOpen(o => (o === 'events' ? null : 'events'))}
         >
           📅 {events.length ? `${events.length} upcoming` : 'No events'}
@@ -210,7 +211,7 @@ const WaveContextBar = ({
         {onCreateEvent && (
           <button
             onClick={onCreateEvent}
-            title="Create an event in this wave"
+            title={`Create an event in this ${T.wave}`}
             style={{
               marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
               padding: isMobile ? '6px 4px' : '2px 4px',
@@ -240,7 +241,7 @@ const WaveContextBar = ({
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onScrollToPing?.(pin.id); setOpen(null); } }}
-                title="Jump to this ping"
+                title={`Jump to this ${T.ping}`}
                 style={{ flex: 1, minWidth: 0 }}
               >
                 <div style={{
@@ -261,7 +262,7 @@ const WaveContextBar = ({
               <button
                 onClick={(e) => { e.stopPropagation(); unpin(pin); }}
                 title="Unpin"
-                aria-label={`Unpin ping from ${pin.authorName || 'unknown'}`}
+                aria-label={`Unpin ${T.ping} from ${pin.authorName || 'unknown'}`}
                 style={{
                   flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer',
                   color: 'var(--text-dim)', fontFamily: 'monospace', fontSize: '0.8rem',

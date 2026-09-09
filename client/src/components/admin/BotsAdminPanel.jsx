@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
 import BotDetailsModal from './BotDetailsModal.jsx';
+import { T } from '../../config/terminology.js';
 
 const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [bots, setBots] = useState([]);
@@ -235,7 +236,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                         </div>
                         {bot.wave_count > 0 && (
                           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
-                            Waves: {bot.wave_titles || `${bot.wave_count} wave(s)`}
+                            Waves: {bot.wave_titles || `${bot.wave_count} ${T.wave}(s)`}
                           </div>
                         )}
                       </div>
@@ -343,7 +344,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                     {token.name}
                   </div>
                   <div style={{ color: 'var(--accent-amber)', fontSize: '0.75rem', marginBottom: '3px' }}>
-                    → {token.wave_title || 'Unknown Wave'}
+                    → {token.wave_title || `Unknown ${T.Wave}`}
                   </div>
                   <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
                     Owner: @{token.creator_handle} •{' '}

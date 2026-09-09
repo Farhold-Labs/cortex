@@ -11,6 +11,7 @@ import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { E2EEStatusIndicator } from '../../../e2ee-components.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import MyReportsPanel from '../reports/MyReportsPanel.jsx';
+import { T } from '../../config/terminology.js';
 
 // ============ PREFERENCE LABEL WITH RESET (v2.65.1) ============
 // Settings can be given a server-wide default by an admin. A user who has explicitly
@@ -1570,7 +1571,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="waveDensity" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>WAVE LIST DENSITY</PrefLabel>
+          <PrefLabel prefKey="waveDensity" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>{T.WAVE} LIST DENSITY</PrefLabel>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             {Object.entries(WAVE_DENSITY).map(([key, config]) => {
               const active = (user?.preferences?.waveDensity || DEFAULT_WAVE_DENSITY) === key;
@@ -1701,7 +1702,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="autoFocusMessages" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>AUTO-FOCUS PINGS</PrefLabel>
+          <PrefLabel prefKey="autoFocusMessages" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>AUTO-FOCUS {T.PINGS}</PrefLabel>
           <button
             onClick={() => handleUpdatePreferences({ autoFocusMessages: !(user?.preferences?.autoFocusMessages === true) })}
             style={{
@@ -2037,7 +2038,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                   { key: 'directMentions', label: '@MENTIONS', icon: '@', desc: 'When someone @mentions you' },
                   { key: 'replies', label: 'REPLIES', icon: '↩', desc: 'When someone replies to your ping' },
                   { key: 'reactions', label: 'REACTIONS', icon: '♡', desc: 'When someone reacts to your ping' },
-                  { key: 'waveActivity', label: 'WAVE ACTIVITY', icon: '◎', desc: 'New pings in your waves' },
+                  { key: 'waveActivity', label: `${T.WAVE} ACTIVITY`, icon: '◎', desc: 'New pings in your waves' },
                   { key: 'burstEvents', label: 'BURST EVENTS', icon: '◈', desc: 'When pings are burst to new waves' },
                 ].map(({ key, label, icon, desc }) => (
                   <div key={key} style={{ marginBottom: '16px' }}>
@@ -2095,7 +2096,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                     {notificationPrefs.suppressWhileFocused ? '▣ ENABLED' : '▢ DISABLED'}
                   </button>
                   <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-                    Don't show wave activity notifications when you're viewing that wave
+                    Don`t show ${T.wave} activity notifications when you`re viewing that wave
                   </div>
                 </div>
 
@@ -2243,7 +2244,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                     <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                       {[
                         { key: 'mentions', label: '@ MENTIONS', desc: 'When someone @mentions you' },
-                        { key: 'replies', label: '↩ REPLIES', desc: 'When someone replies to your ping' },
+                        { key: 'replies', label: '↩ REPLIES', desc: `When someone replies to your ${T.ping}` },
                         { key: 'calendarReminders', label: '📅 CALENDAR REMINDERS', desc: '1-day and 1-hour reminders for events' },
                       ].map(({ key, label, desc }) => (
                         <div key={key}>

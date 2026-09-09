@@ -1,6 +1,7 @@
+import { T } from '../config/terminology.js';
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.81.5';
+export const VERSION = '2.82.0';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
@@ -36,7 +37,7 @@ export const WS_URL = `${wsProtocol}//${_resolved.host}${_resolved.protocol === 
 // ============ PRIVACY LEVELS ============
 export const PRIVACY_LEVELS = {
   private: { name: 'Private', color: 'var(--accent-orange)', bgColor: 'var(--overlay-orange)', icon: '●', desc: 'Only invited participants' },
-  group: { name: 'Crew', color: 'var(--accent-amber)', bgColor: 'var(--overlay-amber)', icon: '●', desc: 'All crew members' },
+  group: { name: `${T.Crew}`, color: 'var(--accent-amber)', bgColor: 'var(--overlay-amber)', icon: '●', desc: 'All crew members' },
   crossServer: { name: 'Verse-Wide', color: 'var(--accent-teal)', bgColor: 'var(--overlay-teal)', icon: '●', desc: 'Allied ports in the Verse' },
   public: { name: 'Public', color: 'var(--accent-green)', bgColor: 'var(--overlay-green)', icon: '○', desc: 'Visible to everyone' },
 };

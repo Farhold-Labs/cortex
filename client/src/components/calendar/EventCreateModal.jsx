@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
+import { T } from '../../config/terminology.js';
 
 const CATEGORIES = ['general','birthday','holiday','community'];
 const SCOPES = [
   { value: 'personal', label: 'Personal (only you)' },
-  { value: 'wave',     label: 'Wave' },
+  { value: 'wave',     label: `${T.Wave}` },
   { value: 'server',   label: 'Server-Wide (mod+)' },
 ];
 const RECURRENCE_OPTIONS = [
@@ -142,9 +143,9 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
           {/* Wave picker (wave scope only; hidden when the wave is already known) */}
           {scope === 'wave' && !lockedWaveId && (
             <div style={{ marginBottom: '12px' }}>
-              <label style={labelStyle}>WAVE *</label>
+              <label style={labelStyle}>{T.WAVE} *</label>
               <select value={waveId} onChange={e => setWaveId(e.target.value)} style={inputStyle}>
-                <option value="">Select a wave...</option>
+                <option value="">Select a {T.wave}...</option>
                 {waves.map(w => <option key={w.id} value={w.id}>{w.title}</option>)}
               </select>
             </div>

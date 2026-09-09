@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { formatError } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 const SearchModal = ({ onClose, fetchAPI, showToast, onSelectMessage, isMobile }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -63,7 +64,7 @@ const SearchModal = ({ onClose, fetchAPI, showToast, onSelectMessage, isMobile }
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            placeholder="Search pings..."
+            placeholder={`Search ${T.pings}...`}
             style={{
               flex: 1,
               padding: isMobile ? '14px' : '12px',

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { VERSION, API_URL, BASE_URL, PRIVACY_LEVELS } from '../config/constants.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
 import { LoadingSpinner, Toast, Avatar, GlowText } from '../components/ui/SimpleComponents.jsx';
+import { T } from '../config/terminology.js';
 
 const PublicMessageView = ({ messageId, onLogin, onRegister }) => {
   const [data, setData] = useState(null);
@@ -141,7 +142,7 @@ const PublicMessageView = ({ messageId, onLogin, onRegister }) => {
           gap: '6px',
         }}>
           <span>○</span>
-          <span>{data.wave?.title || 'Cortex Wave'}</span>
+          <span>{data.wave?.title || `Cortex ${T.Wave}`}</span>
         </div>
 
         {/* Author and content */}

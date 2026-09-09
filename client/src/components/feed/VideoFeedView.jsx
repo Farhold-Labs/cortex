@@ -5,6 +5,7 @@ import { GlowText } from '../ui/SimpleComponents.jsx';
 import VideoFeedItem from './VideoFeedItem.jsx';
 import EmojiPicker from '../ui/EmojiPicker.jsx';
 import ProfileVideoUpload from './ProfileVideoUpload.jsx';
+import { T } from '../../config/terminology.js';
 
 /**
  * VideoFeedView Component (v2.8.0)

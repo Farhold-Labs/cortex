@@ -4,7 +4,7 @@ import { useVoiceCall } from '../../hooks/useVoiceCall.js';
 import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
 import { useSystemBack } from '../../hooks/useSystemBack.js';
 import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL } from '../../../messages.js';
-import { PRIVACY_LEVELS, API_URL, BASE_URL } from '../../config/constants.js';
+import { PRIVACY_LEVELS, API_URL, BASE_URL, canAccess } from '../../config/constants.js';
 import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { LegacyWaveNotice, PartialEncryptionBanner } from '../../../e2ee-components.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
@@ -28,6 +28,7 @@ import EventCreateModal from '../calendar/EventCreateModal.jsx';
 import { storage } from '../../utils/storage.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
+import { T } from '../../config/terminology.js';
 
 const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove }) => {
   // E2EE context
@@ -291,7 +292,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     } catch (e) {
       console.error('Failed to save collapse state:', e);
     }
-    showToast('All threads collapsed', 'success');
+    showToast(`All ${T.threads} collapsed`, 'success');
   };
 
   const expandAllThreads = () => {
@@ -301,7 +302,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     } catch (e) {
       console.error('Failed to save collapse state:', e);
     }
-    showToast('All threads expanded', 'success');
+    showToast(`All ${T.threads} expanded`, 'success');
   };
 
   // Content collapse functions (v2.23.0)
@@ -366,7 +367,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       // Refresh the timeline so the ping's own 📌 marker updates. The websocket
       // event does this for everyone else; the actor should not have to wait.
       loadWave(true);
-      showToast(wasPinned ? 'Unpinned' : 'Pinned for everyone in this wave', 'success');
+      showToast(wasPinned ? 'Unpinned' : `Pinned for everyone in this ${T.wave}`, 'success');
     } catch (err) {
       showToast(err.message || 'Could not update pin', 'error');
     }
@@ -391,7 +392,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       await new Promise(r => setTimeout(r, 150));
       if (flash()) return;
     }
-    showToast('Could not find that ping', 'error');
+    showToast(`Could not find that ${T.ping}`, 'error');
   };
 
   const handleSharePing = async (ping) => {
@@ -437,6 +438,17 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   const composeRef = useRef(null);
   const messagesRef = useRef(null);
+
+  // v2.82.0 — announcement waves. waveData is the authoritative copy once the
+  // wave has loaded; the list object stands in until then so the composer does
+  // not flash into view and vanish. The server enforces all of this regardless
+  // — hiding the controls is a courtesy, not the control.
+  const annWave = waveData || wave || {};
+  const canPostHere = (annWave.postPolicy || 'all') !== 'staff'
+    || annWave.createdBy === currentUser?.id
+    || canAccess(currentUser, 'moderator');
+  const repliesAllowed = annWave.allowReplies !== false;
+  const reactionsAllowed = annWave.allowReactions !== false;
 
   // ===== Wave gestures (v2.77.0, revised v2.78.0) =====
   // Pull UP at the BOTTOM to reload. A wave is newest-last and you are already
@@ -816,7 +828,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       setHasMoreMessages(data.hasMoreMessages || false);
     } catch (err) {
       console.error('Failed to load wave:', err);
-      showToast(formatError('Failed to load wave'), 'error');
+      showToast(formatError(`Failed to load ${T.wave}`), 'error');
     }
     if (!isRefresh) {
       setLoading(false);
@@ -1274,7 +1286,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       onWaveUpdate?.();
       onBack();
     } catch (err) {
-      showToast(formatError('Failed to archive wave'), 'error');
+      showToast(formatError(`Failed to archive ${T.wave}`), 'error');
     }
   };
 
@@ -1289,7 +1301,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       onWaveUpdate?.();
       onBack();
     } catch (err) {
-      showToast(err.message || 'Failed to update wave visibility', 'error');
+      showToast(err.message || `Failed to update ${T.wave} visibility`, 'error');
     }
   };
 
@@ -1304,18 +1316,18 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       onBack();
       onWaveUpdate?.();
     } catch (err) {
-      showToast(err.message || formatError('Failed to delete wave'), 'error');
+      showToast(err.message || formatError(`Failed to delete ${T.wave}`), 'error');
     }
   };
 
   const handleDecryptWave = async () => {
     if (!waveData.encrypted) {
-      showToast('Wave is not encrypted', 'error');
+      showToast(`${T.Wave} is not encrypted`, 'error');
       return;
     }
 
     if (!e2ee.isUnlocked) {
-      showToast('Unlock E2EE first to decrypt this wave', 'error');
+      showToast(`Unlock E2EE first to decrypt this ${T.wave}`, 'error');
       return;
     }
 
@@ -1366,12 +1378,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         body: { pings: decryptedPings }
       });
 
-      showToast('Wave decrypted successfully! All messages are now unencrypted.', 'success');
+      showToast(`${T.Wave} decrypted successfully! All messages are now unencrypted.`, 'success');
       await loadWave(true);
       onWaveUpdate?.();
     } catch (err) {
       console.error('Wave decryption error:', err);
-      showToast(err.message || formatError('Failed to decrypt wave'), 'error');
+      showToast(err.message || formatError(`Failed to decrypt ${T.wave}`), 'error');
     } finally {
       setDecryptingWave(false);
     }
@@ -1391,7 +1403,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   const handleSaveEdit = async (messageId) => {
     if (!editContent.trim()) {
-      showToast('Ping cannot be empty', 'error');
+      showToast(`${T.Ping} cannot be empty`, 'error');
       return;
     }
 
@@ -1525,7 +1537,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       }, 150);
     } catch (err) {
       console.error(`❌ Failed to mark ping ${messageId} as read:`, err);
-      showToast(formatError('Failed to mark ping as read'), 'error');
+      showToast(formatError(`Failed to mark ${T.ping} as read`), 'error');
       scrollPositionToRestore.current = null;
       userActionInProgressRef.current = false;
     }
@@ -1584,7 +1596,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const anyCollapsed = collapsibleIds.some(id => contentCollapsed[id]);
 
   if (loading) return <LoadingSpinner />;
-  if (!waveData) return <div style={{ padding: '20px', color: 'var(--text-dim)' }}>Wave not found</div>;
+  if (!waveData) return <div style={{ padding: '20px', color: 'var(--text-dim)' }}>{T.Wave} not found</div>;
 
   // Safe access with fallbacks for pagination fields
   // Note: API returns `messages` and `all_messages` but we use `pings` internally (v1.11.0)
@@ -1698,7 +1710,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           <div style={{ position: 'relative' }}>
             <button
               onClick={(e) => { e.stopPropagation(); setShowWaveMenu(!showWaveMenu); }}
-              title="Wave actions"
+              title={`${T.Wave} actions`}
               style={{
                 background: 'transparent',
                 border: 'none',
@@ -1767,9 +1779,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                           await Promise.all(unreadPings.map(m => fetchAPI(`/pings/${m.id}/read`, { method: 'POST' })));
                           await loadWave(true);
                           onWaveUpdate?.();
-                          showToast(`Marked ${unreadPings.length} ping${unreadPings.length !== 1 ? 's' : ''} as read`, 'success');
+                          showToast(`Marked ${unreadPings.length} ${T.ping}${unreadPings.length !== 1 ? 's' : ''} as read`, 'success');
                         } catch (err) {
-                          showToast(formatError('Failed to mark pings as read'), 'error');
+                          showToast(formatError(`Failed to mark ${T.pings} as read`), 'error');
                         }
                       }}
                       style={{
@@ -1805,7 +1817,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     <span>{waveData.is_archived ? '📬' : '📦'}</span>
-                    <span>{waveData.is_archived ? 'Restore from Archive' : 'Archive Wave'}</span>
+                    <span>{waveData.is_archived ? 'Restore from Archive' : `Archive ${T.Wave}`}</span>
                   </div>
 
                   {/* Go Dark / Reveal Signal (v2.27.0) */}
@@ -1855,7 +1867,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                       onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                     >
                       <span>{decryptingWave ? '⏳' : '🔓'}</span>
-                      <span>Decrypt Wave</span>
+                      <span>Decrypt {T.Wave}</span>
                     </div>
                   )}
 
@@ -1933,7 +1945,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                         onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                       >
                         <span>⚙</span>
-                        <span>Wave Settings</span>
+                        <span>{T.Wave} Settings</span>
                       </div>
 
                       {/* Delete (creator only) */}
@@ -1956,7 +1968,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                         onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                       >
                         <span>✕</span>
-                        <span>Delete Wave</span>
+                        <span>Delete {T.Wave}</span>
                       </div>
                     </>
                   )}
@@ -2080,10 +2092,10 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     if (confirm(CONFIRM_DIALOG.leaveWave)) {
                       try {
                         await fetchAPI(`/waves/${wave.id}/participants/${currentUser.id}`, { method: 'DELETE' });
-                        showToast('You have left the wave', 'success');
+                        showToast(`You have left the ${T.wave}`, 'success');
                         onBack();
                       } catch (err) {
-                        showToast(err.message || formatError('Failed to leave wave'), 'error');
+                        showToast(err.message || formatError(`Failed to leave ${T.wave}`), 'error');
                       }
                     }
                   }}
@@ -2288,7 +2300,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                               if (confirm(CONFIRM_DIALOG.removeParticipant(p.name))) {
                                 try {
                                   await fetchAPI(`/waves/${wave.id}/participants/${p.id}`, { method: 'DELETE' });
-                                  showToast(`${p.name} removed from wave`, 'success');
+                                  showToast(`${p.name} removed from ${T.wave}`, 'success');
                                   setShowModMenu(null);
                                   loadWave(); // Refresh participants
                                 } catch (err) {
@@ -2385,7 +2397,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                 fontSize: isMobile ? '0.85rem' : '0.75rem',
               }}
             >
-              {loadingMore ? 'Loading...' : `↑ Load older pings (${(waveData.total_messages || 0) - allPings.length} more)`}
+              {loadingMore ? 'Loading...' : `↑ Load older ${T.pings} (${(waveData.total_messages || 0) - allPings.length} more)`}
             </button>
           </div>
         )}
@@ -2399,13 +2411,13 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           return (
             <Message key={msg.id} message={msg} isFirstInGroup={isFirstInGroup} parentPing={parentPing} threadReplyCount={threadReplyCount}
               onOpenEvent={setSelectedEvent} waveEncrypted={!!waveData?.encrypted} showToast={showToast}
-              onReply={setReplyingTo} onDelete={handleDeleteMessage}
+              onReply={repliesAllowed ? setReplyingTo : null} onDelete={handleDeleteMessage}
               onEdit={handleStartEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit}
               editingMessageId={editingMessageId} editContent={editContent} setEditContent={setEditContent}
               currentUserId={currentUser?.id} highlightId={replyingTo?.id}
               collapsed={collapsed} onToggleCollapse={toggleThreadCollapse} isMobile={isMobile}
               contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
-              onReact={handleReaction} onMessageClick={handleMessageClick} participants={participants}
+              onReact={reactionsAllowed ? handleReaction : null} onMessageClick={handleMessageClick} participants={participants}
               contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
               onOpenThread={onOpenThread}
               onShare={handleSharePing} wave={wave || waveData}
@@ -2577,6 +2589,15 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             isMobile={isMobile}
           />
         )}
+        {!canPostHere ? (
+          <div style={{
+            padding: '14px 16px', borderTop: '1px solid var(--border-subtle)',
+            color: 'var(--text-dim)', fontSize: '0.8rem', textAlign: 'center',
+            fontFamily: "'Courier New', monospace", background: 'var(--bg-elevated)',
+          }}>
+            📢 {`Announcements only — the ${T.wave} owner and moderators post here`}
+          </div>
+        ) : (
         <MessageComposer
           ref={composerRef}
           participants={participants}
@@ -2615,6 +2636,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           onPlexClick={() => setShowPlexBrowser(true)}
           fetchAPI={fetchAPI}
         />
+        )}
       </div>
 
       <WaveSettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)}
@@ -3068,7 +3090,7 @@ const GroupInvitationsPanel = ({ invitations, fetchAPI, showToast, onInvitations
     setProcessing(prev => ({ ...prev, [invitationId]: 'decline' }));
     try {
       await fetchAPI(`/groups/invitations/${invitationId}/decline`, { method: 'POST' });
-      showToast('Crew invitation declined', 'info');
+      showToast(`${T.Crew} invitation declined`, 'info');
       onInvitationsChange();
     } catch (err) {
       showToast(err.message || formatError('Failed to decline invitation'), 'error');
@@ -3099,7 +3121,7 @@ const GroupInvitationsPanel = ({ invitations, fetchAPI, showToast, onInvitations
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ color: 'var(--accent-amber)', fontSize: '0.95rem', marginBottom: '4px' }}>
-                {invitation.group?.name || 'Unknown Crew'}
+                {invitation.group?.name || `Unknown ${T.Crew}`}
               </div>
               <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
                 Invited by {invitation.invited_by_user?.displayName || 'Someone'}

@@ -8,6 +8,7 @@ import { mediaEmbedHtml } from '../../utils/embed.js';
 import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import GifSearchModal from '../search/GifSearchModal.jsx';
+import { T } from '../../config/terminology.js';
 
 const ThreadPanel = ({
   wave,

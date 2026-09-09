@@ -3,10 +3,15 @@ import { GlowText } from '../ui/SimpleComponents.jsx';
 import { PRIVACY_LEVELS } from '../../config/constants.js';
 import { SUCCESS, CONFIRM_DIALOG, FEDERATION, formatError } from '../../../messages.js';
 import { useE2EE } from '../../../e2ee-context.jsx';
+import { T } from '../../config/terminology.js';
 
 const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast, onUpdate, participants = [], showParticipants, setShowParticipants, federationEnabled, currentUserId, onFederate, isMobile }) => {
   const e2ee = useE2EE();
   const [privacy, setPrivacy] = useState(wave?.privacy || 'private');
+  // Announcement settings (v2.82.0)
+  const [postPolicy, setPostPolicy] = useState(wave?.postPolicy || 'all');
+  const [allowReplies, setAllowReplies] = useState(wave?.allowReplies !== false);
+  const [allowReactions, setAllowReactions] = useState(wave?.allowReactions !== false);
   const [selectedGroup, setSelectedGroup] = useState(wave?.groupId || null);
   const [title, setTitle] = useState(wave?.title || '');
   const [decrypting, setDecrypting] = useState(false);
@@ -47,6 +52,9 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       setPrivacy(wave.privacy);
       setSelectedGroup(wave.groupId);
       setTitle(wave.title);
+      setPostPolicy(wave.postPolicy || 'all');
+      setAllowReplies(wave.allowReplies !== false);
+      setAllowReactions(wave.allowReactions !== false);
     }
   }, [wave]);
 
@@ -222,24 +230,25 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
     try {
       await fetchAPI(`/waves/${wave.id}`, {
         method: 'PUT',
-        body: { title, privacy, groupId: privacy === 'group' ? selectedGroup : null },
+        body: { title, privacy, groupId: privacy === 'group' ? selectedGroup : null,
+                postPolicy, allowReplies, allowReactions },
       });
       showToast(SUCCESS.waveUpdated, 'success');
       onUpdate();
       onClose();
     } catch (err) {
-      showToast(err.message || formatError('Failed to update wave'), 'error');
+      showToast(err.message || formatError(`Failed to update ${T.wave}`), 'error');
     }
   };
 
   const handleDecryptWave = async () => {
     if (!wave.encrypted) {
-      showToast('Wave is not encrypted', 'error');
+      showToast(`${T.Wave} is not encrypted`, 'error');
       return;
     }
 
     if (!e2ee.isUnlocked) {
-      showToast('Unlock E2EE first to decrypt this wave', 'error');
+      showToast(`Unlock E2EE first to decrypt this ${T.wave}`, 'error');
       return;
     }
 
@@ -302,12 +311,12 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         body: { pings: decryptedPings }
       });
 
-      showToast('Wave decrypted successfully! All messages are now unencrypted.', 'success');
+      showToast(`${T.Wave} decrypted successfully! All messages are now unencrypted.`, 'success');
       onUpdate();
       onClose();
     } catch (err) {
       console.error('Wave decryption error:', err);
-      showToast(err.message || formatError('Failed to decrypt wave'), 'error');
+      showToast(err.message || formatError(`Failed to decrypt ${T.wave}`), 'error');
     } finally {
       setDecrypting(false);
     }
@@ -315,7 +324,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
 
   const handleEncryptWave = async () => {
     if (wave.encrypted) {
-      showToast('Wave is already encrypted', 'error');
+      showToast(`${T.Wave} is already encrypted`, 'error');
       return;
     }
     if (!e2ee.isUnlocked) {
@@ -351,7 +360,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         setEncryptProgress({ phase: 'encrypting', encrypted: totalEncrypted, total: knownTotal });
       }
 
-      showToast('Wave fully encrypted. All messages are now end-to-end encrypted.', 'success');
+      showToast(`${T.Wave} fully encrypted. All messages are now end-to-end encrypted.`, 'success');
       onUpdate();
       onClose();
     } catch (err) {
@@ -374,7 +383,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         border: '2px solid var(--accent-teal)40', padding: '24px',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <GlowText color="var(--accent-teal)" size="1.1rem">Wave Settings</GlowText>
+          <GlowText color="var(--accent-teal)" size="1.1rem">{T.Wave} Settings</GlowText>
           <button onClick={onClose} disabled={encrypting} style={{ background: 'none', border: 'none', color: encrypting ? 'var(--text-muted)' : 'var(--text-dim)', cursor: encrypting ? 'not-allowed' : 'pointer', fontSize: '1.2rem' }}>✕</button>
         </div>
 
@@ -385,6 +394,45 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
             background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
             color: 'var(--text-primary)', fontSize: '0.9rem', fontFamily: 'inherit',
           }} />
+        </div>
+
+        {/* Announcement settings (v2.82.0). Privacy says who may SEE; these say
+            who may WRITE, and whether the wave takes interaction at all. */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>WHO CAN POST</div>
+          {[['all', '👥', 'Everyone', `Any participant can post in this ${T.wave}`],
+            ['staff', '📢', 'Announcements only', `Only you and moderators can post`]].map(([key, icon, label, desc]) => (
+            <button key={key} onClick={() => setPostPolicy(key)} style={{
+              width: '100%', padding: '12px', marginBottom: '8px', textAlign: 'left',
+              background: postPolicy === key ? 'var(--overlay-amber)' : 'var(--bg-elevated)',
+              border: `1px solid ${postPolicy === key ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+              cursor: 'pointer', color: 'var(--text-primary)', fontFamily: 'inherit',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span>{icon}</span>
+                <div>
+                  <div style={{ fontSize: '0.85rem' }}>{label}</div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>{desc}</div>
+                </div>
+              </div>
+            </button>
+          ))}
+
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', margin: '14px 0 8px' }}>INTERACTION</div>
+          {[[allowReplies, setAllowReplies, 'Allow replies', `People can reply to ${T.pings} here`],
+            [allowReactions, setAllowReactions, 'Allow reactions', 'People can react with emoji']].map(([val, setter, label, desc], i) => (
+            <label key={i} style={{
+              display: 'flex', alignItems: 'center', gap: '10px', padding: '10px',
+              marginBottom: '6px', background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)', cursor: 'pointer',
+            }}>
+              <input type="checkbox" checked={val} onChange={(e) => setter(e.target.checked)} />
+              <div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>{label}</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>{desc}</div>
+              </div>
+            </label>
+          ))}
         </div>
 
         <div style={{ marginBottom: '16px' }}>
@@ -409,9 +457,9 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
 
         {privacy === 'group' && (
           <div style={{ marginBottom: '16px' }}>
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SELECT CREW</div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SELECT {T.CREW}</div>
             {groups.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', padding: '10px', background: 'var(--bg-elevated)' }}>No crews available</div>
+              <div style={{ color: 'var(--text-muted)', padding: '10px', background: 'var(--bg-elevated)' }}>No {T.crews} available</div>
             ) : groups.map(g => (
               <button key={g.id} onClick={() => setSelectedGroup(g.id)} style={{
                 width: '100%', padding: '10px', marginBottom: '4px', textAlign: 'left',
@@ -535,7 +583,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
               >
                 <span>🔓</span>
                 <div style={{ flex: 1 }}>
-                  <div>{decrypting ? 'Decrypting wave...' : 'Decrypt Wave (Remove E2EE)'}</div>
+                  <div>{decrypting ? `Decrypting ${T.wave}...` : `Decrypt ${T.Wave} (Remove E2EE)`}</div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                     Convert all encrypted messages to plain text
                   </div>
@@ -734,7 +782,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
               display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px',
               padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
             }}>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>WAVE ID</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{T.WAVE} ID</span>
               <span style={{
                 flex: 1, fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--text-secondary)',
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -742,7 +790,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
                 {wave.id}
               </span>
               <button
-                onClick={() => { navigator.clipboard?.writeText(wave.id); showToast('Wave ID copied', 'success'); }}
+                onClick={() => { navigator.clipboard?.writeText(wave.id); showToast(`${T.Wave} ID copied`, 'success'); }}
                 style={{
                   padding: '3px 8px', background: 'transparent',
                   border: '1px solid var(--border-subtle)', color: 'var(--text-dim)',

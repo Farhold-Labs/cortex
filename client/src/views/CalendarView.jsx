@@ -4,6 +4,7 @@ import CalendarAgendaView from '../components/calendar/CalendarAgendaView.jsx';
 import EventDetailModal from '../components/calendar/EventDetailModal.jsx';
 import EventCreateModal from '../components/calendar/EventCreateModal.jsx';
 import { MONTH_NAMES, toLocalDateStr } from '../components/calendar/calendarUtils.js';
+import { T } from '../config/terminology.js';
 
 const CalendarView = ({ fetchAPI, showToast, currentUser, isMobile, waves = [] }) => {
   const today        = new Date();
