@@ -557,6 +557,38 @@ function requireRole(user, role, res) {
   return true;
 }
 
+/**
+ * v2.82.0 — Announcement waves.
+ *
+ * canPostToWave answers "may this user WRITE here", which is deliberately
+ * separate from canAccessWaveFromCache ("may this user SEE it"). A wave with
+ * post_policy 'staff' is readable by everyone its privacy allows, but writable
+ * only by its creator and instance moderators/admins.
+ *
+ * Server-side enforcement is the real control; the client hides the composer
+ * purely as a courtesy.
+ */
+function canPostToWave(wave, userId) {
+  if (!wave) return false;
+  if ((wave.postPolicy || 'all') !== 'staff') return true;
+  if (wave.createdBy === userId) return true;
+  return hasRole(db.findUserById(userId), ROLES.MODERATOR);
+}
+
+/**
+ * allow_replies / allow_reactions are absolute: when off, nobody may reply or
+ * react, staff included. An admin who needs to say something posts a new
+ * announcement, or turns replies back on. A "staff may still reply" exemption
+ * was considered and rejected — it makes the wave's behaviour depend on who is
+ * looking at it, which is exactly the confusion this feature exists to avoid.
+ */
+function waveAllowsReplies(wave) {
+  return !wave || wave.allowReplies !== false;
+}
+function waveAllowsReactions(wave) {
+  return !wave || wave.allowReactions !== false;
+}
+
 // ============ Security: Rate Limiting ============
 // Configurable via .env - set higher values for development/testing
 const RATE_LIMIT_LOGIN_MAX = parseInt(process.env.RATE_LIMIT_LOGIN_MAX) || 30;
@@ -7308,6 +7340,50 @@ const ALL_INSTANCE_FEATURES = [...INSTANCE_FEATURES, ...INSTANCE_OPT_IN_FEATURES
 // Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
 const INSTANCE_BRANDING_FIELDS = ['instanceName', 'tagline', 'publicTheme'];
 
+// ============ Terminology (v2.82.0) ============
+//
+// The Firefly vocabulary is Cortex's identity, but it is a barrier for
+// communities that just want a message board. Terminology is therefore an
+// INSTANCE setting, not a per-user one: two people in the same wave reading
+// different nouns makes support and documentation impossible, and emails have
+// to pick one vocabulary regardless.
+//
+// Only { one, many } is stored per term. Capitalised and title-case forms are
+// derived, so an admin cannot get them out of sync with the lower-case ones.
+const TERM_KEYS = ['wave', 'ping', 'crew', 'thread'];
+
+const TERM_PRESETS = {
+  firefly:  { wave: { one: 'wave', many: 'waves' },
+              ping: { one: 'ping', many: 'pings' },
+              crew: { one: 'crew', many: 'crews' },
+              thread: { one: 'thread', many: 'threads' } },
+  standard: { wave: { one: 'message', many: 'messages' },
+              ping: { one: 'comment', many: 'comments' },
+              crew: { one: 'group', many: 'groups' },
+              thread: { one: 'thread', many: 'threads' } },
+};
+
+/**
+ * Resolve the vocabulary this instance uses: preset first, then any per-term
+ * overrides on top. Always returns every key, so no caller has to guard.
+ */
+function resolveTerminology(config) {
+  const stored = (config && config.branding && config.branding.terminology) || {};
+  const preset = TERM_PRESETS[stored.preset] ? stored.preset : 'firefly';
+  const base = TERM_PRESETS[preset];
+  const overrides = stored.terms && typeof stored.terms === 'object' ? stored.terms : {};
+  const terms = {};
+  for (const key of TERM_KEYS) {
+    const o = overrides[key] || {};
+    terms[key] = {
+      one: typeof o.one === 'string' && o.one.trim() ? o.one.trim() : base[key].one,
+      many: typeof o.many === 'string' && o.many.trim() ? o.many.trim() : base[key].many,
+    };
+  }
+  return { preset, terms };
+}
+
+
 // Themes the client ships. `publicTheme` is written straight into a
 // `data-theme` attribute by the boot script, so it is validated against this
 // list rather than sanitised as free text.
@@ -10733,7 +10809,11 @@ app.get('/api/instance-config', (req, res) => {
       if (config.branding[key]) branding[key] = config.branding[key];
     }
 
-    res.json({ branding, features, nodeName: FEDERATION_NODE_NAME || null, version: VERSION });
+    // Terminology ships on the PUBLIC endpoint deliberately: the login screen,
+    // the public portal and error text all need the right nouns before anyone
+    // has authenticated.
+    res.json({ branding, features, terminology: resolveTerminology(config),
+      nodeName: FEDERATION_NODE_NAME || null, version: VERSION });
   } catch (error) {
     console.error('Failed to read instance config:', error);
     res.status(500).json({ error: 'Failed to read instance configuration' });
@@ -10850,6 +10930,36 @@ app.put('/api/admin/instance-config', authenticateToken, requireStepUp, (req, re
         return res.status(400).json({ error: `publicTheme must be one of: ${PUBLIC_THEME_IDS.join(', ')}` });
       }
       patch.branding[key] = key === 'publicTheme' ? value : sanitizeInput(value).slice(0, 120);
+    }
+
+    // Terminology is a nested object rather than a flat branding string, so it
+    // is validated on its own terms. An empty/blank override falls back to the
+    // preset rather than being stored, which is what makes "clear this field"
+    // work in the admin UI.
+    if (branding.terminology !== undefined) {
+      const t = branding.terminology;
+      if (t === null) {
+        patch.branding.terminology = null;
+      } else if (typeof t !== 'object') {
+        return res.status(400).json({ error: 'terminology must be an object' });
+      } else {
+        const preset = TERM_PRESETS[t.preset] ? t.preset : 'firefly';
+        const terms = {};
+        if (t.terms && typeof t.terms === 'object') {
+          for (const key of TERM_KEYS) {
+            const v = t.terms[key];
+            if (!v || typeof v !== 'object') continue;
+            const entry = {};
+            for (const form of ['one', 'many']) {
+              if (typeof v[form] !== 'string') continue;
+              const clean = sanitizeInput(v[form]).trim().slice(0, 40);
+              if (clean) entry[form] = clean;
+            }
+            if (Object.keys(entry).length) terms[key] = entry;
+          }
+        }
+        patch.branding.terminology = { preset, terms };
+      }
     }
   }
 
@@ -19287,6 +19397,29 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
     wave.topic = sanitizedTopic;
   }
 
+  // v2.82.0 — announcement settings. The route already restricts everything to
+  // the wave creator, so no extra role check is needed here; instance
+  // moderators reach these through the admin surface instead.
+  const ann = {};
+  if (req.body.postPolicy !== undefined) {
+    if (!['all', 'staff'].includes(req.body.postPolicy)) {
+      return res.status(400).json({ error: "postPolicy must be 'all' or 'staff'" });
+    }
+    ann.postPolicy = req.body.postPolicy;
+  }
+  if (req.body.allowReplies !== undefined) ann.allowReplies = !!req.body.allowReplies;
+  if (req.body.allowReactions !== undefined) ann.allowReactions = !!req.body.allowReactions;
+  if (Object.keys(ann).length) {
+    const updated = db.updateWaveAnnouncementSettings(waveId, ann);
+    if (updated) {
+      wave.postPolicy = updated.postPolicy;
+      wave.allowReplies = updated.allowReplies;
+      wave.allowReactions = updated.allowReactions;
+    }
+    broadcastToWave(waveId, { type: 'wave_settings_changed', waveId,
+      postPolicy: wave.postPolicy, allowReplies: wave.allowReplies, allowReactions: wave.allowReactions });
+  }
+
   // If wave is being promoted to crossServer and federation is enabled, broadcast to all trusted nodes
   if (FEDERATION_ENABLED && changingToCrossServer && wasLocal) {
     // Mark wave as origin
@@ -20965,6 +21098,15 @@ app.post('/api/pings', authenticateToken, (req, res) => {
   const canAccess = canAccessWaveFromCache(waveId, req.user.userId);
   if (!canAccess) return res.status(403).json({ error: 'Access denied' });
 
+  // v2.82.0 — announcement waves
+  if (!canPostToWave(wave, req.user.userId)) {
+    return res.status(403).json({ error: 'Only the wave owner and moderators can post here', code: 'POSTING_RESTRICTED' });
+  }
+  const isReply = !!(req.body.parent_id || req.body.isThreadReply);
+  if (isReply && !waveAllowsReplies(wave)) {
+    return res.status(403).json({ error: 'Replies are turned off in this wave', code: 'REPLIES_DISABLED' });
+  }
+
   // Auto-join public waves - use crypto module for cache synchronization (v2.21.0)
   const isParticipant = participation.isParticipant(waveId, req.user.userId);
   if (!isParticipant && wave.privacy === 'public') {
@@ -21177,6 +21319,23 @@ app.post('/api/pings/:id/react', authenticateToken, (req, res) => {
     return res.status(400).json({ error: 'Invalid emoji' });
   }
 
+  // [SECURITY] Until v2.82.0 this route had NO authorization at all: it looked
+  // the ping up by id and toggled, so any authenticated user could react to any
+  // ping in any wave — including private waves they cannot see — and the
+  // 200-vs-'not found' response confirmed whether an id existed. Check wave
+  // access before touching anything.
+  const target = db.getPing ? db.getPing(pingId) : db.getMessage(pingId);
+  if (!target) return res.status(404).json({ error: 'Ping not found' });
+  if (!canAccessWaveFromCache(target.waveId || target.wave_id, req.user.userId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  // v2.82.0 — announcement waves may switch reactions off entirely.
+  const reactWave = db.getWave(target.waveId || target.wave_id);
+  if (!waveAllowsReactions(reactWave)) {
+    return res.status(403).json({ error: 'Reactions are turned off in this wave', code: 'REACTIONS_DISABLED' });
+  }
+
   const result = db.toggleMessageReaction(pingId, req.user.userId, emoji);
   if (!result.success) return res.status(400).json({ error: result.error });
 
@@ -21361,6 +21520,14 @@ app.post('/api/pings/:id/thread', authenticateToken, (req, res) => {
   // Check wave access
   const canAccess = canAccessWaveFromCache(waveId, userId);
   if (!canAccess) return res.status(403).json({ error: 'Access denied' });
+
+  // v2.82.0 — a thread is a reply surface, so it follows the replies switch.
+  // Unthreading stays allowed: turning replies off should not strand a wave
+  // with threads its participants can no longer collapse.
+  const threadWave = db.getWave(waveId);
+  if (!ping.threaded && !waveAllowsReplies(threadWave)) {
+    return res.status(403).json({ error: 'Replies are turned off in this wave', code: 'REPLIES_DISABLED' });
+  }
 
   // Toggle: if already threaded, unthread; otherwise thread
   const newState = !ping.threaded;

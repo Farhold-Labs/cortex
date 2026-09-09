@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import ContactsView from '../components/contacts/ContactsView.jsx';
 import GroupsView from '../components/groups/GroupsView.jsx';
+import { T } from '../config/terminology.js';
 
 const PeopleView = (props) => {
   const [tab, setTab] = useState('contacts');
@@ -33,7 +34,7 @@ const PeopleView = (props) => {
           )}
         </button>
         <button style={tabStyle(tab === 'crews')} onClick={() => setTab('crews')}>
-          ◆ CREWS
+          ◆ {T.CREWS}
           {props.groupInvitations?.length > 0 && (
             <span style={{
               marginLeft: '6px', background: 'var(--accent-amber)', color: '#000',

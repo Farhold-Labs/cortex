@@ -14,6 +14,7 @@ import MessageWithEmbeds from './MessageWithEmbeds.jsx';
 import EventCard from '../calendar/EventCard.jsx';
 import AudioPlayer from '../media/AudioPlayer.jsx';
 import VideoPlayer from '../media/VideoPlayer.jsx';
+import { T } from '../../config/terminology.js';
 
 const getFirstLine = (content) => {
   if (!content) return '';
@@ -453,7 +454,7 @@ const Message = ({
               gap: '6px',
             }}>
               <span>⬡</span>
-              <span>Thread depth limit — open thread to continue</span>
+              <span>{T.Thread} depth limit — open {T.thread} to continue</span>
             </div>
           )}
           {depth > THREAD_DEPTH_LIMIT && (
@@ -497,7 +498,7 @@ const Message = ({
                   resize: 'vertical',
                   boxSizing: 'border-box',
                 }}
-                placeholder="Edit your ping..."
+                placeholder={`Edit your ${T.ping}...`}
                 autoFocus
               />
               <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
@@ -597,7 +598,9 @@ const Message = ({
               {Object.entries(message.reactions).map(([emoji, userIds]) => {
                 const hasReacted = userIds.includes(currentUserId);
                 return (
-                  <button key={emoji} onClick={() => onReact(message.id, emoji)} style={{
+                  <button key={emoji} onClick={onReact ? () => onReact(message.id, emoji) : undefined}
+                    disabled={!onReact}
+                    style={{
                     padding: '1px 4px',
                     background: hasReacted ? 'var(--accent-amber)20' : 'var(--bg-hover)',
                     border: 'none', cursor: 'pointer',
@@ -627,7 +630,7 @@ const Message = ({
             >
               <span style={{ opacity: 0.7 }}>↳</span>
               <span>{threadReplyCount || totalChildCount} {(threadReplyCount || totalChildCount) === 1 ? 'reply' : 'replies'}</span>
-              <span style={{ opacity: 0.5, fontSize: '0.6rem' }}>— view thread</span>
+              <span style={{ opacity: 0.5, fontSize: '0.6rem' }}>— view {T.thread}</span>
             </div>
           )}
 
@@ -676,7 +679,8 @@ const Message = ({
               boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
             }}
           >
-            {/* React */}
+            {/* React — hidden entirely when the wave has reactions switched off (v2.82.0) */}
+            {onReact && (
             <div style={{ position: 'relative' }}>
               <button
                 onClick={(e) => {
@@ -711,10 +715,12 @@ const Message = ({
                 </div>
               )}
             </div>
+            )}
 
-            {/* Reply */}
-            {isAtDepthLimit && onOpenThread ? (
-              <button onClick={() => onOpenThread(message)} title="Open thread to reply" style={{
+            {/* Reply — the whole affordance disappears when the wave has
+                replies switched off (v2.82.0); the server refuses them anyway. */}
+            {onReply && (isAtDepthLimit && onOpenThread ? (
+              <button onClick={() => onOpenThread(message)} title={`Open ${T.thread} to reply`} style={{
                 padding: '3px 5px', background: 'transparent', border: 'none',
                 color: 'var(--accent-teal)', cursor: 'pointer', fontSize: '0.75rem',
               }}>↳</button>
@@ -723,7 +729,7 @@ const Message = ({
                 padding: '3px 5px', background: 'transparent', border: 'none',
                 color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.75rem',
               }}>↵</button>
-            )}
+            ))}
 
             {/* Collapse/Expand thread */}
             {hasChildren && (
@@ -815,7 +821,7 @@ const Message = ({
                           if (!message.threaded) onOpenThread(message);
                         }}
                       >
-                        <span>↳</span><span>{message.threaded ? 'Unthread' : 'Thread'}</span>
+                        <span>↳</span><span>{message.threaded ? 'Unthread' : `${T.Thread}`}</span>
                       </MenuItem>
                     )}
                     {onTogglePin && !isDeleted && (

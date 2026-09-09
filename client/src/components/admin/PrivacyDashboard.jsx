@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { formatError, FEDERATION } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 /**
  * Privacy & Encryption Dashboard (v2.24.0)
@@ -52,7 +53,7 @@ const PrivacyDashboard = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
     setMigrating('participation');
     try {
       const data = await fetchAPI('/admin/maintenance/migrate-wave-participants', { method: 'POST' });
-      showToast(data.message || `Migrated ${data.migratedWaves} waves`, 'success');
+      showToast(data.message || `Migrated ${data.migratedWaves} ${T.waves}`, 'success');
       loadStatus(); // Refresh stats
     } catch (err) {
       showToast(err.message || formatError('Participation migration failed'), 'error');
@@ -76,10 +77,10 @@ const PrivacyDashboard = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
     setMigrating('crewMembers');
     try {
       const data = await fetchAPI('/admin/maintenance/migrate-crew-members', { method: 'POST' });
-      showToast(data.message || `Migrated ${data.migratedCrews} crews`, 'success');
+      showToast(data.message || `Migrated ${data.migratedCrews} ${T.crews}`, 'success');
       loadStatus(); // Refresh stats
     } catch (err) {
-      showToast(err.message || formatError('Crew membership migration failed'), 'error');
+      showToast(err.message || formatError(`${T.Crew} membership migration failed`), 'error');
     }
     setMigrating(null);
   };
@@ -226,12 +227,12 @@ const PrivacyDashboard = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                   <div style={{ flex: 1, minWidth: '200px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                       <span style={{ fontSize: '1rem' }}>👥</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Wave Participation</span>
+                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{T.Wave} Participation</span>
                       {statusBadge(status.config?.waveParticipationEncryptionEnabled, status.config?.waveParticipationEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
                     </div>
                     <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
                       <div>
-                        <div style={labelStyle}>Total Waves</div>
+                        <div style={labelStyle}>Total {T.Waves}</div>
                         <div style={valueStyle}>{status.waveParticipation?.totalWaves || 0}</div>
                       </div>
                       <div>
@@ -314,12 +315,12 @@ const PrivacyDashboard = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                   <div style={{ flex: 1, minWidth: '200px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                       <span style={{ fontSize: '1rem' }}>🚀</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Crew Membership</span>
+                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{T.Crew} Membership</span>
                       {statusBadge(status.config?.crewMembershipEncryptionEnabled, status.config?.crewMembershipEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
                     </div>
                     <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
                       <div>
-                        <div style={labelStyle}>Total Crews</div>
+                        <div style={labelStyle}>Total {T.Crews}</div>
                         <div style={valueStyle}>{status.crewMembership?.totalCrews || 0}</div>
                       </div>
                       <div>

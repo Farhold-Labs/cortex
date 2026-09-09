@@ -3,6 +3,7 @@ import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { THEMES } from '../../config/themes.js';
 import { FONT_SIZES, MESSAGE_FONTS, WAVE_DENSITY } from '../../config/constants.js';
+import { T, TERM_KEYS, TERM_PRESETS, PRESET_LABELS } from '../../config/terminology.js';
 
 // ============ INSTANCE CONFIG ADMIN PANEL (v2.65.0) ============
 // Server-wide settings: preference defaults every user inherits until they choose for
@@ -14,14 +15,14 @@ const CHOICE_DEFAULTS = [
   { key: 'theme', label: 'THEME', options: Object.entries(THEMES).map(([id, t]) => [id, t.name]) },
   { key: 'fontSize', label: 'FONT SIZE', options: Object.entries(FONT_SIZES).map(([id, f]) => [id, f.name]) },
   { key: 'messageFont', label: 'MESSAGE FONT', options: Object.entries(MESSAGE_FONTS).map(([id, f]) => [id, f.name]) },
-  { key: 'waveDensity', label: 'WAVE DENSITY', options: Object.entries(WAVE_DENSITY).map(([id, d]) => [id, d.name]) },
+  { key: 'waveDensity', label: `${T.WAVE} DENSITY`, options: Object.entries(WAVE_DENSITY).map(([id, d]) => [id, d.name]) },
 ];
 
 const TOGGLE_DEFAULTS = [
   { key: 'scanLines', label: 'CRT SCAN LINES' },
   { key: 'holidayEffects', label: 'HOLIDAY EFFECTS' },
   { key: 'autoCollapseMessages', label: 'AUTO-COLLAPSE MESSAGES' },
-  { key: 'autoFocusMessages', label: 'AUTO-FOCUS THREADS' },
+  { key: 'autoFocusMessages', label: `AUTO-FOCUS ${T.THREADS}` },
 ];
 
 const FEATURES = [
@@ -43,8 +44,8 @@ const NOTIF_MODE_DEFAULTS = [
   { key: 'directMentions', label: 'MENTIONS' },
   { key: 'replies', label: 'REPLIES' },
   { key: 'reactions', label: 'REACTIONS' },
-  { key: 'waveActivity', label: 'WAVE ACTIVITY' },
-  { key: 'burstEvents', label: 'THREAD EVENTS' },
+  { key: 'waveActivity', label: `${T.WAVE} ACTIVITY` },
+  { key: 'burstEvents', label: `${T.THREAD} EVENTS` },
 ];
 const NOTIF_TOGGLE_DEFAULTS = [
   { key: 'enabled', label: 'NOTIFICATIONS ON' },
@@ -105,6 +106,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [branding, setBranding] = useState({});
+  const [terminology, setTerminology] = useState({ preset: 'firefly', terms: {} });
   const [security, setSecurity] = useState({});
   const [timezone, setTimezone] = useState('');
 
@@ -115,6 +117,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
       setConfig(data);
       setCodeDefaults(data.codeDefaults || {});
       setBranding(data.branding || {});
+      setTerminology((data.branding && data.branding.terminology) || { preset: 'firefly', terms: {} });
       setSecurity(data.security || {});
       setTimezone((data.locale && data.locale.timezone) || '');
     } catch (err) {
@@ -399,6 +402,79 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
               style={{ ...pillStyle(true, 'var(--accent-purple)'), padding: '8px 20px' }}
             >
               {saving ? 'SAVING…' : 'SAVE BRANDING'}
+            </button>
+          </div>
+
+          {/* ▸ TERMINOLOGY (v2.82.0) */}
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
+            <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ TERMINOLOGY</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '10px', lineHeight: 1.5 }}>
+              The words this instance uses for its core objects. Applies to everyone on this
+              server — people, emails and help text all read the same vocabulary. Leave a field
+              blank to use the preset's word. Everyone sees the change after their next reload.
+            </div>
+
+            <label style={labelStyle}>PRESET</label>
+            <select
+              value={terminology.preset || 'firefly'}
+              onChange={(e) => setTerminology(prev => ({ ...prev, preset: e.target.value }))}
+              style={{
+                width: '100%', padding: '8px', marginBottom: '12px', background: 'var(--bg-base)',
+                border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
+                fontFamily: 'monospace', fontSize: '0.8rem', borderRadius: '2px',
+              }}
+            >
+              {Object.keys(TERM_PRESETS).map(id => (
+                <option key={id} value={id}>{PRESET_LABELS[id] || id}</option>
+              ))}
+            </select>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr 1fr', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+              <span style={{ ...labelStyle, margin: 0 }}>TERM</span>
+              <span style={{ ...labelStyle, margin: 0 }}>SINGULAR</span>
+              <span style={{ ...labelStyle, margin: 0 }}>PLURAL</span>
+            </div>
+            {TERM_KEYS.map(key => {
+              const preset = TERM_PRESETS[terminology.preset || 'firefly'][key];
+              const over = (terminology.terms || {})[key] || {};
+              const cell = (form) => (
+                <input
+                  type="text"
+                  value={over[form] || ''}
+                  placeholder={preset[form]}
+                  maxLength={40}
+                  onChange={(e) => setTerminology(prev => ({
+                    ...prev,
+                    terms: { ...(prev.terms || {}), [key]: { ...((prev.terms || {})[key] || {}), [form]: e.target.value } },
+                  }))}
+                  style={{
+                    width: '100%', padding: '6px', background: 'var(--bg-base)',
+                    border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
+                    fontFamily: 'monospace', fontSize: '0.78rem', borderRadius: '2px',
+                  }}
+                />
+              );
+              return (
+                <div key={key} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 1fr', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem', fontFamily: 'monospace' }}>{key}</span>
+                  {cell('one')}
+                  {cell('many')}
+                </div>
+              );
+            })}
+
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', margin: '10px 0', lineHeight: 1.6 }}>
+              Preview: “No {(((terminology.terms||{}).wave||{}).many) || TERM_PRESETS[terminology.preset||'firefly'].wave.many} yet” ·
+              “Reply to this {(((terminology.terms||{}).ping||{}).one) || TERM_PRESETS[terminology.preset||'firefly'].ping.one}” ·
+              “Invite your {(((terminology.terms||{}).crew||{}).one) || TERM_PRESETS[terminology.preset||'firefly'].crew.one}”
+            </div>
+
+            <button
+              disabled={saving}
+              onClick={() => save({ branding: { ...branding, terminology } }, 'Terminology saved — reload to see it everywhere')}
+              style={{ ...pillStyle(true, 'var(--accent-amber)'), padding: '8px 20px' }}
+            >
+              {saving ? 'SAVING…' : 'SAVE TERMINOLOGY'}
             </button>
           </div>
 

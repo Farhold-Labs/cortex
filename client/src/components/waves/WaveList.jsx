@@ -4,6 +4,7 @@ import { PRIVACY_LEVELS, NOTIFICATION_BADGE_COLORS, WAVE_DENSITY, DEFAULT_WAVE_D
 import { EMPTY, GHOST_PROTOCOL } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
+import { T } from '../../config/terminology.js';
 
 const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
@@ -156,7 +157,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
                   e.stopPropagation();
                   setMoveMenuOpen(moveMenuOpen === wave.id ? null : wave.id);
                 }}
-                title="Move wave to category"
+                title={`Move ${T.wave} to category`}
                 style={{
                   background: 'transparent',
                   border: 'none',
@@ -344,7 +345,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
               {renderDropZone(category.id, category.name)}
               {categoryWaves.length === 0 ? (
                 <div style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
-                  No waves in this category
+                  No {T.waves} in this category
                 </div>
               ) : (
                 categoryWaves.map(wave => renderWaveItem(wave, true))
@@ -404,11 +405,11 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
   }}>
     {showWaveMenu && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99 }} onClick={() => setShowWaveMenu(false)} />}
     <div style={{ padding: isMobile ? '10px 12px' : '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <GlowText color={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{ghostMode ? GHOST_PROTOCOL.modeActive : 'WAVES'}</GlowText>
+      <GlowText color={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{ghostMode ? GHOST_PROTOCOL.modeActive : `${T.WAVES}`}</GlowText>
       <div style={{ position: 'relative' }}>
         <button
           onClick={() => setShowWaveMenu(!showWaveMenu)}
-          title="Wave options"
+          title={`${T.Wave} options`}
           style={{
             padding: isMobile ? '10px 12px' : '5px 8px',
             background: showWaveMenu ? 'var(--bg-hover)' : 'transparent',
@@ -423,7 +424,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
             background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', zIndex: 100, minWidth: '170px',
           }}>
             {[
-              { label: '+ New Wave', color: 'var(--accent-amber)', action: onNewWave },
+              { label: `+ New ${T.Wave}`, color: 'var(--accent-amber)', action: onNewWave },
               categories.length > 0 && { label: '⚙ Manage Categories', color: 'var(--text-primary)', action: onManageCategories },
               { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol', color: ghostMode ? 'var(--accent-orange)' : 'var(--text-primary)', action: onToggleGhostProtocol },
               { label: showArchived ? '📬 Show Active' : '📦 Show Archived', color: showArchived ? 'var(--accent-teal)' : 'var(--text-primary)', action: onToggleArchived },
@@ -481,7 +482,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
       <div ref={listScrollRef} style={{ flex: 1, overflowY: 'auto' }}>
         {waves.length === 0 ? (
           <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            {showArchived ? 'No archived waves' : EMPTY.noWavesCreate}
+            {showArchived ? `No archived ${T.waves}` : EMPTY.noWavesCreate}
           </div>
         ) : waves.map(wave => {
         const config = PRIVACY_LEVELS[wave.privacy] || PRIVACY_LEVELS.private;

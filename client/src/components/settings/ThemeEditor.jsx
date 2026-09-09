@@ -15,6 +15,7 @@ import {
 } from '../../hooks/useTheme.js';
 import { THEMES } from '../../config/themes.js';
 import { formatError } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 const ThemeEditor = ({
   theme = null, // Existing theme to edit, or null for new theme
@@ -454,7 +455,7 @@ const ThemeEditor = ({
               }}
             >
               <div style={{ color: variables['--text-primary'], fontSize: '0.9rem', marginBottom: '4px' }}>
-                Sample Wave Title
+                Sample {T.Wave} Title
               </div>
               <div style={{ color: variables['--text-muted'], fontSize: '0.7rem' }}>
                 2 participants
@@ -472,7 +473,7 @@ const ThemeEditor = ({
                 @user
               </div>
               <div style={{ color: variables['--text-primary'], fontSize: '0.8rem' }}>
-                This is a sample ping message.
+                This is a sample {T.ping} message.
               </div>
             </div>
 
@@ -486,7 +487,7 @@ const ThemeEditor = ({
                 @another
               </div>
               <div style={{ color: variables['--text-secondary'], fontSize: '0.8rem' }}>
-                A reply to the ping above.
+                A reply to the {T.ping} above.
               </div>
             </div>
 

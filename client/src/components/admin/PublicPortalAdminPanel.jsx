@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { API_URL } from '../../config/constants.js';
+import { T } from '../../config/terminology.js';
 
 const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [portalWaves, setPortalWaves] = useState([]);
@@ -35,12 +36,12 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
     setAdding(true);
     try {
       await fetchAPI('/admin/portal', { method: 'POST', body: { waveId: selectedWaveId, label: label.trim() || undefined } });
-      showToast('Wave added to portal', 'success');
+      showToast(`${T.Wave} added to portal`, 'success');
       setSelectedWaveId('');
       setLabel('');
       await load();
     } catch (err) {
-      showToast(err.message || 'Failed to add wave', 'error');
+      showToast(err.message || `Failed to add ${T.wave}`, 'error');
     } finally {
       setAdding(false);
     }
@@ -49,10 +50,10 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
   const handleRemove = async (waveId) => {
     try {
       await fetchAPI(`/admin/portal/${waveId}`, { method: 'DELETE' });
-      showToast('Wave removed from portal', 'success');
+      showToast(`${T.Wave} removed from portal`, 'success');
       await load();
     } catch (err) {
-      showToast(err.message || 'Failed to remove wave', 'error');
+      showToast(err.message || `Failed to remove ${T.wave}`, 'error');
     }
   };
 
@@ -129,18 +130,18 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
             <a href="/portal" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-amber)' }}>
               {window.location.origin}/portal
             </a>{' '}
-            without login. E2EE-encrypted waves cannot be added.
+            without login. E2EE-encrypted {T.waves} cannot be added.
           </p>
 
           {/* Add wave form */}
           <div style={{ marginBottom: 20, padding: 14, background: 'var(--bg-base)', border: '1px solid var(--border-subtle)' }}>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: 10, fontFamily: 'monospace' }}>
-              ADD WAVE TO PORTAL
+              ADD {T.WAVE} TO PORTAL
             </div>
             <div style={{ marginBottom: 8 }}>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>WAVE</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>{T.WAVE}</div>
               <select value={selectedWaveId} onChange={e => setSelectedWaveId(e.target.value)} style={inputStyle}>
-                <option value="">— select a wave —</option>
+                <option value="">— select a {T.wave} —</option>
                 {allWaves.map(w => (
                   <option key={w.id} value={w.id}>{w.title} ({w.privacy})</option>
                 ))}
@@ -152,7 +153,7 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
                 type="text"
                 value={label}
                 onChange={e => setLabel(e.target.value)}
-                placeholder="Leave blank to use wave title"
+                placeholder={`Leave blank to use ${T.wave} title`}
                 style={inputStyle}
               />
             </div>
@@ -175,7 +176,7 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
             <div style={{ textAlign: 'center', padding: 24 }}><LoadingSpinner /></div>
           ) : portalWaves.length === 0 ? (
             <p style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.8rem', textAlign: 'center', margin: '24px 0' }}>
-              No waves in portal yet.
+              No {T.waves} in portal yet.
             </p>
           ) : (
             portalWaves.map(w => (
@@ -302,7 +303,7 @@ const PortalWaveRow = ({ wave, onRemove, onUpdateLabel, onUpdateEvents, embedSni
         ) : (
           <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: '0.7rem', fontFamily: 'monospace' }}>
             {wave.slug ? 'Slug set — switch on PUBLISH EVENTS to make the page live.'
-                       : 'Give the wave a slug to publish its calendar events publicly.'}
+                       : `Give the ${T.wave} a slug to publish its calendar events publicly.`}
           </div>
         )}
 
@@ -388,7 +389,7 @@ const AttendeeList = ({ waveId, fetchAPI, showToast, rowBtnStyle }) => {
   const cell = { padding: '4px 8px', fontFamily: 'monospace', fontSize: '0.72rem', textAlign: 'left' };
 
   if (!events) return <div style={{ ...cell, color: 'var(--text-muted)' }}>Loading events…</div>;
-  if (!events.length) return <div style={{ ...cell, color: 'var(--text-muted)' }}>This wave has no calendar events.</div>;
+  if (!events.length) return <div style={{ ...cell, color: 'var(--text-muted)' }}>This {T.wave} has no calendar events.</div>;
 
   return (
     <div style={{ marginTop: 8 }}>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { formatError } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
+import { T } from '../../config/terminology.js';
 
 // Report reasons constant
 const REPORT_REASONS = [
-  { value: 'spam', label: 'Spam', desc: 'Unwanted promotional content or repetitive pings' },
+  { value: 'spam', label: 'Spam', desc: `Unwanted promotional content or repetitive ${T.pings}` },
   { value: 'harassment', label: 'Harassment', desc: 'Bullying, threats, or targeted abuse' },
   { value: 'inappropriate', label: 'Inappropriate Content', desc: 'Offensive, explicit, or harmful content' },
   { value: 'other', label: 'Other', desc: 'Other violation of community guidelines' },
@@ -49,7 +50,7 @@ const ReportModal = ({ isOpen, onClose, type, targetId, targetPreview, fetchAPI,
 
   if (!isOpen) return null;
 
-  const typeLabels = { message: 'Ping', ping: 'Ping', wave: 'Wave', user: 'User' };
+  const typeLabels = { message: `${T.Ping}`, ping: `${T.Ping}`, wave: `${T.Wave}`, user: 'User' };
 
   return (
     <div style={{
