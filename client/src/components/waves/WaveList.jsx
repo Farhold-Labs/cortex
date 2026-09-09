@@ -466,7 +466,13 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
           }}>
             {[
               { label: `+ New ${T.Wave}`, color: 'var(--accent-amber)', action: onNewWave },
-              categories.length > 0 && { label: '⚙ Manage Categories', color: 'var(--text-primary)', action: onManageCategories },
+              // v2.84.2 — never gate this on already having a category. It was
+              // `categories.length > 0 &&`, so someone with none had no way to
+              // create their first: the only entry point to the category manager
+              // was hidden until they already had one. The manager itself has
+              // always handled the empty case — it opens on a create form.
+              { label: categories.length > 0 ? '⚙ Manage Categories' : '⚙ Create Category',
+                color: 'var(--text-primary)', action: onManageCategories },
               { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol', color: ghostMode ? 'var(--accent-orange)' : 'var(--text-primary)', action: onToggleGhostProtocol },
               { label: showArchived ? '📬 Show Active' : '📦 Show Archived', color: showArchived ? 'var(--accent-teal)' : 'var(--text-primary)', action: onToggleArchived },
             ].filter(Boolean).map((item, i, arr) => (
