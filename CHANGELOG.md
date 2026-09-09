@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.84.2] - 2026-09-09
+
+### Fixed
+
+- **You could not create your first wave category.** The only entry point to the category manager was hidden until you already had a category — the menu item was gated on `categories.length > 0`, so with none there was nothing to click.
+  - This is the root cause behind the missing ⋮ in v2.84.1: categories are per-user, the grouped wave-list layout was the only one with a row menu, and nobody without a category could reach that layout in the first place.
+  - The item now always appears, reading **⚙ Create Category** when you have none and **⚙ Manage Categories** once you do. The manager itself already handled the empty case — it opens straight onto a create form.
+  - Verified with the account's categories removed: the menu offered Create Category where it previously showed nothing, and the modal opened on its create form.
+
 ## [2.84.1] - 2026-09-09
 
 ### Fixed
