@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
 import { BASE_URL } from '../../config/constants.js';
+import { T } from '../../config/terminology.js';
 
 const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate }) => {
   const [permissions, setPermissions] = useState(bot.permissions || []);
@@ -29,7 +30,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
 
   const handleGrantPermission = async () => {
     if (!selectedWaveId) {
-      showToast('Select a wave', 'error');
+      showToast(`Select a ${T.wave}`, 'error');
       return;
     }
 
@@ -37,7 +38,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
       // Check if wave is encrypted - if so, we need to handle E2EE key distribution
       const wave = waves.find(w => w.id === selectedWaveId);
       if (wave?.encrypted) {
-        showToast('E2EE waves require key distribution - feature coming soon', 'error');
+        showToast(`E2EE ${T.waves} require key distribution - feature coming soon`, 'error');
         return;
       }
 
@@ -171,7 +172,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
             marginBottom: '8px',
           }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-              {bot.isTokenBot ? 'POSTING TOKEN WAVE' : `WAVE PERMISSIONS (${permissions.length})`}
+              {bot.isTokenBot ? 'POSTING TOKEN WAVE' : `${T.WAVE} PERMISSIONS (${permissions.length})`}
             </div>
             {!bot.isTokenBot && (
               <button
@@ -185,13 +186,13 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                   fontSize: '0.7rem',
                 }}
               >
-                + ADD WAVE
+                + ADD {T.WAVE}
               </button>
             )}
           </div>
           {bot.isTokenBot && (
             <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-              This bot is managed by a wave posting token and is locked to one wave.
+              This bot is managed by a {T.wave} posting token and is locked to one {T.wave}.
             </div>
           )}
 
@@ -204,7 +205,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
               border: '1px solid var(--border-subtle)',
               fontSize: '0.75rem',
             }}>
-              Bot has no wave permissions yet
+              Bot has no {T.wave} permissions yet
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -222,7 +223,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                 >
                   <div style={{ flex: 1 }}>
                     <div style={{ color: 'var(--text-primary)', fontSize: '0.8rem', marginBottom: '4px' }}>
-                      {perm.wave_title || 'Unknown Wave'}
+                      {perm.wave_title || `Unknown ${T.Wave}`}
                     </div>
                     <div style={{
                       color: 'var(--text-dim)',
@@ -238,7 +239,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                         onClick={(e) => {
                           e.stopPropagation();
                           navigator.clipboard.writeText(perm.wave_id);
-                          showToast('Wave ID copied!', 'success');
+                          showToast(`${T.Wave} ID copied!`, 'success');
                         }}
                         style={{
                           padding: '2px 4px',
@@ -308,12 +309,12 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
             border: '2px solid var(--accent-green)80', padding: isMobile ? '20px' : '24px',
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ marginBottom: '20px' }}>
-              <GlowText color="var(--accent-green)" size={isMobile ? '1rem' : '1.1rem'}>Grant Wave Access</GlowText>
+              <GlowText color="var(--accent-green)" size={isMobile ? '1rem' : '1.1rem'}>Grant {T.Wave} Access</GlowText>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
               <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '6px' }}>
-                SELECT WAVE
+                SELECT {T.WAVE}
               </label>
               <select
                 value={selectedWaveId}
@@ -327,7 +328,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                   fontSize: '0.85rem',
                 }}
               >
-                <option value="">-- Choose a wave --</option>
+                <option value="">-- Choose a {T.wave} --</option>
                 {waves.map(wave => (
                   <option key={wave.id} value={wave.id}>
                     {wave.title} {wave.encrypted ? '🔒' : ''}

@@ -5,6 +5,7 @@ import { GlowText } from '../ui/SimpleComponents.jsx';
 import VideoFeedItem from './VideoFeedItem.jsx';
 import EmojiPicker from '../ui/EmojiPicker.jsx';
 import ProfileVideoUpload from './ProfileVideoUpload.jsx';
+import { T } from '../../config/terminology.js';
 
 /**
  * VideoFeedView Component (v2.8.0)
@@ -316,8 +317,8 @@ const VideoFeedView = ({
         <div style={{ fontSize: '3rem' }}>▶</div>
         <GlowText color="var(--accent-amber)" size="1.1rem">NO VIDEOS YET</GlowText>
         <div style={{ fontSize: '0.85rem', maxWidth: '300px' }}>
-          Videos from public waves and waves you participate in will appear here.
-          Record a video ping to get started!
+          Videos from public {T.waves} and {T.waves} you participate in will appear here.
+          Record a video {T.ping} to get started!
         </div>
         <button
           onClick={() => loadVideos(true)}

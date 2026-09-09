@@ -1,3 +1,4 @@
+import { T } from '../../config/terminology.js';
 // ============ Calendar Utilities (v2.47.0) ============
 
 // Returns 'YYYY-MM-DD' in the browser's local timezone (not UTC).
@@ -16,7 +17,7 @@ export const CATEGORY_COLORS = {
 
 export const SCOPE_LABELS = {
   server:   'Server-Wide',
-  wave:     'Wave',
+  wave:     `${T.Wave}`,
   personal: 'Personal',
 };
 

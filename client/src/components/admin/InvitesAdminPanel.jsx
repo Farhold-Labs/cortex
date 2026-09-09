@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { canAccess } from '../../config/constants.js';
+import { T } from '../../config/terminology.js';
 
 // ============ INVITES ADMIN PANEL (v2.67.0) ============
 // Single-use invite links. The raw token comes back from the server exactly once, at
@@ -138,7 +139,7 @@ const InvitesAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, us
 
             <div style={{ marginBottom: '12px' }}>
               <label style={labelStyle}>NOTE (optional — for your own reference)</label>
-              <input type="text" value={note} maxLength={200} placeholder="e.g. stage crew"
+              <input type="text" value={note} maxLength={200} placeholder={`e.g. stage ${T.crew}`}
                 onChange={(e) => setNote(e.target.value)} style={inputStyle} />
             </div>
 

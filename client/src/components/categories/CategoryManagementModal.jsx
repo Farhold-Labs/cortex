@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showToast, onCategoriesChange, isMobile }) => {
   const [editingCategory, setEditingCategory] = useState(null);

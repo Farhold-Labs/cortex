@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { canAccess } from '../../config/constants.js';
 import { LOADING, formatError } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 const UserManagementPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, currentUser }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -157,7 +158,7 @@ const UserManagementPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, 
         method: 'POST',
         body: { waveId: kickWaveId.trim() }
       });
-      showToast(`@${selectedUser.handle} kicked from wave`, 'success');
+      showToast(`@${selectedUser.handle} kicked from ${T.wave}`, 'success');
       setShowConfirm(null);
       setSelectedUser(null);
       setKickWaveId('');
@@ -403,7 +404,7 @@ const UserManagementPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, 
                     onClick={() => { setShowConfirm('kick-from-wave'); setKickWaveId(''); }}
                     style={{ ...buttonStyle, border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)' }}
                   >
-                    KICK FROM WAVE
+                    KICK FROM {T.WAVE}
                   </button>
                 )}
                 {canAssignRoles && selectedUser.id !== currentUser?.id && (
@@ -613,7 +614,7 @@ const UserManagementPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, 
               <input
                 value={kickWaveId}
                 onChange={(e) => setKickWaveId(e.target.value)}
-                placeholder="Wave ID (e.g., thread-abc123...)"
+                placeholder={`${T.Wave} ID (e.g., ${T.thread}-abc123...)`}
                 style={{ ...inputStyle, width: '100%', marginBottom: '12px', boxSizing: 'border-box' }}
               />
               <div style={{ display: 'flex', gap: '8px' }}>

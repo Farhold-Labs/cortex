@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { SUCCESS, formatError } from '../../../messages.js';
 import { Avatar } from '../ui/SimpleComponents.jsx';
+import { T } from '../../config/terminology.js';
 
 const GroupInvitationsPanel = ({ invitations, fetchAPI, showToast, onInvitationsChange, onGroupsChange, isMobile }) => {
   const [processing, setProcessing] = useState({});
@@ -22,7 +23,7 @@ const GroupInvitationsPanel = ({ invitations, fetchAPI, showToast, onInvitations
     setProcessing(prev => ({ ...prev, [invitationId]: 'decline' }));
     try {
       await fetchAPI(`/groups/invitations/${invitationId}/decline`, { method: 'POST' });
-      showToast('Crew invitation declined', 'info');
+      showToast(`${T.Crew} invitation declined`, 'info');
       onInvitationsChange();
     } catch (err) {
       showToast(err.message || formatError('Failed to decline invitation'), 'error');

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 /**
  * JellyfinConnectionManager (v2.14.0)
@@ -315,7 +316,7 @@ const JellyfinConnectionManager = ({ fetchAPI, showToast, isMobile }) => {
           <div style={styles.emptyIcon}>📺</div>
           <div>No Jellyfin servers connected</div>
           <div style={{ fontSize: '0.8rem', marginTop: '8px' }}>
-            Connect a Jellyfin server to share media in waves
+            Connect a Jellyfin server to share media in {T.waves}
           </div>
         </div>
       ) : (

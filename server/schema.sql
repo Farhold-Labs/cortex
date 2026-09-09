@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS waves (
     -- Profile Wave fields (v2.9.0)
     is_profile_wave INTEGER DEFAULT 0,      -- 1 if this is a user's profile video wave
     profile_owner_id TEXT REFERENCES users(id) -- Owner of the profile wave
-, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL);
+, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL, post_policy TEXT NOT NULL DEFAULT 'all', allow_replies INTEGER NOT NULL DEFAULT 1, allow_reactions INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS idx_waves_created_by ON waves(created_by);
 CREATE INDEX IF NOT EXISTS idx_waves_privacy ON waves(privacy);
 CREATE INDEX IF NOT EXISTS idx_waves_crew ON waves(crew_id);

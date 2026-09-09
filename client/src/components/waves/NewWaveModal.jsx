@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { PRIVACY_LEVELS } from '../../config/constants.js';
 import { FEDERATION } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
+import { T } from '../../config/terminology.js';
 
 const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled }) => {
   const [title, setTitle] = useState('');
@@ -58,14 +59,14 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
         border: '2px solid var(--accent-amber)40', padding: '24px',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <GlowText color="var(--accent-amber)" size="1.1rem">New Wave</GlowText>
+          <GlowText color="var(--accent-amber)" size="1.1rem">New {T.Wave}</GlowText>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>✕</button>
         </div>
 
         <div style={{ marginBottom: '16px' }}>
           <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>TITLE</div>
           <input type="text" value={title} onChange={(e) => setTitle(e.target.value)}
-            placeholder="Wave title..."
+            placeholder={`${T.Wave} title...`}
             style={{
               width: '100%', padding: '10px', boxSizing: 'border-box',
               background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'inherit',
@@ -94,9 +95,9 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
 
         {privacy === 'group' && (
           <div style={{ marginBottom: '16px' }}>
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SELECT CREW</div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SELECT {T.CREW}</div>
             {groups.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', padding: '10px', background: 'var(--bg-elevated)' }}>No crews. Create one first.</div>
+              <div style={{ color: 'var(--text-muted)', padding: '10px', background: 'var(--bg-elevated)' }}>No {T.crews}. Create one first.</div>
             ) : groups.map(g => (
               <button key={g.id} onClick={() => setSelectedGroup(g.id)} style={{
                 width: '100%', padding: '10px', marginBottom: '4px', textAlign: 'left',

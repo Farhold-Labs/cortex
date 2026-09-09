@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { VERSION, API_URL, BASE_URL, PRIVACY_LEVELS } from '../config/constants.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
 import { LoadingSpinner, Toast, Avatar, GlowText } from '../components/ui/SimpleComponents.jsx';
+import { T } from '../config/terminology.js';
 
 const PublicMessageView = ({ messageId, onLogin, onRegister }) => {
   const [data, setData] = useState(null);
@@ -84,7 +85,7 @@ const PublicMessageView = ({ messageId, onLogin, onRegister }) => {
         <div style={cardStyle}>
           <h2 style={{ color: 'var(--accent-amber)', margin: '0 0 16px 0' }}>Private Content</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: '8px' }}>
-            This message is in a private wave.
+            This message is in a private {T.wave}.
           </p>
           <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>
             Log in or create an account to view it.
@@ -141,7 +142,7 @@ const PublicMessageView = ({ messageId, onLogin, onRegister }) => {
           gap: '6px',
         }}>
           <span>○</span>
-          <span>{data.wave?.title || 'Cortex Wave'}</span>
+          <span>{data.wave?.title || `Cortex ${T.Wave}`}</span>
         </div>
 
         {/* Author and content */}

@@ -3,6 +3,7 @@ import { VERSION, API_URL, BASE_URL, PRIVACY_LEVELS } from '../config/constants.
 import { FEDERATION } from '../../messages.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
 import { LoadingSpinner, Toast, Avatar, GlowText } from '../components/ui/SimpleComponents.jsx';
+import { T } from '../config/terminology.js';
 
 const AboutServerPage = ({ onBack }) => {
   const [info, setInfo] = useState(null);
@@ -132,7 +133,7 @@ const AboutServerPage = ({ onBack }) => {
           </div>
           <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', color: 'var(--text-secondary)' }}>
             <span>Users: <strong style={{ color: 'var(--text-primary)' }}>{info.stats?.users || 0}</strong></span>
-            <span>Waves: <strong style={{ color: 'var(--text-primary)' }}>{info.stats?.waves || 0}</strong></span>
+            <span>{T.Waves}: <strong style={{ color: 'var(--text-primary)' }}>{info.stats?.waves || 0}</strong></span>
             <span>Uptime: <strong style={{ color: 'var(--accent-green)' }}>{formatUptime(info.stats?.uptime || 0)}</strong></span>
           </div>
         </div>
@@ -174,7 +175,7 @@ const AboutServerPage = ({ onBack }) => {
             <div style={{ marginBottom: '6px' }}>• Messages are end-to-end encrypted (ECDH P-384 + AES-256-GCM)</div>
             <div style={{ marginBottom: '6px' }}>• Emails hashed + encrypted — never stored in plaintext</div>
             <div style={{ marginBottom: '6px' }}>• IPs anonymized, user-agents truncated, timestamps rounded</div>
-            <div style={{ marginBottom: '6px' }}>• Wave participation, crew membership, and push subscriptions encrypted at rest</div>
+            <div style={{ marginBottom: '6px' }}>• {T.Wave} participation, {T.crew} membership, and push subscriptions encrypted at rest</div>
             <div style={{ marginBottom: '6px' }}>• Contact lists client-encrypted — server can't read them</div>
             <div style={{ marginBottom: '6px' }}>• No analytics, no ads, no third-party tracking</div>
             <div style={{ marginTop: '10px' }}>

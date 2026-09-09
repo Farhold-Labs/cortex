@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { formatError } from '../../../messages.js';
 import { Avatar } from '../ui/SimpleComponents.jsx';
+import { T } from '../../config/terminology.js';
 
 const SentCrewInvitationsPanel = ({ invitations, fetchAPI, showToast, onInvitationsChange, isMobile }) => {
   const [cancelling, setCancelling] = useState({});
@@ -10,7 +11,7 @@ const SentCrewInvitationsPanel = ({ invitations, fetchAPI, showToast, onInvitati
     setCancelling(prev => ({ ...prev, [invitationId]: true }));
     try {
       await fetchAPI(`/crews/invitations/${invitationId}`, { method: 'DELETE' });
-      showToast('Crew invitation cancelled', 'info');
+      showToast(`${T.Crew} invitation cancelled`, 'info');
       onInvitationsChange();
     } catch (err) {
       showToast(err.message || formatError('Failed to cancel invitation'), 'error');

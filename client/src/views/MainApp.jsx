@@ -4,6 +4,7 @@ import { useE2EE } from '../../e2ee-context.jsx';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
 import { VERSION, API_URL, BASE_URL, canAccess, FONT_SIZES, MESSAGE_FONTS, DEFAULT_MESSAGE_FONT } from '../config/constants.js';
+import { setTerminology } from '../config/terminology.js';
 import { getRandomTagline, SUCCESS, NOTIFICATION, formatError, GHOST_PROTOCOL } from '../../messages.js';
 import { storage } from '../utils/storage.js';
 import { updateAppBadge, subscribeToPush } from '../utils/pwa.js';
@@ -37,6 +38,7 @@ import VideoFeedView from '../components/feed/VideoFeedView.jsx';
 import { useVoiceCall } from '../hooks/useVoiceCall.js';
 import { initializeCustomTheme, applyCustomTheme, removeCustomTheme, getCurrentCustomTheme } from '../hooks/useTheme.js';
 import DockedCallWindow from '../components/calls/DockedCallWindow.jsx';
+import { T } from '../config/terminology.js';
 import WatchPartyPlayer from '../components/media/WatchPartyPlayer.jsx';
 import HolidayEffectsOverlay from '../components/effects/HolidayEffectsOverlay.jsx';
 
@@ -302,12 +304,12 @@ function MainApp({ sharePingId }) {
           } else if (data.error) {
             setToast({ message: data.error, type: 'error' });
           } else {
-            setToast({ message: 'Could not load shared ping', type: 'error' });
+            setToast({ message: `Could not load shared ${T.ping}`, type: 'error' });
           }
         })
         .catch((err) => {
           console.error('[Share] Error:', err);
-          setToast({ message: 'Could not find shared ping', type: 'error' });
+          setToast({ message: `Could not find shared ${T.ping}`, type: 'error' });
         });
     }
   }, [sharePingId, user]);
@@ -499,7 +501,7 @@ function MainApp({ sharePingId }) {
       const data = await fetchAPI('/waves?hidden=true');
       setWaves(data);
     } catch (err) {
-      showToastMsg(formatError('Failed to load hidden waves'), 'error');
+      showToastMsg(formatError(`Failed to load hidden ${T.waves}`), 'error');
       setGhostMode(false);
     }
   }, [fetchAPI]);
@@ -548,7 +550,7 @@ function MainApp({ sharePingId }) {
       loadCategories();
     } catch (err) {
       console.error('Failed to move wave:', err);
-      showToastMsg(formatError('Failed to move wave'), 'error');
+      showToastMsg(formatError(`Failed to move ${T.wave}`), 'error');
     }
   }, [fetchAPI, loadWaves, loadCategories, showToastMsg]);
 
@@ -566,7 +568,7 @@ function MainApp({ sharePingId }) {
       ));
     } catch (err) {
       console.error('Failed to pin/unpin wave:', err);
-      showToastMsg(formatError('Failed to update wave'), 'error');
+      showToastMsg(formatError(`Failed to update ${T.wave}`), 'error');
     }
   }, [fetchAPI, showToastMsg]);
 
@@ -665,7 +667,7 @@ function MainApp({ sharePingId }) {
         // We were removed — close the tab for this wave
         const removedTab = openTabs.find(t => t.waveId === data.waveId);
         if (removedTab) closeTab(removedTab.id);
-        showToastMsg(NOTIFICATION.removedFromWave(data.wave?.title || 'a wave'), 'info');
+        showToastMsg(NOTIFICATION.removedFromWave(data.wave?.title || `a ${T.wave}`), 'info');
         loadWaves();
       } else {
         // Someone else was removed
@@ -676,7 +678,7 @@ function MainApp({ sharePingId }) {
       }
     } else if (data.type === 'added_to_wave') {
       // We were added to a wave
-      showToastMsg(NOTIFICATION.addedToWave(data.wave?.title || 'a wave'), 'success');
+      showToastMsg(NOTIFICATION.addedToWave(data.wave?.title || `a ${T.wave}`), 'success');
       loadWaves();
     } else if (data.type === 'category_created' || data.type === 'category_updated' || data.type === 'category_deleted' || data.type === 'categories_reordered') {
       // Category management events (v2.2.0)
@@ -689,7 +691,7 @@ function MainApp({ sharePingId }) {
       loadCategories();
     } else if (data.type === 'removed_from_wave') {
       // We were removed from a wave (by someone else) — close its tab
-      showToastMsg(NOTIFICATION.removedFromWave(data.wave?.title || 'a wave'), 'info');
+      showToastMsg(NOTIFICATION.removedFromWave(data.wave?.title || `a ${T.wave}`), 'info');
       const removedTab2 = openTabs.find(t => t.waveId === data.wave?.id);
       if (removedTab2) closeTab(removedTab2.id);
       loadWaves();
@@ -751,7 +753,7 @@ function MainApp({ sharePingId }) {
     } else if (data.type === 'group_invitation_received') {
       // Someone invited us to a crew
       setGroupInvitations(prev => [data.invitation, ...prev]);
-      const crewName = data.invitation.group?.name || 'a crew';
+      const crewName = data.invitation.group?.name || `a ${T.crew}`;
       const inviterName = data.invitation.invited_by_user?.displayName || 'Someone';
       showToastMsg(NOTIFICATION.crewInviteReceived(inviterName, crewName), 'info');
     } else if (data.type === 'group_invitation_accepted') {
@@ -1347,7 +1349,7 @@ function MainApp({ sharePingId }) {
       loadWaves();
     } catch (err) {
       console.error('Failed to create wave:', err);
-      showToastMsg(err.message || formatError('Failed to create wave'), 'error');
+      showToastMsg(err.message || formatError(`Failed to create ${T.wave}`), 'error');
     }
   };
 
@@ -1360,7 +1362,7 @@ function MainApp({ sharePingId }) {
       setActiveView('waves');
       setShowSearch(false);
     } else {
-      showToastMsg(formatError('Wave not found or not accessible'), 'error');
+      showToastMsg(formatError(`${T.Wave} not found or not accessible`), 'error');
     }
   };
 
@@ -1369,7 +1371,13 @@ function MainApp({ sharePingId }) {
     let cancelled = false;
     fetch(`${API_URL}/instance-config`)
       .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data && !cancelled) setInstanceFeatures(data.features || {}); })
+      .then(data => {
+        if (!data || cancelled) return;
+        setInstanceFeatures(data.features || {});
+        // v2.82.0 — instance vocabulary, cached by setTerminology so later
+        // loads paint the right nouns immediately instead of swapping them.
+        if (data.terminology) setTerminology(data.terminology);
+      })
       .catch(() => { /* keep defaults — every feature stays available */ })
       .finally(() => { if (!cancelled) setInstanceFeaturesLoaded(true); });
     return () => { cancelled = true; };
@@ -1383,7 +1391,7 @@ function MainApp({ sharePingId }) {
     // on an instance that has the video feed switched off and then vanishes.
     view => view !== 'feed' || (instanceFeaturesLoaded && instanceFeatures.videoFeed !== false)
   );
-  const navLabels = { waves: 'WAVES', feed: 'FEED', people: 'PEOPLE', calendar: 'CALENDAR', settings: 'SETTINGS' };
+  const navLabels = { waves: `${T.WAVES}`, feed: 'FEED', people: 'PEOPLE', calendar: 'CALENDAR', settings: 'SETTINGS' };
 
   const scanLinesEnabled = user?.preferences?.scanLines !== false; // Default to true
 
@@ -1914,7 +1922,7 @@ function MainApp({ sharePingId }) {
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--border-primary)' }}>
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: '4rem', marginBottom: '16px' }}>◎</div>
-                    <div>Select a wave or create a new one</div>
+                    <div>Select a {T.wave} or create a new one</div>
                   </div>
                 </div>
               )}
@@ -2095,7 +2103,7 @@ function MainApp({ sharePingId }) {
               openWaveTab({ id: waveData.id, title: waveData.title });
               if (scrollToMessageId) setScrollToMessageId(scrollToMessageId);
               setActiveView('waves');
-            }).catch(() => showToastMsg(formatError('Failed to open wave'), 'error'));
+            }).catch(() => showToastMsg(formatError(`Failed to open ${T.wave}`), 'error'));
           }
         }}
         isMobile={isMobile}

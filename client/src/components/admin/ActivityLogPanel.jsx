@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { formatError } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 const ActivityLogPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [activities, setActivities] = useState([]);
@@ -25,11 +26,11 @@ const ActivityLogPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
     admin_password_reset: { label: 'Admin Password Reset', color: 'var(--accent-purple)' },
     admin_force_logout: { label: 'Admin Force Logout', color: 'var(--accent-purple)' },
     admin_disable_mfa: { label: 'Admin MFA Disabled', color: 'var(--accent-purple)' },
-    create_wave: { label: 'Wave Created', color: 'var(--accent-teal)' },
-    delete_wave: { label: 'Wave Deleted', color: 'var(--accent-orange)' },
-    create_ping: { label: 'Ping Created', color: 'var(--text-secondary)' },
-    edit_ping: { label: 'Ping Edited', color: 'var(--text-secondary)' },
-    delete_ping: { label: 'Ping Deleted', color: 'var(--accent-orange)' },
+    create_wave: { label: `${T.Wave} Created`, color: 'var(--accent-teal)' },
+    delete_wave: { label: `${T.Wave} Deleted`, color: 'var(--accent-orange)' },
+    create_ping: { label: `${T.Ping} Created`, color: 'var(--text-secondary)' },
+    edit_ping: { label: `${T.Ping} Edited`, color: 'var(--text-secondary)' },
+    delete_ping: { label: `${T.Ping} Deleted`, color: 'var(--accent-orange)' },
   };
 
   const loadActivities = useCallback(async (newOffset = 0) => {
@@ -169,8 +170,8 @@ const ActivityLogPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
           <option value="admin_warn">Admin Warnings</option>
           <option value="admin_password_reset">Admin Password Resets</option>
           <option value="admin_disable_mfa">Admin MFA Disabled</option>
-          <option value="create_wave">Waves Created</option>
-          <option value="delete_wave">Waves Deleted</option>
+          <option value="create_wave">{T.Waves} Created</option>
+          <option value="delete_wave">{T.Waves} Deleted</option>
         </select>
       </div>
 
