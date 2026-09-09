@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.81.5] - 2026-09-08
+
+### Fixed
+
+- **The ping ⋮ menu still opened underneath the wave header.** The flip-to-fit logic added in v2.62.0 measured the free space against the **viewport** (`rect.top` and `window.innerHeight`), but the menu is rendered inside the message scroller, which clips it. The wave header, the wave context bar and the compose bar all sit inside the viewport and outside that scroller, so the measurement counted space the menu could never use and chose a direction that was then cut off.
+  - Measured on a 93-ping wave at a 500x717 viewport: the scroller occupied 199–524, but the old code opened the menu at **top = 66** — 133px of it hidden above the scroller, behind the header. It read 282px of room above the button when only 75px was real.
+  - The v2.74.0 wave context bar made this worse by taking more height above the scroller, which is why it resurfaced after v2.62.0 appeared to fix it.
+  - The menu now measures against the scrolling ancestor that actually clips it, so "space above" and "space below" mean space *inside the visible message area*.
+  - It also caps its height to the room available on the chosen side and scrolls internally, so a menu that fits neither side is still fully reachable instead of disappearing behind the chrome.
+  - Verified in the running client at both edges: menu 207–456 and 314–519 against a 199–524 band — fully visible in both cases, where the previous build was clipped at the top edge.
+
 ## [2.81.4] - 2026-09-08
 
 ### Fixed
