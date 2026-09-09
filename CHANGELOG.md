@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.84.1] - 2026-09-09
+
+### Fixed
+
+- **The per-wave ⋮ menu never appeared for anyone without wave categories**, so Pin was unreachable and Mute — added the same day in v2.84.0 — was invisible to them.
+  - The wave list has two entirely separate render paths: a categorised layout and a flat one. Only the categorised layout ever had the row menu.
+  - Categories are **per-user** and only exist once someone creates one, so this was never about a particular server. It happened to show up on the second node because nobody there had created a category — that instance had **zero** — while the first node had four.
+  - The menu is now one shared `WaveRowMenu` component used by both layouts, rather than a second copy that could drift.
+  - Verified on the exact affected path by removing the test account's only category: the flat list went from **0** row menus to **13**, each offering Pin and Mute, with the mute call firing and no console errors.
+
 ## [2.84.0] - 2026-09-09
 
 ### Added
