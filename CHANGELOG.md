@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.84.0] - 2026-09-09
+
+### Added
+
+- **Per-wave mute.** A wave's ⋮ menu in the wave list now offers 🔕 MUTE NOTIFICATIONS, silencing that wave without hiding it. The wave stays in the list and still accrues unread counts — muting means "stop interrupting me", not "hide this".
+  - Silences in-app notifications, push and email for that wave, for that person only.
+  - **Calendar reminders are deliberately exempt.** Muting a chatty wave should not make someone miss a rehearsal; an event reminder is a commitment they opted into, not conversation.
+  - Stored in its own `wave_mutes` table rather than as a column on `wave_participants`, because a wave you can *see* is not always one you are a participant *of*. Public and Verse-Wide waves are visible to everyone on the node with no participant row at all — and those are exactly the ones people want to silence.
+  - Enforced in `shouldCreateNotification`, which every recipient decision in the notification fan-out already routes through, so a future notification type is covered without anyone remembering to add the check. `sendPushNotification` and `sendEmailNotificationIfOffline` carry the same guard as a backstop.
+  - Unmuting skips the wave-access check on purpose: someone who has lost access to a wave must still be able to clear a stale mute rather than be stuck with it.
+
 ## [2.83.2] - 2026-09-09
 
 ### Fixed

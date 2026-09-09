@@ -1164,6 +1164,14 @@ CREATE TABLE IF NOT EXISTS known_devices (
         );
 CREATE INDEX IF NOT EXISTS idx_known_devices_user ON known_devices(user_id);
 
+CREATE TABLE IF NOT EXISTS wave_mutes (
+          user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          wave_id  TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          muted_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, wave_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_wave_mutes_wave ON wave_mutes(wave_id);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
