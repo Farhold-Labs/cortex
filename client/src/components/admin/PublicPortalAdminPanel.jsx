@@ -130,13 +130,13 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
             <a href="/portal" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-amber)' }}>
               {window.location.origin}/portal
             </a>{' '}
-            without login. E2EE-encrypted waves cannot be added.
+            without login. E2EE-encrypted {T.waves} cannot be added.
           </p>
 
           {/* Add wave form */}
           <div style={{ marginBottom: 20, padding: 14, background: 'var(--bg-base)', border: '1px solid var(--border-subtle)' }}>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: 10, fontFamily: 'monospace' }}>
-              ADD WAVE TO PORTAL
+              ADD {T.WAVE} TO PORTAL
             </div>
             <div style={{ marginBottom: 8 }}>
               <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>{T.WAVE}</div>
@@ -176,7 +176,7 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
             <div style={{ textAlign: 'center', padding: 24 }}><LoadingSpinner /></div>
           ) : portalWaves.length === 0 ? (
             <p style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.8rem', textAlign: 'center', margin: '24px 0' }}>
-              No waves in portal yet.
+              No {T.waves} in portal yet.
             </p>
           ) : (
             portalWaves.map(w => (

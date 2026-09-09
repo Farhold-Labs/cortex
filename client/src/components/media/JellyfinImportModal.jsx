@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
+import { T } from '../../config/terminology.js';
 
 /**
  * JellyfinImportModal (v2.14.0)
@@ -132,9 +133,9 @@ const JellyfinImportModal = ({ isOpen, onClose, fetchAPI, showToast, isMobile })
               <div style={styles.message}>
                 Media import functionality will allow you to download and cache
                 content from your Jellyfin server for offline viewing and faster
-                sharing in waves.
+                sharing in {T.waves}.
                 <br /><br />
-                For now, you can share Jellyfin content directly in waves using
+                For now, you can share Jellyfin content directly in {T.waves} using
                 the media picker in the compose area.
               </div>
             </>

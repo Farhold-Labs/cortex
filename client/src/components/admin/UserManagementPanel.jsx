@@ -404,7 +404,7 @@ const UserManagementPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, 
                     onClick={() => { setShowConfirm('kick-from-wave'); setKickWaveId(''); }}
                     style={{ ...buttonStyle, border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)' }}
                   >
-                    KICK FROM WAVE
+                    KICK FROM {T.WAVE}
                   </button>
                 )}
                 {canAssignRoles && selectedUser.id !== currentUser?.id && (

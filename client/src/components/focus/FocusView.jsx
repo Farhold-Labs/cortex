@@ -428,7 +428,7 @@ const FocusView = ({
   if (!focusedPing) {
     return (
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)' }}>
-        No ping focused
+        No {T.ping} focused
       </div>
     );
   }

@@ -927,7 +927,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
 
                 {tokens.length === 0 && !showAddToken && (
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    Post to this wave via API without a user account
+                    Post to this {T.wave} via API without a user account
                   </div>
                 )}
               </>

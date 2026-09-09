@@ -186,13 +186,13 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                   fontSize: '0.7rem',
                 }}
               >
-                + ADD WAVE
+                + ADD {T.WAVE}
               </button>
             )}
           </div>
           {bot.isTokenBot && (
             <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-              This bot is managed by a wave posting token and is locked to one wave.
+              This bot is managed by a {T.wave} posting token and is locked to one {T.wave}.
             </div>
           )}
 
@@ -205,7 +205,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
               border: '1px solid var(--border-subtle)',
               fontSize: '0.75rem',
             }}>
-              Bot has no wave permissions yet
+              Bot has no {T.wave} permissions yet
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -314,7 +314,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
               <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '6px' }}>
-                SELECT WAVE
+                SELECT {T.WAVE}
               </label>
               <select
                 value={selectedWaveId}

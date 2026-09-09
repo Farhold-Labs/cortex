@@ -345,7 +345,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
               {renderDropZone(category.id, category.name)}
               {categoryWaves.length === 0 ? (
                 <div style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
-                  No waves in this category
+                  No {T.waves} in this category
                 </div>
               ) : (
                 categoryWaves.map(wave => renderWaveItem(wave, true))

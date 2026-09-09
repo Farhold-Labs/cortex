@@ -1390,7 +1390,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
             </div>
             {blockedUsers.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--bg-hover)' }}>
-                No blocked users. Blocked users cannot send you contact requests, invite you to crews, or have their messages shown to you.
+                No blocked users. Blocked users cannot send you contact requests, invite you to {T.crews}, or have their messages shown to you.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1596,7 +1596,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
             })}
           </div>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Row spacing for the wave list — Compact fits more, Spacious is easier to tap.
+            Row spacing for the {T.wave} list — Compact fits more, Spacious is easier to tap.
           </div>
         </div>
 
@@ -1647,7 +1647,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                   The quick brown fox jumps over the lazy dog.
                 </div>
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '3px' }}>
-                  Pings, Waves, Crews — 0123456789 · !?@#
+                  {T.Pings}, {T.Waves}, {T.Crews} — 0123456789 · !?@#
                 </div>
               </div>
             );
@@ -1719,7 +1719,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
             {(user?.preferences?.autoFocusMessages === true) ? '⤢ ENABLED' : '⤢ DISABLED'}
           </button>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Automatically enter Focus View when clicking pings with replies
+            Automatically enter Focus View when clicking {T.pings} with replies
           </div>
         </div>
 
@@ -1963,7 +1963,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </div>
 
         <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
-          ℹ️ The Discover feed shows video pings from public waves and waves you participate in.
+          ℹ️ The Discover feed shows video {T.pings} from public {T.waves} and {T.waves} you participate in.
         </div>
       </CollapsibleSection>
 
@@ -1980,7 +1980,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
           isMobile={isMobile}
         />
         <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
-          ℹ️ Connect your Jellyfin, Emby, or Plex media server to share content in waves.
+          ℹ️ Connect your Jellyfin, Emby, or Plex media server to share content in {T.waves}.
         </div>
       </CollapsibleSection>
 
@@ -2443,7 +2443,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                 {"📦 " + UI_LABELS.exportData}
               </div>
               <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Download a copy of all your personal data including profile, pings, contacts, and settings.
+                Download a copy of all your personal data including profile, {T.pings}, contacts, and settings.
               </div>
               <button
                 onClick={handleExportData}

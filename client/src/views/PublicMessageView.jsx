@@ -85,7 +85,7 @@ const PublicMessageView = ({ messageId, onLogin, onRegister }) => {
         <div style={cardStyle}>
           <h2 style={{ color: 'var(--accent-amber)', margin: '0 0 16px 0' }}>Private Content</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: '8px' }}>
-            This message is in a private wave.
+            This message is in a private {T.wave}.
           </p>
           <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>
             Log in or create an account to view it.

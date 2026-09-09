@@ -166,7 +166,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
             <>
               {/* Info */}
               <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Bots can post messages to waves via API. Each bot has a unique API key and optional webhook URL.
+                Bots can post messages to {T.waves} via API. Each bot has a unique API key and optional webhook URL.
               </div>
 
               {/* Create button */}
@@ -328,7 +328,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
             🔑 WAVE POSTING TOKENS ({postingTokens.length})
           </div>
           <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
-            Per-wave tokens created by wave owners. Each token is locked to its wave — it cannot post to any other wave.
+            Per-{T.wave} tokens created by {T.wave} owners. Each token is locked to its {T.wave} — it cannot post to any other {T.wave}.
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {postingTokens.map(token => (

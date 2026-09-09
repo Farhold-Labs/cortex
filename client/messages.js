@@ -136,9 +136,9 @@ export const NOTIFICATION = {
 
 // ============ CONFIRM DIALOG MESSAGES ============
 export const CONFIRM_DIALOG = {
-  deleteCrew: "Disband this crew? There's no putting it back together.",
-  leaveCrew: "Jump ship from this crew? You'll need a new invite to get back.",
-  leaveWave: "Leave this wave? You'll drift out of range.",
+  deleteCrew: `Disband this ${T.crew}? There's no putting it back together.`,
+  leaveCrew: `Jump ship from this ${T.crew}? You'll need a new invite to get back.`,
+  leaveWave: `Leave this ${T.wave}? You'll drift out of range.`,
   deleteMessage: "Scrub this signal from the cortex? Can't unring that bell.",
   deleteBot: (name) => `Decommission ${name}? This can't be undone.`,
   regenerateKey: "Generate new encryption keys? Old messages stay locked with the old keys.",

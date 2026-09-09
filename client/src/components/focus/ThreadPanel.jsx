@@ -448,7 +448,7 @@ const ThreadPanel = ({
             fontWeight: 600,
             fontFamily: 'monospace',
           }}>
-            THREAD
+            {T.THREAD}
           </div>
           <div style={{
             color: 'var(--text-muted)',
