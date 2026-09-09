@@ -2483,6 +2483,30 @@ export class DatabaseSQLite {
       console.log('✅ waves.post_policy / allow_replies / allow_reactions added');
     }
 
+    // v2.84.0 — per-wave mute.
+    //
+    // Its own table rather than a wave_participants column: a wave you can SEE
+    // is not always a wave you are a participant OF. Public and Verse-Wide
+    // waves are visible to everyone on the node with no participant row at all,
+    // and those are precisely the ones people want to silence. Hanging mute off
+    // participation would either fail for them or force a fake participant row.
+    const waveMutes = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='wave_mutes'`
+    ).get();
+    if (!waveMutes) {
+      console.log('📝 Creating wave_mutes table (v2.84.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS wave_mutes (
+          user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          wave_id  TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          muted_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, wave_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_wave_mutes_wave ON wave_mutes(wave_id);
+      `);
+      console.log('✅ wave_mutes table created');
+    }
+
     // v2.75.0 — Long-lived sessions via refresh-token rotation.
     //
     // Before this, the JWT *was* the session: its exp carried the whole
@@ -5109,6 +5133,8 @@ export class DatabaseSQLite {
 
   // === Wave Methods ===
   getWavesForUser(userId, showArchived = false, showHidden = false, participation = null) {
+    // v2.84.0 — one lookup for the whole list rather than a query per row.
+    const mutedWaveIds = new Set(this.getMutedWaveIds(userId));
     // Get user's crew IDs
     const userCrewIds = this.db.prepare('SELECT crew_id FROM crew_members WHERE user_id = ?').all(userId).map(r => r.crew_id);
 
@@ -5294,6 +5320,7 @@ export class DatabaseSQLite {
       postPolicy: r.post_policy || 'all',
       allowReplies: r.allow_replies == null ? true : r.allow_replies === 1,
       allowReactions: r.allow_reactions == null ? true : r.allow_reactions === 1,
+      muted: mutedWaveIds.has(r.id),
     }));
   }
 
@@ -5301,6 +5328,8 @@ export class DatabaseSQLite {
   // Skips participants array and returns only essential fields
   // Saves 60-80% bandwidth for wave list requests
   getWavesForUserMinimal(userId, showArchived = false, showHidden = false, participation = null) {
+    // v2.84.0 — one lookup for the whole list rather than a query per row.
+    const mutedWaveIds = new Set(this.getMutedWaveIds(userId));
     // Get user's crew IDs
     const userCrewIds = this.db.prepare('SELECT crew_id FROM crew_members WHERE user_id = ?').all(userId).map(r => r.crew_id);
 
@@ -5427,6 +5456,7 @@ export class DatabaseSQLite {
       postPolicy: r.post_policy || 'all',
       allowReplies: r.allow_replies == null ? true : r.allow_replies === 1,
       allowReactions: r.allow_reactions == null ? true : r.allow_reactions === 1,
+      muted: mutedWaveIds.has(r.id),
       updatedAt: r.updated_at,
       encrypted: r.encrypted === 1,
       ping_count: r.ping_count,
@@ -5622,6 +5652,34 @@ export class DatabaseSQLite {
     sets.push('updated_at = ?'); vals.push(new Date().toISOString());
     this.db.prepare(`UPDATE waves SET ${sets.join(', ')} WHERE id = ?`).run(...vals, waveId);
     return this.getWave(waveId);
+  }
+
+  // ===== Per-wave mute (v2.84.0) =====
+  // Silences notifications only. The wave still appears in the list and still
+  // accrues unread counts — muting is "stop interrupting me", not "hide this".
+
+  muteWave(userId, waveId) {
+    this.db.prepare(
+      'INSERT OR IGNORE INTO wave_mutes (user_id, wave_id, muted_at) VALUES (?, ?, ?)'
+    ).run(userId, waveId, new Date().toISOString());
+    return true;
+  }
+
+  unmuteWave(userId, waveId) {
+    this.db.prepare('DELETE FROM wave_mutes WHERE user_id = ? AND wave_id = ?').run(userId, waveId);
+    return true;
+  }
+
+  isWaveMuted(userId, waveId) {
+    if (!userId || !waveId) return false;
+    return !!this.db.prepare(
+      'SELECT 1 FROM wave_mutes WHERE user_id = ? AND wave_id = ?'
+    ).get(userId, waveId);
+  }
+
+  getMutedWaveIds(userId) {
+    return this.db.prepare('SELECT wave_id FROM wave_mutes WHERE user_id = ?')
+      .all(userId).map(r => r.wave_id);
   }
 
   updateWaveTimestamp(waveId) {

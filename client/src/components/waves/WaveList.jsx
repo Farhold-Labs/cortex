@@ -6,7 +6,7 @@ import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import { T } from '../../config/terminology.js';
 
-const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
+const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, onWaveMute, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
@@ -208,6 +208,27 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
                     >
                       {wave.pinned ? '📌 Unpin' : '📍 Pin to top'}
                     </div>
+                    {/* Mute/Unmute (v2.84.0) — silences notifications for this
+                        wave without hiding it or clearing its unread count. */}
+                    {onWaveMute && (
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onWaveMute(wave.id, !wave.muted);
+                          setMoveMenuOpen(null);
+                        }}
+                        style={{
+                          padding: '8px 12px', cursor: 'pointer', fontSize: '0.8rem',
+                          color: wave.muted ? 'var(--accent-amber)' : 'var(--text-primary)',
+                          background: 'transparent',
+                          borderBottom: '1px solid var(--border-subtle)',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        {wave.muted ? '🔔 Unmute' : '🔕 Mute notifications'}
+                      </div>
+                    )}
                     {/* Category options */}
                     {categories.map(cat => (
                       <div
@@ -384,7 +405,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
   );
 };
 
-const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onManageCategories, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh }) => {
+const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onWaveMute, onManageCategories, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh }) => {
   // Pull down at the top of the list to reload it (v2.77.0). Additive: the list
   // already refreshes itself on websocket events; this is for the moments when
   // someone wants to be sure.
@@ -473,6 +494,7 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
         onCategoryToggle={onCategoryToggle}
         onWaveMove={onWaveMove}
         onWavePin={onWavePin}
+        onWaveMute={onWaveMute}
         isMobile={isMobile}
         waveNotifications={waveNotifications}
         activeCalls={activeCalls}

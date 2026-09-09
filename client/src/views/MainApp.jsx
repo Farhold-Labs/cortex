@@ -555,6 +555,19 @@ function MainApp({ sharePingId }) {
   }, [fetchAPI, loadWaves, loadCategories, showToastMsg]);
 
   // Handle wave pin/unpin
+  // v2.84.0 — per-wave mute. Optimistic like pinning: the toggle is a local
+  // preference and a failed call is reverted, so the row never lies about state.
+  const handleWaveMute = useCallback(async (waveId, muted) => {
+    setWaves(prev => prev.map(w => (w.id === waveId ? { ...w, muted } : w)));
+    try {
+      await fetchAPI(`/waves/${waveId}/mute`, { method: muted ? 'POST' : 'DELETE' });
+      showToastMsg(muted ? `Muted — notifications off for this ${T.wave}` : `Unmuted`, 'success');
+    } catch (err) {
+      setWaves(prev => prev.map(w => (w.id === waveId ? { ...w, muted: !muted } : w)));
+      showToastMsg(formatError(`Failed to ${muted ? 'mute' : 'unmute'} ${T.wave}`), 'error');
+    }
+  }, [fetchAPI, showToastMsg]);
+
   const handleWavePin = useCallback(async (waveId, pinned) => {
     try {
       await fetchAPI(`/waves/${waveId}/pin`, {
@@ -1675,6 +1688,7 @@ function MainApp({ sharePingId }) {
                   onCategoryToggle={handleCategoryToggle}
                   onWaveMove={handleWaveMove}
                   onWavePin={handleWavePin}
+                  onWaveMute={handleWaveMute}
                   onManageCategories={() => setCategoryManagementOpen(true)}
                   ghostMode={ghostMode}
                   onToggleGhostProtocol={handleToggleGhostProtocol}
