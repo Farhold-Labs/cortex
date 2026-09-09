@@ -18867,6 +18867,8 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
 
     return res.json({
       ...wave,
+      // v2.84.0 — per-user, so it cannot live in rowToWave
+      muted: db.isWaveMuted ? db.isWaveMuted(req.user.userId, waveId) : false,
       creator_name: creator?.displayName || 'Unknown',
       creator_handle: creator?.handle || 'unknown',
       participants,
@@ -18954,6 +18956,8 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     creator_handle: creator?.handle || 'unknown',
     participants,
     is_archived: isArchived,
+    // v2.84.0 — per-user, so it cannot live in rowToWave
+    muted: db.isWaveMuted ? db.isWaveMuted(req.user.userId, waveId) : false,
     parent_wave: parentWave, // Breadcrumb navigation for burst waves (v2.1.0)
     // Ping fields
     pings: buildPingTree(limitedPings),
@@ -19648,6 +19652,31 @@ app.post('/api/waves/:id/rebroadcast', authenticateToken, async (req, res) => {
     attempted: results.length,
     results,
   });
+});
+
+// Per-wave mute (v2.84.0). Silences notifications for this wave without
+// hiding it: the wave stays in the list and still accrues unread counts.
+//
+// Deliberately available for any wave the user can SEE, not only ones they
+// participate in — public and Verse-Wide waves have no participant row and are
+// exactly the ones people want to silence.
+app.post('/api/waves/:id/mute', authenticateToken, (req, res) => {
+  const waveId = sanitizeInput(req.params.id);
+  const wave = db.getWave(waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+  if (!canAccessWaveFromCache(waveId, req.user.userId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  db.muteWave(req.user.userId, waveId);
+  res.json({ success: true, muted: true, waveId });
+});
+
+app.delete('/api/waves/:id/mute', authenticateToken, (req, res) => {
+  const waveId = sanitizeInput(req.params.id);
+  // No access check on unmute: someone who has lost access to a wave must still
+  // be able to clear a stale mute row rather than be stuck with it forever.
+  db.unmuteWave(req.user.userId, waveId);
+  res.json({ success: true, muted: false, waveId });
 });
 
 // Invite federated participants to an existing wave
@@ -21507,7 +21536,7 @@ app.post('/api/pings/:id/react', authenticateToken, (req, res) => {
 
   // Notify the ping author when someone reacts (not when removing, not self-reactions)
   if (result.added && result.authorId && result.authorId !== req.user.userId) {
-    if (shouldCreateNotification(result.authorId, 'reaction')) {
+    if (shouldCreateNotification(result.authorId, 'reaction', result.waveId)) {
       const reactor = db.findUserById(req.user.userId);
       const wave = db.getWave ? db.getWave(result.waveId) : null;
       const waveTitle = wave?.title || 'a wave';
@@ -22553,9 +22582,14 @@ if (FEDERATION_ENABLED && FEDERATION_DECOY_ENABLED) {
 // now resolves through resolveNotificationPreferences().
 
 // Check if a user should receive a notification based on their preferences
-function shouldCreateNotification(userId, notificationType) {
+function shouldCreateNotification(userId, notificationType, waveId = null) {
   const user = db.findUserById(userId);
   if (!user) return false;
+
+  // v2.84.0 — per-wave mute. Checked here because every recipient decision in
+  // the notification fan-out already routes through this function, so a future
+  // notification type is covered without remembering to add the check.
+  if (waveId && db.isWaveMuted && db.isWaveMuted(userId, waveId)) return false;
 
   const prefs = resolveNotificationPreferences(user);
 
@@ -22609,6 +22643,13 @@ function getAppBaseUrl() {
 // Fire-and-forget — never throws, never blocks the caller.
 async function sendEmailNotificationIfOffline(userId, type, emailData) {
   try {
+    // v2.84.0 — per-wave mute silences email too. Callers pass waveId; without
+    // it the mute cannot be evaluated and the send proceeds as before.
+    if (emailData?.waveId && db.isWaveMuted && db.isWaveMuted(userId, emailData.waveId)) {
+      console.log(`[email-notif] Skipping ${type} — wave muted by recipient`);
+      return;
+    }
+
     const emailService = getEmailService();
     if (!emailService.isConfigured()) {
       console.log(`[email-notif] Skipping ${type} — email service not configured`);
@@ -22706,7 +22747,7 @@ function createPingNotifications(ping, wave, author) {
   if (mentionedHandles.includes('everyone')) {
     for (const participant of participants) {
       if (!isBot && participant.id === author.id) continue;
-      if (!shouldCreateNotification(participant.id, 'direct_mention')) continue;
+      if (!shouldCreateNotification(participant.id, 'direct_mention', wave.id)) continue;
 
       mentionedUsers.add(participant.id);
 
@@ -22748,7 +22789,7 @@ function createPingNotifications(ping, wave, author) {
       mentionedUsers.add(mentionedUser.id);
 
       // Check user's notification preferences
-      if (!shouldCreateNotification(mentionedUser.id, 'direct_mention')) continue;
+      if (!shouldCreateNotification(mentionedUser.id, 'direct_mention', wave.id)) continue;
 
       // Create direct mention notification
       const notification = db.createNotification({
@@ -22780,6 +22821,7 @@ function createPingNotifications(ping, wave, author) {
       });
 
       sendEmailNotificationIfOffline(mentionedUser.id, 'mention', {
+        waveId: wave.id,
         mentionerName: author.displayName,
         waveName: wave.title,
         preview: contentPreview,
@@ -22796,7 +22838,7 @@ function createPingNotifications(ping, wave, author) {
     const parentPing = db.getMessage(ping.parentId);
     if (parentPing && (isBot || parentPing.authorId !== author.id) && !mentionedUsers.has(parentPing.authorId)) {
       // Check user's notification preferences
-      if (shouldCreateNotification(parentPing.authorId, 'reply')) {
+      if (shouldCreateNotification(parentPing.authorId, 'reply', wave.id)) {
         const notification = db.createNotification({
           userId: parentPing.authorId,
           type: 'reply',
@@ -22824,6 +22866,7 @@ function createPingNotifications(ping, wave, author) {
         });
 
         sendEmailNotificationIfOffline(parentPing.authorId, 'reply', {
+          waveId: wave.id,
           replierName: author.displayName,
           waveName: wave.title,
           preview: contentPreview,
@@ -22843,7 +22886,7 @@ function createPingNotifications(ping, wave, author) {
     if (mentionedUsers.has(participant.id)) continue;
 
     // Check user's notification preferences
-    if (!shouldCreateNotification(participant.id, 'wave_activity')) continue;
+    if (!shouldCreateNotification(participant.id, 'wave_activity', wave.id)) continue;
 
     // Check wave notification settings
     if (!db.shouldNotifyForWave(participant.id, wave.id, 'wave_activity')) continue;
@@ -23005,6 +23048,16 @@ function broadcastToWave(waveId, message, excludeWs = null) {
 
 // Send push notification to a user who isn't connected via WebSocket
 async function sendPushNotification(userId, payload) {
+  // v2.84.0 — a muted wave must not reach the device even if some future call
+  // site forgets the shouldCreateNotification check.
+  //
+  // Calendar reminders are deliberately exempt. Muting a wave means "stop
+  // interrupting me about the conversation", not "let me miss the rehearsal" —
+  // an event reminder is a commitment the person opted into, and silencing it
+  // as a side effect of muting a chatty wave would be a nasty surprise.
+  if (payload?.waveId && payload?.type !== 'calendar_reminder'
+      && db.isWaveMuted && db.isWaveMuted(userId, payload.waveId)) return;
+
   const subscriptions = pushSubs.getSubscriptions(userId);
   if (subscriptions.length === 0) return;
 
