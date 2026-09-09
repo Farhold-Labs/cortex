@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.81.4] - 2026-09-08
+
+### Fixed
+
+- **The native apps had never had their version bumped, so a new build could not present itself as an upgrade.** Android sat at `versionCode 1` / `versionName "1.0"` and iOS at build `1` / `MARKETING_VERSION 1.0`, unchanged since the Capacitor apps were added in v2.31.0 — every release since then shipped a binary indistinguishable from the one before it.
+  - This surfaced while preparing the first release to actually carry app binaries as assets. Until now every APK was built and sideloaded by hand, so the stale version was invisible.
+  - Consequences it removes: Android had no upgrade semantics between builds and reported "1.0" in system settings; the Play Store and App Store Connect both **reject** an upload whose build number did not increase, which would have blocked the store submissions on the roadmap.
+  - Both platforms now derive their version from the Cortex release — `versionName`/`MARKETING_VERSION` track the release string, and the build number uses `major * 10000 + minor * 100 + patch` (2.81.4 → `28104`), which is monotonic across future releases and readable at a glance.
+
+- No server or client behaviour changes. This release exists to carry the corrected native build metadata and the first published app binaries; the fixes users will notice are those in v2.81.3, which the binaries include.
+
 ## [2.81.3] - 2026-09-08
 
 ### Fixed
