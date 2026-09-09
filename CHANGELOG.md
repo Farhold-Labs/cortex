@@ -5,6 +5,20 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.81.3] - 2026-09-08
+
+### Fixed
+
+- **Android users could be stranded on the loading screen, and force-closing did not help.** The start-up identity check added in v2.75.0 awaits a token refresh before rendering anything, and that request had **no timeout** — `fetch` has none by default. On a stalled connection (patchy mobile data, a captive portal) the promise never settled, so the app never left its loading state, and relaunching simply repeated it.
+  - v2.81.2 is what made it visible: before it, most users had no refresh token, so start-up skipped the refresh entirely. Once far more sessions became rotating, far more clients reached the un-deadlined request.
+  - The refresh now has a 12-second deadline. A timeout is treated as a network failure, **not** an ended session — the refresh token is kept and the next attempt retries, because signing someone out for being on a train would be worse than the bug.
+  - A 20-second watchdog now guarantees the loading screen ends regardless. The specific cause is fixed, but the deeper fault was that one un-settled promise anywhere in start-up could withhold the whole UI; showing a cached session or the login screen always beats an endless spinner.
+
+- **The Android app could not download attachments.** Tapping a PDF did nothing at all — no file, no error. An Android WebView ignores the HTML `download` attribute and has no download handling of its own, and Capacitor does not add any, so the tap went nowhere.
+  - `MainActivity` now registers a `DownloadListener` that hands downloads to Android's `DownloadManager`, which saves to Downloads and shows the usual progress notification.
+  - `DownloadManager` runs outside the app and cannot see the WebView's `Authorization` header, so an authenticated media URL would have returned 401. The media route already accepts `?token=`, and the web layer now appends the token at click time — only on the native shell, only for this instance's own media routes, and never written into stored message content.
+  - **Requires a rebuilt Android app**, since the listener is native code. The web half ships with the server; the download itself only starts working once a new APK is installed.
+
 ## [2.81.2] - 2026-09-07
 
 ### Fixed

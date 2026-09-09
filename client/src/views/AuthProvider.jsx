@@ -50,6 +50,21 @@ function AuthProvider({ children }) {
     const controller = new AbortController();
     let timeoutId = setTimeout(() => controller.abort(), 10000);
 
+    // Belt and braces: whatever happens above, stop showing the loading screen.
+    //
+    // Users were stranded on "establishing signal" indefinitely, and relaunching
+    // repeated it. The cause was an un-deadlined fetch (now fixed), but the
+    // deeper fault is that a single un-settled promise anywhere in start-up
+    // could withhold the entire UI. Rendering the app with a cached session — or
+    // the login screen — is always better than an eternal spinner, so this
+    // guarantees an exit regardless of what the checks below do.
+    const watchdog = setTimeout(() => {
+      setLoading(prev => {
+        if (prev) console.warn('⚠️  Start-up checks did not finish in time — continuing without them.');
+        return false;
+      });
+    }, 20000);
+
     // Check for browser session timeout (24 hours for non-PWA browser tabs)
     if (token && storage.isSessionExpired()) {
       clearTimeout(timeoutId);
@@ -57,6 +72,7 @@ function AuthProvider({ children }) {
       storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
       setToken(null); setUser(null);
       setLoading(false);
+      clearTimeout(watchdog);
       return () => controller.abort();
     }
 
@@ -66,6 +82,7 @@ function AuthProvider({ children }) {
       tokenJustRenewedRef.current = false;
       clearTimeout(timeoutId);
       setLoading(false);
+      clearTimeout(watchdog);
       return () => controller.abort();
     }
 
@@ -121,7 +138,7 @@ function AuthProvider({ children }) {
             console.warn('Auth check failed, keeping cached session:', err.message);
           }
         })
-        .finally(() => setLoading(false));
+        .finally(() => { clearTimeout(watchdog); setLoading(false); });
     } else {
       clearTimeout(timeoutId);
       // No token — clear any stale user data left over from a session-only login
@@ -132,11 +149,13 @@ function AuthProvider({ children }) {
         storage.removeSessionStart();
         setUser(null);
       }
+      clearTimeout(watchdog);
       setLoading(false);
     }
 
     return () => {
       clearTimeout(timeoutId);
+      clearTimeout(watchdog);
       controller.abort();
     };
   }, [token]);
