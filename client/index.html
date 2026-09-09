@@ -687,9 +687,16 @@
         opacity: 1;
         pointer-events: auto;
       }
-      .cortex-msg-row:hover {
-        padding-right: 90px !important;
-      }
+      /* No padding change on hover. This used to be `padding-right: 90px` on
+         :hover, which narrowed the text column, re-wrapped the text and changed
+         the row's height — so the row moved under the pointer. On touch it was
+         worse: a tap sticks :hover, so the ping jumped just as you reached for
+         its controls, and a mis-tap could move a reply onto the wrong ping.
+
+         The pill is position:absolute over the row's top-right corner, which is
+         the tail of the header line and normally empty, so it needs no reserved
+         space. It is opaque and transient, the same overlay approach Slack and
+         Discord use for their hover toolbars. */
       /* Instant loading screen — painted from the HTML itself (no JS/network),
          so users never see a black screen while the bundle downloads on slow
          connections. React replaces #root's children on mount, removing it. */

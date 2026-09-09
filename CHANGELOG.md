@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.83.2] - 2026-09-09
+
+### Fixed
+
+- **Pings moved when you hovered or tapped them.** `.cortex-msg-row:hover` applied `padding-right: 90px`, which narrowed the text column, re-wrapped the text and changed the row's height — so the ping resized and shifted, along with everything below it.
+  - Measured on a real ping: **118px tall while hovered, 93px when not** — a 25px jump, with the following ping moving by the same amount.
+  - Worse on a phone, where a tap sticks `:hover`: the ping moved exactly as you reached for its reactions or ⋮ menu, which could put those controls under a different ping. This caused a reply to be moved onto the wrong ping.
+  - The action pill is `position: absolute` over the row's top-right corner — the tail of the header line, normally empty — so it never needed reserved space. The padding rule is gone; the pill simply overlays while visible, the same approach Slack and Discord use.
+  - Verified with the cursor parked off-row first, so "unhovered" was genuinely unhovered: **0px height change and 0px shift of the following ping**, with the pill confirmed visible so the test could not pass vacuously.
+
 ## [2.83.1] - 2026-09-09
 
 ### Fixed
