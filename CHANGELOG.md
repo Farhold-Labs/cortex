@@ -5,6 +5,36 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.82.0] - 2026-09-09
+
+### Added
+
+- **Announcement waves.** Any wave can now restrict who posts in it and whether it takes interaction at all — the shape needed for an updates feed that shouldn't collect comments around each post.
+  - Three new settings in wave settings: **who can post** (everyone, or only the wave owner and instance moderators/admins), **allow replies**, and **allow reactions**.
+  - Modelled as three columns on `waves` rather than a fourth `privacy` value, deliberately. Privacy answers *who may see*; these answer *who may write*. Folding them together would make "crew-only announcement" inexpressible and force a new branch into every privacy check. As separate flags, an existing wave converts in place without touching its visibility.
+  - Replies and reactions are **absolute when switched off** — staff included. An admin who needs to add something posts a new announcement or turns replies back on. A staff exemption was considered and rejected: it makes the wave behave differently depending on who is looking at it, which is the confusion the feature exists to remove.
+  - Threading follows the replies switch, since a thread is a reply surface. *Un*threading stays allowed, so turning replies off cannot strand a wave with threads nobody can collapse.
+  - Enforced server-side on every write path. The client hides the composer, the reply arrow and the reaction controls, but that is a courtesy — the server refuses regardless.
+  - Defaults reproduce today's behaviour exactly, so every existing wave is unchanged by the migration.
+
+- **Configurable terminology.** The Firefly vocabulary is now optional. An admin can switch the whole instance between **Firefly** (`wave` / `ping` / `crew`) and **Standard** (`message` / `comment` / `group`), or override any individual word.
+  - Set under SETTINGS → ADMIN PANEL → INSTANCE DEFAULTS → TERMINOLOGY, with singular and plural per term and a live preview.
+  - **Instance-wide, not per-user.** Two people in the same wave reading different nouns makes support and documentation impossible, and email has to pick one vocabulary regardless.
+  - Only the singular and plural are stored; capitalised and upper-case forms are derived, so they cannot drift out of sync.
+  - The resolved vocabulary ships on the public `/api/instance-config`, so the login screen and public pages use it too, and is cached in `localStorage` so the correct words paint on first load instead of flashing the default and swapping.
+  - Firefly **flavour text is untouched** — taglines like "Find a crew, find a job, keep flying" are quotes, not nouns, and swapping words inside them produces nonsense. Voice and vocabulary are separate axes; only the vocabulary is configurable.
+
+### Fixed
+
+- **Logging in showed a blank page (introduced in v2.81.3).** The Android download handler added in v2.81.3 was wired up with `useEffect` placed *after* `AppContent`'s early returns. On the render where `user` flips from null to signed-in, the component mounted one more hook than the previous render — React error #310, which unmounts the whole tree and leaves a white screen.
+  - Only the **login transition** was affected. Reloading recovered, because by then `user` was already set and the hook count was stable from the first render — which is why it went unnoticed through v2.81.3, v2.81.4 and v2.81.5.
+  - Found while verifying an unrelated terminology change; confirmed pre-existing by reproducing it on a v2.81.5 build, so it is not a regression from this release.
+  - The effect now runs above the early returns, where every other hook already lives.
+
+- **[SECURITY] Emoji reactions had no authorization check at all.** `POST /api/pings/:id/react` looked a ping up by id and toggled the reaction, with no wave-access check anywhere in the path — not in the route, not in `togglePingReaction`. Any authenticated user could react to any ping in any wave, **including private waves they cannot see**, and the 200-versus-404 response confirmed whether a given ping id existed.
+  - Found while adding the reactions switch, which needed the wave record the route had never loaded.
+  - The route now resolves the ping's wave and checks access before touching anything. Verified: a non-participant reacting into a private wave now gets 403 where it previously succeeded.
+
 ## [2.81.5] - 2026-09-08
 
 ### Fixed

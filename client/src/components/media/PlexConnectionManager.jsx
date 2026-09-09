@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 /**
  * PlexConnectionManager (v2.15.0)
@@ -432,7 +433,7 @@ const PlexConnectionManager = ({ fetchAPI, showToast, isMobile }) => {
           <div style={styles.emptyIcon}>📺</div>
           <div>No Plex servers connected</div>
           <div style={{ fontSize: '0.8rem', marginTop: '8px' }}>
-            Connect a Plex server to share media in waves
+            Connect a Plex server to share media in {T.waves}
           </div>
         </div>
       ) : (

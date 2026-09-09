@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
 import BotDetailsModal from './BotDetailsModal.jsx';
+import { T } from '../../config/terminology.js';
 
 const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [bots, setBots] = useState([]);
@@ -165,7 +166,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
             <>
               {/* Info */}
               <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Bots can post messages to waves via API. Each bot has a unique API key and optional webhook URL.
+                Bots can post messages to {T.waves} via API. Each bot has a unique API key and optional webhook URL.
               </div>
 
               {/* Create button */}
@@ -235,7 +236,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                         </div>
                         {bot.wave_count > 0 && (
                           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
-                            Waves: {bot.wave_titles || `${bot.wave_count} wave(s)`}
+                            Waves: {bot.wave_titles || `${bot.wave_count} ${T.wave}(s)`}
                           </div>
                         )}
                       </div>
@@ -327,7 +328,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
             🔑 WAVE POSTING TOKENS ({postingTokens.length})
           </div>
           <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
-            Per-wave tokens created by wave owners. Each token is locked to its wave — it cannot post to any other wave.
+            Per-{T.wave} tokens created by {T.wave} owners. Each token is locked to its {T.wave} — it cannot post to any other {T.wave}.
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {postingTokens.map(token => (
@@ -343,7 +344,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                     {token.name}
                   </div>
                   <div style={{ color: 'var(--accent-amber)', fontSize: '0.75rem', marginBottom: '3px' }}>
-                    → {token.wave_title || 'Unknown Wave'}
+                    → {token.wave_title || `Unknown ${T.Wave}`}
                   </div>
                   <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
                     Owner: @{token.creator_handle} •{' '}

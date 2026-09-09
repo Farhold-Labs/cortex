@@ -1,6 +1,7 @@
 import React from 'react';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import { CONFIRM } from '../../../messages.js';
+import { T } from '../../config/terminology.js';
 
 const DeleteConfirmModal = ({ isOpen, onClose, waveTitle, onConfirm, isMobile }) => {
   if (!isOpen) return null;
@@ -16,7 +17,7 @@ const DeleteConfirmModal = ({ isOpen, onClose, waveTitle, onConfirm, isMobile })
         border: '2px solid var(--accent-orange)80', padding: isMobile ? '20px' : '24px',
       }} onClick={(e) => e.stopPropagation()}>
         <div style={{ marginBottom: '20px' }}>
-          <GlowText color="var(--accent-orange)" size={isMobile ? '1rem' : '1.1rem'}>Delete Wave</GlowText>
+          <GlowText color="var(--accent-orange)" size={isMobile ? '1rem' : '1.1rem'}>Delete {T.Wave}</GlowText>
         </div>
 
         <div style={{ marginBottom: '24px' }}>

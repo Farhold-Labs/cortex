@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { storage } from '../../utils/storage.js';
 import { Avatar } from '../ui/SimpleComponents.jsx';
+import { T } from '../../config/terminology.js';
 
 /**
  * VideoFeedItem Component (v2.8.0)
@@ -498,7 +499,7 @@ const VideoFeedItem = ({
             cursor: 'pointer',
             backdropFilter: 'blur(4px)',
           }}
-          title="View Wave"
+          title={`View ${T.Wave}`}
         >
           <span style={{ fontSize: '1.3rem', color: 'var(--accent-amber)', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>◈</span>
         </button>
