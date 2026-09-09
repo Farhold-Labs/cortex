@@ -10794,6 +10794,15 @@ app.get('/api/invites/:token', registerLimiter, (req, res) => {
 
 // ============ Instance Config Endpoints (v2.65.0) ============
 
+// v2.85.0 — keep the email service's signature in step with the instance name,
+// so a second node signs its mail with its own name instead of "Cortex".
+function syncEmailInstanceName() {
+  try {
+    const branding = db.getInstanceConfig().branding || {};
+    getEmailService().setInstanceName(branding.instanceName || FEDERATION_NODE_NAME || 'Cortex');
+  } catch { /* email templates fall back to 'Cortex' */ }
+}
+
 // Public instance info — served WITHOUT auth so the login screen can render branding and
 // know whether registration is open. Deliberately narrow: branding + feature flags only,
 // never preference defaults or anything operator-sensitive.
@@ -11015,6 +11024,7 @@ app.put('/api/admin/instance-config', authenticateToken, requireStepUp, (req, re
 
   try {
     const updated = db.updateInstanceConfig(patch, admin.id);
+    syncEmailInstanceName(); // branding.instanceName may have just changed
     if (db.logActivity) db.logActivity(admin.id, 'instance_config_updated', 'instance_config', '1', { namespaces: Object.keys(patch) });
     console.log(`⚙️  Instance config updated by @${admin.handle}: ${Object.keys(patch).join(', ')}`);
     res.json(updated);
@@ -23579,6 +23589,7 @@ server.listen(PORT, BIND_HOST, () => {
   // depend on a third party being reachable.
   setImmediate(() => {
     try {
+      syncEmailInstanceName();
       getEmailService().verifyConnection?.();
     } catch (err) {
       console.warn('Email reachability check could not run:', err.message);

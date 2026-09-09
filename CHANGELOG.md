@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.85.0] - 2026-09-09
+
+### Changed
+
+- **Emails are now plain and light instead of the Serenity terminal theme.** Every message — event reminders, mentions, replies, invites, password resets, verification codes, temporary passwords, new-device alerts, warnings and the admin test email — now uses system fonts and dark text on white, with one accent.
+  - Dark HTML email does not survive contact with real mail clients: Outlook drops much of the styling, and Gmail and Apple Mail re-invert colours in dark mode, which is how amber on near-black becomes amber on white. Heavy inline styling on a dark ground also reads poorly to spam heuristics.
+  - Monospace is kept only where it earns its place — verification codes and temporary passwords, which people read character by character and retype.
+  - All ten templates now share one layout. Previously only three used the shared shell and the other seven carried their own copies of the same colours, so a change had to be made in ten places.
+
+- **Emails are signed with the instance's name rather than a hardcoded "CORTEX".** A second node was sending mail headed with this project's name instead of its own. The name is read from instance branding at boot and refreshed whenever an admin saves the configuration.
+
+### Fixed
+
+- **The plain-text part of emails ran words together.** Tags were stripped without separators, so a table produced `WhenIn 1 hour` and paragraphs collapsed into one another. Block elements and table cells now produce line breaks and label separators, with cell separation applied only *between* cells so values no longer end in a stray colon.
+
 ## [2.84.2] - 2026-09-09
 
 ### Fixed
