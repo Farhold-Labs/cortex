@@ -8284,13 +8284,22 @@ export class DatabaseSQLite {
   }
 
   // Create a participant wave (copy of origin wave from another server)
-  createParticipantWave({ id, title, privacy, createdBy, originNode, originWaveId }) {
+  // v2.83.1 — announcement settings travel with the wave. Without them a
+  // participant copy was created at the permissive defaults, so a wave that is
+  // announcements-only on its origin arrived elsewhere accepting replies and
+  // reactions from anyone.
+  createParticipantWave({ id, title, privacy, createdBy, originNode, originWaveId,
+                          postPolicy, allowReplies, allowReactions }) {
     const now = new Date().toISOString();
 
     this.db.prepare(`
-      INSERT INTO waves (id, title, privacy, created_by, created_at, updated_at, federation_state, origin_node, origin_wave_id)
-      VALUES (?, ?, ?, ?, ?, ?, 'participant', ?, ?)
-    `).run(id, title, privacy, createdBy, now, now, originNode, originWaveId);
+      INSERT INTO waves (id, title, privacy, created_by, created_at, updated_at, federation_state, origin_node, origin_wave_id,
+                         post_policy, allow_replies, allow_reactions)
+      VALUES (?, ?, ?, ?, ?, ?, 'participant', ?, ?, ?, ?, ?)
+    `).run(id, title, privacy, createdBy, now, now, originNode, originWaveId,
+           ['all', 'staff'].includes(postPolicy) ? postPolicy : 'all',
+           allowReplies === false ? 0 : 1,
+           allowReactions === false ? 0 : 1);
 
     return this.getWave(id);
   }

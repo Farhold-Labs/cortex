@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.83.1] - 2026-09-09
+
+### Fixed
+
+- **Announcement settings did not travel with a federated wave.** A wave set to announcements-only on its origin arrived on an allied port accepting replies and reactions from anyone there, so the restriction had to be re-applied by hand on every port.
+  - The broadcast payload carried only id, title, privacy, creator and creation date; the receiving node created the participant copy at the permissive defaults.
+  - `post_policy`, `allow_replies` and `allow_reactions` now travel with the wave, on both the broadcast and the federated-invite path.
+  - The origin is treated as **authoritative**: an existing participant copy is brought into line on every broadcast, so a re-broadcast repairs a wave that arrived before this fix, and tightening a wave on its origin cannot leave other ports permissive.
+  - Changing the settings on an origin wave now **syncs to allied ports on save**, rather than only when the wave is re-broadcast.
+  - **Both ends must be on v2.83.1** — the sending node has to include the settings and the receiving node has to apply them.
+
+- A participant copy created from a **federated invite** also arrived at the permissive defaults; it now carries the origin's settings too.
+
 ## [2.83.0] - 2026-09-09
 
 ### Added

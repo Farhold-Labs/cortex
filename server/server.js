@@ -17595,6 +17595,19 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         // Check if we already have this wave as a participant
         let localWave = db.getWaveByOrigin(sourceNode.nodeName, wave.id);
 
+        // v2.83.1 — the origin is authoritative for who may post here, so bring
+        // an existing copy into line. Without this a re-broadcast could never
+        // repair a wave that arrived before the settings were federated, and
+        // tightening the origin would silently leave other ports permissive.
+        if (localWave && db.updateWaveAnnouncementSettings) {
+          db.updateWaveAnnouncementSettings(localWave.id, {
+            postPolicy: ['all', 'staff'].includes(wave.postPolicy) ? wave.postPolicy : 'all',
+            allowReplies: wave.allowReplies !== false,
+            allowReactions: wave.allowReactions !== false,
+          });
+          console.log(`🔄 Updated announcement settings on participant wave ${localWave.id}`);
+        }
+
         if (!localWave) {
           // Create participant wave
           const participantWaveId = uuidv4();
@@ -17605,6 +17618,9 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             createdBy: invitedUser.id, // Local user as creator reference
             originNode: sourceNode.nodeName,
             originWaveId: wave.id,
+            postPolicy: wave.postPolicy,
+            allowReplies: wave.allowReplies,
+            allowReactions: wave.allowReactions,
           });
 
           // Cache any remote participants
@@ -17674,6 +17690,19 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         // Check if we already have this wave as a participant
         let localWave = db.getWaveByOrigin(sourceNode.nodeName, wave.id);
 
+        // v2.83.1 — the origin is authoritative for who may post, so bring an
+        // existing copy into line on every broadcast. Without this, a wave that
+        // arrived before the settings were federated could never be repaired,
+        // and tightening the origin would leave other ports still permissive.
+        if (localWave && db.updateWaveAnnouncementSettings) {
+          db.updateWaveAnnouncementSettings(localWave.id, {
+            postPolicy: ['all', 'staff'].includes(wave.postPolicy) ? wave.postPolicy : 'all',
+            allowReplies: wave.allowReplies !== false,
+            allowReactions: wave.allowReactions !== false,
+          });
+          console.log(`🔄 Synced announcement settings onto participant wave ${localWave.id}`);
+        }
+
         if (!localWave) {
           // Create participant wave with privacy set to crossServer
           // This allows any local user to see it
@@ -17697,6 +17726,9 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             createdBy: referenceUser.id,
             originNode: sourceNode.nodeName,
             originWaveId: wave.id,
+            postPolicy: wave.postPolicy,
+            allowReplies: wave.allowReplies,
+            allowReactions: wave.allowReactions,
           });
 
           // Cache any remote participants
@@ -19390,6 +19422,12 @@ function buildWaveBroadcastPayload(wave) {
       privacy: 'crossServer',
       createdBy: wave.createdBy,
       createdAt: wave.createdAt,
+      // v2.83.1 — announcement settings must travel with the wave, or a
+      // wave that is announcements-only here arrives elsewhere accepting
+      // replies and reactions from anyone on that node.
+      postPolicy: wave.postPolicy || 'all',
+      allowReplies: wave.allowReplies !== false,
+      allowReactions: wave.allowReactions !== false,
     },
     participants: localParticipants.map(p => ({
       id: p.id, handle: p.handle, displayName: p.name, avatar: p.avatar, nodeName: ourNodeName,
@@ -19513,6 +19551,18 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
     }
     broadcastToWave(waveId, { type: 'wave_settings_changed', waveId,
       postPolicy: wave.postPolicy, allowReplies: wave.allowReplies, allowReactions: wave.allowReactions });
+
+    // v2.83.1 — push the change to allied ports. The origin is authoritative
+    // for who may post, so tightening a wave here must not leave other ports
+    // still accepting replies. The receiver updates an existing copy in place
+    // and skips history it already holds, so this is safe to fire on every
+    // save; it is an admin toggling checkboxes, not a hot path.
+    if (FEDERATION_ENABLED && updated
+        && (updated.privacy === 'crossServer' || updated.privacy === 'cross-server')
+        && updated.federationState === 'origin') {
+      broadcastWaveToAlliedNodes(updated);
+      console.log(`📢 Syncing announcement settings for ${waveId} to allied ports`);
+    }
   }
 
   // If wave is being promoted to crossServer and federation is enabled, broadcast to all trusted nodes
