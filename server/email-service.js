@@ -38,8 +38,15 @@ class EmailService {
     this.fromAddress = process.env.EMAIL_FROM || 'noreply@cortex.local';
     this.transporter = null;
     this.configured = false;
+    // v2.85.0 — set from instance config at boot and whenever it changes, so
+    // mail is signed with the instance's own name rather than "Cortex".
+    this.instanceName = 'Cortex';
 
     this.initialize();
+  }
+
+  setInstanceName(name) {
+    if (typeof name === 'string' && name.trim()) this.instanceName = name.trim();
   }
 
   initialize() {
@@ -318,239 +325,205 @@ class EmailService {
    * @param {string} resetUrl - Full URL for password reset
    * @returns {Promise<{success: boolean, error?: string}>}
    */
-  /**
-   * Invite someone to create an account (v2.67.0)
-   * @param {string} email - Recipient
-   * @param {Object} opts - { inviteUrl, inviterName, instanceName, expiresAt }
-   */
-  async sendInviteEmail(email, { inviteUrl, inviterName, instanceName, expiresAt }) {
-    const where = instanceName || 'Cortex';
-    const who = inviterName ? `${inviterName} has invited you` : 'You have been invited';
-    const expires = expiresAt ? new Date(expiresAt).toLocaleDateString() : null;
-    const subject = `Cortex - You're invited to join ${where}`;
-    const html = `
-      <div style="font-family: 'Courier New', monospace; max-width: 600px; margin: 0 auto; padding: 20px; background: #050805; color: #e8e8e8;">
-        <h1 style="color: #ffd23f; text-align: center; border-bottom: 1px solid #3a4a3a; padding-bottom: 20px;">CORTEX</h1>
-        <h2 style="color: #0ead69;">You're invited</h2>
-        <p>${who} to join <strong>${where}</strong>.</p>
-        <p style="margin: 30px 0; text-align: center;">
-          <a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; background: #ffd23f20; border: 1px solid #ffd23f; color: #ffd23f; text-decoration: none; font-family: monospace;">
-            CREATE YOUR ACCOUNT
-          </a>
-        </p>
-        ${expires ? `<p style="color: #888; font-size: 0.9em;">This invitation expires on ${expires}.</p>` : ''}
-        <p style="color: #888; font-size: 0.9em;">This link can only be used once. If you weren't expecting this, you can ignore it.</p>
+  // ============ Shared presentation ============
+  //
+  // v2.85.0 — plain, light templates. These were the Serenity terminal palette
+  // (near-black background, amber text, monospace) reproduced inline in ten
+  // separate templates.
+  //
+  // Dark HTML email is a losing game: Outlook drops much of the styling, and
+  // Gmail and Apple Mail re-invert colours in dark mode, which is how amber on
+  // near-black turns into amber on white. Heavy inline styling on a dark ground
+  // also reads badly to spam heuristics. These are short transactional
+  // messages, so they now use system fonts on white with one accent, and only
+  // use monospace where it genuinely helps — reading a code or a password.
+  //
+  // The header shows the INSTANCE name rather than a hardcoded "CORTEX", so a
+  // second node stops signing its mail with this project's name.
+
+  _baseLayout(bodyHtml, { footer } = {}) {
+    const name = this.escapeHtml(this.instanceName || 'Cortex');
+    return `
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#ffffff;color:#222222;line-height:1.55;font-size:15px;">
+        <p style="margin:0 0 20px;padding-bottom:12px;border-bottom:1px solid #e0e0e0;font-size:15px;font-weight:600;color:#444444;">${name}</p>
+        ${bodyHtml}
+        <hr style="border:none;border-top:1px solid #e0e0e0;margin:28px 0 12px;">
+        <p style="margin:0;color:#777777;font-size:12px;">${footer || `Sent by ${name}.`}</p>
       </div>`;
+  }
+
+  _heading(text) {
+    return `<p style="margin:0 0 12px;font-size:17px;font-weight:600;color:#222222;">${text}</p>`;
+  }
+
+  _button(url, label) {
+    return `<p style="margin:26px 0;">
+      <a href="${url}" style="display:inline-block;padding:11px 20px;background:#f5f5f5;border:1px solid #c8c8c8;border-radius:4px;color:#1a1a1a;text-decoration:none;font-size:15px;">${label}</a>
+    </p>`;
+  }
+
+  // Monospace earns its place here: these are strings someone has to read
+  // character by character and retype.
+  _codeBlock(value, { spaced = false } = {}) {
+    return `<p style="margin:24px 0;">
+      <span style="display:inline-block;padding:14px 22px;background:#f5f5f5;border:1px solid #c8c8c8;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:${spaced ? '26px' : '17px'};${spaced ? 'letter-spacing:6px;' : ''}color:#1a1a1a;">${value}</span>
+    </p>`;
+  }
+
+  _rows(pairs) {
+    const body = pairs.filter(Boolean)
+      .map(([k, v]) => `<tr><td style="padding:3px 14px 3px 0;color:#777777;vertical-align:top;">${k}</td><td style="padding:3px 0;">${v}</td></tr>`)
+      .join('');
+    return `<table style="margin:16px 0;border-collapse:collapse;font-size:14px;color:#333333;">${body}</table>`;
+  }
+
+  _quote(text) {
+    return `<div style="margin:16px 0;padding:12px 16px;background:#f7f7f7;border-left:3px solid #c8c8c8;color:#333333;font-size:14px;">${text}</div>`;
+  }
+
+  _muted(text) {
+    return `<p style="margin:10px 0;color:#777777;font-size:13px;">${text}</p>`;
+  }
+
+  escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // ============ Account & security emails ============
+
+  async sendInviteEmail(email, { inviteUrl, inviterName, instanceName, expiresAt }) {
+    const where = this.escapeHtml(instanceName || this.instanceName || 'Cortex');
+    const who = inviterName ? `${this.escapeHtml(inviterName)} has invited you` : 'You have been invited';
+    const expires = expiresAt ? new Date(expiresAt).toLocaleDateString() : null;
+    const subject = `You're invited to join ${instanceName || this.instanceName || 'Cortex'}`;
+    const html = this._baseLayout(`
+      ${this._heading("You're invited")}
+      <p style="margin:0 0 8px;">${who} to join <strong>${where}</strong>.</p>
+      ${this._button(inviteUrl, 'Create your account')}
+      ${expires ? this._muted(`This invitation expires on ${expires}.`) : ''}
+      ${this._muted("This link can only be used once. If you weren't expecting it, you can ignore this email.")}`,
+      { footer: 'You received this because someone invited you to this server.' });
     return this.sendEmail({ to: email, subject, html });
   }
 
   async sendPasswordResetEmail(email, token, resetUrl) {
-    const subject = 'Cortex - Password Reset Request';
-    const html = `
-      <div style="font-family: 'Courier New', monospace; max-width: 600px; margin: 0 auto; padding: 20px; background: #050805; color: #e8e8e8;">
-        <h1 style="color: #ffd23f; text-align: center; border-bottom: 1px solid #3a4a3a; padding-bottom: 20px;">CORTEX</h1>
-        <h2 style="color: #0ead69;">Password Reset Request</h2>
-        <p>You requested to reset your password. Click the link below to set a new password:</p>
-        <p style="margin: 30px 0; text-align: center;">
-          <a href="${resetUrl}" style="display: inline-block; padding: 12px 24px; background: #ffd23f20; border: 1px solid #ffd23f; color: #ffd23f; text-decoration: none; font-family: monospace;">
-            RESET PASSWORD
-          </a>
-        </p>
-        <p style="color: #888; font-size: 0.9em;">This link will expire in 1 hour.</p>
-        <p style="color: #888; font-size: 0.9em;">If you didn't request this, you can safely ignore this email.</p>
-        <hr style="border: none; border-top: 1px solid #3a4a3a; margin: 30px 0;">
-        <p style="color: #666; font-size: 0.8em; text-align: center;">Cortex - Secure Communications</p>
-      </div>
-    `;
-
+    const subject = 'Password reset request';
+    const html = this._baseLayout(`
+      ${this._heading('Password reset request')}
+      <p style="margin:0 0 8px;">You asked to reset your password. Use the button below to set a new one.</p>
+      ${this._button(resetUrl, 'Reset password')}
+      ${this._muted('This link expires in 1 hour.')}
+      ${this._muted("If you didn't request this, you can safely ignore this email — your password will not change.")}`,
+      { footer: 'This is an automated security email.' });
     return this.sendEmail({ to: email, subject, html });
   }
 
-  /**
-   * Send an MFA verification code via email
-   * @param {string} email - Recipient email
-   * @param {string} code - 6-digit verification code
-   * @param {string} [customMessage] - Optional custom message to display
-   * @returns {Promise<{success: boolean, error?: string}>}
-   */
   async sendMFACode(email, code, customMessage = null) {
-    const subject = 'Cortex - Your Verification Code';
-    const message = customMessage || 'Your login verification code is:';
-    const html = `
-      <div style="font-family: 'Courier New', monospace; max-width: 600px; margin: 0 auto; padding: 20px; background: #050805; color: #e8e8e8;">
-        <h1 style="color: #ffd23f; text-align: center; border-bottom: 1px solid #3a4a3a; padding-bottom: 20px;">CORTEX</h1>
-        <h2 style="color: #0ead69;">Verification Code</h2>
-        <p>${message}</p>
-        <p style="margin: 30px 0; text-align: center;">
-          <span style="display: inline-block; padding: 16px 32px; background: #0ead6920; border: 2px solid #0ead69; color: #0ead69; font-size: 2em; letter-spacing: 8px; font-weight: bold;">
-            ${code}
-          </span>
-        </p>
-        <p style="color: #888; font-size: 0.9em;">This code will expire in 10 minutes.</p>
-        <p style="color: #888; font-size: 0.9em;">If you didn't request this code, your account may be at risk. Consider changing your password.</p>
-        <hr style="border: none; border-top: 1px solid #3a4a3a; margin: 30px 0;">
-        <p style="color: #666; font-size: 0.8em; text-align: center;">Cortex - Secure Communications</p>
-      </div>
-    `;
-
+    const subject = 'Your verification code';
+    const message = this.escapeHtml(customMessage || 'Your login verification code is:');
+    const html = this._baseLayout(`
+      ${this._heading('Verification code')}
+      <p style="margin:0;">${message}</p>
+      ${this._codeBlock(this.escapeHtml(code), { spaced: true })}
+      ${this._muted('This code expires in 10 minutes.')}
+      ${this._muted("If you didn't request it, your account may be at risk — consider changing your password.")}`,
+      { footer: 'This is an automated security email.' });
     return this.sendEmail({ to: email, subject, html });
   }
 
-  /**
-   * Send a temporary password email (for admin password reset)
-   * @param {string} email - Recipient email
-   * @param {string} tempPassword - Temporary password
-   * @param {string} adminName - Name of admin who initiated reset
-   * @returns {Promise<{success: boolean, error?: string}>}
-   */
   async sendTempPasswordEmail(email, tempPassword, adminName) {
-    const subject = 'Cortex - Your Password Has Been Reset';
-    const html = `
-      <div style="font-family: 'Courier New', monospace; max-width: 600px; margin: 0 auto; padding: 20px; background: #050805; color: #e8e8e8;">
-        <h1 style="color: #ffd23f; text-align: center; border-bottom: 1px solid #3a4a3a; padding-bottom: 20px;">CORTEX</h1>
-        <h2 style="color: #0ead69;">Password Reset by Administrator</h2>
-        <p>An administrator (${adminName}) has reset your password.</p>
-        <p>Your temporary password is:</p>
-        <p style="margin: 30px 0; text-align: center;">
-          <span style="display: inline-block; padding: 16px 32px; background: #ffd23f20; border: 2px solid #ffd23f; color: #ffd23f; font-size: 1.2em; font-family: monospace;">
-            ${tempPassword}
-          </span>
-        </p>
-        <p style="color: #ff6b35; font-weight: bold;">You will be required to change this password on your next login.</p>
-        <hr style="border: none; border-top: 1px solid #3a4a3a; margin: 30px 0;">
-        <p style="color: #666; font-size: 0.8em; text-align: center;">Cortex - Secure Communications</p>
-      </div>
-    `;
-
+    const subject = 'Your password has been reset';
+    const html = this._baseLayout(`
+      ${this._heading('Password reset by an administrator')}
+      <p style="margin:0 0 8px;">An administrator (${this.escapeHtml(adminName)}) has reset your password. Your temporary password is:</p>
+      ${this._codeBlock(this.escapeHtml(tempPassword))}
+      <p style="margin:0;"><strong>You will be asked to change this password the next time you sign in.</strong></p>`,
+      { footer: 'This is an automated security email.' });
     return this.sendEmail({ to: email, subject, html });
   }
 
-  /**
-   * Alert the account owner that a session started on a device we have not seen
-   * before (v2.75.0). Sessions can now last months, so a sign-in the owner did
-   * not perform is worth surfacing while they can still act on it.
-   * @param {string} email - Recipient email
-   * @param {string} deviceLabel - Truncated user agent of the new device
-   * @param {string} ipAddress - Anonymised IP
-   * @param {string} when - Human-readable timestamp
-   * @param {string} manageUrl - Link to the sessions screen
-   * @returns {Promise<{success: boolean, error?: string}>}
-   */
   async sendNewDeviceEmail(email, deviceLabel, ipAddress, when, manageUrl) {
-    const subject = 'Cortex - New sign-in to your account';
-    const html = `
-      <div style="font-family: 'Courier New', monospace; max-width: 600px; margin: 0 auto; padding: 20px; background: #050805; color: #e8e8e8;">
-        <h1 style="color: #ffd23f; text-align: center; border-bottom: 1px solid #3a4a3a; padding-bottom: 20px;">CORTEX</h1>
-        <h2 style="color: #0ead69;">New sign-in</h2>
-        <p>Your account was signed in to from a device we have not seen before.</p>
-        <table style="margin: 20px 0; color: #b8ccb8;">
-          <tr><td style="padding: 4px 12px 4px 0; color: #8aa08a;">When</td><td>${when}</td></tr>
-          <tr><td style="padding: 4px 12px 4px 0; color: #8aa08a;">Device</td><td>${deviceLabel}</td></tr>
-          <tr><td style="padding: 4px 12px 4px 0; color: #8aa08a;">Approx. location</td><td>${ipAddress}</td></tr>
-        </table>
-        <p style="color: #0ead69;">If this was you, nothing to do.</p>
-        <p style="color: #ff6b35;">If it was not, change your password now — that ends every other signed-in session immediately.</p>
-        <p style="margin: 30px 0; text-align: center;">
-          <a href="${manageUrl}" style="display: inline-block; padding: 14px 28px; background: #ffd23f20; border: 2px solid #ffd23f; color: #ffd23f; text-decoration: none;">Review your sessions</a>
-        </p>
-        <hr style="border: none; border-top: 1px solid #3a4a3a; margin: 30px 0;">
-        <p style="color: #666; font-size: 0.8em; text-align: center;">Cortex - Secure Communications</p>
-      </div>
-    `;
+    const subject = 'New sign-in to your account';
+    const html = this._baseLayout(`
+      ${this._heading('New sign-in')}
+      <p style="margin:0;">Your account was signed in to from a device we have not seen before.</p>
+      ${this._rows([
+        ['When', this.escapeHtml(when)],
+        ['Device', this.escapeHtml(deviceLabel)],
+        ['Approx. location', this.escapeHtml(ipAddress)],
+      ])}
+      <p style="margin:0 0 6px;">If this was you, there is nothing to do.</p>
+      <p style="margin:0;"><strong>If it was not, change your password now</strong> — that ends every other signed-in session immediately.</p>
+      ${this._button(manageUrl, 'Review your sessions')}`,
+      { footer: 'This is an automated security email.' });
     return this.sendEmail({ to: email, subject, html });
   }
 
-  /**
-   * Send a warning notification email
-   * @param {string} email - Recipient email
-   * @param {string} reason - Warning reason
-   * @param {string} adminName - Name of admin who issued warning
-   * @returns {Promise<{success: boolean, error?: string}>}
-   */
   async sendWarningEmail(email, reason, adminName) {
-    const subject = 'Cortex - Warning Notification';
-    const html = `
-      <div style="font-family: 'Courier New', monospace; max-width: 600px; margin: 0 auto; padding: 20px; background: #050805; color: #e8e8e8;">
-        <h1 style="color: #ffd23f; text-align: center; border-bottom: 1px solid #3a4a3a; padding-bottom: 20px;">CORTEX</h1>
-        <h2 style="color: #ff6b35;">Account Warning</h2>
-        <p>You have received a warning from a moderator:</p>
-        <div style="margin: 20px 0; padding: 16px; background: #ff6b3510; border-left: 4px solid #ff6b35;">
-          <p style="margin: 0; color: #ff6b35;">${reason}</p>
-        </div>
-        <p style="color: #888; font-size: 0.9em;">Please review our community guidelines to avoid further action.</p>
-        <hr style="border: none; border-top: 1px solid #3a4a3a; margin: 30px 0;">
-        <p style="color: #666; font-size: 0.8em; text-align: center;">Cortex - Secure Communications</p>
-      </div>
-    `;
-
+    const subject = 'Account warning';
+    const html = this._baseLayout(`
+      ${this._heading('Account warning')}
+      <p style="margin:0;">You have received a warning from a moderator:</p>
+      ${this._quote(this.escapeHtml(reason))}
+      ${this._muted('Please review the community guidelines to avoid further action.')}`,
+      { footer: 'This is an automated moderation email.' });
     return this.sendEmail({ to: email, subject, html });
   }
 
-  // ============ Notification Emails ============
-
-  _baseLayout(bodyHtml) {
-    return `
-      <div style="font-family:'Courier New',monospace;max-width:600px;margin:0 auto;padding:20px;background:#050805;color:#e8e8e8;">
-        <h1 style="color:#ffd23f;text-align:center;border-bottom:1px solid #3a4a3a;padding-bottom:16px;margin-bottom:20px;letter-spacing:4px;">CORTEX</h1>
-        ${bodyHtml}
-        <hr style="border:none;border-top:1px solid #3a4a3a;margin:30px 0;">
-        <p style="color:#444;font-size:0.75em;text-align:center;">You're receiving this because email notifications are enabled on your account.<br>Manage your preferences in Profile &rsaquo; Notifications.</p>
-      </div>`;
-  }
+  // ============ Notification emails ============
 
   async sendMentionEmail(email, { mentionerName, waveName, preview, waveUrl, isEncrypted }) {
+    const who = this.escapeHtml(mentionerName);
+    const where = this.escapeHtml(waveName);
     const subject = `${mentionerName} mentioned you in ${waveName}`;
     const previewLine = isEncrypted
-      ? '<p style="color:#888;font-style:italic;">[Encrypted message — open Cortex to read]</p>'
-      : `<div style="margin:16px 0;padding:12px 16px;background:#0ead6910;border-left:3px solid #0ead69;color:#ccc;font-size:0.9em;">${preview}</div>`;
+      ? this._muted('[Encrypted message — open the app to read it]')
+      : this._quote(preview);
     const html = this._baseLayout(`
-      <p style="color:#0ead69;font-size:0.8em;letter-spacing:2px;margin-bottom:8px;">@ MENTION</p>
-      <p><strong style="color:#ffd23f;">${mentionerName}</strong> mentioned you in <strong style="color:#ffd23f;">${waveName}</strong>.</p>
+      ${this._heading('You were mentioned')}
+      <p style="margin:0;"><strong>${who}</strong> mentioned you in <strong>${where}</strong>.</p>
       ${previewLine}
-      <p style="margin-top:24px;text-align:center;">
-        <a href="${waveUrl}" style="display:inline-block;padding:10px 24px;background:#ffd23f20;border:1px solid #ffd23f;color:#ffd23f;text-decoration:none;font-family:monospace;font-size:0.85rem;">
-          OPEN WAVE →
-        </a>
-      </p>`);
+      ${this._button(waveUrl, 'Open conversation')}`);
     return this.sendEmail({ to: email, subject, html });
   }
 
   async sendReplyEmail(email, { replierName, waveName, preview, waveUrl, isEncrypted }) {
+    const who = this.escapeHtml(replierName);
+    const where = this.escapeHtml(waveName);
     const subject = `${replierName} replied to you in ${waveName}`;
     const previewLine = isEncrypted
-      ? '<p style="color:#888;font-style:italic;">[Encrypted message — open Cortex to read]</p>'
-      : `<div style="margin:16px 0;padding:12px 16px;background:#0ead6910;border-left:3px solid #0ead69;color:#ccc;font-size:0.9em;">${preview}</div>`;
+      ? this._muted('[Encrypted message — open the app to read it]')
+      : this._quote(preview);
     const html = this._baseLayout(`
-      <p style="color:#0ead69;font-size:0.8em;letter-spacing:2px;margin-bottom:8px;">↩ REPLY</p>
-      <p><strong style="color:#ffd23f;">${replierName}</strong> replied to your ping in <strong style="color:#ffd23f;">${waveName}</strong>.</p>
+      ${this._heading('New reply')}
+      <p style="margin:0;"><strong>${who}</strong> replied to you in <strong>${where}</strong>.</p>
       ${previewLine}
-      <p style="margin-top:24px;text-align:center;">
-        <a href="${waveUrl}" style="display:inline-block;padding:10px 24px;background:#ffd23f20;border:1px solid #ffd23f;color:#ffd23f;text-decoration:none;font-family:monospace;font-size:0.85rem;">
-          OPEN WAVE →
-        </a>
-      </p>`);
+      ${this._button(waveUrl, 'Open conversation')}`);
     return this.sendEmail({ to: email, subject, html });
   }
 
   async sendCalendarReminderEmail(email, { eventTitle, eventDate, eventTime, location, waveUrl, window: win }) {
     const windowLabels = { '1day': 'Tomorrow', '1hour': 'In 1 hour', '30min': 'In 30 minutes', '15min': 'In 15 minutes' };
     const label = windowLabels[win] || 'Upcoming event';
-    const subject = `📅 ${label}: ${eventTitle}`;
+    const subject = `${label}: ${eventTitle}`;
     const fmt12 = (t) => {
       if (!t) return 'All day';
       const [h, m] = t.split(':').map(Number);
       return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
     };
     const html = this._baseLayout(`
-      <p style="color:#ffd23f;font-size:0.8em;letter-spacing:2px;margin-bottom:8px;">📅 CALENDAR REMINDER</p>
-      <p style="font-size:1.1em;color:#ffd23f;font-weight:bold;">${eventTitle}</p>
-      <table style="margin:16px 0;border-collapse:collapse;font-size:0.85em;color:#ccc;">
-        <tr><td style="padding:4px 12px 4px 0;color:#888;">When</td><td><strong>${label}</strong> &mdash; ${eventDate}${eventTime ? ' at ' + fmt12(eventTime) : ''}</td></tr>
-        ${location ? `<tr><td style="padding:4px 12px 4px 0;color:#888;">Where</td><td>${location}</td></tr>` : ''}
-      </table>
-      ${waveUrl ? `<p style="margin-top:24px;text-align:center;"><a href="${waveUrl}" style="display:inline-block;padding:10px 24px;background:#ffd23f20;border:1px solid #ffd23f;color:#ffd23f;text-decoration:none;font-family:monospace;font-size:0.85rem;">VIEW EVENT →</a></p>` : ''}`);
+      ${this._heading(this.escapeHtml(eventTitle))}
+      ${this._rows([
+        ['When', `<strong>${label}</strong> — ${this.escapeHtml(eventDate)}${eventTime ? ' at ' + fmt12(eventTime) : ''}`],
+        location ? ['Where', this.escapeHtml(location)] : null,
+      ])}
+      ${waveUrl ? this._button(waveUrl, 'View event') : ''}`,
+      { footer: 'You are receiving this because you have calendar reminders switched on.' });
     return this.sendEmail({ to: email, subject, html });
   }
+
 
   /**
    * Strip HTML tags to create plain text version
@@ -560,12 +533,24 @@ class EmailService {
   stripHtml(html) {
     return html
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      // v2.85.0 — put a separator where a block or cell ended before dropping
+      // tags, or adjacent cells collapse into each other: a "When" label and
+      // its value rendered as "WhenIn 1 hour" in the text/plain part.
+      // Separate a label cell from its value, but only BETWEEN cells — a blanket
+      // rule also fired on the closing cell of a row and left values ending in a
+      // stray colon.
+      .replace(/<\/(?:td|th)>\s*<(?:td|th)[^>]*>/gi, ': ')
+      .replace(/<\/(?:td|th)>/gi, '')
+      .replace(/<\/(p|div|tr|h1|h2|h3|table)>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<[^>]+>/g, '')
       .replace(/&nbsp;/g, ' ')
       .replace(/&amp;/g, '&')
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
-      .replace(/\s+/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/^[ \t]+/gm, '')
       .trim();
   }
 
@@ -575,16 +560,16 @@ class EmailService {
    * @returns {Promise<{success: boolean, error?: string}>}
    */
   async verifyConfiguration(testEmail) {
-    const subject = 'Cortex - Email Configuration Test';
-    const html = `
-      <div style="font-family: 'Courier New', monospace; padding: 20px;">
-        <h1 style="color: #0ead69;">Email Configuration Successful</h1>
-        <p>This is a test email from Cortex to verify your email configuration.</p>
-        <p>Provider: ${this.provider}</p>
-        <p>From: ${this.fromAddress}</p>
-        <p>Time: ${new Date().toISOString()}</p>
-      </div>
-    `;
+    const subject = 'Email configuration test';
+    const html = this._baseLayout(`
+      ${this._heading('Email configuration successful')}
+      <p style="margin:0;">If you are reading this, this server can send email.</p>
+      ${this._rows([
+        ['Provider', this.escapeHtml(this.provider)],
+        ['From', this.escapeHtml(this.fromAddress)],
+        ['Time', new Date().toISOString()],
+      ])}`,
+      { footer: 'Test message sent from the admin panel.' });
 
     return this.sendEmail({ to: testEmail, subject, html });
   }
