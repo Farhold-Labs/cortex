@@ -6,6 +6,141 @@ import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import { T } from '../../config/terminology.js';
 
+// v2.84.1 — one row menu, used by BOTH wave-list layouts.
+//
+// The categorised and uncategorised lists are separate render paths and only
+// the categorised one ever had this menu, so anyone who had not created a
+// category saw no ⋮ at all: Pin was unreachable, and Mute (v2.84.0) never
+// appeared for them. Extracted rather than copied so the two cannot drift.
+const WaveRowMenu = ({ wave, categories = [], isOpen, onToggle, onWavePin, onWaveMute, onWaveMove }) => (
+  <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle(isOpen ? null : wave.id);
+      }}
+      title={`Move ${T.wave} to category`}
+      style={{
+        background: 'transparent',
+        border: 'none',
+        color: 'var(--text-dim)',
+        cursor: 'pointer',
+        fontSize: '0.85rem',
+        padding: '0 3px',
+        lineHeight: 1,
+      }}
+    >
+      ⋮
+    </button>
+    {/* Move menu dropdown */}
+    {isOpen && (
+      <div
+        style={{
+          position: 'absolute',
+          right: 0,
+          top: '100%',
+          marginTop: '4px',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border-primary)',
+          borderRadius: '4px',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          minWidth: '150px',
+          zIndex: 1000,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ padding: '4px 0' }}>
+          {/* Pin/Unpin option */}
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              onWavePin(wave.id, !wave.pinned);
+              onToggle(null);
+            }}
+            style={{
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              color: 'var(--text-primary)',
+              background: 'transparent',
+              borderBottom: '1px solid var(--border-subtle)',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          >
+            {wave.pinned ? '📌 Unpin' : '📍 Pin to top'}
+          </div>
+          {/* Mute/Unmute (v2.84.0) — silences notifications for this
+              wave without hiding it or clearing its unread count. */}
+          {onWaveMute && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onWaveMute(wave.id, !wave.muted);
+                onToggle(null);
+              }}
+              style={{
+                padding: '8px 12px', cursor: 'pointer', fontSize: '0.8rem',
+                color: wave.muted ? 'var(--accent-amber)' : 'var(--text-primary)',
+                background: 'transparent',
+                borderBottom: '1px solid var(--border-subtle)',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              {wave.muted ? '🔔 Unmute' : '🔕 Mute notifications'}
+            </div>
+          )}
+          {/* Category options */}
+          {categories.map(cat => (
+            <div
+              key={cat.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                onWaveMove(wave.id, cat.id);
+                onToggle(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                color: 'var(--text-primary)',
+                background: wave.category_id === cat.id ? 'var(--accent-green)20' : 'transparent',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = wave.category_id === cat.id ? 'var(--accent-green)20' : 'transparent'}
+            >
+              {wave.category_id === cat.id ? '✓ ' : ''}{cat.name}
+            </div>
+          ))}
+          {/* Uncategorized option */}
+          {wave.category_id && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onWaveMove(wave.id, null);
+                onToggle(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                color: 'var(--text-primary)',
+                background: 'transparent',
+                borderTop: '1px solid var(--border-subtle)',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              Remove from category
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+  </div>
+);
+
 const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, onWaveMute, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
@@ -150,133 +285,15 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
                 📞 {callInfo.participantCount}
               </span>
             )}
-            {/* Move menu button (mobile/PWA alternative to drag-and-drop) */}
-            <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMoveMenuOpen(moveMenuOpen === wave.id ? null : wave.id);
-                }}
-                title={`Move ${T.wave} to category`}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--text-dim)',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  padding: '0 3px',
-                  lineHeight: 1,
-                }}
-              >
-                ⋮
-              </button>
-              {/* Move menu dropdown */}
-              {moveMenuOpen === wave.id && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    right: 0,
-                    top: '100%',
-                    marginTop: '4px',
-                    background: 'var(--bg-elevated)',
-                    border: '1px solid var(--border-primary)',
-                    borderRadius: '4px',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-                    minWidth: '150px',
-                    zIndex: 1000,
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div style={{ padding: '4px 0' }}>
-                    {/* Pin/Unpin option */}
-                    <div
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onWavePin(wave.id, !wave.pinned);
-                        setMoveMenuOpen(null);
-                      }}
-                      style={{
-                        padding: '8px 12px',
-                        cursor: 'pointer',
-                        fontSize: '0.8rem',
-                        color: 'var(--text-primary)',
-                        background: 'transparent',
-                        borderBottom: '1px solid var(--border-subtle)',
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                    >
-                      {wave.pinned ? '📌 Unpin' : '📍 Pin to top'}
-                    </div>
-                    {/* Mute/Unmute (v2.84.0) — silences notifications for this
-                        wave without hiding it or clearing its unread count. */}
-                    {onWaveMute && (
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onWaveMute(wave.id, !wave.muted);
-                          setMoveMenuOpen(null);
-                        }}
-                        style={{
-                          padding: '8px 12px', cursor: 'pointer', fontSize: '0.8rem',
-                          color: wave.muted ? 'var(--accent-amber)' : 'var(--text-primary)',
-                          background: 'transparent',
-                          borderBottom: '1px solid var(--border-subtle)',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                      >
-                        {wave.muted ? '🔔 Unmute' : '🔕 Mute notifications'}
-                      </div>
-                    )}
-                    {/* Category options */}
-                    {categories.map(cat => (
-                      <div
-                        key={cat.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onWaveMove(wave.id, cat.id);
-                          setMoveMenuOpen(null);
-                        }}
-                        style={{
-                          padding: '8px 12px',
-                          cursor: 'pointer',
-                          fontSize: '0.8rem',
-                          color: 'var(--text-primary)',
-                          background: wave.category_id === cat.id ? 'var(--accent-green)20' : 'transparent',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = wave.category_id === cat.id ? 'var(--accent-green)20' : 'transparent'}
-                      >
-                        {wave.category_id === cat.id ? '✓ ' : ''}{cat.name}
-                      </div>
-                    ))}
-                    {/* Uncategorized option */}
-                    {wave.category_id && (
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onWaveMove(wave.id, null);
-                          setMoveMenuOpen(null);
-                        }}
-                        style={{
-                          padding: '8px 12px',
-                          cursor: 'pointer',
-                          fontSize: '0.8rem',
-                          color: 'var(--text-primary)',
-                          background: 'transparent',
-                          borderTop: '1px solid var(--border-subtle)',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                      >
-                        Remove from category
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            <WaveRowMenu
+              wave={wave}
+              categories={categories}
+              isOpen={moveMenuOpen === wave.id}
+              onToggle={setMoveMenuOpen}
+              onWavePin={onWavePin}
+              onWaveMute={onWaveMute}
+              onWaveMove={onWaveMove}
+            />
             <span style={{ color: config.color, fontSize: '0.7rem', lineHeight: 1 }}>{config.icon}</span>
           </div>
         </div>
@@ -417,6 +434,9 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
   );
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [showWaveMenu, setShowWaveMenu] = React.useState(false);
+  // v2.84.1 — the uncategorised list needs its own row-menu state; the
+  // categorised list keeps its copy inside WaveCategoryList.
+  const [rowMenuOpen, setRowMenuOpen] = React.useState(null);
   return (
   <div style={{
     width: '100%',
@@ -600,6 +620,15 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
                     📞 {callInfo.participantCount}
                   </span>
                 )}
+                <WaveRowMenu
+                  wave={wave}
+                  categories={categories}
+                  isOpen={rowMenuOpen === wave.id}
+                  onToggle={setRowMenuOpen}
+                  onWavePin={onWavePin}
+                  onWaveMute={onWaveMute}
+                  onWaveMove={onWaveMove}
+                />
                 <span style={{ color: config.color, fontSize: '0.7rem', lineHeight: 1 }}>{config.icon}</span>
               </div>
             </div>
