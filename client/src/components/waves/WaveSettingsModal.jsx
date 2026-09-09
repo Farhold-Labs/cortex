@@ -15,6 +15,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
   const [selectedGroup, setSelectedGroup] = useState(wave?.groupId || null);
   const [title, setTitle] = useState(wave?.title || '');
   const [decrypting, setDecrypting] = useState(false);
+  const [rebroadcasting, setRebroadcasting] = useState(false); // v2.83.0
   const [encrypting, setEncrypting] = useState(false);
   const [encryptProgress, setEncryptProgress] = useState({ phase: 'idle', encrypted: 0, total: null });
 
@@ -238,6 +239,28 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       onClose();
     } catch (err) {
       showToast(err.message || formatError(`Failed to update ${T.wave}`), 'error');
+    }
+  };
+
+  // v2.83.0 — re-send this wave to allied ports. Reports per-port outcome
+  // rather than a bare success: the whole point of pressing it is knowing
+  // whether the wave actually arrived somewhere.
+  const handleRebroadcast = async () => {
+    setRebroadcasting(true);
+    try {
+      const r = await fetchAPI(`/waves/${wave.id}/rebroadcast`, { method: 'POST' });
+      const failed = (r.results || []).filter(x => !x.ok);
+      if (r.delivered > 0 && !failed.length) {
+        showToast(`Sent to ${r.delivered} allied port${r.delivered === 1 ? '' : 's'}`, 'success');
+      } else if (r.delivered > 0) {
+        showToast(`Sent to ${r.delivered} of ${r.attempted} — failed: ${failed.map(f => f.node).join(', ')}`, 'warning');
+      } else {
+        showToast(`No port accepted it — ${failed.map(f => f.node + ' (' + (f.error || f.status) + ')').join(', ')}`, 'error');
+      }
+    } catch (err) {
+      showToast(err.message || 'Re-broadcast failed', 'error');
+    } finally {
+      setRebroadcasting(false);
     }
   };
 
@@ -510,6 +533,32 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
               <span>◇</span>
               {wave?.federationState === 'origin' ? FEDERATION.manageTravelers : FEDERATION.broadcastBtn}
             </button>
+
+            {/* v2.83.0 — a Verse-Wide wave is pushed to allied ports only at the
+                moment it is promoted. Ports allied later never received it, and
+                nothing in the UI could fix that. This re-sends on demand. */}
+            {(wave?.privacy === 'crossServer' || wave?.privacy === 'cross-server') && (
+              <>
+                <button
+                  onClick={handleRebroadcast}
+                  disabled={rebroadcasting}
+                  style={{
+                    width: '100%', padding: '12px', marginTop: '8px', textAlign: 'left',
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-primary)', cursor: rebroadcasting ? 'wait' : 'pointer',
+                    fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '8px',
+                  }}
+                >
+                  <span>⟳</span>
+                  {rebroadcasting ? 'BROADCASTING…' : 'RE-BROADCAST TO ALLIED PORTS'}
+                </button>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '6px', lineHeight: 1.5 }}>
+                  Sends this {T.wave} and its history to every allied port again. Use it when a
+                  port was allied after this {T.wave} went Verse-Wide, so never received it.
+                  Ports that already have it are unaffected.
+                </div>
+              </>
+            )}
           </div>
         )}
 

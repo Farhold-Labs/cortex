@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.83.0] - 2026-09-09
+
+### Added
+
+- **Re-broadcast a Verse-Wide wave to allied ports.** Wave settings now has a RE-BROADCAST TO ALLIED PORTS action for Verse-Wide waves, which re-sends the wave and its history to every currently-allied port.
+  - Federation was push-only **and one-shot**: `wave_broadcast` was sent solely at the instant a wave's privacy became Verse-Wide, to whichever ports were allied at that moment. A port allied later never received waves promoted before it joined, and **nothing could fix it from either side** — a receiving node cannot request a wave (there is no discovery, join or subscribe path, by design), and toggling privacy on the origin does not re-send, because the send is gated on `federation_state` being `local` and `updateWavePrivacy` never resets it once it is `origin`.
+  - Cortex Updates was exactly this case: promoted 2025-12-02, the second node allied 2026-08-06, so it was permanently invisible there.
+  - Restricted to the wave creator or an instance admin. Refuses a participant copy, since re-broadcasting a wave that originates elsewhere would announce another node's wave under this one's name.
+  - Idempotent — the receiver matches on origin node plus origin wave id and skips a wave it already holds, so pressing it twice is harmless.
+  - Reports **per-port** outcome rather than a bare success, because whether the wave actually arrived is the entire point of pressing the button.
+
+### Changed
+
+- The promotion path and the new action now build their payload through one shared function, so the two cannot drift apart.
+- A wave's federation relationship is recorded **only once the receiving port accepts it**. Previously it was recorded before sending, so the table claimed deliveries that had never happened.
+- Broadcasts send at most the newest 1000 pings. A very long wave previously built a single enormous request that a receiving node would reject outright, losing the entire broadcast rather than most of it.
+
 ## [2.82.0] - 2026-09-09
 
 ### Added
