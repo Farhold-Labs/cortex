@@ -155,6 +155,17 @@ function AppContent() {
     return () => { cancelled = true; };
   }, [currentPath]);
 
+  // Android WebViews cannot download an `<a download>` link; this routes those
+  // taps through the system DownloadManager instead (v2.81.3). No-op on web.
+  //
+  // MUST live above the early returns below. It sat after them until v2.82.0,
+  // so the render where `user` flips from null to set mounted one more hook
+  // than the previous render — React error #310, which unmounts the tree and
+  // leaves a blank page on every fresh login. A reload recovered it, because
+  // by then `user` was already set and the hook count was stable from the
+  // first render, which is why it survived unnoticed.
+  useEffect(() => installNativeDownloadHandler(), []);
+
   // v2.82.0 — instance vocabulary, fetched on every route. The theme effect
   // above runs only on public pages; the nouns are needed everywhere, the
   // login screen included, so this is a separate effect.
@@ -231,10 +242,6 @@ function AppContent() {
   }
 
   // User is authenticated - wrap with E2EE flow
-  // Android WebViews cannot download an `<a download>` link; this routes those
-  // taps through the system DownloadManager instead (v2.81.3). No-op on web.
-  useEffect(() => installNativeDownloadHandler(), []);
-
   return (
     <>
       <E2EEAuthenticatedApp sharePingId={sharePingId} logout={logout} />

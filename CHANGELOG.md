@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Logging in showed a blank page (introduced in v2.81.3).** The Android download handler added in v2.81.3 was wired up with `useEffect` placed *after* `AppContent`'s early returns. On the render where `user` flips from null to signed-in, the component mounted one more hook than the previous render — React error #310, which unmounts the whole tree and leaves a white screen.
+  - Only the **login transition** was affected. Reloading recovered, because by then `user` was already set and the hook count was stable from the first render — which is why it went unnoticed through v2.81.3, v2.81.4 and v2.81.5.
+  - Found while verifying an unrelated terminology change; confirmed pre-existing by reproducing it on a v2.81.5 build, so it is not a regression from this release.
+  - The effect now runs above the early returns, where every other hook already lives.
+
 - **[SECURITY] Emoji reactions had no authorization check at all.** `POST /api/pings/:id/react` looked a ping up by id and toggled the reaction, with no wave-access check anywhere in the path — not in the route, not in `togglePingReaction`. Any authenticated user could react to any ping in any wave, **including private waves they cannot see**, and the 200-versus-404 response confirmed whether a given ping id existed.
   - Found while adding the reactions switch, which needed the wave record the route had never loaded.
   - The route now resolves the ping's wave and checks access before touching anything. Verified: a non-participant reacting into a private wave now gets 403 where it previously succeeded.
