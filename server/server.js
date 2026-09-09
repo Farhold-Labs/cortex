@@ -19361,6 +19361,101 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   res.status(201).json(result);
 });
 
+// ============ Verse-Wide broadcast (v2.83.0) ============
+//
+// Extracted from the promote-to-crossServer path so the explicit re-broadcast
+// action sends byte-identical payloads. Two copies of this drifted apart in
+// other parts of the codebase; one function keeps them honest.
+
+// A very long wave would otherwise build a single enormous request that the
+// receiving node rejects outright, losing the whole broadcast rather than most
+// of it. Newest history is the part people actually scroll.
+const BROADCAST_PING_LIMIT = 1000;
+
+function buildWaveBroadcastPayload(wave) {
+  const ourNodeName = db.getServerIdentity()?.nodeName;
+  const localParticipants = db.getWaveParticipants(wave.id);
+  const allPings = db.getPingsForWave(wave.id) || [];
+  const existingPings = allPings.length > BROADCAST_PING_LIMIT
+    ? allPings.slice(-BROADCAST_PING_LIMIT)
+    : allPings;
+  if (allPings.length !== existingPings.length) {
+    console.log(`📦 Wave ${wave.id}: sending newest ${existingPings.length} of ${allPings.length} pings`);
+  }
+
+  return createFederationEnvelope(`wave-broadcast-${uuidv4()}`, 'wave_broadcast', {
+    wave: {
+      id: wave.id,
+      title: wave.title,
+      privacy: 'crossServer',
+      createdBy: wave.createdBy,
+      createdAt: wave.createdAt,
+    },
+    participants: localParticipants.map(p => ({
+      id: p.id, handle: p.handle, displayName: p.name, avatar: p.avatar, nodeName: ourNodeName,
+    })),
+    pings: existingPings.map(d => {
+      let reactions = d.reactions || {};
+      if (typeof reactions === 'string') {
+        try { reactions = JSON.parse(reactions); } catch { reactions = {}; }
+      }
+      return {
+        id: d.id,
+        parentId: d.parentId || d.parent_id,
+        content: d.content,
+        createdAt: d.createdAt || d.created_at,
+        editedAt: d.editedAt || d.edited_at,
+        reactions,
+        author: {
+          id: d.authorId || d.author_id,
+          handle: d.sender_handle,
+          displayName: d.sender_name,
+          avatar: d.sender_avatar,
+          avatarUrl: d.sender_avatar_url,
+          nodeName: ourNodeName,
+        },
+      };
+    }),
+  });
+}
+
+/**
+ * Send a wave to every active allied port.
+ *
+ * `awaitResults` distinguishes the two callers: promoting a wave fires and
+ * forgets (the HTTP response is about the privacy change), while the explicit
+ * re-broadcast waits, because "did it arrive?" is the entire point of pressing
+ * the button. Reporting success without knowing would make the action useless.
+ */
+async function broadcastWaveToAlliedNodes(wave, { awaitResults = false } = {}) {
+  const nodes = db.getFederationNodes().filter(n => n.status === 'active');
+  if (!nodes.length) return [];
+
+  const payload = buildWaveBroadcastPayload(wave);
+  const send = (node) =>
+    sendSignedFederationRequest(node, 'POST', '/api/federation/inbox', payload)
+      .then(response => {
+        const ok = !!response.ok;
+        if (ok) {
+          // Only record the relationship once the node has actually accepted.
+          // Recording it up front is how wave_federation ended up claiming
+          // deliveries that never happened.
+          db.addWaveFederationNode(wave.id, node.nodeName);
+          console.log(`✅ Wave broadcast sent to ${node.nodeName}`);
+        } else {
+          console.error(`❌ Wave broadcast to ${node.nodeName} failed: ${response.status}`);
+        }
+        return { node: node.nodeName, ok, status: response.status || null, error: null };
+      })
+      .catch(err => {
+        console.error(`❌ Wave broadcast to ${node.nodeName} error:`, err.message);
+        return { node: node.nodeName, ok: false, status: null, error: err.message };
+      });
+
+  if (!awaitResults) { nodes.forEach(send); return nodes.map(n => ({ node: n.nodeName, ok: null })); }
+  return Promise.all(nodes.map(send));
+}
+
 app.put('/api/waves/:id', authenticateToken, async (req, res) => {
   const waveId = sanitizeInput(req.params.id);
   let wave = db.getWave(waveId);
@@ -19422,82 +19517,12 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
 
   // If wave is being promoted to crossServer and federation is enabled, broadcast to all trusted nodes
   if (FEDERATION_ENABLED && changingToCrossServer && wasLocal) {
-    // Mark wave as origin
     db.setWaveAsOrigin(waveId);
-
-    // Get all active trusted nodes
-    const trustedNodes = db.getFederationNodes().filter(n => n.status === 'active');
-
-    if (trustedNodes.length > 0) {
-      // Get current participants for the wave invite
-      const localParticipants = db.getWaveParticipants(waveId);
-
-      // Get existing pings to include in broadcast
-      const existingPings = db.getPingsForWave(waveId);
-      const ourNodeName = db.getServerIdentity()?.nodeName;
-
-      // Broadcast wave to all trusted nodes
-      // We use a special "broadcast" flag indicating this is a public wave broadcast
-      for (const node of trustedNodes) {
-        // Track federation relationship
-        db.addWaveFederationNode(waveId, node.nodeName);
-
-        // Send wave broadcast (invites all users on the remote node)
-        const broadcastPayload = createFederationEnvelope(`wave-broadcast-${uuidv4()}`, 'wave_broadcast', {
-          wave: {
-            id: wave.id,
-            title: wave.title,
-            privacy: 'crossServer',
-            createdBy: wave.createdBy,
-            createdAt: wave.createdAt,
-          },
-          participants: localParticipants.map(p => ({
-            id: p.id,
-            handle: p.handle,
-            displayName: p.name,
-            avatar: p.avatar,
-            nodeName: ourNodeName,
-          })),
-          // Include existing pings so federated servers have history
-          pings: existingPings.map(d => {
-            // Ensure reactions is an object (may be string from DB)
-            let reactions = d.reactions || {};
-            if (typeof reactions === 'string') {
-              try { reactions = JSON.parse(reactions); } catch { reactions = {}; }
-            }
-            return {
-              id: d.id,
-              parentId: d.parentId || d.parent_id,
-              content: d.content,
-              createdAt: d.createdAt || d.created_at,
-              editedAt: d.editedAt || d.edited_at,
-              reactions,
-              author: {
-                id: d.authorId || d.author_id,
-                handle: d.sender_handle,
-                displayName: d.sender_name,
-                avatar: d.sender_avatar,
-                avatarUrl: d.sender_avatar_url,
-                nodeName: ourNodeName,
-              },
-            };
-          }),
-        });
-
-        sendSignedFederationRequest(node, 'POST', '/api/federation/inbox', broadcastPayload)
-          .then(response => {
-            if (response.ok) {
-              console.log(`✅ Wave broadcast sent to ${node.nodeName}`);
-            } else {
-              console.error(`❌ Wave broadcast to ${node.nodeName} failed: ${response.status}`);
-            }
-          })
-          .catch(err => {
-            console.error(`❌ Wave broadcast to ${node.nodeName} error:`, err.message);
-          });
-      }
-
-      console.log(`📢 Broadcasting wave ${waveId} to ${trustedNodes.length} federated nodes`);
+    const promoted = db.getWave(waveId);
+    const nodeCount = db.getFederationNodes().filter(n => n.status === 'active').length;
+    if (nodeCount > 0) {
+      broadcastWaveToAlliedNodes(promoted);
+      console.log(`📢 Broadcasting wave ${waveId} to ${nodeCount} federated nodes`);
     }
   }
 
@@ -19506,6 +19531,73 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
 
   broadcastToWave(waveId, { type: 'wave_updated', wave });
   res.json(wave);
+});
+
+// Re-broadcast a Verse-Wide wave to every allied port (v2.83.0).
+//
+// Federation is push-only and, until now, one-shot: `wave_broadcast` was sent
+// solely at the instant a wave's privacy became crossServer, to whichever nodes
+// were allied at that moment. A node paired afterwards never received waves
+// promoted before it joined, and there was no way to fix that from either side
+// — the receiving node cannot ask for a wave, and toggling privacy on the
+// origin does not help because the re-send is gated on federation_state being
+// 'local', which updateWavePrivacy never resets once it is 'origin'.
+//
+// Cortex Updates hit exactly this: promoted 2025-12-02, PMP allied 2026-08-06,
+// and the wave was therefore permanently invisible there.
+//
+// Idempotent: the receiver matches on (originNode, originWaveId) and skips a
+// wave it already holds, so pressing this twice is harmless.
+app.post('/api/waves/:id/rebroadcast', authenticateToken, async (req, res) => {
+  if (!FEDERATION_ENABLED) {
+    return res.status(501).json({ error: 'Federation not enabled on this server' });
+  }
+
+  const waveId = sanitizeInput(req.params.id);
+  const wave = db.getWave(waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+
+  const actor = db.findUserById(req.user.userId);
+  if (wave.createdBy !== req.user.userId && !hasRole(actor, ROLES.ADMIN)) {
+    return res.status(403).json({ error: 'Only the wave creator or an admin can re-broadcast' });
+  }
+
+  if (wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server') {
+    return res.status(400).json({ error: 'Only Verse-Wide waves can be broadcast', code: 'NOT_VERSE_WIDE' });
+  }
+
+  // A participant copy belongs to another node; re-broadcasting it would
+  // announce someone else's wave under our name.
+  if (wave.federationState === 'participant') {
+    return res.status(400).json({
+      error: 'This wave originates on ' + (wave.originNode || 'another port') + ' — re-broadcast it there',
+      code: 'NOT_ORIGIN',
+    });
+  }
+
+  const nodes = db.getFederationNodes().filter(n => n.status === 'active');
+  if (!nodes.length) {
+    return res.status(400).json({ error: 'No allied ports to broadcast to', code: 'NO_ALLIED_PORTS' });
+  }
+
+  // A wave promoted before this endpoint existed may still be 'local'; make it
+  // an origin so replies federate back to it afterwards.
+  if (wave.federationState !== 'origin') db.setWaveAsOrigin(waveId);
+
+  const results = await broadcastWaveToAlliedNodes(db.getWave(waveId), { awaitResults: true });
+  const delivered = results.filter(r => r.ok).length;
+
+  if (db.logActivity) {
+    db.logActivity(req.user.userId, 'rebroadcast_wave', 'wave', waveId,
+      { ...getRequestMeta(req), delivered, attempted: results.length });
+  }
+
+  res.json({
+    success: delivered > 0,
+    delivered,
+    attempted: results.length,
+    results,
+  });
 });
 
 // Invite federated participants to an existing wave
