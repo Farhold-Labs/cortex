@@ -19,6 +19,10 @@ import { API_URL } from '../config/constants.js';
 let inFlight = null;
 let onSessionLost = null;
 
+// Long enough for a slow phone on bad signal, short enough that a dead
+// connection does not look like a hung app.
+const REFRESH_TIMEOUT_MS = 12000;
+
 // Called when the session is definitively over (revoked, expired, or the
 // refresh token is gone) so the app can drop to the login screen.
 export function setSessionLostHandler(fn) {
@@ -45,6 +49,13 @@ export function refreshAccessToken() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
+        // MUST have a deadline. Start-up awaits this call before it will render
+        // anything, so a request that never settles leaves the app on its
+        // loading screen forever — and relaunching just repeats it, which is
+        // why force-closing did not help. A stalled connection (patchy mobile
+        // data, captive portal) produces exactly that: `fetch` on its own has
+        // no timeout at all and will wait indefinitely.
+        signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
       });
 
       if (!res.ok) {
@@ -81,7 +92,10 @@ export function refreshAccessToken() {
 
       return data.token;
     } catch {
-      // Network error — same reasoning as 5xx above: not terminal.
+      // Network error or timeout — same reasoning as the 5xx case above. NOT
+      // terminal: the refresh token is kept and the next attempt tries again.
+      // Treating a flaky connection as an ended session would sign people out
+      // for being on a train.
       return null;
     } finally {
       inFlight = null;

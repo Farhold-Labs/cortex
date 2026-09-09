@@ -13,6 +13,7 @@ import CrossPortCallbackView from './CrossPortCallbackView.jsx';
 import AuthProvider from './AuthProvider.jsx';
 import E2EEAuthenticatedApp from './E2EEAuthenticatedApp.jsx';
 import StepUpModal from '../components/session/StepUpModal.jsx';
+import { installNativeDownloadHandler } from '../utils/nativeDownload.js';
 
 function AppContent() {
   const { user, token, logout } = useAuth();
@@ -217,6 +218,10 @@ function AppContent() {
   }
 
   // User is authenticated - wrap with E2EE flow
+  // Android WebViews cannot download an `<a download>` link; this routes those
+  // taps through the system DownloadManager instead (v2.81.3). No-op on web.
+  useEffect(() => installNativeDownloadHandler(), []);
+
   return (
     <>
       <E2EEAuthenticatedApp sharePingId={sharePingId} logout={logout} />
