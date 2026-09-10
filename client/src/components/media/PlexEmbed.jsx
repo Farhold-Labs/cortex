@@ -30,6 +30,8 @@ const PlexEmbed = ({
   const [loadingStream, setLoadingStream] = useState(false);
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
+  const playbackRequestRef = useRef(0);
+  const playbackInFlightRef = useRef(false);
 
   const formatDuration = (ms) => {
     if (!ms) return null;
@@ -112,6 +114,13 @@ const PlexEmbed = ({
 
   // Fetch stream URL from server
   const startPlayback = async () => {
+    // Ignore repeated clicks while a stream request is already being resolved.
+    // Without this guard, an older response can replace a newer video element
+    // and break browser features such as Picture-in-Picture.
+    if (playing || playbackInFlightRef.current) return;
+
+    playbackInFlightRef.current = true;
+    const requestId = ++playbackRequestRef.current;
     setLoadingStream(true);
     setVideoError(null);
 
@@ -122,6 +131,9 @@ const PlexEmbed = ({
         },
       });
       const data = await response.json();
+
+      // The player may have been closed while the request was in flight.
+      if (requestId !== playbackRequestRef.current) return;
 
       if (!response.ok) {
         setVideoError(data.error || 'Failed to get stream info');
@@ -147,12 +159,22 @@ const PlexEmbed = ({
     } catch (err) {
       setVideoError('Failed to connect to server');
     } finally {
-      setLoadingStream(false);
+      if (requestId === playbackRequestRef.current) {
+        playbackInFlightRef.current = false;
+        setLoadingStream(false);
+      }
     }
   };
 
   // Stop playback and clean up
   const stopPlayback = () => {
+    // PiP keeps a reference to the video element after it leaves the document.
+    // Exit first so closing the card does not strand a dead PiP session.
+    if (document.pictureInPictureElement === videoRef.current) {
+      document.exitPictureInPicture?.().catch(() => {});
+    }
+    playbackRequestRef.current += 1;
+    playbackInFlightRef.current = false;
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
