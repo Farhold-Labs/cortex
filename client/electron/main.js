@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import electronUpdater from 'electron-updater';
 const { autoUpdater } = electronUpdater;
 import contextMenu from 'electron-context-menu';
+import { isServerUrl, isExternalUrl } from './url-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +23,13 @@ contextMenu({
 
 const APP_PROTOCOL = 'cortex';
 
+function openExternalUrl(url) {
+  if (!isExternalUrl(url)) return;
+  shell.openExternal(url).catch(error => {
+    console.warn('Could not open external URL:', error.message);
+  });
+}
+
 // ============ WINDOW STATE PERSISTENCE ============
 
 const stateFile = path.join(app.getPath('userData'), 'window-state.json');
@@ -32,13 +40,14 @@ function getSavedServerUrl() {
   try {
     if (fs.existsSync(serverUrlFile)) {
       const url = fs.readFileSync(serverUrlFile, 'utf-8').trim();
-      if (url) return url;
+      if (isServerUrl(url)) return url;
     }
   } catch {}
   return DEFAULT_SERVER_URL;
 }
 
 function saveServerUrl(url) {
+  if (!isServerUrl(url)) return;
   try { fs.writeFileSync(serverUrlFile, url); } catch {}
 }
 
@@ -195,7 +204,7 @@ async function createWindow() {
 
   // Open target="_blank" links and window.open() calls in the OS browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openExternalUrl(url);
     return { action: 'deny' };
   });
 
@@ -205,7 +214,7 @@ async function createWindow() {
       const appOrigin = new URL(isDev ? 'http://localhost:3000' : getSavedServerUrl()).origin;
       if (new URL(url).origin !== appOrigin) {
         event.preventDefault();
-        shell.openExternal(url);
+        openExternalUrl(url);
       }
     } catch {
       event.preventDefault();

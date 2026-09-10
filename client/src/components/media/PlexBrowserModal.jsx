@@ -7,7 +7,7 @@ import { storage } from '../../utils/storage.js';
  * Plex Media Browser Modal (v2.15.0)
  * Allows users to browse their Plex libraries and select media to share
  */
-const PlexBrowserModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile, connections }) => {
+const PlexBrowserModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile, connections, waveId }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selectedConnection, setSelectedConnection] = useState(null);
@@ -110,26 +110,38 @@ const PlexBrowserModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile, conne
     loadItems(section.key, null, section.title);
   };
 
-  const handleItemClick = (item) => {
+  const handleItemClick = async (item) => {
     if (item.type === 'show' || item.type === 'season') {
       // Navigate into show/season
       loadItems(null, item.ratingKey, item.title);
     } else {
-      // Select media item
-      onSelect({
-        connectionId: selectedConnection.id,
-        serverUrl: selectedConnection.serverUrl,
-        ratingKey: item.ratingKey,
-        name: item.title,
-        type: item.type,
-        summary: item.summary,
-        duration: item.duration,
-        grandparentTitle: item.grandparentTitle,
-        parentTitle: item.parentTitle,
-        index: item.index,
-        parentIndex: item.parentIndex,
-        thumb: item.thumb,
-      });
+      if (!waveId) { setError('Open this picker from a wave to share media.'); return; }
+      setLoading(true);
+      setError(null);
+      try {
+        const { share } = await fetchAPI('/media/shares', { method: 'POST', body: {
+          provider: 'plex', connectionId: selectedConnection.id, itemId: String(item.ratingKey), waveId,
+        } });
+        await onSelect({
+          shareId: share.id,
+          connectionId: selectedConnection.id,
+          serverUrl: selectedConnection.serverUrl,
+          ratingKey: item.ratingKey,
+          name: item.title,
+          type: item.type,
+          summary: item.summary,
+          duration: item.duration,
+          grandparentTitle: item.grandparentTitle,
+          parentTitle: item.parentTitle,
+          index: item.index,
+          parentIndex: item.parentIndex,
+          thumb: item.thumb,
+        });
+      } catch (err) {
+        setError(err.message || 'Failed to share media');
+      } finally {
+        setLoading(false);
+      }
     }
   };
 

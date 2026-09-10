@@ -2688,6 +2688,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
       {showPlexBrowser && (
         <PlexBrowserModal
+          waveId={wave.id}
           isOpen={showPlexBrowser}
           onClose={() => setShowPlexBrowser(false)}
           onSelect={(media) => {
@@ -2695,6 +2696,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             const embedUrl = createPlexUrl({
               connectionId: media.connectionId,
               ratingKey: media.ratingKey,
+              shareId: media.shareId,
               name: media.name,
               type: media.type,
               duration: media.duration,

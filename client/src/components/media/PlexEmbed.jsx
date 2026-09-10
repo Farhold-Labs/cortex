@@ -1,3 +1,4 @@
+import { mediaPlaybackUrl } from '../../utils/media.js';
 import React, { useState, useRef, useEffect } from 'react';
 import Hls from 'hls.js';
 import { API_URL } from '../../config/constants.js';
@@ -12,6 +13,7 @@ import { storage } from '../../utils/storage.js';
  */
 const PlexEmbed = ({
   connectionId,
+  shareId,
   ratingKey,
   name,
   type,
@@ -28,6 +30,8 @@ const PlexEmbed = ({
   const [loadingStream, setLoadingStream] = useState(false);
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
+  const playbackRequestRef = useRef(0);
+  const playbackInFlightRef = useRef(false);
 
   const formatDuration = (ms) => {
     if (!ms) return null;
@@ -42,7 +46,8 @@ const PlexEmbed = ({
 
   // Include token in URL since <img src> and <video src> can't pass auth headers
   const token = storage.getToken();
-  const thumbnailUrl = `${API_URL}/plex/thumbnail/${connectionId}/${ratingKey}?width=300&height=450${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+  const shareQuery = shareId ? `&share=${encodeURIComponent(shareId)}` : '';
+  const thumbnailUrl = `${API_URL}/plex/thumbnail/${connectionId}/${ratingKey}?width=300&height=450${token ? `&token=${encodeURIComponent(token)}` : ''}${shareQuery}`;
 
   // Clean up HLS instance on unmount or when stopping playback
   useEffect(() => {
@@ -63,11 +68,7 @@ const PlexEmbed = ({
           hlsRef.current.destroy();
         }
 
-        const hls = new Hls({
-          xhrSetup: (xhr) => {
-            // Add auth header if needed (though Plex uses token in URL)
-          },
-        });
+        const hls = new Hls();
 
         hls.loadSource(streamUrl);
         hls.attachMedia(videoRef.current);
@@ -113,16 +114,26 @@ const PlexEmbed = ({
 
   // Fetch stream URL from server
   const startPlayback = async () => {
+    // Ignore repeated clicks while a stream request is already being resolved.
+    // Without this guard, an older response can replace a newer video element
+    // and break browser features such as Picture-in-Picture.
+    if (playing || playbackInFlightRef.current) return;
+
+    playbackInFlightRef.current = true;
+    const requestId = ++playbackRequestRef.current;
     setLoadingStream(true);
     setVideoError(null);
 
     try {
-      const response = await fetch(`${API_URL}/plex/stream/${connectionId}/${ratingKey}`, {
+      const response = await fetch(`${API_URL}/plex/stream/${connectionId}/${ratingKey}?${shareQuery.slice(1)}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
       });
       const data = await response.json();
+
+      // The player may have been closed while the request was in flight.
+      if (requestId !== playbackRequestRef.current) return;
 
       if (!response.ok) {
         setVideoError(data.error || 'Failed to get stream info');
@@ -130,16 +141,14 @@ const PlexEmbed = ({
       }
 
       if (data.needsHlsPlayer && data.streamUrl) {
-        // HLS stream - use the direct Plex URL (already includes token)
+        // HLS playlists and segments stay on the authenticated Cortex proxy.
         console.log('Plex: Using HLS stream');
-        setStreamUrl(data.streamUrl);
+        setStreamUrl(mediaPlaybackUrl(data.streamUrl, API_URL, token));
         setStreamFormat('hls');
         setPlaying(true);
       } else if (data.streamUrl) {
         // Direct stream - proxy through our server
-        const fullStreamUrl = data.streamUrl.startsWith('http')
-          ? data.streamUrl
-          : `${API_URL}${data.streamUrl.replace('/api', '')}?token=${encodeURIComponent(token)}`;
+        const fullStreamUrl = mediaPlaybackUrl(data.streamUrl, API_URL, token);
         console.log('Plex: Using direct stream');
         setStreamUrl(fullStreamUrl);
         setStreamFormat('direct');
@@ -150,12 +159,22 @@ const PlexEmbed = ({
     } catch (err) {
       setVideoError('Failed to connect to server');
     } finally {
-      setLoadingStream(false);
+      if (requestId === playbackRequestRef.current) {
+        playbackInFlightRef.current = false;
+        setLoadingStream(false);
+      }
     }
   };
 
   // Stop playback and clean up
   const stopPlayback = () => {
+    // PiP keeps a reference to the video element after it leaves the document.
+    // Exit first so closing the card does not strand a dead PiP session.
+    if (document.pictureInPictureElement === videoRef.current) {
+      document.exitPictureInPicture?.().catch(() => {});
+    }
+    playbackRequestRef.current += 1;
+    playbackInFlightRef.current = false;
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
@@ -467,6 +486,7 @@ export const parsePlexUrl = (url) => {
     return {
       connectionId,
       ratingKey,
+      shareId: params.get('share') || null,
       name: params.get('name') || 'Unknown Media',
       type: params.get('type') || 'movie',
       duration: params.get('duration') ? parseInt(params.get('duration')) : null,
@@ -480,8 +500,9 @@ export const parsePlexUrl = (url) => {
 /**
  * Create Plex embed URL from media info
  */
-export const createPlexUrl = ({ connectionId, ratingKey, name, type, duration, summary }) => {
+export const createPlexUrl = ({ connectionId, ratingKey, name, type, duration, summary, shareId }) => {
   const params = new URLSearchParams();
+  if (shareId) params.set('share', shareId);
   if (name) params.set('name', name);
   if (type) params.set('type', type);
   if (duration) params.set('duration', duration.toString());

@@ -5,6 +5,22 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.86.0] - 2026-09-09
+
+### Security
+
+- Require item-specific, wave-scoped grants for shared Jellyfin and Plex media, and proxy playback through Cortex without exposing upstream credentials. Recheck authorization for media and HLS requests.
+- Sanitize rendered message HTML, tighten message and watch-party authorization, validate Electron navigation and storage paths, and fail closed when requested database encryption is unavailable.
+- Update dependencies to address confirmed security advisories.
+
+### Fixed
+
+- Correct broken references and notification helpers, regenerate compressed service-worker assets after injection, and prevent stale compressed HTML caching.
+
+### Changed
+
+- Remove confirmed Claude Code metadata and add regression tests and security review documentation.
+
 ## [2.85.0] - 2026-09-09
 
 ### Changed

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWindowSize } from '../../hooks/useWindowSize.js';
-import { SUCCESS, EMPTY, CONFIRM_DIALOG, FEDERATION, formatError } from '../../../messages.js';
+import { SUCCESS, EMPTY, LOADING, CONFIRM_DIALOG, FEDERATION, formatError } from '../../../messages.js';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
-import { BASE_URL } from '../../config/constants.js';
+import { BASE_URL, canAccess } from '../../config/constants.js';
 import GroupInvitationsPanel from './GroupInvitationsPanel.jsx';
 import InviteToGroupModal from './InviteToGroupModal.jsx';
 import { T } from '../../config/terminology.js';

@@ -4462,5 +4462,9 @@ Update server-wide crawl bar configuration.
 For more information, see:
 
 - [Project README](../README.md)
-- [CLAUDE.md](../CLAUDE.md) - Development guide for AI assistants
 - [GitHub Repository](https://github.com/Farhold-Labs/cortex)
+
+
+## Scoped external media sharing
+
+See [Scoped Jellyfin/Plex media sharing](MEDIA-SECURITY.md) for the grant API, item authorization, proxied playback/HLS, revocation, and legacy-link migration.

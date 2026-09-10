@@ -229,16 +229,16 @@ class StorageProvider {
    * @returns {string}
    */
   getLocalPath(key) {
-    // Map key prefixes to directories
-    if (key.startsWith('avatars/')) {
-      return path.join(this.uploadsDir, key);
-    } else if (key.startsWith('messages/')) {
-      return path.join(this.uploadsDir, key);
-    } else if (key.startsWith('media/')) {
-      return path.join(this.mediaDir, key.replace('media/', ''));
-    } else {
-      return path.join(this.uploadsDir, key);
+    if (typeof key !== 'string' || !key || key.includes('\\')) {
+      throw new Error('Invalid storage key');
     }
+    const root = path.resolve(this.uploadsDir);
+    const filepath = path.resolve(root, key);
+    const relative = path.relative(root, filepath);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error('Storage key must stay within the uploads directory');
+    }
+    return filepath;
   }
 
   /**

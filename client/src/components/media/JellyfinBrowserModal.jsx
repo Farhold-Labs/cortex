@@ -7,7 +7,7 @@ import { storage } from '../../utils/storage.js';
  * Jellyfin Media Browser Modal (v2.14.0)
  * Allows users to browse their Jellyfin libraries and select media to share
  */
-const JellyfinBrowserModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile, connections }) => {
+const JellyfinBrowserModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile, connections, waveId }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selectedConnection, setSelectedConnection] = useState(null);
@@ -112,23 +112,35 @@ const JellyfinBrowserModal = ({ isOpen, onClose, onSelect, fetchAPI, isMobile, c
     loadItems(library.id, library.name);
   };
 
-  const handleItemClick = (item) => {
+  const handleItemClick = async (item) => {
     if (item.type === 'Series' || item.type === 'Season' || item.type === 'Folder') {
       // Navigate into folder/series
       loadItems(item.id, item.name);
     } else {
-      // Select media item
-      onSelect({
-        connectionId: selectedConnection.id,
-        serverUrl: selectedConnection.serverUrl,
-        itemId: item.id,
-        name: item.name,
-        type: item.type,
-        overview: item.overview,
-        runTimeTicks: item.runTimeTicks,
-        seriesName: item.seriesName,
-        imageTag: item.primaryImageTag,
-      });
+      if (!waveId) { setError('Open this picker from a wave to share media.'); return; }
+      setLoading(true);
+      setError(null);
+      try {
+        const { share } = await fetchAPI('/media/shares', { method: 'POST', body: {
+          provider: 'jellyfin', connectionId: selectedConnection.id, itemId: String(item.id), waveId,
+        } });
+        await onSelect({
+          shareId: share.id,
+          connectionId: selectedConnection.id,
+          serverUrl: selectedConnection.serverUrl,
+          itemId: item.id,
+          name: item.name,
+          type: item.type,
+          overview: item.overview,
+          runTimeTicks: item.runTimeTicks,
+          seriesName: item.seriesName,
+          imageTag: item.primaryImageTag,
+        });
+      } catch (err) {
+        setError(err.message || 'Failed to share media');
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
