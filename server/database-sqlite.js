@@ -379,15 +379,16 @@ export class DatabaseSQLite {
     if (encryptionKey) {
       try {
         // Apply encryption key - this only works with SQLCipher
-        this.db.pragma(`key = '${encryptionKey}'`);
+        // Ordinary SQLite silently accepts unknown pragmas. Check the cipher
+        // implementation before claiming that the database is encrypted.
+        if (!this.db.pragma('cipher_version', { simple: true })) {
+          throw new Error('SQLCipher support is unavailable');
+        }
+        this.db.pragma(`key = '${encryptionKey.replace(/'/g, "''")}'`);
         console.log('🔐 Database encryption enabled');
       } catch (err) {
-        if (process.env.NODE_ENV === 'production') {
-          console.error('FATAL: DB_ENCRYPTION_KEY set but encryption failed. Install @journeyapps/sqlcipher for encryption support.');
-          process.exit(1);
-        } else {
-          console.warn('⚠️  DB_ENCRYPTION_KEY set but encryption not available. Install @journeyapps/sqlcipher for encryption.');
-        }
+        this.db.close();
+        throw new Error('DB_ENCRYPTION_KEY is set but database encryption could not be enabled', { cause: err });
       }
     } else if (process.env.NODE_ENV === 'production' && process.env.REQUIRE_DB_ENCRYPTION === 'true') {
       console.error('FATAL: REQUIRE_DB_ENCRYPTION is true but DB_ENCRYPTION_KEY is not set');
@@ -426,6 +427,18 @@ export class DatabaseSQLite {
   }
 
   applySchemaUpdates() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS media_shares (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL CHECK(provider IN ('jellyfin', 'plex')),
+        connection_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_media_shares_connection ON media_shares(provider, connection_id);
+    `);
     // v2.0.0 (Farhold) - First check if database is already on v2.0.0 schema
     // If pings table exists, we're on v2.0.0 and should skip all legacy migrations
     const pingsExistsEarly = this.db.prepare(`
@@ -11386,6 +11399,22 @@ export class DatabaseSQLite {
     return !!row;
   }
 
+  createMediaShare({ provider, connectionId, itemId, waveId, ownerId }) {
+    const id = `share-${uuidv4()}`;
+    this.db.prepare(`INSERT INTO media_shares (id, provider, connection_id, item_id, wave_id, owner_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, provider, connectionId, itemId, waveId, ownerId, new Date().toISOString());
+    return this.getMediaShare(id);
+  }
+
+  getMediaShare(id) {
+    return this.db.prepare(`SELECT id, provider, connection_id AS connectionId, item_id AS itemId,
+      wave_id AS waveId, owner_id AS ownerId, created_at AS createdAt FROM media_shares WHERE id = ?`).get(id) || null;
+  }
+
+  deleteMediaShare(id, ownerId) {
+    return this.db.prepare('DELETE FROM media_shares WHERE id = ? AND owner_id = ?').run(id, ownerId).changes > 0;
+  }
+
   // ---- Watch Party Methods ----
 
   /**
@@ -11451,7 +11480,7 @@ export class DatabaseSQLite {
   getActiveWatchPartyForWave(waveId) {
     const row = this.db.prepare(`
       SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar,
-             jc.server_url as jellyfin_server_url, jc.access_token as jellyfin_access_token
+             jc.server_url as jellyfin_server_url
       FROM watch_parties wp
       LEFT JOIN users u ON wp.host_user_id = u.id
       LEFT JOIN jellyfin_connections jc ON wp.jellyfin_connection_id = jc.id
@@ -11469,7 +11498,6 @@ export class DatabaseSQLite {
       hostAvatar: row.host_avatar,
       jellyfinConnectionId: row.jellyfin_connection_id,
       jellyfinServerUrl: row.jellyfin_server_url,
-      jellyfinAccessToken: row.jellyfin_access_token,
       jellyfinItemId: row.jellyfin_item_id,
       mediaTitle: row.media_title,
       mediaType: row.media_type,
@@ -11570,7 +11598,7 @@ export class DatabaseSQLite {
    */
   getJellyfinFeedImport(userId, jellyfinItemId) {
     const row = this.db.prepare(`
-      SELECT fi.*, jc.server_url, jc.access_token
+      SELECT fi.*, jc.server_url
       FROM jellyfin_feed_imports fi
       LEFT JOIN jellyfin_connections jc ON fi.connection_id = jc.id
       WHERE fi.user_id = ? AND fi.jellyfin_item_id = ?
@@ -11588,7 +11616,6 @@ export class DatabaseSQLite {
       durationTicks: row.duration_ticks,
       mediaType: row.media_type,
       serverUrl: row.server_url,
-      accessToken: row.access_token,
       importedAt: row.imported_at,
     };
   }

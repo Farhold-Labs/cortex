@@ -1,3 +1,4 @@
+import { sanitizeMessageHtml } from '../../utils/html.js';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { API_URL, BASE_URL } from '../../config/constants.js';
 import { detectEmbedUrls, EMBED_PLATFORMS } from '../../utils/embed.js';
@@ -622,7 +623,7 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
   return (
     <>
       <div
-        dangerouslySetInnerHTML={{ __html: displayContent }}
+        dangerouslySetInnerHTML={{ __html: sanitizeMessageHtml(displayContent) }}
         onClick={handleClick}
       />
       {embeds.map((embed, index) => (
@@ -630,6 +631,7 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
           <JellyfinEmbed
             key={`jellyfin-${embed.connectionId}-${embed.itemId}-${index}`}
             connectionId={embed.connectionId}
+            shareId={embed.shareId}
             itemId={embed.itemId}
             name={embed.name}
             type={embed.type}
@@ -641,6 +643,7 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
           <PlexEmbed
             key={`plex-${embed.connectionId}-${embed.ratingKey}-${index}`}
             connectionId={embed.connectionId}
+            shareId={embed.shareId}
             ratingKey={embed.ratingKey}
             name={embed.name}
             type={embed.type}

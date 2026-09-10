@@ -30,6 +30,8 @@ import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import { getCurrentHoliday } from './holidays.js';
 import admin from 'firebase-admin';
+import { canAccessMedia, validMediaTarget } from './lib/media-access.js';
+import { HlsSessions, proxyMedia, upstreamUrl } from './lib/media-proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -898,7 +900,7 @@ function validateSession(token) {
     return { valid: true, session };
   } catch (err) {
     console.error('[Session] Validation error:', err.message);
-    return { valid: true, session: null }; // Fail open if database error
+    return { valid: false, reason: 'Session validation unavailable' };
   }
 }
 
@@ -7176,26 +7178,9 @@ app.post('/api/uploads/presign', authenticateToken, async (req, res) => {
 
 // ============ Media Streaming - v2.7.0 ============
 // Stream media file with HTTP Range support for seeking
-// Note: Uses custom auth that accepts token via query param (for <video>/<audio> elements)
-app.get('/api/media/:filename', (req, res) => {
+// Authentication accepts header or query tokens and checks session/account status.
+app.get('/api/media/:filename', authenticateToken, (req, res) => {
   try {
-    // Custom auth: Accept token from header OR query param
-    const authHeader = req.headers['authorization'];
-    const headerToken = authHeader && authHeader.split(' ')[1];
-    const queryToken = req.query.token;
-    const token = headerToken || queryToken;
-
-    if (!token) {
-      return res.status(401).json({ error: 'Access denied' });
-    }
-
-    let decoded;
-    try {
-      decoded = jwt.verify(token, JWT_SECRET);
-    } catch (err) {
-      return res.status(403).json({ error: 'Invalid token' });
-    }
-
     const filename = req.params.filename;
 
     // Validate filename (prevent path traversal)
@@ -8978,6 +8963,8 @@ async function jellyfinRequest(serverUrl, path, accessToken, options = {}) {
   const url = new URL(path, serverUrl);
   const response = await fetch(url.toString(), {
     ...options,
+    redirect: 'error',
+    signal: AbortSignal.timeout(30000),
     headers: {
       'Accept': 'application/json',
       'X-Emby-Token': accessToken,
@@ -8986,6 +8973,65 @@ async function jellyfinRequest(serverUrl, path, accessToken, options = {}) {
   });
   return response;
 }
+
+const mediaHlsSessions = new HlsSessions();
+
+// Express 4 does not handle rejected async route promises automatically.
+const mediaRoute = handler => (req, res, next) => {
+  Promise.resolve().then(() => handler(req, res, next)).catch(() => {
+    if (!res.headersSent && !res.destroyed) res.status(502).json({ error: 'Media unavailable' });
+    else if (!res.destroyed) res.destroy();
+  });
+};
+
+function mediaConnection(provider, id) {
+  return provider === 'jellyfin' ? db.getJellyfinConnection(id) : db.getPlexConnection(id);
+}
+
+function authorizeMediaRequest(req, res, provider) {
+  const { connectionId } = req.params;
+  const itemId = req.params.itemId || req.params.ratingKey;
+  if (!validMediaTarget(provider, connectionId, itemId)) {
+    res.status(400).json({ error: 'Invalid media identifier' });
+    return null;
+  }
+  const connection = mediaConnection(provider, connectionId);
+  if (!canAccessMedia({ db, canAccessWave: canAccessWaveFromCache, userId: req.user.userId,
+    provider, connection, itemId, shareId: req.query.share, partyId: req.query.party })) {
+    res.status(403).json({ error: 'This item has not been shared with you' });
+    return null;
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  return connection;
+}
+
+function localMediaUrl(req, pathname) {
+  const params = new URLSearchParams();
+  for (const key of ['share', 'party']) if (typeof req.query[key] === 'string') params.set(key, req.query[key]);
+  return `${pathname}${params.size ? `?${params}` : ''}`;
+}
+
+// The owner explicitly authorizes one item for one wave, including E2EE waves.
+// No message decryption or inference from a connection ID grants permission.
+app.post('/api/media/shares', authenticateToken, (req, res) => {
+  const { provider, connectionId, itemId, waveId } = req.body;
+  if (!validMediaTarget(provider, connectionId, itemId) || typeof waveId !== 'string') {
+    return res.status(400).json({ error: 'Provider, connection, item and wave are required' });
+  }
+  const connection = mediaConnection(provider, connectionId);
+  if (!connection || connection.userId !== req.user.userId) return res.status(403).json({ error: 'Only the connection owner can share media' });
+  const wave = db.getWave(waveId);
+  if (!wave || !canAccessWaveFromCache(waveId, req.user.userId) || !canPostToWave(wave, req.user.userId)) {
+    return res.status(403).json({ error: 'You cannot share media in this wave' });
+  }
+  if (!db.createMediaShare) return res.status(503).json({ error: 'Media sharing requires SQLite' });
+  res.status(201).json({ share: db.createMediaShare({ provider, connectionId, itemId, waveId, ownerId: req.user.userId }) });
+});
+
+app.delete('/api/media/shares/:id', authenticateToken, (req, res) => {
+  if (!db.deleteMediaShare?.(req.params.id, req.user.userId)) return res.status(404).json({ error: 'Share not found' });
+  res.json({ success: true });
+});
 
 // Get user's Jellyfin connections
 app.get('/api/jellyfin/connections', authenticateToken, (req, res) => {
@@ -9308,18 +9354,11 @@ app.get('/api/jellyfin/items/:connectionId', authenticateToken, jellyfinLimiter,
 });
 
 // Get single Jellyfin item details
-app.get('/api/jellyfin/item/:connectionId/:itemId', authenticateToken, jellyfinLimiter, async (req, res) => {
+app.get('/api/jellyfin/item/:connectionId/:itemId', authenticateToken, jellyfinLimiter, mediaRoute(async (req, res) => {
   const { connectionId, itemId } = req.params;
 
-  // Verify ownership
-  if (!db.userOwnsJellyfinConnection(req.user.userId, connectionId)) {
-    return res.status(404).json({ error: 'Connection not found' });
-  }
-
-  const connection = db.getJellyfinConnection(connectionId);
-  if (!connection) {
-    return res.status(404).json({ error: 'Connection not found' });
-  }
+  const connection = authorizeMediaRequest(req, res, 'jellyfin');
+  if (!connection) return;
 
   try {
     const accessToken = decryptJellyfinToken(connection.accessToken);
@@ -9358,127 +9397,31 @@ app.get('/api/jellyfin/item/:connectionId/:itemId', authenticateToken, jellyfinL
     console.error('Jellyfin item error:', err);
     res.status(500).json({ error: 'Failed to fetch item' });
   }
-});
-
+}));
 // Proxy Jellyfin video stream
 // Accepts token via query param for direct browser access
-app.get('/api/jellyfin/stream/:connectionId/:itemId', async (req, res) => {
-  const { connectionId, itemId } = req.params;
-  const { token } = req.query;
-
-  // Try to authenticate - accept token from query param or header
-  let userId = null;
-  const authHeader = req.headers.authorization;
-  const tokenToVerify = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : token;
-
-  if (tokenToVerify) {
-    try {
-      const decoded = jwt.verify(tokenToVerify, process.env.JWT_SECRET);
-      userId = decoded.userId;
-    } catch (err) {
-      console.error('Jellyfin stream JWT error:', err.message);
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-  }
-
-  if (!userId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  // Allow any authenticated user to access streams from valid connections
-  // Security: user must be authenticated, connection must exist
-  // The connection owner chose to share content by posting it in a wave
-  const connection = db.getJellyfinConnection(connectionId);
-  if (!connection) {
-    return res.status(404).json({ error: 'Connection not found' });
-  }
-
-  try {
-    const accessToken = decryptJellyfinToken(connection.accessToken);
-
-    // Try WebM with VP8/Vorbis - the classic WebM codec combination
-    // VP8 is older and more widely supported than VP9
-    // Lower bitrate to reduce buffering/decode issues
-    const playSessionId = `cortex-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const streamUrl = `${connection.serverUrl}/Videos/${itemId}/stream.webm?api_key=${encodeURIComponent(accessToken)}&Static=false&Container=webm&VideoCodec=vp8&AudioCodec=vorbis&VideoBitRate=1500000&AudioBitRate=96000&MaxWidth=1280&MaxHeight=720&TranscodingMaxAudioChannels=2&PlaySessionId=${playSessionId}`;
-
-    console.log(`[Jellyfin] Redirecting to stream: ${streamUrl.replace(accessToken, '***')}`);
-
-    // Return the direct URL for the client to use
-    // Note: This exposes the API key in the URL, but it's temporary and scoped to this video
-    res.json({ streamUrl });
-  } catch (err) {
-    console.error('Jellyfin stream error:', err);
-    res.status(500).json({ error: 'Failed to get stream' });
-  }
-});
-
-// Proxy Jellyfin thumbnail/image
-// Note: Uses optionalAuthenticateToken since <img src> can't pass headers
-// Falls back to token query param for image requests
-app.get('/api/jellyfin/thumbnail/:connectionId/:itemId', async (req, res) => {
-  const { connectionId, itemId } = req.params;
-  const { type = 'Primary', maxWidth = 400, token } = req.query;
-
-  // Try to authenticate - accept token from query param for image requests
-  let userId = null;
-  const authHeader = req.headers.authorization;
-  const tokenToVerify = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : token;
-
-  if (tokenToVerify) {
-    try {
-      const decoded = jwt.verify(tokenToVerify, process.env.JWT_SECRET);
-      userId = decoded.userId;
-    } catch (err) {
-      console.error('Jellyfin thumbnail JWT error:', err.message);
-    }
-  }
-
-  if (!userId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  // Verify ownership or wave participant access
-  const ownsConnection = db.userOwnsJellyfinConnection(userId, connectionId);
-  if (!ownsConnection) {
-    // Check if user is in any wave where this media was shared
-    // For now, allow any authenticated user to view thumbnails from valid connections
-    // This is safe because we still validate the connection exists
-  }
-
-  const connection = db.getJellyfinConnection(connectionId);
-  if (!connection) {
-    return res.status(404).json({ error: 'Connection not found' });
-  }
-
-  try {
-    const accessToken = decryptJellyfinToken(connection.accessToken);
-
-    // Proxy image from Jellyfin
-    const imageUrl = `${connection.serverUrl}/Items/${itemId}/Images/${type}?maxWidth=${maxWidth}`;
-    const response = await fetch(imageUrl, {
-      headers: {
-        'X-Emby-Token': accessToken,
-      },
-    });
-
-    if (!response.ok) {
-      return res.status(response.status).json({ error: 'Image not found' });
-    }
-
-    // Forward image response
-    const contentType = response.headers.get('content-type');
-    res.setHeader('Content-Type', contentType || 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24h
-
-    const buffer = await response.arrayBuffer();
-    res.send(Buffer.from(buffer));
-  } catch (err) {
-    console.error('Jellyfin thumbnail error:', err);
-    res.status(500).json({ error: 'Failed to fetch thumbnail' });
-  }
-});
-
+app.get('/api/jellyfin/stream/:connectionId/:itemId', authenticateToken, mediaRoute(async (req, res) => {
+  if (!authorizeMediaRequest(req, res, 'jellyfin')) return;
+  res.json({ streamUrl: localMediaUrl(req, `/api/jellyfin/video/${req.params.connectionId}/${req.params.itemId}`) });
+}));
+app.get('/api/jellyfin/video/:connectionId/:itemId', authenticateToken, mediaRoute(async (req, res) => {
+  const connection = authorizeMediaRequest(req, res, 'jellyfin');
+  if (!connection) return;
+  const url = upstreamUrl(connection.serverUrl, `/Videos/${req.params.itemId}/stream.webm`);
+  const params = { Static: 'false', Container: 'webm', VideoCodec: 'vp8', AudioCodec: 'vorbis',
+    VideoBitRate: '1500000', AudioBitRate: '96000', MaxWidth: '1280', MaxHeight: '720',
+    TranscodingMaxAudioChannels: '2', PlaySessionId: `cortex-${crypto.randomUUID()}` };
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  await proxyMedia(req, res, url, { 'X-Emby-Token': decryptJellyfinToken(connection.accessToken) });
+}));
+app.get('/api/jellyfin/thumbnail/:connectionId/:itemId', authenticateToken, mediaRoute(async (req, res) => {
+  const connection = authorizeMediaRequest(req, res, 'jellyfin');
+  if (!connection) return;
+  const type = ['Primary', 'Backdrop', 'Thumb', 'Logo'].includes(req.query.type) ? req.query.type : 'Primary';
+  const url = upstreamUrl(connection.serverUrl, `/Items/${req.params.itemId}/Images/${type}`);
+  url.searchParams.set('maxWidth', String(Math.min(1920, Math.max(1, parseInt(req.query.maxWidth) || 400))));
+  await proxyMedia(req, res, url, { 'X-Emby-Token': decryptJellyfinToken(connection.accessToken) });
+}));
 // ============ Watch Party Endpoints (v2.14.0) ============
 
 // Get all active watch parties for waves the user participates in
@@ -9497,8 +9440,8 @@ app.get('/api/watch-parties/:waveId', authenticateToken, (req, res) => {
   const { waveId } = req.params;
 
   // Verify user is participant in wave
-  const wave = db.getWaveWithParticipants(waveId, req.user.userId);
-  if (!wave) {
+  const wave = db.getWave(waveId);
+  if (!wave || !canAccessWaveFromCache(waveId, req.user.userId)) {
     return res.status(404).json({ error: 'Wave not found' });
   }
 
@@ -9516,6 +9459,7 @@ app.get('/api/watch-parties/:waveId', authenticateToken, (req, res) => {
       hostHandle: party.hostHandle,
       hostName: party.hostName,
       hostAvatar: party.hostAvatar,
+      jellyfinConnectionId: party.jellyfinConnectionId,
       jellyfinItemId: party.jellyfinItemId,
       mediaTitle: party.mediaTitle,
       mediaType: party.mediaType,
@@ -9536,8 +9480,8 @@ app.post('/api/watch-parties', authenticateToken, (req, res) => {
   }
 
   // Verify user is participant in wave
-  const wave = db.getWaveWithParticipants(waveId, req.user.userId);
-  if (!wave) {
+  const wave = db.getWave(waveId);
+  if (!wave || !canAccessWaveFromCache(waveId, req.user.userId)) {
     return res.status(404).json({ error: 'Wave not found' });
   }
 
@@ -9557,25 +9501,21 @@ app.post('/api/watch-parties', authenticateToken, (req, res) => {
     });
 
     // Notify wave participants via WebSocket
-    const waveParticipants = wave.participants || [];
-    waveParticipants.forEach(p => {
-      if (p.id !== req.user.userId && userConnections.has(p.id)) {
-        const ws = userConnections.get(p.id);
-        if (ws.readyState === 1) {
-          ws.send(JSON.stringify({
-            type: 'watch_party_started',
-            waveId,
-            party: {
-              id: party.id,
-              hostUserId: party.hostUserId,
-              hostName: party.hostName,
-              mediaTitle: party.mediaTitle,
-              mediaType: party.mediaType,
-            },
-          }));
-        }
+    for (const userId of participation.getWaveParticipants(waveId)) {
+      if (userId !== req.user.userId) {
+        broadcastToUser(userId, {
+          type: 'watch_party_started',
+          waveId,
+          party: {
+            id: party.id,
+            hostUserId: party.hostUserId,
+            hostName: party.hostName,
+            mediaTitle: party.mediaTitle,
+            mediaType: party.mediaType,
+          },
+        });
       }
-    });
+    }
 
     res.json({ party });
   } catch (err) {
@@ -9601,20 +9541,13 @@ app.delete('/api/watch-parties/:id', authenticateToken, (req, res) => {
   const success = db.endWatchParty(id);
   if (success) {
     // Notify wave participants
-    const wave = db.getWaveWithParticipants(party.waveId, req.user.userId);
-    const waveParticipants = wave?.participants || [];
-    waveParticipants.forEach(p => {
-      if (userConnections.has(p.id)) {
-        const ws = userConnections.get(p.id);
-        if (ws.readyState === 1) {
-          ws.send(JSON.stringify({
-            type: 'watch_party_ended',
-            waveId: party.waveId,
-            partyId: id,
-          }));
-        }
-      }
-    });
+    for (const userId of participation.getWaveParticipants(party.waveId)) {
+      broadcastToUser(userId, {
+        type: 'watch_party_ended',
+        waveId: party.waveId,
+        partyId: id,
+      });
+    }
 
     res.json({ success: true });
   } else {
@@ -9811,6 +9744,8 @@ async function plexRequest(serverUrl, path, accessToken, options = {}) {
   const url = new URL(path, serverUrl);
   const response = await fetch(url.toString(), {
     ...options,
+    redirect: 'error',
+    signal: AbortSignal.timeout(30000),
     headers: {
       ...getPlexHeaders(accessToken),
       ...(options.headers || {}),
@@ -10235,18 +10170,12 @@ app.get('/api/plex/items/:connectionId', authenticateToken, plexLimiter, async (
 });
 
 // Get single item details
-app.get('/api/plex/item/:connectionId/:ratingKey', authenticateToken, plexLimiter, async (req, res) => {
+app.get('/api/plex/item/:connectionId/:ratingKey', authenticateToken, plexLimiter, mediaRoute(async (req, res) => {
   const { connectionId, ratingKey } = req.params;
 
   try {
-    if (!db.userOwnsPlexConnection(req.user.userId, connectionId)) {
-      return res.status(403).json({ error: 'Not your connection' });
-    }
-
-    const connection = db.getPlexConnection(connectionId);
-    if (!connection) {
-      return res.status(404).json({ error: 'Connection not found' });
-    }
+    const connection = authorizeMediaRequest(req, res, 'plex');
+    if (!connection) return;
 
     const accessToken = decryptPlexToken(connection.accessToken);
     const response = await plexRequest(connection.serverUrl, `/library/metadata/${ratingKey}`, accessToken);
@@ -10305,21 +10234,16 @@ app.get('/api/plex/item/:connectionId/:ratingKey', authenticateToken, plexLimite
     console.error('Plex item fetch error:', err);
     res.status(500).json({ error: 'Failed to fetch item' });
   }
-});
-
+}));
 // ---- Plex Streaming ----
 
 // Get stream info and proxied URL for playback
-app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimiter, async (req, res) => {
+app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimiter, mediaRoute(async (req, res) => {
   const { connectionId, ratingKey } = req.params;
 
   try {
-    // Allow any authenticated user to stream - connection IDs are only shared via message embeds
-    // The connection owner controls what gets shared by embedding content in messages
-    const connection = db.getPlexConnection(connectionId);
-    if (!connection) {
-      return res.status(404).json({ error: 'Connection not found' });
-    }
+    const connection = authorizeMediaRequest(req, res, 'plex');
+    if (!connection) return;
 
     const accessToken = decryptPlexToken(connection.accessToken);
 
@@ -10358,7 +10282,7 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
     if (isBrowserCompatible) {
       // Direct stream through Cortex proxy (avoids CORS issues)
       res.json({
-        streamUrl: `/api/plex/video/${connectionId}/${ratingKey}`,
+        streamUrl: localMediaUrl(req, `/api/plex/video/${connectionId}/${ratingKey}`),
         duration: item.duration,
         title: item.title,
         type: item.type,
@@ -10370,6 +10294,7 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
       // Needs transcoding - check if Plex can transcode, then return HLS URL
       console.log(`Plex stream: ${fileContainer}/${videoCodec} needs transcoding`);
 
+      const sessionId = `cortex-${crypto.randomUUID()}`;
       const decisionUrl = `${connection.serverUrl}/video/:/transcode/universal/decision?` +
         `path=${encodeURIComponent(`/library/metadata/${ratingKey}`)}` +
         `&mediaIndex=0&partIndex=0` +
@@ -10378,13 +10303,14 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
         `&directPlay=0&directStream=0` +
         `&subtitleSize=100&audioBoost=100` +
         `&location=lan` +
-        `&session=cortex-${Date.now()}` +
+        `&session=${sessionId}` +
         `&X-Plex-Platform=Chrome` +
-        `&X-Plex-Client-Identifier=${PLEX_CLIENT_IDENTIFIER}` +
-        `&X-Plex-Token=${accessToken}`;
+        `&X-Plex-Client-Identifier=${PLEX_CLIENT_IDENTIFIER}`;
 
       const decisionResponse = await fetch(decisionUrl, {
         headers: getPlexHeaders(accessToken),
+        redirect: 'error',
+        signal: AbortSignal.timeout(30000),
       });
 
       if (!decisionResponse.ok) {
@@ -10404,7 +10330,6 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
       }
 
       // Plex approved transcoding - return HLS URL for client to use with hls.js
-      const sessionId = `cortex-${Date.now()}`;
       const hlsUrl = `${connection.serverUrl}/video/:/transcode/universal/start.m3u8?` +
         `path=${encodeURIComponent(`/library/metadata/${ratingKey}`)}` +
         `&mediaIndex=0&partIndex=0` +
@@ -10425,13 +10350,14 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
         `&session=${sessionId}` +
         `&X-Plex-Platform=Chrome` +
         `&X-Plex-Product=Cortex` +
-        `&X-Plex-Client-Identifier=${PLEX_CLIENT_IDENTIFIER}` +
-        `&X-Plex-Token=${accessToken}`;
+        `&X-Plex-Client-Identifier=${PLEX_CLIENT_IDENTIFIER}`;
 
-      console.log('Plex: Returning HLS URL for transcoded stream');
+      const playback = mediaHlsSessions.create({ userId: req.user.userId, connectionId, itemId: ratingKey,
+        serverUrl: connection.serverUrl, shareId: req.query.share, partyId: req.query.party }, hlsUrl);
+      const rootResource = playback.resources.keys().next().value;
 
       res.json({
-        streamUrl: hlsUrl,
+        streamUrl: mediaHlsSessions.localUrl(playback, rootResource, req.token),
         format: 'hls',
         needsHlsPlayer: true,
         duration: item.duration,
@@ -10447,202 +10373,57 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
     console.error('Plex stream URL error:', err);
     res.status(500).json({ error: 'Failed to get stream URL' });
   }
-});
-
+}));
 // Proxy video stream from Plex server (direct playback only)
 // Transcoding is handled via HLS in /api/plex/stream endpoint
-app.get('/api/plex/video/:connectionId/:ratingKey', async (req, res) => {
-  const { connectionId, ratingKey } = req.params;
-  const { token } = req.query;
-
+app.get('/api/plex/video/:connectionId/:ratingKey', authenticateToken, mediaRoute(async (req, res) => {
+  const connection = authorizeMediaRequest(req, res, 'plex');
+  if (!connection) return;
   try {
-    // Support both authenticated requests and token-based requests (for video src)
-    let userId;
-    if (token) {
-      try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        userId = decoded.userId;
-      } catch {
-        return res.status(401).json({ error: 'Invalid token' });
-      }
-    } else if (req.headers.authorization) {
-      try {
-        const authToken = req.headers.authorization.replace('Bearer ', '');
-        const decoded = jwt.verify(authToken, JWT_SECRET);
-        userId = decoded.userId;
-      } catch {
-        return res.status(401).json({ error: 'Invalid authorization' });
-      }
-    } else {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    const connection = db.getPlexConnection(connectionId);
-    if (!connection) {
-      return res.status(404).json({ error: 'Connection not found' });
-    }
-
-    // Allow any authenticated user to stream - connection IDs are only shared via message embeds
     const accessToken = decryptPlexToken(connection.accessToken);
-
-    // Get item info to find the media part
-    const itemResponse = await plexRequest(connection.serverUrl, `/library/metadata/${ratingKey}`, accessToken);
-    if (!itemResponse.ok) {
-      return res.status(itemResponse.status).json({ error: 'Failed to fetch item' });
-    }
-
-    const itemData = await itemResponse.json();
-    const mediaContainer = itemData.MediaContainer || itemData;
-    const item = (mediaContainer.Metadata || [])[0];
-
-    if (!item) {
-      return res.status(404).json({ error: 'Item not found' });
-    }
-
-    const media = item.Media?.[0];
-    const part = media?.Part?.[0];
-
-    if (!part) {
-      return res.status(404).json({ error: 'No playable media found' });
-    }
-
-    // Check if file is browser-compatible (MP4/M4V with H264)
-    const fileContainer = media?.container?.toLowerCase();
-    const videoCodec = media?.videoCodec?.toLowerCase();
-    const isBrowserCompatible =
-      (fileContainer === 'mp4' || fileContainer === 'm4v' || fileContainer === 'mov') &&
-      (videoCodec === 'h264' || videoCodec === 'avc1');
-
-    if (!isBrowserCompatible) {
-      // Non-compatible files should use /api/plex/stream which returns HLS URL
-      return res.status(400).json({
-        error: `This ${fileContainer?.toUpperCase() || 'video'} file requires transcoding. Use the stream endpoint instead.`
-      });
-    }
-
-    // Direct stream URL
-    const videoUrl = `${connection.serverUrl}${part.key}?X-Plex-Token=${accessToken}`;
-
-    // Handle range requests for seeking
-    const rangeHeader = req.headers.range;
-    const fetchHeaders = getPlexHeaders(accessToken);
-    if (rangeHeader) {
-      fetchHeaders['Range'] = rangeHeader;
-    }
-
-    const videoResponse = await fetch(videoUrl, {
-      headers: fetchHeaders,
-    });
-
-    if (!videoResponse.ok && videoResponse.status !== 206) {
-      const errorText = await videoResponse.text().catch(() => '');
-      console.error('Plex video stream error:', videoResponse.status, errorText.substring(0, 100));
-      return res.status(videoResponse.status).json({ error: 'Failed to stream video' });
-    }
-
-    // Forward response headers
-    const contentType = videoResponse.headers.get('content-type') || 'video/mp4';
-    const contentLength = videoResponse.headers.get('content-length');
-    const contentRange = videoResponse.headers.get('content-range');
-    const acceptRanges = videoResponse.headers.get('accept-ranges');
-
-    res.set('Content-Type', contentType);
-    if (contentLength) res.set('Content-Length', contentLength);
-    if (contentRange) res.set('Content-Range', contentRange);
-    if (acceptRanges) res.set('Accept-Ranges', acceptRanges);
-    res.status(videoResponse.status);
-
-    // Pipe the video stream to the response
-    const { Readable } = await import('stream');
-    const nodeStream = Readable.fromWeb(videoResponse.body);
-    nodeStream.pipe(res);
-
-    // Handle client disconnect
-    req.on('close', () => {
-      nodeStream.destroy();
-    });
-
-  } catch (err) {
-    console.error('Plex video proxy error:', err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to stream video' });
-    }
+    const itemResponse = await plexRequest(connection.serverUrl, `/library/metadata/${req.params.ratingKey}`, accessToken);
+    if (!itemResponse.ok) return res.status(502).json({ error: 'Media unavailable' });
+    const data = await itemResponse.json();
+    const part = (data.MediaContainer || data).Metadata?.[0]?.Media?.[0]?.Part?.[0];
+    if (!part?.key) return res.status(404).json({ error: 'No playable media found' });
+    const url = upstreamUrl(connection.serverUrl, part.key, '/library/parts/');
+    await proxyMedia(req, res, url, getPlexHeaders(accessToken));
+  } catch {
+    if (!res.headersSent) res.status(502).json({ error: 'Media unavailable' });
   }
-});
-
-// Proxy thumbnail from Plex server
-app.get('/api/plex/thumbnail/:connectionId/:ratingKey', async (req, res) => {
-  const { connectionId, ratingKey } = req.params;
-  const { width = 300, height = 450, token } = req.query;
-
-  try {
-    // Support both authenticated requests and token-based requests (for img src)
-    let userId;
-    if (token) {
-      try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        userId = decoded.userId;
-      } catch {
-        return res.status(401).json({ error: 'Invalid token' });
-      }
-    } else if (req.headers.authorization) {
-      try {
-        const authToken = req.headers.authorization.replace('Bearer ', '');
-        const decoded = jwt.verify(authToken, JWT_SECRET);
-        userId = decoded.userId;
-      } catch {
-        return res.status(401).json({ error: 'Invalid authorization' });
-      }
-    } else {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    // Verify user owns the connection or is in a wave that has this media shared
-    const connection = db.getPlexConnection(connectionId);
-    if (!connection) {
-      return res.status(404).json({ error: 'Connection not found' });
-    }
-
-    // Allow access if user owns connection
-    const ownsConnection = connection.userId === userId;
-
-    // Also allow if this media is shared in a wave the user participates in
-    // (This enables viewing thumbnails for media shared by others)
-    if (!ownsConnection) {
-      // For now, allow if the connection exists (media was shared intentionally)
-      // A more restrictive check could verify wave participation
-    }
-
-    const accessToken = decryptPlexToken(connection.accessToken);
-
-    // Build thumbnail URL - Plex uses /photo/:/transcode for resizing
-    const thumbUrl = new URL(`${connection.serverUrl}/photo/:/transcode`);
-    thumbUrl.searchParams.set('url', `/library/metadata/${ratingKey}/thumb`);
-    thumbUrl.searchParams.set('width', width);
-    thumbUrl.searchParams.set('height', height);
-    thumbUrl.searchParams.set('minSize', '1');
-    thumbUrl.searchParams.set('upscale', '1');
-    thumbUrl.searchParams.set('X-Plex-Token', accessToken);
-
-    const response = await fetch(thumbUrl.toString());
-
-    if (!response.ok) {
-      return res.status(response.status).json({ error: 'Failed to fetch thumbnail' });
-    }
-
-    // Forward the image with proper headers
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
-    res.set('Content-Type', contentType);
-    res.set('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
-
-    const buffer = await response.arrayBuffer();
-    res.send(Buffer.from(buffer));
-  } catch (err) {
-    console.error('Plex thumbnail error:', err);
-    res.status(500).json({ error: 'Failed to fetch thumbnail' });
+}));
+app.get('/api/plex/thumbnail/:connectionId/:ratingKey', authenticateToken, mediaRoute(async (req, res) => {
+  const connection = authorizeMediaRequest(req, res, 'plex');
+  if (!connection) return;
+  const url = upstreamUrl(connection.serverUrl, '/photo/:/transcode');
+  url.searchParams.set('url', `/library/metadata/${req.params.ratingKey}/thumb`);
+  for (const [key, fallback] of [['width', 300], ['height', 450]]) {
+    url.searchParams.set(key, String(Math.min(1920, Math.max(1, parseInt(req.query[key]) || fallback))));
   }
-});
-
+  url.searchParams.set('minSize', '1');
+  url.searchParams.set('upscale', '1');
+  await proxyMedia(req, res, url, getPlexHeaders(decryptPlexToken(connection.accessToken)));
+}));
+app.get('/api/plex/hls/:sessionId/:resourceId', authenticateToken, mediaRoute(async (req, res) => {
+  const session = mediaHlsSessions.get(req.params.sessionId, req.user.userId);
+  const resource = session?.resources.get(req.params.resourceId);
+  if (!resource) return res.status(404).json({ error: 'Playback expired or resource unavailable' });
+  const connection = db.getPlexConnection(session.connectionId);
+  if (!canAccessMedia({ db, canAccessWave: canAccessWaveFromCache, userId: req.user.userId, provider: 'plex',
+    connection, itemId: session.itemId, shareId: session.shareId, partyId: session.partyId })) {
+    return res.status(403).json({ error: 'Media access revoked' });
+  }
+  const accessToken = decryptPlexToken(connection.accessToken);
+  await proxyMedia(req, res, resource, getPlexHeaders(accessToken), {
+    playlist: text => {
+      const rewritten = mediaHlsSessions.rewrite(session, text, resource, req.token);
+      if (rewritten.includes(accessToken) || rewritten.includes(encodeURIComponent(accessToken))) {
+        throw new Error('Unsafe upstream playlist');
+      }
+      return rewritten;
+    },
+  });
+}));
 // ============ Account Invitations (v2.67.0) ============
 //
 // Closed registration is only usable if there's another way in. Invites are that way:
@@ -12932,7 +12713,8 @@ app.post('/api/bot/ping', authenticateBotToken, botLimiter, (req, res) => {
 
     // E2EE: encrypted content validation
     const maxLength = req.body.encrypted ? 20000 : 10000;
-    if (content.length > maxLength) {
+    if (typeof content !== 'string') return res.status(400).json({ error: 'Content must be a string' });
+  if (content.length > maxLength) {
       return res.status(400).json({ error: 'Content too long' });
     }
 
@@ -15709,7 +15491,7 @@ app.post('/api/admin/users/:id/kick', authenticateToken, (req, res) => {
     }
 
     // Remove participant
-    db.removeParticipant(waveId.trim(), targetUserId);
+    participation.removeParticipant(waveId.trim(), targetUserId);
     broadcastToUser(targetUserId, { type: 'removed_from_wave', waveId: waveId.trim() });
 
     if (db.logModerationAction) db.logModerationAction(admin.id, 'kick_from_wave', 'user', targetUserId, `Kicked from wave ${waveId.trim()}`);
@@ -18746,7 +18528,7 @@ app.post('/api/profile/videos/:id/reply', authenticateToken, (req, res) => {
       }
 
       // Broadcast WebSocket event
-      broadcastToWaveParticipants(result.wave.id, {
+      broadcastToWave(result.wave.id, {
         type: 'wave_created',
         wave: result.wave,
       });
@@ -21408,6 +21190,7 @@ app.put('/api/pings/:id', authenticateToken, (req, res) => {
   const keyVersion = req.body.keyVersion || null;
 
   const maxLength = encrypted ? 20000 : 10000;
+  if (typeof content !== 'string') return res.status(400).json({ error: 'Content must be a string' });
   if (content.length > maxLength) return res.status(400).json({ error: 'Message too long' });
 
   // Encrypted edits require nonce and keyVersion
@@ -21664,6 +21447,10 @@ app.post('/api/pings/:id/read', authenticateToken, (req, res) => {
   // Get the ping first to find the waveId
   const ping = db.getPing(pingId);
   const waveId = ping?.wave_id || ping?.waveId;
+  if (!ping) return res.status(404).json({ error: 'Message not found' });
+  if (!canAccessWaveFromCache(waveId, userId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
 
   if (!db.markMessageAsRead(pingId, userId)) {
     console.log(`❌ Failed to mark ping ${pingId} as read`);
@@ -21780,6 +21567,13 @@ app.post('/api/messages', authenticateToken, deprecatedEndpoint, (req, res) => {
 
   const canAccess = canAccessWaveFromCache(waveId, req.user.userId);
   if (!canAccess) return res.status(403).json({ error: 'Access denied' });
+  if (!canPostToWave(wave, req.user.userId)) {
+    return res.status(403).json({ error: 'Only the wave owner and moderators can post here', code: 'POSTING_RESTRICTED' });
+  }
+  if ((req.body.parent_id || req.body.isThreadReply) && !waveAllowsReplies(wave)) {
+    return res.status(403).json({ error: 'Replies are turned off in this wave', code: 'REPLIES_DISABLED' });
+  }
+
 
   // Auto-join public waves - use crypto module for cache synchronization (v2.21.0)
   const isParticipant = participation.isParticipant(waveId, req.user.userId);
@@ -21787,6 +21581,7 @@ app.post('/api/messages', authenticateToken, deprecatedEndpoint, (req, res) => {
     participation.addParticipant(waveId, req.user.userId);
   }
 
+  if (typeof content !== 'string') return res.status(400).json({ error: 'Content must be a string' });
   if (content.length > 10000) return res.status(400).json({ error: 'Message too long' });
 
   // For burst waves, default parent to root ping if no parent specified
@@ -21819,6 +21614,7 @@ app.put('/api/messages/:id', authenticateToken, deprecatedEndpoint, (req, res) =
   if (message.authorId !== req.user.userId) return res.status(403).json({ error: 'Not authorized' });
 
   const content = req.body.content;
+  if (typeof content !== 'string') return res.status(400).json({ error: 'Content must be a string' });
   if (content.length > 10000) return res.status(400).json({ error: 'Message too long' });
 
   const updated = db.updateMessage(messageId, content);
@@ -21857,6 +21653,15 @@ app.post('/api/messages/:id/react', authenticateToken, deprecatedEndpoint, (req,
     return res.status(400).json({ error: 'Invalid emoji' });
   }
 
+  const target = db.getMessage(messageId);
+  if (!target) return res.status(404).json({ error: 'Message not found' });
+  if (!canAccessWaveFromCache(target.waveId, req.user.userId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  if (!waveAllowsReactions(db.getWave(target.waveId))) {
+    return res.status(403).json({ error: 'Reactions are turned off in this wave', code: 'REACTIONS_DISABLED' });
+  }
+
   const result = db.toggleMessageReaction(messageId, req.user.userId, emoji);
   if (!result.success) return res.status(400).json({ error: result.error });
 
@@ -21884,6 +21689,10 @@ app.post('/api/messages/:id/read', authenticateToken, deprecatedEndpoint, (req, 
   // Get the message first to find the waveId
   const message = db.getPing ? db.getPing(messageId) : db.getMessage?.(messageId);
   const waveId = message?.wave_id || message?.waveId;
+  if (!message) return res.status(404).json({ error: 'Message not found' });
+  if (!canAccessWaveFromCache(waveId, userId)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
 
   if (!db.markMessageAsRead(messageId, userId)) {
     console.log(`❌ Failed to mark message ${messageId} as read`);
@@ -21894,11 +21703,11 @@ app.post('/api/messages/:id/read', authenticateToken, deprecatedEndpoint, (req, 
   const notificationsMarked = db.markNotificationsReadByPing(messageId, userId);
   if (notificationsMarked > 0) {
     console.log(`🔔 Marked ${notificationsMarked} notification(s) as read for message ${messageId}`);
-    broadcast({ type: 'unread_count_update', userId });
+    broadcast({ type: 'unread_count_update', userId }, [userId]);
   }
 
   // Broadcast message read event so all clients can update wave list
-  broadcast({ type: 'message_read', messageId, waveId, userId });
+  broadcast({ type: 'message_read', messageId, waveId, userId }, [userId]);
 
   console.log(`✅ Message ${messageId} marked as read`);
   res.json({ success: true });
@@ -22302,12 +22111,9 @@ wss.on('connection', (ws, req) => {
         // Verify user is the host
         if (!db.isWatchPartyHost(partyId, userId)) return;
 
-        // Update party state in database
-        db.updateWatchPartyPlayback(partyId, { playbackPosition, isPlaying });
-
-        // Get party to find wave and broadcast
         const party = db.getWatchParty(partyId);
-        if (!party || party.status !== 'active') return;
+        if (!party || party.status !== 'active' || !canAccessWaveFromCache(party.waveId, userId)) return;
+        db.updateWatchPartyPlayback(partyId, { playbackPosition, isPlaying });
 
         // Broadcast to wave participants
         broadcastToWave(party.waveId, {
@@ -22329,7 +22135,7 @@ wss.on('connection', (ws, req) => {
         if (!db.isWatchPartyHost(partyId, userId)) return;
 
         const party = db.getWatchParty(partyId);
-        if (!party || party.status !== 'active') return;
+        if (!party || party.status !== 'active' || !canAccessWaveFromCache(party.waveId, userId)) return;
 
         // Update state based on command
         if (command === 'play') {
@@ -22357,7 +22163,7 @@ wss.on('connection', (ws, req) => {
         if (!partyId) return;
 
         const party = db.getActiveWatchPartyForWave(db.getWatchParty(partyId)?.waveId);
-        if (!party || party.status !== 'active') {
+        if (!party || party.id !== partyId || party.status !== 'active' || !canAccessWaveFromCache(party.waveId, userId)) {
           ws.send(JSON.stringify({ type: 'watch_party_not_found', partyId }));
           return;
         }

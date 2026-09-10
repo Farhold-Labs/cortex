@@ -45,8 +45,8 @@ const WatchPartyPlayer = ({
   const streamUrl = useMemo(() => {
     if (!party?.connectionId || !party?.itemId) return '';
     const token = storage.getToken();
-    return `${API_URL}/jellyfin/stream/${party.connectionId}/${party.itemId}?token=${encodeURIComponent(token || '')}`;
-  }, [party?.connectionId, party?.itemId]);
+    return `${API_URL}/jellyfin/video/${party.connectionId}/${party.itemId}?party=${encodeURIComponent(party.id)}&token=${encodeURIComponent(token || '')}`;
+  }, [party?.id, party?.connectionId, party?.itemId]);
 
   // Format time as HH:MM:SS or MM:SS
   const formatTime = (seconds) => {

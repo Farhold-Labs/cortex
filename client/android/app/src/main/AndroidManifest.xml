@@ -36,6 +36,10 @@
         </provider>
     </application>
 
+    <!-- Camera capture is optional; messaging also works without a camera. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />

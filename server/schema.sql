@@ -1172,6 +1172,17 @@ CREATE TABLE IF NOT EXISTS wave_mutes (
         );
 CREATE INDEX IF NOT EXISTS idx_wave_mutes_wave ON wave_mutes(wave_id);
 
+CREATE TABLE IF NOT EXISTS media_shares (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL CHECK(provider IN ('jellyfin', 'plex')),
+        connection_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL
+      );
+CREATE INDEX IF NOT EXISTS idx_media_shares_connection ON media_shares(provider, connection_id);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
