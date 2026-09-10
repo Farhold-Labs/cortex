@@ -1,5 +1,7 @@
 # Droplets: Message-to-Wave Evolution
 
+> **Historical document.** Shipped in v1.10.0; the terminology it proposes was superseded by the v2.0.0 rename (droplet → ping, burst/ripple → thread). Kept for the reasoning behind the design, not as a description of how Cortex works today — see CHANGELOG.md and docs/API.md for current behaviour.
+
 ## Design Document - v1.0
 
 **Status:** Implemented in v1.10.0

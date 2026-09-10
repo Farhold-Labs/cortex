@@ -1,5 +1,7 @@
 # Cortex Native Distribution Plan — Electron + Capacitor
 
+> **Historical document.** Planning document written against a v2.30.0 baseline; the native apps shipped in v2.31.0. For building them today see docs/BUILD-NATIVE.md. Kept for the reasoning behind the design, not as a description of how Cortex works today — see CHANGELOG.md and docs/API.md for current behaviour.
+
 **Date:** 2026-02-20
 **Version:** v2.30.0 baseline
 **Status:** Planning complete, awaiting Phase 1 implementation

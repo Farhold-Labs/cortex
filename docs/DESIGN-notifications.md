@@ -1,5 +1,7 @@
 # Cortex Notifications System Design
 
+> **Historical document.** Early design note using pre-v2.0.0 terminology. Notifications have since gained per-instance defaults, per-wave mute and email delivery. Kept for the reasoning behind the design, not as a description of how Cortex works today — see CHANGELOG.md and docs/API.md for current behaviour.
+
 ## Overview
 
 This document outlines the notification system design for Cortex, with particular focus on how notifications work with the Droplets architecture (Focus View and Break Out features).

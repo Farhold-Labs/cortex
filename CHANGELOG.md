@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove confirmed Claude Code metadata and add regression tests and security review documentation.
 
+### Documentation
+
+- **Restored `CLAUDE.md`**, rewritten against the current tree rather than reverted. The deleted copy described a v2.58-era codebase — a single-file client, a version living in three places, no test suite — so reverting it would have reinstated stale guidance. It is the developer workflow and architecture guide, not a tool artifact.
+- **The three LiveKit variables are now in `.env.example`.** The server has read `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` since voice/video shipped, but they had never been documented anywhere — so the only way to discover that calls need configuration was to grep the source. Documented alongside the constraint that each node needs its own LiveKit project, since the API secret mints room tokens.
+- Documented the operational consequences of the v2.86.0 media proxy where an operator will actually meet them: streaming now consumes the Cortex server's own bandwidth rather than redirecting, and HLS session state is process-local, so a multi-worker deployment needs sticky routing for a playback session.
+- `JWT_EXPIRES_IN` is marked as the legacy path it became in v2.75.0, pointing at the instance security policy that replaced it, and `SESSION_MAX_AGE_DAYS` now says it reaps session *rows* rather than setting how long a session stays valid.
+- Corrected Tenor to GIPHY/Klipy in `README.md` and `docs/DEPLOYMENT.md` — Tenor was shut down by Google in 2026 and both still offered it as the default. Both now prefer Resend over SMTP, with the blocked-port-587 warning stated rather than implied.
+- `README.md` brought current from v2.72.3: the v2.75.0 session model, fail-closed database encryption, scoped media sharing, and the crawl bar being admin-panel-configured since v2.80.0.
+- `docs/API.md` carries an honest coverage note — roughly half of some 320 routes are undocumented, so `server/server.js` is authoritative when an endpoint is missing. Better to say so than to let the omission read as "this endpoint does not exist".
+- `OUTSTANDING-FEATURES.md` completed table brought current through v2.86.0, and six superseded design/plan documents now carry a Historical banner instead of reading as current.
+
 ## [2.85.0] - 2026-09-09
 
 ### Changed
