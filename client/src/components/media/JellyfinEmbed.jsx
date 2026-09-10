@@ -1,3 +1,4 @@
+import { mediaPlaybackUrl } from '../../utils/media.js';
 import React, { useState } from 'react';
 import { API_URL } from '../../config/constants.js';
 import { storage } from '../../utils/storage.js';
@@ -10,6 +11,7 @@ import { storage } from '../../utils/storage.js';
  */
 const JellyfinEmbed = ({
   connectionId,
+  shareId,
   itemId,
   name,
   type,
@@ -40,7 +42,8 @@ const JellyfinEmbed = ({
 
   // Include token in URL since <img src> and <video src> can't pass auth headers
   const token = storage.getToken();
-  const thumbnailUrl = `${API_URL}/jellyfin/thumbnail/${connectionId}/${itemId}?type=Primary&maxWidth=300${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+  const shareQuery = shareId ? `&share=${encodeURIComponent(shareId)}` : '';
+  const thumbnailUrl = `${API_URL}/jellyfin/thumbnail/${connectionId}/${itemId}?type=Primary&maxWidth=300${token ? `&token=${encodeURIComponent(token)}` : ''}${shareQuery}`;
 
   // Fetch direct stream URL from server
   const startPlayback = async () => {
@@ -48,11 +51,11 @@ const JellyfinEmbed = ({
     setVideoError(null);
 
     try {
-      const response = await fetch(`${API_URL}/jellyfin/stream/${connectionId}/${itemId}?token=${encodeURIComponent(token)}`);
+      const response = await fetch(`${API_URL}/jellyfin/stream/${connectionId}/${itemId}?token=${encodeURIComponent(token)}${shareQuery}`);
       const data = await response.json();
 
       if (data.streamUrl) {
-        setDirectStreamUrl(data.streamUrl);
+        setDirectStreamUrl(mediaPlaybackUrl(data.streamUrl, API_URL, token));
         setPlaying(true);
       } else if (data.error) {
         setVideoError(data.error);
@@ -372,6 +375,7 @@ export const parseJellyfinUrl = (url) => {
     return {
       connectionId,
       itemId,
+      shareId: params.get('share') || null,
       name: params.get('name') || 'Unknown Media',
       type: params.get('type') || 'Video',
       duration: params.get('duration') ? parseInt(params.get('duration')) : null,
@@ -385,8 +389,9 @@ export const parseJellyfinUrl = (url) => {
 /**
  * Create Jellyfin embed URL from media info
  */
-export const createJellyfinUrl = ({ connectionId, itemId, name, type, duration, overview }) => {
+export const createJellyfinUrl = ({ connectionId, itemId, name, type, duration, overview, shareId }) => {
   const params = new URLSearchParams();
+  if (shareId) params.set('share', shareId);
   if (name) params.set('name', name);
   if (type) params.set('type', type);
   if (duration) params.set('duration', duration.toString());

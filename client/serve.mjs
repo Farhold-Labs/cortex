@@ -24,7 +24,7 @@ app.use(
       etag: true,
       lastModified: true,
       setHeaders(res, filePath) {
-        if (filePath.endsWith('.html') || /(?:^|\/)(sw\.js|manifest\.json)(?:\.gz|\.br)?$/.test(filePath)) {
+        if (/\.html(?:\.gz|\.br)?$/.test(filePath) || /(?:^|\/)(sw\.js|manifest\.json)(?:\.gz|\.br)?$/.test(filePath)) {
           // HTML must never be cached — it references hashed asset filenames.
           // sw.js/manifest.json likewise: an immutable-cached service worker
           // can stay stale for up to 24h after a deploy (v2.60.3).
