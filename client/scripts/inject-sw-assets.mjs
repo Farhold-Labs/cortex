@@ -1,7 +1,8 @@
 // Post-build: reads the Vite manifest and injects hashed asset URLs
 // into dist/sw.js so the service worker can pre-cache them at install time.
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
+import { gzipSync, brotliCompressSync } from 'node:zlib';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -9,8 +10,8 @@ const ROOT = join(__dirname, '..');
 // The build stages into a temporary directory and swaps it into place (see
 // scripts/build.mjs), so the directory to patch is not always literally "dist".
 const OUT_DIR = process.env.CORTEX_OUT_DIR || 'dist';
-const manifestPath = join(ROOT, OUT_DIR, '.vite', 'manifest.json');
-const swPath = join(ROOT, OUT_DIR, 'sw.js');
+const manifestPath = join(resolve(ROOT, OUT_DIR), '.vite', 'manifest.json');
+const swPath = join(resolve(ROOT, OUT_DIR), 'sw.js');
 
 if (!existsSync(manifestPath)) {
   console.warn('[inject-sw-assets] Vite manifest not found — skipping SW injection.');
@@ -52,6 +53,9 @@ sw = sw.replace(/const CACHE_NAME = 'cortex-v[^']+';/, `const CACHE_NAME = 'cort
 sw = sw.replace(/const API_CACHE_NAME = 'cortex-api-v[^']+';/, `const API_CACHE_NAME = 'cortex-api-v${version}';`);
 
 writeFileSync(swPath, sw, 'utf8');
+// Keep the representations served by express-static-gzip identical.
+writeFileSync(`${swPath}.gz`, gzipSync(sw));
+writeFileSync(`${swPath}.br`, brotliCompressSync(sw));
 
 console.log(`[inject-sw-assets] Cache name set to cortex-v${version}`);
 console.log(`[inject-sw-assets] Injected ${assets.length} assets into ${OUT_DIR}/sw.js`);

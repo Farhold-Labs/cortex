@@ -69,9 +69,10 @@ export function detectEmbedUrls(text) {
   while ((jellyfinMatch = jellyfinRegex.exec(text)) !== null) {
     const fullUrl = jellyfinMatch[0];
     if (!seenUrls.has(fullUrl)) {
-      const params = new URLSearchParams(jellyfinMatch[3]?.substring(1) || '');
+      const params = new URLSearchParams((jellyfinMatch[3]?.substring(1) || '').replace(/&amp;/g, '&'));
       embeds.push({
         platform: 'jellyfin',
+        shareId: params.get('share') || null,
         url: fullUrl,
         connectionId: jellyfinMatch[1],
         itemId: jellyfinMatch[2],
@@ -90,9 +91,10 @@ export function detectEmbedUrls(text) {
   while ((plexMatch = plexRegex.exec(text)) !== null) {
     const fullUrl = plexMatch[0];
     if (!seenUrls.has(fullUrl)) {
-      const params = new URLSearchParams(plexMatch[3]?.substring(1) || '');
+      const params = new URLSearchParams((plexMatch[3]?.substring(1) || '').replace(/&amp;/g, '&'));
       embeds.push({
         platform: 'plex',
+        shareId: params.get('share') || null,
         url: fullUrl,
         connectionId: plexMatch[1],
         ratingKey: plexMatch[2],

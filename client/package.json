@@ -1,6 +1,6 @@
 {
   "name": "cortex-client",
-  "version": "2.85.0",
+  "version": "2.86.0",
   "description": "Cortex - Privacy-First Federated Communication Platform",
   "author": "Cortex Project <admin@farhold.com>",
   "homepage": "https://cortex.farhold.com",
@@ -36,6 +36,7 @@
     "@capacitor/push-notifications": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.1",
+    "dompurify": "^3.4.15",
     "electron-context-menu": "^4.1.1",
     "electron-updater": "^6.8.3",
     "express": "^5.2.1",
@@ -48,6 +49,7 @@
     "electron": "^42.0.0",
     "electron-builder": "^26.8.1",
     "hls.js": "^1.6.15",
+    "jsdom": "^29.1.1",
     "livekit-client": "^2.6.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -1,6 +1,6 @@
 {
   "name": "cortex-server",
-  "version": "2.85.0",
+  "version": "2.86.0",
   "description": "Cortex - Privacy-First Federated Communication Platform",
   "type": "module",
   "scripts": {
@@ -22,11 +22,11 @@
     "jsonwebtoken": "^9.0.2",
     "livekit-server-sdk": "^2.8.0",
     "multer": "^2.0.2",
-    "nodemailer": "^8.0.7",
+    "nodemailer": "^10.0.2",
     "otplib": "^12.0.1",
     "qrcode": "^1.5.4",
     "sanitize-html": "^2.17.4",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.4",
     "uuid": "^10.0.0",
     "web-push": "^3.6.7",
     "ws": "^8.18.0"
@@ -38,5 +38,8 @@
     "waves"
   ],
   "author": "Cortex Project",
-  "license": "MIT"
+  "license": "MIT",
+  "overrides": {
+    "qs": "^6.16.0"
+  }
 }
