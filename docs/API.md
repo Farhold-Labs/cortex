@@ -1,10 +1,10 @@
 # Cortex REST API Documentation
 
-Version: 2.57.2
+Version: 2.86.0
 
 ## Overview
 
-The Cortex API is a RESTful API that powers the Cortex federated communication platform (formerly Cortex). All endpoints return JSON responses and require `Content-Type: application/json` headers for requests with body content.
+The Cortex API is a RESTful API that powers the Cortex federated communication platform. All endpoints return JSON responses and require `Content-Type: application/json` headers for requests with body content.
 
 ### Terminology (v2.0.0)
 - **Ping** = message (formerly "droplet")
@@ -16,6 +16,8 @@ The Cortex API is a RESTful API that powers the Cortex federated communication p
 **Base URL:** `http://localhost:3001` (development)
 
 **Content-Type:** `application/json`
+
+> **Coverage:** this document describes the most-used endpoints, not all of them. The server currently exposes roughly 320 routes and about half are undocumented here — treat `server/server.js` as authoritative when an endpoint is missing.
 
 ## Table of Contents
 

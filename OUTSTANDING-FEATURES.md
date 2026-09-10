@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
-**Last Updated:** August 2026
-**Current Version:** v2.72.3
+**Last Updated:** September 2026
+**Current Version:** v2.86.0
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.72.3)
+## Completed Features (v1.5.0 - v2.86.0)
 
 | Feature | Version |
 |---------|---------|
@@ -96,6 +96,19 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Event Cards in Waves (live-rendering, inline RSVP, in-wave creation, E2EE labelling) | v2.72.0 |
 | Documentation Audit; Guest RSVP Privacy Disclosure; Landing Page Events Card | v2.72.1 |
 | Add to Google Calendar on Public Event Pages (+ zero-length / past-midnight link fixes) | v2.72.2 |
+| Operator-Chosen Public Theme for /portal and /events | v2.73.0 |
+| Pinned Pings + Always-Visible Wave Context Bar (wave playback removed) | v2.74.0 |
+| Long-Lived Sessions: Rotating Access Tokens, Reuse Detection, Step-Up Re-Auth | v2.75.0 |
+| Email over HTTPS via Resend + Boot Reachability Probe (cloud hosts block SMTP) | v2.75.1–v2.76.1 |
+| Touch Gestures Across the App; Pull-Up-to-Refresh in a Wave | v2.77.0–v2.78.1 |
+| Instance Timezone Setting (naive event times no longer read in the server's zone) | v2.79.0 |
+| Crawl Bar Configured from the Admin Panel; TEST Buttons for Keys and Feeds | v2.80.0–v2.81.0 |
+| Native App Version Numbering; Android Startup Timeout and Attachment Downloads | v2.81.2–v2.81.5 |
+| Announcement Waves + Instance-Configurable Terminology | v2.82.0 |
+| Federation Re-Broadcast; Announcement Settings Travel with a Federated Wave | v2.83.0–v2.83.2 |
+| Per-Wave Mute (calendar reminders deliberately exempt) | v2.84.0–v2.84.2 |
+| Plain, Light Email Templates Signed with the Instance Name | v2.85.0 |
+| Security Release: Wave-Scoped Media Grants, Playback Proxy, Fail-Closed Encryption | v2.86.0 |
 
 ---
 

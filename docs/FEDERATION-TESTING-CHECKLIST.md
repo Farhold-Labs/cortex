@@ -1,5 +1,7 @@
 # Federation Testing Checklist
 
+> **Historical document.** Written against v1.13.0. Federation has changed substantially since — re-broadcast, per-wave settings propagation and history backfill all postdate it. Kept for the reasoning behind the design, not as a description of how Cortex works today — see CHANGELOG.md and docs/API.md for current behaviour.
+
 **Version:** v1.13.0
 **Last Updated:** December 2025
 

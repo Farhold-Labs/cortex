@@ -294,8 +294,14 @@ ACTIVITY_LOG_RETENTION_DAYS=30
 SESSION_MAX_AGE_DAYS=30
 
 # GIF provider (optional)
-GIF_PROVIDER=tenor
-TENOR_API_KEY=<your-key>
+GIF_PROVIDER=giphy
+GIPHY_API_KEY=<your-key>
+KLIPY_API_KEY=<your-key>
+
+# Voice/video calls (optional — all three required together)
+LIVEKIT_URL=wss://<your-project>.livekit.cloud
+LIVEKIT_API_KEY=<your-key>
+LIVEKIT_API_SECRET=<your-secret>
 
 # Push notifications (optional)
 VAPID_PUBLIC_KEY=<generated>
@@ -307,12 +313,13 @@ FEDERATION_ENABLED=true
 FEDERATION_NODE_NAME=cortex.yourdomain.com
 
 # Email (optional — required for password reset)
-EMAIL_PROVIDER=smtp
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=<your-email>
-SMTP_PASS=<your-app-password>
-EMAIL_FROM=noreply@yourdomain.com
+# NOTE: most cloud providers (DigitalOcean, GCP, AWS, Azure) block outbound
+# SMTP port 587 by default, which silently breaks smtp/sendgrid/mailgun.
+# Resend uses HTTPS on 443 and needs no support ticket. Check the startup log
+# for "EMAIL WILL NOT SEND" if mail never arrives.
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_xxx
+EMAIL_FROM=Cortex <noreply@yourdomain.com>   # domain must be verified in Resend
 ```
 
 ### Back Up Your Keys
