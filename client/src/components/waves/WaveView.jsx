@@ -444,8 +444,23 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   // not flash into view and vanish. The server enforces all of this regardless
   // — hiding the controls is a courtesy, not the control.
   const annWave = waveData || wave || {};
-  const canPostHere = (annWave.postPolicy || 'all') !== 'staff'
+  // v2.88.0 — staff of THIS wave may post too: appointed here, or inherited from
+  // the crew that owns it. Only asked for when the wave is actually restricted,
+  // since for an ordinary wave the answer cannot change the outcome.
+  const isAnnouncementWave = (annWave.postPolicy || 'all') === 'staff';
+  const [myWaveRole, setMyWaveRole] = useState(null);
+  useEffect(() => {
+    if (!isAnnouncementWave || !annWave.id) { setMyWaveRole(null); return; }
+    let cancelled = false;
+    fetchAPI(`/api/waves/${annWave.id}/roles`)
+      .then(res => { if (!cancelled) setMyWaveRole(res?.yourRole || null); })
+      .catch(() => { if (!cancelled) setMyWaveRole(null); });
+    return () => { cancelled = true; };
+  }, [isAnnouncementWave, annWave.id, fetchAPI]);
+
+  const canPostHere = !isAnnouncementWave
     || annWave.createdBy === currentUser?.id
+    || !!myWaveRole
     || canAccess(currentUser, 'moderator');
   const repliesAllowed = annWave.allowReplies !== false;
   const reactionsAllowed = annWave.allowReactions !== false;
