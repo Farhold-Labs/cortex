@@ -5,6 +5,27 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.87.0] - 2026-09-11
+
+### Fixed
+
+- **Tapping a ping squished it, and tapping again un-squished it.** Reported on Android and the mobile PWA: the first tap brought up the reactions, reply and ⋮ controls but narrowed the ping, and a second tap restored the layout while leaving the controls up.
+  - Both halves were the same cause. v2.83.2 removed `padding-right: 90px` from `.cortex-msg-row:hover` because it narrowed the text column, re-wrapped the text and changed the row's height — but it left the **touch-side twin** of that rule behind as an inline style, `paddingRight: actionsRevealed ? '90px' : '12px'`, with a comment claiming desktop reserved the space via CSS. Nothing reserved it any more.
+  - So the first tap set `actionsRevealed` and re-wrapped the text; the second tap cleared it, while a tap-stuck `:hover` kept the pill on screen. That is why tapping twice looked like it fixed the layout.
+  - The padding is now constant. The pill is `position: absolute` over the row's top-right corner — the tail of the header line, normally empty — so it never needed reserved space on either input type.
+
+### Added
+
+- **Three more quick reactions: 💯, 🤣 and 😡.** Inserted next to their nearest relatives rather than appended, so the row still reads positive → funny → thoughtful → negative and the existing reactions keep their relative order.
+  - The picker's mobile width goes from 200px to 260px. At fourteen reactions the old width showed about six, so the new ones would have sat off-screen behind a horizontal scroll nobody knew was there.
+
+- **Typed emoticons become emoji.** `:)` sends as 🙂, `:D` as 😃, `;)` as 😉, along with `:(`, `:'(`, `>:(`, `:P`, `:O`, `:|`, `:/`, `xD`, `<3` and their `:-)`-style and `=)`-style variants.
+  - Conversion happens on send and in the live preview, **before encryption**, so the stored ping holds the emoji itself. Nothing new runs on the server and it behaves identically in E2EE and plaintext waves.
+  - An emoticon must be preceded by a space or the start of the message. That is what stops `https://example.com` becoming `https😕/example.com` — the `:/` there follows a letter. The boundary is expressed as a captured group rather than a lookbehind, which Safari only gained in 16.4.
+  - **`:)` and `:shrug:` inside code are now left verbatim**, in fenced blocks and inline spans alike. Shortcodes were previously converted inside code too; on a platform where people paste code, that was wrong for both.
+  - `B)` and `8)` are deliberately absent: `b)` is an outline marker, so "a) first b) second" would have sprouted sunglasses.
+  - Covered by `tests/emoji-resolution.test.cjs` — 12 cases, weighted toward what must *not* convert, since this is the last point at which the text is readable.
+
 ## [2.86.0] - 2026-09-09
 
 ### Security
@@ -20,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Remove confirmed Claude Code metadata and add regression tests and security review documentation.
+
+### Documentation
+
+- **Restored `CLAUDE.md`**, rewritten against the current tree rather than reverted. The deleted copy described a v2.58-era codebase — a single-file client, a version living in three places, no test suite — so reverting it would have reinstated stale guidance. It is the developer workflow and architecture guide, not a tool artifact.
+- **The three LiveKit variables are now in `.env.example`.** The server has read `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` since voice/video shipped, but they had never been documented anywhere — so the only way to discover that calls need configuration was to grep the source. Documented alongside the constraint that each node needs its own LiveKit project, since the API secret mints room tokens.
+- Documented the operational consequences of the v2.86.0 media proxy where an operator will actually meet them: streaming now consumes the Cortex server's own bandwidth rather than redirecting, and HLS session state is process-local, so a multi-worker deployment needs sticky routing for a playback session.
+- `JWT_EXPIRES_IN` is marked as the legacy path it became in v2.75.0, pointing at the instance security policy that replaced it, and `SESSION_MAX_AGE_DAYS` now says it reaps session *rows* rather than setting how long a session stays valid.
+- Corrected Tenor to GIPHY/Klipy in `README.md` and `docs/DEPLOYMENT.md` — Tenor was shut down by Google in 2026 and both still offered it as the default. Both now prefer Resend over SMTP, with the blocked-port-587 warning stated rather than implied.
+- `README.md` brought current from v2.72.3: the v2.75.0 session model, fail-closed database encryption, scoped media sharing, and the crawl bar being admin-panel-configured since v2.80.0.
+- `docs/API.md` carries an honest coverage note — roughly half of some 320 routes are undocumented, so `server/server.js` is authoritative when an endpoint is missing. Better to say so than to let the omission read as "this endpoint does not exist".
+- `OUTSTANDING-FEATURES.md` completed table brought current through v2.86.0, and six superseded design/plan documents now carry a Historical banner instead of reading as current.
 
 ## [2.85.0] - 2026-09-09
 

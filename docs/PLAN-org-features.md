@@ -1,5 +1,7 @@
 # Organization Features Plan
 
+> **Historical document.** Planning document. Its four features shipped across the v2.65–v2.72 lines. Kept for the reasoning behind the design, not as a description of how Cortex works today — see CHANGELOG.md and docs/API.md for current behaviour.
+
 This document outlines the planned implementation for making Cortex suitable for organizations, broken into four discrete features.
 
 ---

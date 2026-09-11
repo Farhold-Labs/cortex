@@ -161,7 +161,11 @@ const Message = ({
   }, [message.content, message.media_type, message.deleted]);
 
   const isContentCollapsed = contentCollapsed[message.id];
-  const quickReactions = ['👍', '☝️', '❤️', '😂', '🎉', '🤔', '👏', '😢', '🖕', '😮', '🤦'];
+  // 💯, 🤣 and 😡 added in v2.87.0. Inserted beside their nearest relatives
+  // rather than appended, so the row still reads positive → funny → thoughtful
+  // → negative; the existing emoji keep their relative order, so nobody's
+  // muscle memory for the first few moves.
+  const quickReactions = ['👍', '☝️', '❤️', '💯', '😂', '🤣', '🎉', '🤔', '👏', '😢', '😡', '🖕', '😮', '🤦'];
 
   // ===== Touch gestures (v2.77.0) =====
   // Every one of these mirrors a control that already exists; nothing here is
@@ -270,7 +274,16 @@ const Message = ({
           paddingTop: isFirstInGroup ? (isMobile ? '10px' : '7px') : '1px',
           paddingBottom: '1px',
           paddingLeft: '12px',
-          paddingRight: actionsRevealed ? '90px' : '12px', // touch-revealed; desktop hover reserves via CSS
+          // Constant. This used to be `actionsRevealed ? '90px' : '12px'`, the
+          // touch-side twin of the `:hover` padding removed in v2.83.2 — and it
+          // had exactly the same effect: revealing the pill narrowed the text
+          // column, re-wrapped the text and changed the row's height, so the
+          // ping squished under the finger that tapped it. The second tap
+          // cleared the padding while a stuck `:hover` kept the pill visible,
+          // which is why tapping twice appeared to "fix" the layout.
+          // The pill is position:absolute over the row's top-right corner, so
+          // it never needed reserved space on either input type.
+          paddingRight: '12px',
           background: isMoving ? 'rgba(255, 210, 63, 0.08)'
             : isHighlighted ? `${config.color}15`
             : isUnread ? 'var(--accent-amber)08'
@@ -702,7 +715,11 @@ const Message = ({
                     position: 'absolute', bottom: '100%', right: 0, marginBottom: '4px', zIndex: 30,
                     background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
                     padding: '4px', display: 'flex', flexWrap: 'nowrap', gap: '2px',
-                    overflowX: 'auto', maxWidth: isMobile ? '200px' : 'max-content',
+                    // 260px on mobile (was 200px): at 14 reactions the old width
+                    // showed about six, so the three added in v2.87.0 would have
+                    // landed off-screen behind a scroll nobody knew to make. Still
+                    // narrow enough to sit inside the row on a small phone.
+                    overflowX: 'auto', maxWidth: isMobile ? '260px' : 'max-content',
                     WebkitOverflowScrolling: 'touch',
                   }}
                 >
