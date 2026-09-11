@@ -172,6 +172,42 @@ test('wave roles gate announcement posting without instance-wide moderator', asy
       assert.equal((await post(wave.id, 'stranger')).status, 403);
     });
 
+    await t.test('wave staff can delete another author\'s ping; bystanders cannot', async () => {
+      // owner posts; 'member' is a wave admin by now, 'stranger' is nobody.
+      const posted = await post(wave.id, 'owner', 'delete me');
+      assert.equal(posted.status, 201);
+      const pingId = (await posted.json()).id;
+      assert.ok(pingId, 'expected the new ping id');
+
+      assert.equal((await req(`/api/pings/${pingId}`, 'stranger', { method: 'DELETE' })).status, 403);
+      assert.equal((await req(`/api/pings/${pingId}`, 'member', { method: 'DELETE' })).status, 200);
+    });
+
+    await t.test('an author can still delete their own ping', async () => {
+      const posted = await post(crewWave.id, 'crewmod', 'mine to remove');
+      assert.equal(posted.status, 201);
+      const pingId = (await posted.json()).id;
+      assert.equal((await req(`/api/pings/${pingId}`, 'crewmod', { method: 'DELETE' })).status, 200);
+    });
+
+    await t.test('pinning in an announcements-only wave is staff-only', async () => {
+      const posted = await post(wave.id, 'owner', 'pin target');
+      const pingId = (await posted.json()).id;
+      // 'deputy' had its moderator role removed earlier, but can still see the wave.
+      assert.equal((await req(`/api/pings/${pingId}/pin`, 'deputy', { method: 'POST' })).status, 403);
+      assert.equal((await req(`/api/pings/${pingId}/pin`, 'owner', { method: 'POST' })).status, 200);
+    });
+
+    await t.test('pinning in an ordinary wave stays open to participants', async () => {
+      // Relax the crew wave back to open posting and confirm an ordinary member
+      // can still pin — the new restriction must be limited to announcement waves.
+      const relax = await req(`/api/waves/${crewWave.id}`, 'owner', { method: 'PUT', body: { postPolicy: 'all' } });
+      assert.equal(relax.status, 200);
+      const posted = await post(crewWave.id, 'owner', 'ordinary pin');
+      const pingId = (await posted.json()).id;
+      assert.equal((await req(`/api/pings/${pingId}/pin`, 'member', { method: 'POST' })).status, 200);
+    });
+
     await t.test('roles are not stored in the clear', async () => {
       const raw = fs.readFileSync(path.join(serverDir, 'data/farhold.db'));
       // The blob is AES-GCM; the plain string "moderator" adjacent to a user id

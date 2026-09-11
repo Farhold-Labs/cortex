@@ -21429,15 +21429,22 @@ app.delete('/api/pings/:id', authenticateToken, (req, res) => {
   const ping = db.getMessage(pingId);
 
   if (!ping) return res.status(404).json({ error: 'Message not found' });
-  if (ping.authorId !== req.user.userId) {
-    return res.status(403).json({ error: 'Only the author can delete' });
-  }
 
   // Save wave ID before deletion for federation
   const waveId = ping.waveId;
   const wave = db.getWave(waveId);
 
-  const result = db.deleteMessage(pingId, req.user.userId);
+  // v2.88.0 — the author, or staff of this wave (appointed, inherited from the
+  // owning crew, or an instance moderator). Until now deletion was author-only,
+  // so nobody could clear an abusive ping from a wave they ran without also
+  // running the whole node.
+  const isAuthor = ping.authorId === req.user.userId;
+  const asStaff = !isAuthor && canModerateWave(wave, req.user.userId);
+  if (!isAuthor && !asStaff) {
+    return res.status(403).json({ error: 'Only the author or wave staff can delete' });
+  }
+
+  const result = db.deleteMessage(pingId, req.user.userId, { asStaff });
   if (!result.success) return res.status(400).json({ error: result.error });
 
   // Broadcast deletion to all participants
@@ -21588,6 +21595,16 @@ const requirePinAccess = (pingId, userId, res) => {
   // refused to pin in exactly those two — the same rule posting a ping uses.
   if (!canAccessWaveFromCache(waveId, userId)) {
     res.status(403).json({ error: 'Access denied' });
+    return null;
+  }
+  // v2.88.0 — pinning stays open to anyone who can see an ordinary wave; the
+  // shared shelf is a participant feature and nothing here takes that away.
+  // In an ANNOUNCEMENTS-ONLY wave it is different: the pin banner is part of
+  // the publishing surface, so someone who may not post should not be able to
+  // promote a ping into it either. Staff there means the same as for posting.
+  const wave = db.getWave(waveId);
+  if ((wave?.postPolicy || 'all') === 'staff' && !canModerateWave(wave, userId)) {
+    res.status(403).json({ error: 'Only wave staff can pin in an announcements-only wave' });
     return null;
   }
   return waveId;
@@ -21827,11 +21844,17 @@ app.delete('/api/messages/:id', authenticateToken, deprecatedEndpoint, (req, res
   const message = db.getMessage(messageId);
 
   if (!message) return res.status(404).json({ error: 'Message not found' });
-  if (message.authorId !== req.user.userId) {
-    return res.status(403).json({ error: 'Only message author can delete' });
+
+  // Same rule as the current route (v2.88.0). Legacy routes bypassing a new
+  // policy is exactly what the v2.86.0 review found for announcement waves and
+  // reactions, so this one moves with its replacement rather than after it.
+  const isAuthor = message.authorId === req.user.userId;
+  const asStaff = !isAuthor && canModerateWave(db.getWave(message.waveId), req.user.userId);
+  if (!isAuthor && !asStaff) {
+    return res.status(403).json({ error: 'Only the author or wave staff can delete' });
   }
 
-  const result = db.deleteMessage(messageId, req.user.userId);
+  const result = db.deleteMessage(messageId, req.user.userId, { asStaff });
   if (!result.success) return res.status(400).json({ error: result.error });
 
   // Broadcast deletion to all participants

@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Editing a wave's settings is no longer restricted to its creator; wave admins and instance moderators can too. Deleting a wave stays with the owner.
+- **Wave staff can delete another person's ping.** Deletion was previously author-only with no moderator path whatsoever — not even an instance moderator could clear an abusive ping, which made "moderator" a title without the one power the word implies. The author, wave staff, crew-inherited staff and instance moderators can now remove a ping; everyone else still cannot. Applied to the legacy `/api/messages/:id` route in the same change, because legacy routes bypassing a new policy is precisely what the v2.86.0 review found for announcement posting and reactions.
+- **Pinning in an announcements-only wave is now staff-only.** Pinning is otherwise unchanged and stays open to anyone who can see the wave — the shared shelf is a participant feature. But in an announcement wave the pin banner is part of the publishing surface, so someone who may not post should not be able to promote a ping into it either.
 - Crew ownership succession now runs **admin → moderator → anyone**, rather than admin → whoever happened to be first.
 
 ### Technical

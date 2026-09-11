@@ -7362,11 +7362,17 @@ export class DatabaseSQLite {
   updateMessage(id, content, opts) { return this.updatePing(id, content, opts); }
   updateDroplet(id, content, opts) { return this.updatePing(id, content, opts); }
 
-  deletePing(pingId, userId) {
+  // v2.88.0 — `asStaff` lets wave staff (and instance moderators) remove someone
+  // else's ping. It is an explicit opt-in rather than a relaxed check, so a
+  // caller that forgets to authorize still gets the author-only behaviour.
+  // The route decides who counts as staff; this layer only obeys.
+  deletePing(pingId, userId, { asStaff = false } = {}) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
     if (!existing) return { success: false, error: 'Message not found' };
     if (existing.deleted) return { success: false, error: 'Message already deleted' };
-    if (existing.author_id !== userId) return { success: false, error: 'Only the author can delete' };
+    if (existing.author_id !== userId && !asStaff) {
+      return { success: false, error: 'Only the author can delete' };
+    }
 
     const now = new Date().toISOString();
 
@@ -7386,8 +7392,8 @@ export class DatabaseSQLite {
   }
 
   // Backward compatibility aliases
-  deleteMessage(id, userId) { return this.deletePing(id, userId); }
-  deleteDroplet(id, userId) { return this.deletePing(id, userId); }
+  deleteMessage(id, userId, options) { return this.deletePing(id, userId, options); }
+  deleteDroplet(id, userId, options) { return this.deletePing(id, userId, options); }
 
   togglePingReaction(pingId, userId, emoji) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
