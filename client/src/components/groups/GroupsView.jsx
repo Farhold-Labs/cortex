@@ -120,10 +120,16 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
     }
   };
 
+  // v2.88.0 — three rungs now, so the button cycles rather than toggles:
+  // member → moderator → admin → member. A crew moderator inherits moderator
+  // standing in waves the crew owns, which is what lets them post in that
+  // crew's announcement waves without running the crew.
+  const NEXT_CREW_ROLE = { member: 'moderator', moderator: 'admin', admin: 'member' };
+
   const handleToggleAdmin = async (userId, currentRole) => {
     try {
       await fetchAPI(`/groups/${selectedGroup}/members/${userId}`, {
-        method: 'PUT', body: { role: currentRole === 'admin' ? 'member' : 'admin' },
+        method: 'PUT', body: { role: NEXT_CREW_ROLE[currentRole] || 'moderator' },
       });
       const updated = await fetchAPI(`/groups/${selectedGroup}`);
       setGroupDetails(updated);
@@ -271,7 +277,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <Avatar letter={member.avatar || member.name[0]} color={member.role === 'admin' ? 'var(--accent-amber)' : 'var(--text-dim)'} size={36} status={member.status} />
+                    <Avatar letter={member.avatar || member.name[0]} color={member.role === 'admin' ? 'var(--accent-amber)' : member.role === 'moderator' ? 'var(--accent-teal)' : 'var(--text-dim)'} size={36} status={member.status} />
                     <div>
                       <div style={{ color: 'var(--text-primary)' }}>{member.name}</div>
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{member.role}</div>
@@ -279,10 +285,14 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
                   </div>
                   {groupDetails.isAdmin && (
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      <button onClick={() => handleToggleAdmin(member.id, member.role)} style={{
-                        padding: '4px 8px', background: 'transparent', border: '1px solid var(--border-primary)',
-                        color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.65rem', fontFamily: 'monospace',
-                      }}>{member.role === 'admin' ? '↓' : '↑'}</button>
+                      <button
+                        onClick={() => handleToggleAdmin(member.id, member.role)}
+                        title={`Make ${NEXT_CREW_ROLE[member.role] || 'moderator'}`}
+                        aria-label={`Change ${member.name}'s role to ${NEXT_CREW_ROLE[member.role] || 'moderator'}`}
+                        style={{
+                          padding: '4px 8px', background: 'transparent', border: '1px solid var(--border-primary)',
+                          color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.65rem', fontFamily: 'monospace',
+                        }}>{member.role === 'admin' ? '↺' : '↑'}</button>
                       <button onClick={() => handleRemoveMember(member.id)} style={{
                         padding: '4px 8px', background: 'transparent', border: '1px solid var(--accent-orange)50',
                         color: 'var(--accent-orange)', cursor: 'pointer', fontSize: '0.65rem', fontFamily: 'monospace',

@@ -28,6 +28,7 @@ import * as waveParticipationCrypto from './lib/wave-participation-crypto.js';
 import * as pushSubscriptionCrypto from './lib/push-subscription-crypto.js';
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
+import * as waveRoles from './lib/wave-roles.js';
 import { getCurrentHoliday } from './holidays.js';
 import admin from 'firebase-admin';
 import { canAccessMedia, validMediaTarget } from './lib/media-access.js';
@@ -570,11 +571,62 @@ function requireRole(user, role, res) {
  * Server-side enforcement is the real control; the client hides the composer
  * purely as a courtesy.
  */
+/**
+ * v2.88.0 — per-wave roles.
+ *
+ * Resolves a user's standing in ONE wave: 'owner' | 'admin' | 'moderator' | null.
+ * Three sources, highest wins:
+ *
+ *   1. the wave's creator is always its owner;
+ *   2. an explicit appointment stored in wave_roles_encrypted;
+ *   3. for a wave owned by a crew, that crew's own admin/moderator — running the
+ *      group means running its waves, so staff are appointed once rather than on
+ *      every wave the crew owns.
+ *
+ * Instance moderators/admins are deliberately NOT folded in here. This function
+ * answers "what is this person to this wave", and an instance moderator is not
+ * staff of a wave they have never touched — they reach it through the admin
+ * surface. Callers that should honour instance rank say so explicitly, which
+ * keeps "I was appointed here" and "I outrank this whole node" distinguishable
+ * in the code and in any future audit log.
+ */
+function getWaveRole(wave, userId) {
+  if (!wave || !userId) return null;
+  if (wave.createdBy === userId) return 'owner';
+
+  const appointed = waveRoles.getStoredRole(wave.id, userId);
+
+  let inherited = null;
+  if (wave.crewId || wave.groupId) {
+    const crewRole = db.getGroupRole?.(wave.crewId || wave.groupId, userId);
+    if (crewRole === 'admin' || crewRole === 'moderator') inherited = crewRole;
+  }
+
+  if (!appointed) return inherited;
+  if (!inherited) return appointed;
+  return waveRoles.rankOf(appointed) >= waveRoles.rankOf(inherited) ? appointed : inherited;
+}
+
+/** Wave staff at `required` or above, OR an instance moderator/admin. */
+function hasWaveAuthority(wave, userId, required) {
+  if (waveRoles.atLeast(getWaveRole(wave, userId), required)) return true;
+  return hasRole(db.findUserById(userId), ROLES.MODERATOR);
+}
+
+/** Manage the wave itself: settings, appointments, invites. Admin and up. */
+function canManageWave(wave, userId) {
+  return hasWaveAuthority(wave, userId, 'admin');
+}
+
+/** Police its content: post in an announcement wave, pin, delete pings. */
+function canModerateWave(wave, userId) {
+  return hasWaveAuthority(wave, userId, 'moderator');
+}
+
 function canPostToWave(wave, userId) {
   if (!wave) return false;
   if ((wave.postPolicy || 'all') !== 'staff') return true;
-  if (wave.createdBy === userId) return true;
-  return hasRole(db.findUserById(userId), ROLES.MODERATOR);
+  return canModerateWave(wave, userId);
 }
 
 /**
@@ -4581,6 +4633,8 @@ const newsProviders = [crawlKey('newsapi') && 'NewsAPI', crawlKey('gnews') && 'G
 if (newsProviders.length > 0) console.log(`📰 News data enabled (${newsProviders.join(', ')})`);
 if (USE_SQLITE) {
   console.log('🗄️  Using SQLite database');
+  // Per-wave roles (v2.88.0) — lazy cache, so this only hands it the database
+  waveRoles.initialize(db);
   // Initialize wave participation cache (v2.21.0 - Privacy Hardening)
   waveParticipationCrypto.initializeCache(db).then(stats => {
     console.log(`🔐 Wave participation cache initialized: ${stats.waveCount} waves, ${stats.participantCount} mappings`);
@@ -18259,7 +18313,11 @@ app.post('/api/groups/:id/members', authenticateToken, (req, res) => {
   const user = db.findUserById(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  if (!crewMembership.addMember(groupId, userId, req.body.role || 'member')) {
+  const memberRole = req.body.role || 'member';
+  if (!['admin', 'moderator', 'member'].includes(memberRole)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
+  if (!crewMembership.addMember(groupId, userId, memberRole)) {
     return res.status(409).json({ error: 'User already in group' });
   }
   res.status(201).json({ success: true });
@@ -18288,10 +18346,13 @@ app.put('/api/groups/:id/members/:userId', authenticateToken, (req, res) => {
   
   const userId = sanitizeInput(req.params.userId);
   const role = req.body.role;
-  if (!['admin', 'member'].includes(role)) {
+  // v2.88.0 — 'moderator' sits between admin and member. Crew staff inherit the
+  // matching standing in waves the crew owns, so a crew moderator can post in
+  // that crew's announcement waves without being a crew admin.
+  if (!['admin', 'moderator', 'member'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
-  
+
   if (!db.updateGroupMemberRole(groupId, userId, role)) {
     return res.status(404).json({ error: 'Member not found' });
   }
@@ -19294,8 +19355,11 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
   const waveId = sanitizeInput(req.params.id);
   let wave = db.getWave(waveId);
   if (!wave) return res.status(404).json({ error: 'Wave not found' });
-  if (wave.createdBy !== req.user.userId) {
-    return res.status(403).json({ error: 'Only wave creator can modify' });
+  // v2.88.0 — wave admins (appointed, or inherited from the owning crew) may
+  // change settings too, so delegating a wave no longer means handing out
+  // instance-wide moderator. Deleting the wave stays owner-only, on its own route.
+  if (!canManageWave(wave, req.user.userId)) {
+    return res.status(403).json({ error: 'Only the wave owner or a wave admin can modify' });
   }
 
   const privacy = req.body.privacy;
@@ -19326,9 +19390,9 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
     wave.topic = sanitizedTopic;
   }
 
-  // v2.82.0 — announcement settings. The route already restricts everything to
-  // the wave creator, so no extra role check is needed here; instance
-  // moderators reach these through the admin surface instead.
+  // v2.82.0 — announcement settings. The route guard above already limits this
+  // to the wave owner, its admins, or an instance moderator (v2.88.0), so no
+  // extra role check is needed here.
   const ann = {};
   if (req.body.postPolicy !== undefined) {
     if (!['all', 'staff'].includes(req.body.postPolicy)) {
@@ -20311,6 +20375,142 @@ app.post('/api/waves/:id/decrypt', authenticateToken, async (req, res) => {
 // ============ Wave Participant Management ============
 
 // Add participant to wave
+// ============ Per-wave roles (v2.88.0) ============
+//
+// Appointing wave staff so that an announcement wave can be delegated without
+// granting instance-wide moderator. See getWaveRole() and lib/wave-roles.js.
+//
+// Who may appoint whom: the OWNER (or an instance admin) appoints admins; a
+// wave admin appoints moderators only. An admin who could mint other admins
+// could entrench themselves against the owner, which is not what "help me run
+// this wave" means.
+
+function waveStaffSummary(wave) {
+  const stored = waveRoles.getWaveRoles(wave.id);
+  const describe = (userId, role, source) => {
+    const u = db.findUserById(userId);
+    return u ? { userId, handle: u.handle, name: u.displayName || u.handle, role, source } : null;
+  };
+
+  const staff = [];
+  const owner = describe(wave.createdBy, 'owner', 'owner');
+  if (owner) staff.push(owner);
+
+  for (const [userId, role] of Object.entries(stored)) {
+    if (userId === wave.createdBy) continue;
+    const entry = describe(userId, role, 'appointed');
+    if (entry) staff.push(entry);
+  }
+
+  // Inherited crew staff are shown but cannot be edited here — they are managed
+  // in the crew. Listing them avoids the "why can that person post?" mystery.
+  const crewId = wave.crewId || wave.groupId;
+  if (crewId && db.getGroupMembers) {
+    for (const member of (db.getGroupMembers(crewId) || [])) {
+      const role = member.role;
+      if (role !== 'admin' && role !== 'moderator') continue;
+      const id = member.id || member.userId;
+      if (!id || id === wave.createdBy || stored[id]) continue;
+      const entry = describe(id, role, 'crew');
+      if (entry) staff.push(entry);
+    }
+  }
+  return staff;
+}
+
+app.get('/api/waves/:id/roles', authenticateToken, (req, res) => {
+  const waveId = sanitizeInput(req.params.id);
+  const wave = db.getWave(waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+  if (!canAccessWaveFromCache(waveId, req.user.userId)) {
+    return res.status(403).json({ error: 'No access to this wave' });
+  }
+  res.json({
+    staff: waveStaffSummary(wave),
+    yourRole: getWaveRole(wave, req.user.userId),
+    canManage: canManageWave(wave, req.user.userId),
+  });
+});
+
+app.put('/api/waves/:id/roles/:userId', authenticateToken, (req, res) => {
+  const waveId = sanitizeInput(req.params.id);
+  const targetId = sanitizeInput(req.params.userId);
+  const role = sanitizeInput(req.body?.role || '');
+
+  const wave = db.getWave(waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+  if (!waveRoles.WAVE_ROLE_VALUES.includes(role)) {
+    return res.status(400).json({ error: `role must be one of: ${waveRoles.WAVE_ROLE_VALUES.join(', ')}` });
+  }
+  if (!canManageWave(wave, req.user.userId)) {
+    return res.status(403).json({ error: 'Only the wave owner or a wave admin can assign roles' });
+  }
+  const target = db.findUserById(targetId);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (targetId === wave.createdBy) {
+    return res.status(400).json({ error: 'The wave owner already outranks every role' });
+  }
+
+  const actorIsOwnerOrInstanceAdmin =
+    wave.createdBy === req.user.userId || hasRole(db.findUserById(req.user.userId), ROLES.ADMIN);
+  if (role === waveRoles.WAVE_ROLES.ADMIN && !actorIsOwnerOrInstanceAdmin) {
+    return res.status(403).json({ error: 'Only the wave owner can appoint a wave admin' });
+  }
+  const existing = waveRoles.getStoredRole(waveId, targetId);
+  if (existing === waveRoles.WAVE_ROLES.ADMIN && !actorIsOwnerOrInstanceAdmin) {
+    return res.status(403).json({ error: 'Only the wave owner can change a wave admin' });
+  }
+
+  waveRoles.setWaveRole(waveId, targetId, role);
+
+  // Staff join the wave: moderating something you cannot see is not a state
+  // worth supporting, and it keeps the wave in their list and their notifications on.
+  if (!participation.isParticipant(waveId, targetId)) {
+    participation.addParticipant(waveId, targetId);
+  }
+
+  broadcastToWave(waveId, { type: 'wave_roles_changed', waveId, userId: targetId, role });
+  res.json({ staff: waveStaffSummary(wave), role });
+});
+
+app.delete('/api/waves/:id/roles/:userId', authenticateToken, (req, res) => {
+  const waveId = sanitizeInput(req.params.id);
+  const targetId = sanitizeInput(req.params.userId);
+
+  const wave = db.getWave(waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+  if (!canManageWave(wave, req.user.userId)) {
+    return res.status(403).json({ error: 'Only the wave owner or a wave admin can remove roles' });
+  }
+  if (targetId === wave.createdBy) {
+    return res.status(400).json({ error: 'The wave owner cannot be removed; transfer the wave instead' });
+  }
+
+  const existing = waveRoles.getStoredRole(waveId, targetId);
+  if (!existing) {
+    // Distinguish "not staff" from "staff via the crew", which is not removable here.
+    const inherited = getWaveRole(wave, targetId);
+    if (inherited) {
+      return res.status(409).json({
+        error: 'That standing comes from the crew that owns this wave — change it in the crew',
+        source: 'crew', role: inherited,
+      });
+    }
+    return res.status(404).json({ error: 'That user has no role on this wave' });
+  }
+  const actorIsOwnerOrInstanceAdmin =
+    wave.createdBy === req.user.userId || hasRole(db.findUserById(req.user.userId), ROLES.ADMIN);
+  if (existing === waveRoles.WAVE_ROLES.ADMIN && !actorIsOwnerOrInstanceAdmin) {
+    return res.status(403).json({ error: 'Only the wave owner can remove a wave admin' });
+  }
+
+  waveRoles.removeWaveRole(waveId, targetId);
+  // Their participant row stays: being removed as staff is not the same as
+  // being thrown out of the wave, and revoking access is a separate action.
+  broadcastToWave(waveId, { type: 'wave_roles_changed', waveId, userId: targetId, role: null });
+  res.json({ staff: waveStaffSummary(wave) });
+});
+
 app.post('/api/waves/:id/participants', authenticateToken, async (req, res) => {
   const waveId = sanitizeInput(req.params.id);
   const { userId } = req.body;

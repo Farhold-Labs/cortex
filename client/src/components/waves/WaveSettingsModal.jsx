@@ -14,7 +14,63 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
   const [allowReactions, setAllowReactions] = useState(wave?.allowReactions !== false);
   const [selectedGroup, setSelectedGroup] = useState(wave?.groupId || null);
   const [title, setTitle] = useState(wave?.title || '');
+  // Wave staff (v2.88.0)
+  const [staff, setStaff] = useState([]);
+  const [canManageStaff, setCanManageStaff] = useState(false);
+  const [staffHandle, setStaffHandle] = useState('');
+  const [staffBusy, setStaffBusy] = useState(false);
   const [decrypting, setDecrypting] = useState(false);
+
+  // Load the staff list whenever the modal opens on a wave.
+  useEffect(() => {
+    if (!isOpen || !wave?.id) return;
+    let cancelled = false;
+    fetchAPI(`/waves/${wave.id}/roles`)
+      .then(res => {
+        if (cancelled) return;
+        setStaff(res?.staff || []);
+        setCanManageStaff(!!res?.canManage);
+      })
+      .catch(() => { if (!cancelled) { setStaff([]); setCanManageStaff(false); } });
+    return () => { cancelled = true; };
+  }, [isOpen, wave?.id, fetchAPI]);
+
+  // role === null removes the appointment.
+  const changeStaff = async (userId, role) => {
+    setStaffBusy(true);
+    try {
+      const res = role
+        ? await fetchAPI(`/waves/${wave.id}/roles/${userId}`, { method: 'PUT', body: { role } })
+        : await fetchAPI(`/waves/${wave.id}/roles/${userId}`, { method: 'DELETE' });
+      setStaff(res?.staff || []);
+      showToast(role ? `Role set to ${role}` : 'Role removed', 'success');
+    } catch (err) {
+      showToast(err.message || formatError('Failed to update role'), 'error');
+    } finally {
+      setStaffBusy(false);
+    }
+  };
+
+  const addStaff = async (role) => {
+    const handle = staffHandle.trim().replace(/^@/, '');
+    if (!handle) return;
+    setStaffBusy(true);
+    try {
+      const results = await fetchAPI(`/users/search?q=${encodeURIComponent(handle)}&limit=5`);
+      const list = Array.isArray(results) ? results : (results?.users || []);
+      const match = list.find(u => (u.handle || '').toLowerCase() === handle.toLowerCase());
+      if (!match) {
+        showToast(`No user @${handle}`, 'error');
+        return;
+      }
+      setStaffHandle('');
+      await changeStaff(match.id || match.userId, role);
+    } catch (err) {
+      showToast(err.message || formatError('Failed to add staff'), 'error');
+    } finally {
+      setStaffBusy(false);
+    }
+  };
   const [rebroadcasting, setRebroadcasting] = useState(false); // v2.83.0
   const [encrypting, setEncrypting] = useState(false);
   const [encryptProgress, setEncryptProgress] = useState({ phase: 'idle', encrypted: 0, total: null });
@@ -417,6 +473,63 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
             background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
             color: 'var(--text-primary)', fontSize: '0.9rem', fontFamily: 'inherit',
           }} />
+        </div>
+
+        {/* Wave staff (v2.88.0). Appointing someone here is what lets an
+            announcement wave be delegated without making them a moderator of
+            the whole instance. Crew-inherited staff are listed but not editable
+            here — they are managed in the crew that owns the wave. */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+            {T.WAVE} STAFF
+          </div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '8px' }}>
+            Admins manage this {T.wave}; moderators can post in it when it is announcements-only.
+          </div>
+
+          {staff.map(member => (
+            <div key={member.userId} style={{
+              display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', marginBottom: '6px',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{member.name}</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+                  @{member.handle} · {member.role}
+                  {member.source === 'crew' && ' · from crew'}
+                  {member.source === 'owner' && ' · owner'}
+                </div>
+              </div>
+              {canManageStaff && member.source === 'appointed' && (
+                <button disabled={staffBusy} onClick={() => changeStaff(member.userId, null)} style={{
+                  padding: '4px 8px', background: 'transparent', border: '1px solid var(--border-subtle)',
+                  color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
+                }}>REMOVE</button>
+              )}
+            </div>
+          ))}
+
+          {canManageStaff && (
+            <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+              <input
+                type="text" value={staffHandle} placeholder="handle"
+                onChange={(e) => setStaffHandle(e.target.value)}
+                style={{
+                  flex: 1, padding: '8px 10px', background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-subtle)', color: 'var(--text-primary)',
+                  fontFamily: 'inherit', fontSize: '0.8rem', minWidth: 0,
+                }}
+              />
+              <button disabled={staffBusy || !staffHandle.trim()} onClick={() => addStaff('moderator')} style={{
+                padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
+              }}>+ MOD</button>
+              <button disabled={staffBusy || !staffHandle.trim()} onClick={() => addStaff('admin')} style={{
+                padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.7rem',
+              }}>+ ADMIN</button>
+            </div>
+          )}
         </div>
 
         {/* Announcement settings (v2.82.0). Privacy says who may SEE; these say

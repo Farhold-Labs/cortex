@@ -5,6 +5,33 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.88.0] - 2026-09-11
+
+### Added
+
+- **Per-wave and per-crew staff.** A wave can now have its own admins and moderators, entirely separate from the instance-wide Admin/Moderator/User ladder. Announcement waves were the reason: posting in one was restricted to the wave's creator and *instance* moderators, so delegating a single wave meant handing someone moderator powers over the whole node.
+  - The ladder is **owner → admin → moderator**. The owner is the wave's creator and is never stored as a role; it is already a column on the wave.
+    - **Admin** manages the wave: settings including the announcement flags, appointing moderators, invites, pinning, deleting any ping.
+    - **Moderator** polices it: posting in an announcements-only wave, pinning, deleting pings. No settings, no appointments.
+    - Only the **owner** deletes the wave or transfers it.
+  - **The owner appoints admins; an admin appoints moderators only.** An admin who could mint other admins could entrench themselves against the owner, which is not what "help me run this wave" means.
+  - **Crew roles carry into that crew's waves.** `crew_members` gains a `moderator` rung between admin and member, and a crew admin or moderator holds the same standing in waves the crew owns — so staff are appointed once in the crew rather than on every wave. The crew member button now cycles member → moderator → admin.
+  - **Being appointed joins you to the wave.** Moderating something you cannot see is not a state worth supporting.
+  - Inherited crew standing is **shown in the wave's staff list but not editable there** — it is changed in the crew. Trying to remove it returns a 409 that says so, rather than silently doing nothing.
+
+### Changed
+
+- Editing a wave's settings is no longer restricted to its creator; wave admins and instance moderators can too. Deleting a wave stays with the owner.
+- Crew ownership succession now runs **admin → moderator → anyone**, rather than admin → whoever happened to be first.
+
+### Technical
+
+- **Roles live in their own table, not a column on `wave_participants`.** Public and Verse-Wide waves have no participant rows at all — the exact trap `wave_mutes` hit in v2.84.0 — and announcement waves are very often public, so a column would have failed in the main case this feature exists for.
+- **The role map is encrypted at rest**, one blob per wave under the existing `WAVE_PARTICIPATION_KEY`, falling back to plaintext with a warning exactly as participation does. `wave_participants_encrypted` exists so that a database dump cannot reveal social graphs; a plaintext `(wave_id, user_id, role)` table would have handed back the most interesting slice of it — the people who matter in each wave. A test asserts the role map does not appear in the database file in the clear.
+- **Wave roles are deliberately not federated.** User IDs are node-local, so a moderator here is nobody on an allied port. Unlike the announcement flags in v2.83.1, which travel and treat the origin as authoritative, each port keeps its own staff for its own copy.
+- `getWaveRole()` resolves owner, appointment and crew inheritance, highest wins. Instance moderators are deliberately *not* folded into it: it answers "what is this person to this wave", and callers that should honour instance rank say so explicitly, so "I was appointed here" stays distinguishable from "I outrank this node".
+- New `tests/wave-roles.test.cjs` covers the authorization matrix against a live server — twelve cases, weighted toward what must be refused.
+
 ## [2.87.1] - 2026-09-11
 
 ### Fixed

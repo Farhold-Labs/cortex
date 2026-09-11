@@ -1183,6 +1183,13 @@ CREATE TABLE IF NOT EXISTS media_shares (
       );
 CREATE INDEX IF NOT EXISTS idx_media_shares_connection ON media_shares(provider, connection_id);
 
+CREATE TABLE IF NOT EXISTS wave_roles_encrypted (
+          wave_id TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+          role_blob TEXT NOT NULL,
+          iv TEXT NOT NULL DEFAULT '',
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        );
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);

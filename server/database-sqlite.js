@@ -1981,6 +1981,29 @@ export class DatabaseSQLite {
       console.log('   Run migration endpoint to encrypt existing participation data');
     }
 
+    // v2.88.0 - Per-wave roles. One encrypted blob per wave, {userId: role}.
+    // Encrypted for the same reason participation is: a plaintext
+    // (wave_id, user_id, role) table would hand a database dump the most
+    // interesting slice of the social graph — who matters in each wave.
+    // A separate table rather than a column on wave_participants, because
+    // public and Verse-Wide waves have no participant rows to hang it on.
+    const waveRolesExists = this.db.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='wave_roles_encrypted'
+    `).get();
+
+    if (!waveRolesExists) {
+      console.log('📝 Creating wave_roles_encrypted table (v2.88.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS wave_roles_encrypted (
+          wave_id TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+          role_blob TEXT NOT NULL,
+          iv TEXT NOT NULL DEFAULT '',
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        );
+      `);
+      console.log('✅ Wave roles table created');
+    }
+
     // v2.22.0 - Privacy Hardening: Encrypted push subscriptions table
     const encryptedPushSubsExists = this.db.prepare(`
       SELECT name FROM sqlite_master WHERE type='table' AND name='push_subscriptions_encrypted'
@@ -4413,6 +4436,33 @@ export class DatabaseSQLite {
   isGroupAdmin(groupId, userId) {
     const row = this.db.prepare("SELECT 1 FROM crew_members WHERE crew_id = ? AND user_id = ? AND role = 'admin'").get(groupId, userId);
     return !!row;
+  }
+
+  // v2.88.0 — a crew's own role for one member: 'admin' | 'moderator' | 'member'
+  // (null when they are not a member at all). Crew staff inherit the matching
+  // standing in waves owned by that crew.
+  getGroupRole(groupId, userId) {
+    if (!groupId || !userId) return null;
+    const row = this.db.prepare('SELECT role FROM crew_members WHERE crew_id = ? AND user_id = ?').get(groupId, userId);
+    return row ? row.role : null;
+  }
+
+  // ===== Per-wave roles (v2.88.0) — raw blob access; see lib/wave-roles.js =====
+  getWaveRolesRow(waveId) {
+    const row = this.db.prepare('SELECT role_blob, iv FROM wave_roles_encrypted WHERE wave_id = ?').get(waveId);
+    return row ? { blob: row.role_blob, iv: row.iv } : null;
+  }
+
+  setWaveRolesRow(waveId, blob, iv) {
+    this.db.prepare(`
+      INSERT INTO wave_roles_encrypted (wave_id, role_blob, iv, updated_at)
+      VALUES (?, ?, ?, strftime('%s','now'))
+      ON CONFLICT(wave_id) DO UPDATE SET role_blob = excluded.role_blob, iv = excluded.iv, updated_at = excluded.updated_at
+    `).run(waveId, blob, iv);
+  }
+
+  deleteWaveRolesRow(waveId) {
+    this.db.prepare('DELETE FROM wave_roles_encrypted WHERE wave_id = ?').run(waveId);
   }
 
   createGroup(data) {
@@ -9853,9 +9903,12 @@ export class DatabaseSQLite {
             LIMIT 1
           `).get(group.id, userId);
 
+          // v2.88.0 — with a moderator tier in play, succession runs
+          // admin → moderator → anyone, rather than admin → whoever is first.
           const newOwner = nextAdmin?.user_id || this.db.prepare(`
             SELECT user_id FROM crew_members
             WHERE crew_id = ? AND user_id != ?
+            ORDER BY CASE role WHEN 'moderator' THEN 0 ELSE 1 END, joined_at
             LIMIT 1
           `).get(group.id, userId)?.user_id;
 
