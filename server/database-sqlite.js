@@ -690,6 +690,18 @@ export class DatabaseSQLite {
       console.log(`✅ Breakout columns added to ${tableName}`);
     }
 
+    // v2.88.0 — who removed a ping. Deletion used to be author-only, so
+    // deleted_at was answer enough: the author did it. Now that wave staff can
+    // remove someone else's ping, a soft-deleted row with no actor is an
+    // unanswerable question, and moderation nobody can audit turns into an
+    // argument. NULL means the author removed their own, which is also every
+    // pre-v2.88.0 row.
+    if (!pingColumns.some(c => c.name === 'deleted_by')) {
+      console.log(`📝 Adding deleted_by to ${tableName} table (v2.88.0)...`);
+      this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL;`);
+      console.log(`✅ deleted_by added to ${tableName}`);
+    }
+
     // Check if breakout columns exist on waves table (v1.10.0 Phase 5)
     // Check for both old name (root_droplet_id) and new name (root_ping_id) for v2.0.0 compatibility
     const waveColumns = this.db.prepare(`PRAGMA table_info(waves)`).all();
@@ -1979,6 +1991,29 @@ export class DatabaseSQLite {
       `);
       console.log('✅ Encrypted wave participants table created');
       console.log('   Run migration endpoint to encrypt existing participation data');
+    }
+
+    // v2.88.0 - Per-wave roles. One encrypted blob per wave, {userId: role}.
+    // Encrypted for the same reason participation is: a plaintext
+    // (wave_id, user_id, role) table would hand a database dump the most
+    // interesting slice of the social graph — who matters in each wave.
+    // A separate table rather than a column on wave_participants, because
+    // public and Verse-Wide waves have no participant rows to hang it on.
+    const waveRolesExists = this.db.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='wave_roles_encrypted'
+    `).get();
+
+    if (!waveRolesExists) {
+      console.log('📝 Creating wave_roles_encrypted table (v2.88.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS wave_roles_encrypted (
+          wave_id TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+          role_blob TEXT NOT NULL,
+          iv TEXT NOT NULL DEFAULT '',
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        );
+      `);
+      console.log('✅ Wave roles table created');
     }
 
     // v2.22.0 - Privacy Hardening: Encrypted push subscriptions table
@@ -4413,6 +4448,33 @@ export class DatabaseSQLite {
   isGroupAdmin(groupId, userId) {
     const row = this.db.prepare("SELECT 1 FROM crew_members WHERE crew_id = ? AND user_id = ? AND role = 'admin'").get(groupId, userId);
     return !!row;
+  }
+
+  // v2.88.0 — a crew's own role for one member: 'admin' | 'moderator' | 'member'
+  // (null when they are not a member at all). Crew staff inherit the matching
+  // standing in waves owned by that crew.
+  getGroupRole(groupId, userId) {
+    if (!groupId || !userId) return null;
+    const row = this.db.prepare('SELECT role FROM crew_members WHERE crew_id = ? AND user_id = ?').get(groupId, userId);
+    return row ? row.role : null;
+  }
+
+  // ===== Per-wave roles (v2.88.0) — raw blob access; see lib/wave-roles.js =====
+  getWaveRolesRow(waveId) {
+    const row = this.db.prepare('SELECT role_blob, iv FROM wave_roles_encrypted WHERE wave_id = ?').get(waveId);
+    return row ? { blob: row.role_blob, iv: row.iv } : null;
+  }
+
+  setWaveRolesRow(waveId, blob, iv) {
+    this.db.prepare(`
+      INSERT INTO wave_roles_encrypted (wave_id, role_blob, iv, updated_at)
+      VALUES (?, ?, ?, strftime('%s','now'))
+      ON CONFLICT(wave_id) DO UPDATE SET role_blob = excluded.role_blob, iv = excluded.iv, updated_at = excluded.updated_at
+    `).run(waveId, blob, iv);
+  }
+
+  deleteWaveRolesRow(waveId) {
+    this.db.prepare('DELETE FROM wave_roles_encrypted WHERE wave_id = ?').run(waveId);
   }
 
   createGroup(data) {
@@ -7312,19 +7374,28 @@ export class DatabaseSQLite {
   updateMessage(id, content, opts) { return this.updatePing(id, content, opts); }
   updateDroplet(id, content, opts) { return this.updatePing(id, content, opts); }
 
-  deletePing(pingId, userId) {
+  // v2.88.0 — `asStaff` lets wave staff (and instance moderators) remove someone
+  // else's ping. It is an explicit opt-in rather than a relaxed check, so a
+  // caller that forgets to authorize still gets the author-only behaviour.
+  // The route decides who counts as staff; this layer only obeys.
+  deletePing(pingId, userId, { asStaff = false } = {}) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
     if (!existing) return { success: false, error: 'Message not found' };
     if (existing.deleted) return { success: false, error: 'Message already deleted' };
-    if (existing.author_id !== userId) return { success: false, error: 'Only the author can delete' };
+    if (existing.author_id !== userId && !asStaff) {
+      return { success: false, error: 'Only the author can delete' };
+    }
 
     const now = new Date().toISOString();
 
-    // Soft delete
+    // Soft delete. deleted_by is recorded only when someone other than the
+    // author removed it, so NULL keeps its plain meaning — "the author deleted
+    // their own" — for every row written before v2.88.0 as well as after.
+    const removedByOther = existing.author_id !== userId;
     this.db.prepare(`
-      UPDATE pings SET content = '[deleted]', deleted = 1, deleted_at = ?, reactions = '{}'
+      UPDATE pings SET content = '[deleted]', deleted = 1, deleted_at = ?, deleted_by = ?, reactions = '{}'
       WHERE id = ?
-    `).run(now, pingId);
+    `).run(now, removedByOther ? userId : null, pingId);
 
     // Clear read status
     this.db.prepare('DELETE FROM ping_read_by WHERE ping_id = ?').run(pingId);
@@ -7332,12 +7403,12 @@ export class DatabaseSQLite {
     // Clear history
     this.db.prepare('DELETE FROM ping_history WHERE ping_id = ?').run(pingId);
 
-    return { success: true, pingId, waveId: existing.wave_id, deleted: true };
+    return { success: true, pingId, waveId: existing.wave_id, deleted: true, deletedBy: removedByOther ? userId : null };
   }
 
   // Backward compatibility aliases
-  deleteMessage(id, userId) { return this.deletePing(id, userId); }
-  deleteDroplet(id, userId) { return this.deletePing(id, userId); }
+  deleteMessage(id, userId, options) { return this.deletePing(id, userId, options); }
+  deleteDroplet(id, userId, options) { return this.deletePing(id, userId, options); }
 
   togglePingReaction(pingId, userId, emoji) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
@@ -9853,9 +9924,12 @@ export class DatabaseSQLite {
             LIMIT 1
           `).get(group.id, userId);
 
+          // v2.88.0 — with a moderator tier in play, succession runs
+          // admin → moderator → anyone, rather than admin → whoever is first.
           const newOwner = nextAdmin?.user_id || this.db.prepare(`
             SELECT user_id FROM crew_members
             WHERE crew_id = ? AND user_id != ?
+            ORDER BY CASE role WHEN 'moderator' THEN 0 ELSE 1 END, joined_at
             LIMIT 1
           `).get(group.id, userId)?.user_id;
 
