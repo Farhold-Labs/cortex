@@ -5,6 +5,27 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.87.0] - 2026-09-11
+
+### Fixed
+
+- **Tapping a ping squished it, and tapping again un-squished it.** Reported on Android and the mobile PWA: the first tap brought up the reactions, reply and ⋮ controls but narrowed the ping, and a second tap restored the layout while leaving the controls up.
+  - Both halves were the same cause. v2.83.2 removed `padding-right: 90px` from `.cortex-msg-row:hover` because it narrowed the text column, re-wrapped the text and changed the row's height — but it left the **touch-side twin** of that rule behind as an inline style, `paddingRight: actionsRevealed ? '90px' : '12px'`, with a comment claiming desktop reserved the space via CSS. Nothing reserved it any more.
+  - So the first tap set `actionsRevealed` and re-wrapped the text; the second tap cleared it, while a tap-stuck `:hover` kept the pill on screen. That is why tapping twice looked like it fixed the layout.
+  - The padding is now constant. The pill is `position: absolute` over the row's top-right corner — the tail of the header line, normally empty — so it never needed reserved space on either input type.
+
+### Added
+
+- **Three more quick reactions: 💯, 🤣 and 😡.** Inserted next to their nearest relatives rather than appended, so the row still reads positive → funny → thoughtful → negative and the existing reactions keep their relative order.
+  - The picker's mobile width goes from 200px to 260px. At fourteen reactions the old width showed about six, so the new ones would have sat off-screen behind a horizontal scroll nobody knew was there.
+
+- **Typed emoticons become emoji.** `:)` sends as 🙂, `:D` as 😃, `;)` as 😉, along with `:(`, `:'(`, `>:(`, `:P`, `:O`, `:|`, `:/`, `xD`, `<3` and their `:-)`-style and `=)`-style variants.
+  - Conversion happens on send and in the live preview, **before encryption**, so the stored ping holds the emoji itself. Nothing new runs on the server and it behaves identically in E2EE and plaintext waves.
+  - An emoticon must be preceded by a space or the start of the message. That is what stops `https://example.com` becoming `https😕/example.com` — the `:/` there follows a letter. The boundary is expressed as a captured group rather than a lookbehind, which Safari only gained in 16.4.
+  - **`:)` and `:shrug:` inside code are now left verbatim**, in fenced blocks and inline spans alike. Shortcodes were previously converted inside code too; on a platform where people paste code, that was wrong for both.
+  - `B)` and `8)` are deliberately absent: `b)` is an outline marker, so "a) first b) second" would have sprouted sunglasses.
+  - Covered by `tests/emoji-resolution.test.cjs` — 12 cases, weighted toward what must *not* convert, since this is the last point at which the text is readable.
+
 ## [2.86.0] - 2026-09-09
 
 ### Security
