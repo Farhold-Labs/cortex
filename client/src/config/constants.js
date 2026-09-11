@@ -1,7 +1,7 @@
 import { T } from '../config/terminology.js';
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.87.0';
+export const VERSION = '2.87.1';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
