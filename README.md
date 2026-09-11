@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.72.3** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.86.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -105,14 +105,17 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 - **Voice/Video messages** — Record and send audio (5 min) and video messages
 - **Voice/Video calls** — Real-time calls via LiveKit with screen sharing
 - **Rich embeds** — YouTube, Spotify, Vimeo, Twitter, SoundCloud
-- **Images & GIFs** — Upload, paste, or search via Tenor/GIPHY
+- **Images & GIFs** — Upload, paste, or search via GIPHY/Klipy (Tenor was shut down by Google in 2026)
 - **Media server integration** — Jellyfin, Emby, and Plex with OAuth and HLS transcoding
+- **Scoped media sharing** — Shared media requires an explicit, wave-scoped grant, and playback is proxied through Cortex so upstream credentials never reach a viewer ([docs/MEDIA-SECURITY.md](docs/MEDIA-SECURITY.md))
 - **S3-compatible storage** — Optional S3/MinIO backend for uploads
 
 ### Crawl Bar
+Configured in the admin panel (ADMIN → CRAWL BAR CONFIG) rather than `.env` since v2.80.0 — feeds, keys, symbols and intervals live in the database, with a TEST button for every key and feed.
+
 - **Stock ticker** — Real-time quotes from Finnhub API
 - **Weather data** — Current conditions from OpenWeatherMap
-- **Breaking news** — Headlines from NewsAPI.org and GNews.io
+- **Breaking news** — Headlines from NewsAPI.org, GNews.io and any number of custom RSS feeds
 - **Admin alerts** — Scheduled system alerts with priority levels
 - **Holiday effects** — Automatic seasonal celebrations with themed alerts and visual effects
 
@@ -123,13 +126,14 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 - **Incoming webhooks** — Discord-compatible webhook URLs; point GitHub, Grafana, Uptime Kuma, etc. at Cortex with no code changes
 
 ### Security
-- JWT authentication with configurable session duration, silent renewal, and grace-period re-auth
+- **Long-lived sessions without long-lived tokens** — a 60-minute rotating access token over a 90-day sliding refresh session, with reuse detection that revokes an entire token family on replay, step-up re-auth for sensitive actions, new-device email alerts, and password change ending every other session. Policy is per-instance.
 - End-to-end encryption (ECDH P-384 + AES-256-GCM)
 - Multi-factor authentication (TOTP and email-based 2FA)
 - Role-based access control (Admin / Moderator / User)
 - Password recovery via email
 - Rate limiting on all endpoints with persistent account lockout
 - HTML sanitization, Helmet.js security headers, HSTS
+- Fails closed — if requested database encryption is unavailable the server refuses to start rather than run unprotected
 - HTTP Signature verification for federation
 - GDPR compliance — data export ("Ship's Manifest") and account deletion ("Abandon Ship")
 
@@ -220,9 +224,14 @@ PUSH_SUBSCRIPTION_KEY=<32-byte-hex>
 CREW_MEMBERSHIP_KEY=<32-byte-hex>
 
 # GIF Search
-GIF_PROVIDER=tenor                 # giphy, tenor, or both
-TENOR_API_KEY=your-key
+GIF_PROVIDER=giphy                 # giphy, klipy, both, or tenor (legacy — Tenor is shut down)
 GIPHY_API_KEY=your-key
+KLIPY_API_KEY=your-key
+
+# Voice/video calls (optional — all three required together)
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=your-key
+LIVEKIT_API_SECRET=your-secret
 
 # Push Notifications (optional)
 VAPID_PUBLIC_KEY=your-public-key
@@ -234,7 +243,10 @@ FEDERATION_ENABLED=false
 FEDERATION_NODE_NAME=cortex.example.com
 
 # Email Service (optional — required for password reset and email MFA)
-EMAIL_PROVIDER=smtp                # smtp, sendgrid, or mailgun
+# Most cloud hosts block SMTP port 587 outright. Resend talks HTTPS on 443
+# and works anywhere, so prefer it on a hosted VPS.
+EMAIL_PROVIDER=resend              # resend, smtp, sendgrid, or mailgun
+RESEND_API_KEY=re_xxx
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your-email@gmail.com
@@ -396,7 +408,9 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 - [docs/API.md](docs/API.md) — API endpoint documentation
 - [docs/BUILD-NATIVE.md](docs/BUILD-NATIVE.md) — Desktop and mobile build instructions
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Hardened VPS deployment guide (LUKS, SQLCipher, backups)
+- [docs/MEDIA-SECURITY.md](docs/MEDIA-SECURITY.md) — Jellyfin/Plex grant model and playback proxy
 - [docs/PRIVACY.md](docs/PRIVACY.md) — Privacy policy
+- [CLAUDE.md](CLAUDE.md) — Developer workflow, branching, and architecture notes
 - [OUTSTANDING-FEATURES.md](OUTSTANDING-FEATURES.md) — Future roadmap
 
 ---

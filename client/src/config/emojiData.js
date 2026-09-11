@@ -379,8 +379,69 @@ export function searchEmoji(query) {
   return [...prefix, ...contains].slice(0, 20);
 }
 
+// ===== Emoticons (v2.87.0) =====
+//
+// Typed emoticons become emoji, so `:)` sends as 🙂. Conversion happens on send
+// (and in the live preview), before encryption, so the stored ping holds the
+// emoji itself — nothing here has to run on the server, and it works in E2EE
+// waves exactly as it does in plaintext ones.
+//
+// The set is deliberately conservative. `B)` and `8)` are the obvious omissions:
+// `b)` is an outline marker, so "a) first b) second" would sprout sunglasses.
+export const EMOTICON_MAP = [
+  [":')", '😂'],
+  [":'(", '😢'],
+  ['>:(', '😠'],
+  [':-)', '🙂'], [':)', '🙂'], ['=)', '🙂'],
+  [':-D', '😃'], [':D', '😃'], ['=D', '😃'],
+  [';-)', '😉'], [';)', '😉'],
+  [':-(', '🙁'], [':(', '🙁'], ['=(', '🙁'],
+  [':-P', '😛'], [':P', '😛'],
+  [':-O', '😮'], [':O', '😮'],
+  [':-|', '😐'], [':|', '😐'],
+  [':-/', '😕'], [':/', '😕'],
+  ['xD', '😆'],
+  ['<3', '❤️'],
+];
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Longest first, so `:-)` is not eaten by `:)` and `>:(` is not eaten by `:(`.
+const EMOTICON_RE = new RegExp(
+  '(^|\\s)(' +
+  [...EMOTICON_MAP].sort((a, b) => b[0].length - a[0].length).map(([e]) => escapeRe(e)).join('|') +
+  ')(?!\\w)',
+  'gi'
+);
+
+const EMOTICON_LOOKUP = new Map(EMOTICON_MAP.map(([e, c]) => [e.toLowerCase(), c]));
+
+function replaceEmoticons(text) {
+  // The leading `(^|\s)` is captured and re-emitted rather than matched with a
+  // lookbehind, which Safari only gained in 16.4. Requiring whitespace before
+  // the emoticon is also what keeps `https://example.com` from becoming
+  // `https😕/example.com` — the `:/` there follows a letter, not a space.
+  return text.replace(EMOTICON_RE, (match, lead, emoticon) =>
+    lead + (EMOTICON_LOOKUP.get(emoticon.toLowerCase()) || emoticon)
+  );
+}
+
+// Runs `fn` over everything except fenced blocks and inline code spans, so
+// `:)` and `:shrug:` survive verbatim inside code. Splitting on a single
+// capturing group puts the code segments at the odd indices.
+function mapOutsideCode(text, fn) {
+  return text
+    .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
+    .map((part, i) => (i % 2 === 1 ? part : fn(part)))
+    .join('');
+}
+
+// Resolves both `:shortcode:` and typed emoticons. Kept as one entry point so a
+// future caller cannot pick up one and silently miss the other.
 export function resolveEmojiShortcodes(text) {
-  return text.replace(/:([a-z0-9_+\-]+):/gi, (match, code) => {
-    return EMOJI_MAP.get(code.toLowerCase()) || match;
-  });
+  return mapOutsideCode(text, (segment) =>
+    replaceEmoticons(
+      segment.replace(/:([a-z0-9_+\-]+):/gi, (match, code) => EMOJI_MAP.get(code.toLowerCase()) || match)
+    )
+  );
 }

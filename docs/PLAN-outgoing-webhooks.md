@@ -1,5 +1,7 @@
 # Outgoing Webhooks Feature Plan
 
+> **Historical document.** Planning document; outgoing webhooks have shipped. Kept for the reasoning behind the design, not as a description of how Cortex works today — see CHANGELOG.md and docs/API.md for current behaviour.
+
 This document outlines the implementation plan for adding outgoing webhook support to Cortex, enabling automatic forwarding of wave messages to external services like Discord, Slack, etc.
 
 ## Overview
