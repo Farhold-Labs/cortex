@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.87.1] - 2026-09-11
+
+### Fixed
+
+- **A resumed phone could sit for minutes receiving nothing.** Reported against the version banner — a device left on v2.86.0 took a long time to be told a new version existed — but the banner was only the visible symptom. New pings, typing indicators and every other realtime event were equally late.
+  - The server has always kept its side honest: it pings every 30 seconds and terminates any socket that fails to pong. The client sent pings and **threw the replies away** — the `pong` branch was literally `// Heartbeat response, ignore`. Nothing ever checked whether an answer came back.
+  - That left the *half-open* socket undetected. When a phone suspends its webview — backgrounding, Doze, a wifi-to-cellular handover — the connection dies without a close frame. `readyState` stays `OPEN`, so every send appears to succeed while going nowhere, and `onclose` does not fire until the operating system's own TCP timeout expires. The three-second auto-reconnect was never broken; nothing was triggering it.
+  - An unanswered ping is now treated as a dead socket: the connection is dropped and rebuilt. Worst-case detection falls from minutes to about 40 seconds.
+  - **Resuming the app now probes immediately** rather than waiting for an interval the browser was throttling while backgrounded. `visibilitychange`, `focus` and `online` all trigger the check, so unlocking the phone reconnects at once instead of on the next tick.
+  - Handlers are detached before a dead socket is discarded, so a late `onclose` arriving minutes later cannot tear down the replacement connection or queue a second reconnect.
+  - `onerror` no longer leaves the heartbeat interval running — it did not always produce a close event, so each such reconnect leaked a timer.
+  - Covered by `tests/ws-heartbeat.test.cjs`, which pins the contract the fix depends on: the server must keep answering `{type:'ping'}` with `{type:'pong'}`. If that ever regressed, every healthy client would now rebuild its connection on a timer.
+
 ## [2.87.0] - 2026-09-11
 
 ### Fixed
