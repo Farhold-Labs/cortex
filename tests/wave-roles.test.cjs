@@ -181,6 +181,15 @@ test('wave roles gate announcement posting without instance-wide moderator', asy
 
       assert.equal((await req(`/api/pings/${pingId}`, 'stranger', { method: 'DELETE' })).status, 403);
       assert.equal((await req(`/api/pings/${pingId}`, 'member', { method: 'DELETE' })).status, 200);
+
+      // v2.88.0 — a staff removal must name its actor. Moderation nobody can
+      // audit becomes an argument; NULL here means "the author removed it".
+      const Database = serverRequire('better-sqlite3');
+      const audit = new Database(path.join(serverDir, 'data/farhold.db'), { readonly: true });
+      const row = audit.prepare('SELECT deleted, deleted_by FROM pings WHERE id = ?').get(pingId);
+      audit.close();
+      assert.equal(row.deleted, 1);
+      assert.equal(row.deleted_by, 'member');
     });
 
     await t.test('an author can still delete their own ping', async () => {
@@ -188,6 +197,14 @@ test('wave roles gate announcement posting without instance-wide moderator', asy
       assert.equal(posted.status, 201);
       const pingId = (await posted.json()).id;
       assert.equal((await req(`/api/pings/${pingId}`, 'crewmod', { method: 'DELETE' })).status, 200);
+
+      // Deleting your own leaves deleted_by NULL, which is what every row
+      // written before v2.88.0 looks like too.
+      const Database = serverRequire('better-sqlite3');
+      const audit = new Database(path.join(serverDir, 'data/farhold.db'), { readonly: true });
+      const row = audit.prepare('SELECT deleted_by FROM pings WHERE id = ?').get(pingId);
+      audit.close();
+      assert.equal(row.deleted_by, null);
     });
 
     await t.test('pinning in an announcements-only wave is staff-only', async () => {

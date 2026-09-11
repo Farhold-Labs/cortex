@@ -690,6 +690,18 @@ export class DatabaseSQLite {
       console.log(`✅ Breakout columns added to ${tableName}`);
     }
 
+    // v2.88.0 — who removed a ping. Deletion used to be author-only, so
+    // deleted_at was answer enough: the author did it. Now that wave staff can
+    // remove someone else's ping, a soft-deleted row with no actor is an
+    // unanswerable question, and moderation nobody can audit turns into an
+    // argument. NULL means the author removed their own, which is also every
+    // pre-v2.88.0 row.
+    if (!pingColumns.some(c => c.name === 'deleted_by')) {
+      console.log(`📝 Adding deleted_by to ${tableName} table (v2.88.0)...`);
+      this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL;`);
+      console.log(`✅ deleted_by added to ${tableName}`);
+    }
+
     // Check if breakout columns exist on waves table (v1.10.0 Phase 5)
     // Check for both old name (root_droplet_id) and new name (root_ping_id) for v2.0.0 compatibility
     const waveColumns = this.db.prepare(`PRAGMA table_info(waves)`).all();
@@ -7376,11 +7388,14 @@ export class DatabaseSQLite {
 
     const now = new Date().toISOString();
 
-    // Soft delete
+    // Soft delete. deleted_by is recorded only when someone other than the
+    // author removed it, so NULL keeps its plain meaning — "the author deleted
+    // their own" — for every row written before v2.88.0 as well as after.
+    const removedByOther = existing.author_id !== userId;
     this.db.prepare(`
-      UPDATE pings SET content = '[deleted]', deleted = 1, deleted_at = ?, reactions = '{}'
+      UPDATE pings SET content = '[deleted]', deleted = 1, deleted_at = ?, deleted_by = ?, reactions = '{}'
       WHERE id = ?
-    `).run(now, pingId);
+    `).run(now, removedByOther ? userId : null, pingId);
 
     // Clear read status
     this.db.prepare('DELETE FROM ping_read_by WHERE ping_id = ?').run(pingId);
@@ -7388,7 +7403,7 @@ export class DatabaseSQLite {
     // Clear history
     this.db.prepare('DELETE FROM ping_history WHERE ping_id = ?').run(pingId);
 
-    return { success: true, pingId, waveId: existing.wave_id, deleted: true };
+    return { success: true, pingId, waveId: existing.wave_id, deleted: true, deletedBy: removedByOther ? userId : null };
   }
 
   // Backward compatibility aliases

@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS pings (
     -- Threading fields (v2.38.0)
     threaded INTEGER DEFAULT 0,            -- 1 if message has been burst/threaded
     is_thread_reply INTEGER DEFAULT 0      -- 1 if reply was made within thread panel
-, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL);
+, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL, deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL);
 CREATE INDEX IF NOT EXISTS idx_pings_wave ON pings(wave_id);
 CREATE INDEX IF NOT EXISTS idx_pings_author ON pings(author_id);
 CREATE INDEX IF NOT EXISTS idx_pings_parent ON pings(parent_id);
