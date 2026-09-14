@@ -1,0 +1,131 @@
+# CI
+#
+# Tooling only — no version bump, following the client build heap-flag change.
+#
+# Until now nothing ran the test suite automatically — 76 tests existed and the
+# only thing executing them was whoever remembered to. This is the gate the
+# v2.86.0 security review asked for.
+#
+# Node 24 because that is what every node runs (dev 24.12, prod 24.18), and
+# firebase-admin 14 requires >= 22. Testing on an older line would prove the
+# wrong thing.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, qa, master]
+  push:
+    branches: [develop, qa, master]
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests and schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+
+      # The suite spans BOTH dependency trees, which is easy to miss locally
+      # where node_modules already exists everywhere. The server tree backs the
+      # disposable-server suites; the sanitization test in review.test.cjs loads
+      # DOMPurify and jsdom out of the CLIENT tree. The root manifest is not
+      # installed: it carries only pm2, which nothing in the repo requires, and
+      # `npm test` is plain `node --test`.
+      - name: Install server dependencies
+        run: npm ci
+        working-directory: server
+
+      - name: Install client dependencies
+        run: npm ci
+        working-directory: client
+
+      # server/schema.sql is GENERATED. This proves a fresh install and a
+      # migrated one still converge — the check that would have caught a
+      # hand-edited schema before it reached a production migration.
+      - name: Verify generated schema is current
+        run: node tools/generate-schema.mjs --check
+
+      # Several suites boot a disposable Cortex against a temporary SQLite file,
+      # so this exercises real HTTP, WebSocket and migration paths, not stubs.
+      - name: Run tests
+        run: npm test
+
+  build:
+    name: Client build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install client dependencies
+        run: npm ci
+        working-directory: client
+
+      # The client is a single-file-ish React app with no type checking, so the
+      # build IS the syntax gate. It also runs the service-worker asset
+      # injection, which has broken twice in ways that only surface at deploy.
+      - name: Build client
+        run: npm run build
+        working-directory: client
+
+      # A dist without an injected CACHE_NAME ships a service worker that keeps
+      # serving the previous release — the v2.60.3 cache-poisoning failure mode.
+      - name: Verify service worker was stamped
+        working-directory: client
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if ! grep -q "cortex-v${version}" dist/sw.js; then
+            echo "dist/sw.js is not stamped cortex-v${version} — asset injection did not run"
+            grep -o "cortex-v[0-9.]*" dist/sw.js | head -1
+            exit 1
+          fi
+          echo "service worker stamped cortex-v${version}"
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # TEMPORARY THRESHOLD. Eight moderate advisories are currently open in the
+      # server tree, all reached through firebase-admin's Google Cloud
+      # dependencies. Once that upgrade lands this should drop to
+      # `--audit-level=moderate`; leaving it at `high` after that would quietly
+      # stop the gate from doing its job.
+      - name: Audit server dependencies
+        run: npm audit --audit-level=high --omit=dev
+        working-directory: server
+
+      # The client's production dependencies are clean, so this one is already
+      # held to the stricter line.
+      - name: Audit client production dependencies
+        run: npm audit --audit-level=moderate --omit=dev
+        working-directory: client
