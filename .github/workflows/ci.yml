@@ -38,14 +38,23 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: server/package-lock.json
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
 
-      # Only the server's dependencies are needed. The root manifest carries
-      # pm2, which nothing in the repo actually requires, and `npm test` is
-      # plain `node --test` with no dependencies of its own.
+      # The suite spans BOTH dependency trees, which is easy to miss locally
+      # where node_modules already exists everywhere. The server tree backs the
+      # disposable-server suites; the sanitization test in review.test.cjs loads
+      # DOMPurify and jsdom out of the CLIENT tree. The root manifest is not
+      # installed: it carries only pm2, which nothing in the repo requires, and
+      # `npm test` is plain `node --test`.
       - name: Install server dependencies
         run: npm ci
         working-directory: server
+
+      - name: Install client dependencies
+        run: npm ci
+        working-directory: client
 
       # server/schema.sql is GENERATED. This proves a fresh install and a
       # migrated one still converge — the check that would have caught a
