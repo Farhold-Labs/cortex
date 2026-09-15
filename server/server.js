@@ -30,7 +30,11 @@ import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import * as waveRoles from './lib/wave-roles.js';
 import { getCurrentHoliday } from './holidays.js';
-import admin from 'firebase-admin';
+// firebase-admin 14 (v2.89.0) removed the namespaced API entirely: the default
+// export no longer carries `credential`, `apps` or `messaging`. Everything now
+// comes from the modular subpaths, so these imports are the whole migration.
+import { initializeApp as initializeFirebaseApp, getApps as getFirebaseApps, cert as firebaseCert } from 'firebase-admin/app';
+import { getMessaging as getFirebaseMessaging } from 'firebase-admin/messaging';
 import { canAccessMedia, validMediaTarget } from './lib/media-access.js';
 import { HlsSessions, proxyMedia, upstreamUrl } from './lib/media-proxy.js';
 
@@ -67,8 +71,8 @@ const FIREBASE_SERVICE_ACCOUNT_PATH = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
 if (FIREBASE_SERVICE_ACCOUNT_PATH) {
   try {
     const serviceAccount = JSON.parse(fs.readFileSync(path.resolve(FIREBASE_SERVICE_ACCOUNT_PATH), 'utf8'));
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
+    initializeFirebaseApp({
+      credential: firebaseCert(serviceAccount),
     });
     console.log('✅ Firebase Admin SDK initialized');
   } catch (error) {
@@ -7927,7 +7931,7 @@ app.post('/api/push/fcm/register', authenticateToken, (req, res) => {
     return res.status(400).json({ error: 'FCM token is required' });
   }
 
-  if (!admin.apps.length) {
+  if (!getFirebaseApps().length) {
     return res.status(501).json({ error: 'Firebase not configured on server' });
   }
 
@@ -23160,13 +23164,13 @@ async function sendPushNotification(userId, payload) {
   }
 
   // Send to FCM (Capacitor native) tokens
-  if (fcmTokens.length > 0 && admin.apps.length > 0) {
+  if (fcmTokens.length > 0 && getFirebaseApps().length > 0) {
     console.log(`📱 Sending ${fcmTokens.length} FCM notification(s) to user ${userId}`);
 
     for (const sub of fcmTokens) {
       const fcmToken = sub.endpoint.replace(/^fcm:/, '');
       try {
-        await admin.messaging().send({
+        await getFirebaseMessaging().send({
           token: fcmToken,
           notification: {
             title: payload.title || 'Cortex',
