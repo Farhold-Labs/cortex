@@ -133,6 +133,21 @@ test('server answers application-level pings and reports its version on auth', a
       }
     });
 
+    await t.test('the FCM readiness check answers instead of throwing', async () => {
+      // firebase-admin 14 (v2.89.0) removed the namespaced API: `admin.apps` no
+      // longer exists, so the old `admin.apps.length` readiness check would
+      // raise a TypeError and return 500 on a live route rather than a clean
+      // 501. Nothing here configures Firebase, so 501 is the correct answer and
+      // a 500 means the modular migration regressed.
+      const res = await fetch(`http://127.0.0.1:${port}/api/push/fcm/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.token}` },
+        body: JSON.stringify({ token: 'fake-fcm-token', platform: 'android' }),
+      });
+      assert.equal(res.status, 501, `expected 501 Firebase-not-configured, got ${res.status}`);
+      assert.match((await res.json()).error, /Firebase/i);
+    });
+
     ws.close();
   } finally {
     if (child) child.kill('SIGKILL');
