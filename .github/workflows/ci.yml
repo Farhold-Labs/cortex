@@ -127,3 +127,21 @@ jobs:
       - name: Audit client production dependencies
         run: npm audit --audit-level=moderate --omit=dev
         working-directory: client
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The scan reads history, so it needs all of it. The default shallow
+      # checkout would look clean simply by not fetching the commits where a
+      # leak would live — a green tick meaning "I did not look".
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan history for committed credentials
+        run: python3 tools/secret-scan.py
+
+      # --dangling is deliberately not used here: unreachable objects are a
+      # local-clone artefact and are never pushed, so CI has none to find.

@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **The Git history has been audited for committed credentials — the last open item from the v2.86.0 review, whose §8 recorded that no such audit had ever been done.** Verdict: **no live credential has ever been committed.** Full method and findings in [docs/SECRET-AUDIT.md](docs/SECRET-AUDIT.md).
+  - Coverage: 1,667 commits, 64 local branches, 107 remote-tracking refs, 160 tags and roughly 216,000 added lines, with zero origin heads missing locally. Every *added* line on every ref was examined, so a secret committed and later deleted is still caught.
+  - **A VAPID keypair was committed to the README** in December 2025 as example output of the key-generation command. It is not a live key — the public half was compared by hash against all three environments and matches none of them, and it is already gone from the README at HEAD. **No rotation**, which matters: rotating VAPID invalidates every existing push subscription, so reflexively rotating would have broken push for everyone to fix a non-problem.
+  - **A copy of the dev box's real `.env` exists as an unreachable object** — the `.env.bak-*` near-miss `.gitignore` already describes. It was staged and unstaged, never committed, and since Git only transfers objects reachable from commits it was **never pushed**. Exposure is limited to that machine's own `.git/objects`; clearable with `git gc --prune=now`.
+- **The audit ships as a tool and a CI job rather than a one-off.** `tools/secret-scan.py` runs two passes: known credential formats, and bare env-style assignments with high-entropy values. The second pass is the one that matters here — Cortex's GIPHY, Klipy, Finnhub and OpenWeatherMap keys are plain alphanumerics with no prefix, so a scanner that only knew famous formats would have reported "all clear" while being blind to every key this project actually uses.
+  - CI checks out with `fetch-depth: 0`, because a shallow clone would pass by not fetching the commits where a leak would live.
+  - Accepted findings are fingerprinted in `tools/secret-scan-baseline.txt` by hash, never by value.
+
 ## [2.89.0] - 2026-09-15
 
 ### Security

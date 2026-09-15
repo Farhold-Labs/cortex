@@ -409,6 +409,7 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 - [docs/BUILD-NATIVE.md](docs/BUILD-NATIVE.md) — Desktop and mobile build instructions
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Hardened VPS deployment guide (LUKS, SQLCipher, backups)
 - [docs/MEDIA-SECURITY.md](docs/MEDIA-SECURITY.md) — Jellyfin/Plex grant model and playback proxy
+- [docs/SECRET-AUDIT.md](docs/SECRET-AUDIT.md) — Git-history credential audit, method and findings
 - [docs/PRIVACY.md](docs/PRIVACY.md) — Privacy policy
 - [CLAUDE.md](CLAUDE.md) — Developer workflow, branching, and architecture notes
 - [OUTSTANDING-FEATURES.md](OUTSTANDING-FEATURES.md) — Future roadmap
