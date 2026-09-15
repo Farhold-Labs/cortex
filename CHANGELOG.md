@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.89.0] - 2026-09-15
+
+### Security
+
+- **All outstanding dependency advisories are cleared.** The server, client and root trees now report zero vulnerabilities; eight moderate advisories were open before this release.
+  - **Firebase Admin SDK upgraded 13.10.0 → 14.4.0**, which clears the Firestore, Cloud Storage, google-gax, gaxios, teeny-request and retry-request findings in one move. Worth correcting the v2.86.0 review here: it recorded that npm proposed "a Firebase *downgrade*". npm proposes an upgrade.
+  - **`uuid` 10 → 11.1.1**, and a `uuid` override pins the transitive copies to the patched line. `@google-cloud/storage` is on its latest release and still requires `gaxios ^6`, which pins `uuid@9` — so there is no upstream fix to wait for, and the override is the fix. Both Cortex and gaxios call only `uuid.v4()`, while the advisory concerns `v3`/`v5`/`v6` when a `buf` is supplied, so neither was reachable in practice; the override removes the finding rather than the risk.
+  - **The root `pm2` dependency is removed**, along with roughly 1,400 lines of lockfile. It was never required by anything in the repo, and the pm2 that actually runs is installed globally — both production nodes were already on a patched 7.0.3, so the "low PM2 advisory" described in the review was an unused copy sitting in the repo's own `node_modules`. The root manifest is now a test script and nothing else. (The dev box's global pm2 is 6.0.14 and does want updating; that is a host change, not a repo one.)
+  - **CI's audit threshold drops from `high` to `moderate`** for the server tree, matching the client. The `high` setting existed for exactly one release to accommodate these findings.
+
+### Changed
+
+- **Migrated off the Firebase namespaced API.** firebase-admin 14 removes it entirely: `admin.credential`, `admin.apps` and `admin.messaging` no longer exist on the default export. Four call sites move to the modular entry points — `initializeApp`/`cert`/`getApps` from `firebase-admin/app` and `getMessaging` from `firebase-admin/messaging`.
+  - This was a real break, not a formality. `admin.apps.length` guards both the FCM token-registration route and the push send path; against v14 it raises a `TypeError` on an undefined property, so registering a device would have returned a 500 instead of a clean 501, and push sends would have thrown. A test now pins that route to 501 when Firebase is unconfigured, so the readiness check must answer rather than throw.
+
 ## [2.88.0] - 2026-09-11
 
 ### Added

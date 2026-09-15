@@ -1,11 +1,5 @@
 {
-  "dependencies": {
-    "pm2": "^6.0.14"
-  },
   "scripts": {
     "test": "node --test tests/*.test.cjs"
-  },
-  "overrides": {
-    "js-yaml": "^4.3.2"
   }
 }

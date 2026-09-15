@@ -115,17 +115,15 @@ jobs:
         with:
           node-version: 24
 
-      # TEMPORARY THRESHOLD. Eight moderate advisories are currently open in the
-      # server tree, all reached through firebase-admin's Google Cloud
-      # dependencies. Once that upgrade lands this should drop to
-      # `--audit-level=moderate`; leaving it at `high` after that would quietly
-      # stop the gate from doing its job.
+      # Both trees are clean as of v2.89.0, so both are held to the same line.
+      # The server sat at `high` for one release while eight moderate advisories
+      # were open in firebase-admin's Google Cloud tree; that upgrade has landed,
+      # so the accommodation is gone. Do not raise this back to `high` to get a
+      # red build green — that is how the gate quietly stops doing its job.
       - name: Audit server dependencies
-        run: npm audit --audit-level=high --omit=dev
+        run: npm audit --audit-level=moderate --omit=dev
         working-directory: server
 
-      # The client's production dependencies are clean, so this one is already
-      # held to the stricter line.
       - name: Audit client production dependencies
         run: npm audit --audit-level=moderate --omit=dev
         working-directory: client
