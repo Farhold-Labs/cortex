@@ -2474,6 +2474,118 @@ export class DatabaseSQLite {
       console.log('✅ event_rsvp_guest table created');
     }
 
+    // ===== v2.90.0 — attendance tracking ("Spond-like" events) =====
+    //
+    // Everything here hangs off one idea the events subsystem did not have:
+    // a record of WHO WAS ASKED. Without it "who hasn't replied?" is
+    // unanswerable, and that question is the entire point of the feature.
+    //
+    // Occurrence scoping is the other half. RSVP used to key on
+    // (event_id, user_id), so answering "going" to a weekly rehearsal marked
+    // you going for every rehearsal ever. Invites, answers and attendance are
+    // all per OCCURRENCE now — a concrete date, equal to the event's own date
+    // for anything non-recurring.
+    const eventsCols = this.db.prepare(`PRAGMA table_info(events)`).all();
+    if (!eventsCols.some(c => c.name === 'rsvp_deadline')) {
+      console.log('📝 Adding rsvp_deadline/capacity to events (v2.90.0)...');
+      this.db.exec(`
+        ALTER TABLE events ADD COLUMN rsvp_deadline TEXT;
+        ALTER TABLE events ADD COLUMN capacity INTEGER;
+      `);
+      console.log('✅ events: rsvp_deadline, capacity added');
+    }
+
+    const rsvpCols = this.db.prepare(`PRAGMA table_info(event_rsvp)`).all();
+    if (rsvpCols.length && !rsvpCols.some(c => c.name === 'occurrence_date')) {
+      // SQLite cannot alter a UNIQUE constraint, so this is a rebuild — same
+      // shape as the v1.13.0 contacts migration. Existing answers are attached
+      // to the event's own date, which is the only occurrence a non-recurring
+      // event has, and the anchor occurrence for a recurring one. A weekly
+      // series therefore keeps its answers for the first occurrence rather
+      // than silently applying them to every future date.
+      console.log('📝 Rebuilding event_rsvp for per-occurrence answers (v2.90.0)...');
+      this.db.exec(`
+        PRAGMA foreign_keys = OFF;
+
+        CREATE TABLE event_rsvp_new (
+          id              TEXT PRIMARY KEY,
+          event_id        TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          occurrence_date TEXT NOT NULL DEFAULT '',
+          status          TEXT NOT NULL CHECK(status IN ('going','maybe','not_going')),
+          waitlisted      INTEGER NOT NULL DEFAULT 0,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT,
+          UNIQUE(event_id, user_id, occurrence_date)
+        );
+
+        INSERT INTO event_rsvp_new (id, event_id, user_id, occurrence_date, status, waitlisted, created_at, updated_at)
+          SELECT r.id, r.event_id, r.user_id,
+                 COALESCE((SELECT e.event_date FROM events e WHERE e.id = r.event_id), ''),
+                 r.status, 0, r.created_at, r.updated_at
+          FROM event_rsvp r;
+
+        DROP TABLE event_rsvp;
+        ALTER TABLE event_rsvp_new RENAME TO event_rsvp;
+
+        CREATE INDEX IF NOT EXISTS idx_event_rsvp_event ON event_rsvp(event_id);
+        CREATE INDEX IF NOT EXISTS idx_event_rsvp_user  ON event_rsvp(user_id);
+        CREATE INDEX IF NOT EXISTS idx_event_rsvp_occurrence ON event_rsvp(event_id, occurrence_date);
+
+        PRAGMA foreign_keys = ON;
+      `);
+      console.log('✅ event_rsvp rebuilt with occurrence_date + waitlisted');
+    }
+
+    const invitesExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='event_invites'`
+    ).get();
+    if (!invitesExist) {
+      console.log('📝 Creating event_invites table (v2.90.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS event_invites (
+          id              TEXT PRIMARY KEY,
+          event_id        TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          occurrence_date TEXT NOT NULL,
+          user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- 'direct', or the crew id the invitation came through. Kept so the
+          -- organiser can see WHY someone is on the list, and so re-inviting a
+          -- crew does not duplicate people already invited by name.
+          invited_via     TEXT NOT NULL DEFAULT 'direct',
+          invited_by      TEXT REFERENCES users(id) ON DELETE SET NULL,
+          invited_at      TEXT NOT NULL,
+          UNIQUE(event_id, occurrence_date, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_event_invites_event ON event_invites(event_id, occurrence_date);
+        CREATE INDEX IF NOT EXISTS idx_event_invites_user ON event_invites(user_id);
+      `);
+      console.log('✅ event_invites table created');
+    }
+
+    const attendanceExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='event_attendance'`
+    ).get();
+    if (!attendanceExist) {
+      console.log('📝 Creating event_attendance table (v2.90.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS event_attendance (
+          event_id        TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          occurrence_date TEXT NOT NULL,
+          user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- What happened, not what they said. Someone can answer "going" and
+          -- not turn up, which is exactly the gap an attendance register exists
+          -- to record.
+          attended        INTEGER NOT NULL DEFAULT 0,
+          marked_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+          marked_at       TEXT NOT NULL,
+          PRIMARY KEY (event_id, occurrence_date, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_event_attendance_event ON event_attendance(event_id, occurrence_date);
+        CREATE INDEX IF NOT EXISTS idx_event_attendance_user ON event_attendance(user_id);
+      `);
+      console.log('✅ event_attendance table created');
+    }
+
     // v2.72.0 — Event cards in the wave timeline. The card references the event
     // rather than copying it, so editing or cancelling an event is reflected
     // wherever the card appears instead of leaving a message that lies.
@@ -12179,17 +12291,18 @@ export class DatabaseSQLite {
 
   // ============ Events CRUD (v2.40.0) ============
 
-  createEvent({ title, description, eventDate, recurrence, recurrenceEndDate, category, createdBy, eventTime, eventEndTime, timezone, location, scope, waveId, rsvpEnabled }) {
+  createEvent({ title, description, eventDate, recurrence, recurrenceEndDate, category, createdBy, eventTime, eventEndTime, timezone, location, scope, waveId, rsvpEnabled, rsvpDeadline, capacity }) {
     const id = `event-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const now = new Date().toISOString();
     this.db.prepare(
       `INSERT INTO events (id, title, description, event_date, recurrence, recurrence_end_date, category, created_by, created_at,
-        event_time, event_end_time, timezone, location, scope, wave_id, rsvp_enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        event_time, event_end_time, timezone, location, scope, wave_id, rsvp_enabled, rsvp_deadline, capacity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(id, title, description || null, eventDate, recurrence || null, recurrenceEndDate || null,
       category || 'general', createdBy, now,
       eventTime || null, eventEndTime || null, timezone || null, location || null,
-      scope || 'server', waveId || null, rsvpEnabled ? 1 : 0);
+      scope || 'server', waveId || null, rsvpEnabled ? 1 : 0,
+      rsvpDeadline || null, Number.isInteger(capacity) && capacity > 0 ? capacity : null);
     return this.getEvent(id);
   }
 
@@ -12210,6 +12323,11 @@ export class DatabaseSQLite {
       scope: row.scope || 'server',
       waveId: row.wave_id || null,
       rsvpEnabled: !!row.rsvp_enabled,
+      // v2.90.0 — camelCase here, like everything else off rowToEvent. Reading
+      // event.rsvp_deadline off a mapped event silently yields undefined; that
+      // exact mistake shipped a 403 on every guest RSVP in v2.69.0.
+      rsvpDeadline: row.rsvp_deadline || null,
+      capacity: row.capacity != null ? row.capacity : null,
       createdBy: row.created_by,
       createdAt: row.created_at,
       updatedAt: row.updated_at || null,
@@ -12244,14 +12362,24 @@ export class DatabaseSQLite {
       scope:                updates.scope                !== undefined ? updates.scope                : existing.scope,
       wave_id:              updates.waveId               !== undefined ? updates.waveId               : existing.waveId,
       rsvp_enabled:         updates.rsvpEnabled          !== undefined ? (updates.rsvpEnabled ? 1 : 0) : (existing.rsvpEnabled ? 1 : 0),
+      // v2.90.0. This map is the third place an event field has to be listed,
+      // after createEvent and rowToEvent — miss it and the value can be set once
+      // and then never edited, which is precisely what happened here until a
+      // test tried to move a deadline.
+      rsvp_deadline:        updates.rsvpDeadline         !== undefined ? (updates.rsvpDeadline || null) : existing.rsvpDeadline,
+      capacity:             updates.capacity             !== undefined
+                              ? (Number.isInteger(updates.capacity) && updates.capacity > 0 ? updates.capacity : null)
+                              : existing.capacity,
     };
     this.db.prepare(
       `UPDATE events SET title=?, description=?, event_date=?, recurrence=?, recurrence_end_date=?, category=?,
-        event_time=?, event_end_time=?, timezone=?, location=?, scope=?, wave_id=?, rsvp_enabled=?, updated_at=?
+        event_time=?, event_end_time=?, timezone=?, location=?, scope=?, wave_id=?, rsvp_enabled=?,
+        rsvp_deadline=?, capacity=?, updated_at=?
        WHERE id=?`
     ).run(fields.title, fields.description, fields.event_date, fields.recurrence, fields.recurrence_end_date,
       fields.category, fields.event_time, fields.event_end_time, fields.timezone, fields.location,
-      fields.scope, fields.wave_id, fields.rsvp_enabled, now, eventId);
+      fields.scope, fields.wave_id, fields.rsvp_enabled,
+      fields.rsvp_deadline, fields.capacity, now, eventId);
     return this.getEvent(eventId);
   }
 
@@ -12335,30 +12463,203 @@ export class DatabaseSQLite {
     return { ...event, rsvpCounts };
   }
 
-  upsertRsvp({ eventId, userId, status }) {
+  // ===== RSVP, per occurrence (v2.90.0) =====
+  //
+  // Every method here takes an occurrenceDate. A recurring event is one row and
+  // many occurrences, so answers keyed only on (event, user) meant one "going"
+  // covered every future rehearsal. Callers resolve the date; for a
+  // non-recurring event it is simply the event's own date.
+
+  /** Seats already taken for one occurrence: members going and not waitlisted, plus guest party sizes. */
+  countConfirmed(eventId, occurrenceDate, excludeUserId = null) {
+    const members = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM event_rsvp
+      WHERE event_id = ? AND occurrence_date = ? AND status = 'going' AND waitlisted = 0
+        AND (? IS NULL OR user_id != ?)
+    `).get(eventId, occurrenceDate, excludeUserId, excludeUserId).n;
+    // Guests answer per event rather than per occurrence — the public pages have
+    // no occurrence concept — so they count against every occurrence's capacity.
+    const guests = this.db.prepare(`
+      SELECT COALESCE(SUM(guest_count), 0) AS n FROM event_rsvp_guest
+      WHERE event_id = ? AND status = 'going'
+    `).get(eventId).n;
+    return members + guests;
+  }
+
+  /**
+   * Returns { status, waitlisted }. When the event has a capacity and it is
+   * already full, a new "going" is recorded as going-but-waitlisted rather than
+   * refused: the person said yes, they are simply queued, which is what a
+   * waiting list means.
+   */
+  upsertRsvp({ eventId, userId, occurrenceDate, status, capacity = null }) {
     const id = `rsvp-${crypto.randomUUID()}`;
     const now = new Date().toISOString();
+
+    let waitlisted = 0;
+    if (status === 'going' && capacity != null && capacity > 0) {
+      const existing = this.getUserRsvp(eventId, userId, occurrenceDate);
+      const alreadyHasSeat = existing && existing.status === 'going' && !existing.waitlisted;
+      if (!alreadyHasSeat && this.countConfirmed(eventId, occurrenceDate, userId) >= capacity) {
+        waitlisted = 1;
+      }
+    }
+
     this.db.prepare(`
-      INSERT INTO event_rsvp (id, event_id, user_id, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(event_id, user_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at
-    `).run(id, eventId, userId, status, now, now);
+      INSERT INTO event_rsvp (id, event_id, user_id, occurrence_date, status, waitlisted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id, user_id, occurrence_date)
+        DO UPDATE SET status=excluded.status, waitlisted=excluded.waitlisted, updated_at=excluded.updated_at
+    `).run(id, eventId, userId, occurrenceDate, status, waitlisted, now, now);
+
+    return { status, waitlisted: !!waitlisted };
   }
 
-  getRsvps(eventId) {
-    return this.db.prepare(`
-      SELECT r.status, r.user_id, u.handle, u.display_name, u.avatar
+  /**
+   * Fill freed seats from the waiting list, oldest answer first. Returns the
+   * promoted user ids so the caller can tell them — a silent promotion is worse
+   * than no waiting list, because they never learn they are now expected.
+   */
+  promoteFromWaitlist(eventId, occurrenceDate, capacity) {
+    if (capacity == null || capacity <= 0) return [];
+    const promoted = [];
+    let free = capacity - this.countConfirmed(eventId, occurrenceDate);
+    if (free <= 0) return [];
+    const queued = this.db.prepare(`
+      SELECT user_id FROM event_rsvp
+      WHERE event_id = ? AND occurrence_date = ? AND status = 'going' AND waitlisted = 1
+      ORDER BY created_at ASC
+    `).all(eventId, occurrenceDate);
+    for (const row of queued) {
+      if (free <= 0) break;
+      this.db.prepare(`
+        UPDATE event_rsvp SET waitlisted = 0, updated_at = ?
+        WHERE event_id = ? AND occurrence_date = ? AND user_id = ?
+      `).run(new Date().toISOString(), eventId, occurrenceDate, row.user_id);
+      promoted.push(row.user_id);
+      free -= 1;
+    }
+    return promoted;
+  }
+
+  getRsvps(eventId, occurrenceDate = null) {
+    const sql = `
+      SELECT r.status, r.waitlisted, r.user_id, r.occurrence_date, u.handle, u.display_name, u.avatar
       FROM event_rsvp r JOIN users u ON r.user_id = u.id
-      WHERE r.event_id = ? ORDER BY r.created_at ASC
-    `).all(eventId);
+      WHERE r.event_id = ?` + (occurrenceDate ? ` AND r.occurrence_date = ?` : ``) + `
+      ORDER BY r.created_at ASC`;
+    return occurrenceDate
+      ? this.db.prepare(sql).all(eventId, occurrenceDate)
+      : this.db.prepare(sql).all(eventId);
   }
 
-  getUserRsvp(eventId, userId) {
-    return this.db.prepare(`SELECT status FROM event_rsvp WHERE event_id = ? AND user_id = ?`).get(eventId, userId);
+  getUserRsvp(eventId, userId, occurrenceDate = null) {
+    if (occurrenceDate) {
+      return this.db.prepare(
+        `SELECT status, waitlisted FROM event_rsvp WHERE event_id = ? AND user_id = ? AND occurrence_date = ?`
+      ).get(eventId, userId, occurrenceDate);
+    }
+    return this.db.prepare(
+      `SELECT status, waitlisted FROM event_rsvp WHERE event_id = ? AND user_id = ? ORDER BY occurrence_date LIMIT 1`
+    ).get(eventId, userId);
   }
 
-  deleteRsvp(eventId, userId) {
-    this.db.prepare(`DELETE FROM event_rsvp WHERE event_id = ? AND user_id = ?`).run(eventId, userId);
+  deleteRsvp(eventId, userId, occurrenceDate = null) {
+    if (occurrenceDate) {
+      this.db.prepare(`DELETE FROM event_rsvp WHERE event_id = ? AND user_id = ? AND occurrence_date = ?`)
+        .run(eventId, userId, occurrenceDate);
+    } else {
+      this.db.prepare(`DELETE FROM event_rsvp WHERE event_id = ? AND user_id = ?`).run(eventId, userId);
+    }
+  }
+
+  // ===== Invitations (v2.90.0) =====
+
+  /** Bulk invite. Existing rows are left alone, so re-inviting a crew is harmless. */
+  addEventInvites({ eventId, occurrenceDate, userIds, invitedVia = 'direct', invitedBy = null }) {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      INSERT OR IGNORE INTO event_invites (id, event_id, occurrence_date, user_id, invited_via, invited_by, invited_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const added = [];
+    const run = this.db.transaction((ids) => {
+      for (const userId of ids) {
+        const res = stmt.run(`inv-${crypto.randomUUID()}`, eventId, occurrenceDate, userId, invitedVia, invitedBy, now);
+        if (res.changes > 0) added.push(userId);
+      }
+    });
+    run(userIds);
+    return added;
+  }
+
+  removeEventInvite(eventId, occurrenceDate, userId) {
+    return this.db.prepare(
+      `DELETE FROM event_invites WHERE event_id = ? AND occurrence_date = ? AND user_id = ?`
+    ).run(eventId, occurrenceDate, userId).changes > 0;
+  }
+
+  /**
+   * The organiser's view: everyone asked, what they said, and whether they came.
+   * LEFT JOINs because the whole point is the people with no answer — an INNER
+   * JOIN here would hide exactly the rows worth chasing.
+   */
+  getEventRoster(eventId, occurrenceDate) {
+    return this.db.prepare(`
+      SELECT i.user_id, i.invited_via, i.invited_at,
+             u.handle, u.display_name, u.avatar,
+             r.status, r.waitlisted,
+             a.attended, a.marked_at
+      FROM event_invites i
+      JOIN users u ON u.id = i.user_id
+      LEFT JOIN event_rsvp r
+        ON r.event_id = i.event_id AND r.occurrence_date = i.occurrence_date AND r.user_id = i.user_id
+      LEFT JOIN event_attendance a
+        ON a.event_id = i.event_id AND a.occurrence_date = i.occurrence_date AND a.user_id = i.user_id
+      WHERE i.event_id = ? AND i.occurrence_date = ?
+      ORDER BY u.display_name COLLATE NOCASE, u.handle
+    `).all(eventId, occurrenceDate);
+  }
+
+  /** Invited people who have not answered — the list the reminder goes to. */
+  getEventNonResponders(eventId, occurrenceDate) {
+    return this.db.prepare(`
+      SELECT i.user_id, u.handle, u.display_name
+      FROM event_invites i
+      JOIN users u ON u.id = i.user_id
+      LEFT JOIN event_rsvp r
+        ON r.event_id = i.event_id AND r.occurrence_date = i.occurrence_date AND r.user_id = i.user_id
+      WHERE i.event_id = ? AND i.occurrence_date = ? AND r.status IS NULL
+    `).all(eventId, occurrenceDate);
+  }
+
+  isInvited(eventId, occurrenceDate, userId) {
+    return !!this.db.prepare(
+      `SELECT 1 FROM event_invites WHERE event_id = ? AND occurrence_date = ? AND user_id = ?`
+    ).get(eventId, occurrenceDate, userId);
+  }
+
+  // ===== Attendance (v2.90.0) =====
+
+  markAttendance({ eventId, occurrenceDate, userId, attended, markedBy = null }) {
+    this.db.prepare(`
+      INSERT INTO event_attendance (event_id, occurrence_date, user_id, attended, marked_by, marked_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id, occurrence_date, user_id)
+        DO UPDATE SET attended=excluded.attended, marked_by=excluded.marked_by, marked_at=excluded.marked_at
+    `).run(eventId, occurrenceDate, userId, attended ? 1 : 0, markedBy, new Date().toISOString());
+  }
+
+  /** One person's record across occurrences — "has missed three rehearsals". */
+  getUserAttendanceHistory(userId, limit = 50) {
+    return this.db.prepare(`
+      SELECT a.event_id, a.occurrence_date, a.attended, e.title, e.category
+      FROM event_attendance a
+      JOIN events e ON e.id = a.event_id
+      WHERE a.user_id = ?
+      ORDER BY a.occurrence_date DESC
+      LIMIT ?
+    `).all(userId, limit);
   }
 
   markReminderSent(eventId, userId, window) {

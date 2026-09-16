@@ -5,6 +5,32 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.90.0] - 2026-09-16
+
+### Added
+
+- **Events now track who was asked, not just who answered.** Cortex could record RSVPs but had no record of who had been *invited*, which meant the question every organiser actually has — **"who hasn't replied?"** — was unanswerable. That one gap is what this release closes; everything else here hangs off it.
+  - **Invite people, or a whole crew.** Crew membership is resolved **at the moment of inviting**, not stored as a reference: someone who joins the crew next week was not invited to this rehearsal, and someone who leaves should not vanish from a register that already has their answer on it. Re-inviting the same crew adds only the people who are not already on the list.
+  - **A roster showing GOING / MAYBE / NO / NO REPLY**, with the no-reply count highlighted because it is the only column that needs acting on.
+  - **A nudge that reaches only the people who have not answered.** Deliberately not rate-limited by the reminder debounce — this is a person pressing a button about one specific event, not the automatic sweep — but still routed through the same notification gate, so a muted wave stays muted.
+  - **A reply-by deadline.** After it passes, answers are refused with a clear message rather than silently accepted. Organisers stay exempt, because someone has to be able to fix a mistake.
+  - **A cap on numbers with a waiting list.** Answering "going" to a full event records you as going **and waitlisted**, rather than refusing you — you said yes, you are simply queued. When someone gives up a place the earliest queued person is promoted **and told**; a silent promotion would be worse than no waiting list at all, because they would never learn they are now expected.
+  - **An attendance register** — what happened, as opposed to what was said. Someone can answer "going" and not turn up, and that gap is the entire reason a register exists.
+  - Organising an event is open to its creator, **staff of the wave it belongs to** (v2.88.0), or an instance moderator — so delegating a wave now delegates its events too.
+
+### Changed
+
+- **Answers are scoped to one occurrence instead of the whole series.** RSVP was keyed on `(event, user)`, so answering "going" to a weekly rehearsal marked you going for **every** rehearsal, forever. Invitations, answers and attendance are now all per occurrence — a concrete date, equal to the event's own date for anything non-recurring.
+  - **This is a behaviour change to existing data.** The migration attaches every existing answer to its event's own date: the only occurrence a one-off has, and the anchor of a repeating one. A weekly series therefore keeps its answers on the first occurrence rather than continuing to apply them to every future date.
+  - A date that is not a real occurrence of the event is refused, so an answer cannot be attached to a week that does not exist.
+- Event cards in waves reference the series rather than a date, so they continue to act on the event's own date — unchanged behaviour, now explicit.
+
+### Technical
+
+- New `event_invites` and `event_attendance` tables; `events` gains `rsvp_deadline` and `capacity`; `event_rsvp` is rebuilt with `occurrence_date` and `waitlisted`, since SQLite cannot alter a UNIQUE constraint in place. The rebuild was verified against a copy of a real database before shipping.
+- The roster query uses LEFT JOINs deliberately: the whole point is the people with no answer, and an inner join would hide exactly the rows worth chasing.
+- `updateEvent` keeps its own explicit field map, separate from `createEvent` and `rowToEvent` — the third place an event field must be listed. Missing it meant the new fields could be set once and never edited, which is what a test caught.
+
 ## [Unreleased]
 
 ### Security
