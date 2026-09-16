@@ -41,6 +41,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [loading, setLoading] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState(null); // event opened from the banner (v2.71.0)
   const [showEventCreate, setShowEventCreate] = useState(false); // create in-wave (v2.72.0)
+  const [editEvent, setEditEvent] = useState(null); // edit in-wave (v2.90.1)
   const [eventsReload, setEventsReload] = useState(0);
   const [pinsReload, setPinsReload] = useState(0);
   const [replyingTo, setReplyingTo] = useState(null);
@@ -443,6 +444,22 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   // wave has loaded; the list object stands in until then so the composer does
   // not flash into view and vanish. The server enforces all of this regardless
   // — hiding the controls is a courtesy, not the control.
+  // v2.90.1 — deleting an event from the wave it belongs to. Mirrors the
+  // calendar's handler, including the confirm: an event is shared state, and
+  // removing one takes everyone else's answers with it.
+  const handleDeleteEvent = async (ev) => {
+    if (!window.confirm(`Delete "${ev.title}"?`)) return;
+    try {
+      await fetchAPI(`/events/${ev.id}`, { method: 'DELETE' });
+      showToast('Event deleted', 'success');
+      setSelectedEvent(null);
+      setEventsReload(n => n + 1);
+      loadWave(true);
+    } catch (err) {
+      showToast(err.message || formatError('Failed to delete event'), 'error');
+    }
+  };
+
   const annWave = waveData || wave || {};
   // v2.88.0 — staff of THIS wave may post too: appointed here, or inherited from
   // the crew that owns it. Only asked for when the wave is actually restricted,
@@ -2781,8 +2798,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         />
       )}
 
-      {/* Full event detail from the upcoming-events banner (v2.71.0). Editing
-          and deleting stay in the calendar — this is a read/RSVP surface. */}
+      {/* Full event detail from the upcoming-events banner (v2.71.0).
+          v2.90.1 — editing and deleting now happen here too. This was
+          originally "a read/RSVP surface", with changes deliberately kept in
+          the calendar; in practice that meant noticing a wrong time on the
+          event in front of you and having to go and find it somewhere else. */}
       {selectedEvent && (
         <EventDetailModal
           event={selectedEvent}
@@ -2790,6 +2810,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           fetchAPI={fetchAPI}
           showToast={showToast}
           currentUser={currentUser}
+          onEdit={ev => { setEditEvent(ev); setSelectedEvent(null); setShowEventCreate(true); }}
+          onDelete={handleDeleteEvent}
         />
       )}
 
@@ -2797,14 +2819,19 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           already known here, where the calendar makes you pick both. */}
       {showEventCreate && (
         <EventCreateModal
-          onClose={() => setShowEventCreate(false)}
+          onClose={() => { setShowEventCreate(false); setEditEvent(null); }}
           fetchAPI={fetchAPI}
           showToast={showToast}
           currentUser={currentUser}
+          editEvent={editEvent}
           waves={wave ? [{ id: wave.id, title: wave.title }] : []}
+          // The locks apply to NEW events only: EventCreateModal prefers
+          // editEvent.scope / editEvent.waveId over these, so editing a
+          // server-wide event from inside a wave cannot silently re-scope it
+          // to the wave.
           lockedScope="wave"
           lockedWaveId={wave?.id}
-          onSaved={() => { setShowEventCreate(false); setEventsReload(n => n + 1); loadWave(true); }}
+          onSaved={() => { setShowEventCreate(false); setEditEvent(null); setEventsReload(n => n + 1); loadWave(true); }}
         />
       )}
     </div>

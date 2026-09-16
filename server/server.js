@@ -12089,7 +12089,8 @@ app.get('/api/events/:id', authenticateToken, (req, res) => {
       };
     }
 
-    res.json({ event, userRsvp: userRsvp?.status || null, publishing });
+    res.json({ event, userRsvp: userRsvp?.status || null, publishing,
+      canManage: canManageEvent(event, req.user.userId) });
   } catch (err) {
     console.error('Get event error:', err);
     res.status(500).json({ error: 'Failed to get event' });
@@ -12233,7 +12234,10 @@ app.put('/api/events/:id', authenticateToken, (req, res) => {
     const user = db.findUserById(req.user.userId);
     const event = db.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: 'Event not found' });
-    if (event.createdBy !== user.id && !hasRole(user, ROLES.MODERATOR)) {
+    // v2.90.1 — same people who may organise the event may edit it. v2.90.0
+    // let wave staff invite, chase and take the register but not fix a wrong
+    // time, which is an odd place to draw the line.
+    if (!canManageEvent(event, user.id)) {
       return res.status(403).json({ error: 'Cannot edit this event' });
     }
     const updates = {};
@@ -12299,7 +12303,7 @@ app.delete('/api/events/:id', authenticateToken, (req, res) => {
     const user = db.findUserById(req.user.userId);
     const event = db.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: 'Event not found' });
-    if (event.createdBy !== user.id && !hasRole(user, ROLES.MODERATOR)) {
+    if (!canManageEvent(event, user.id)) {
       return res.status(403).json({ error: 'Cannot delete this event' });
     }
     db.deleteEvent(req.params.id);
