@@ -874,7 +874,7 @@ CREATE TABLE IF NOT EXISTS events (
     created_by TEXT REFERENCES users(id),
     created_at TEXT NOT NULL,
     updated_at TEXT
-, event_time TEXT, event_end_time TEXT, timezone TEXT, location TEXT, scope TEXT NOT NULL DEFAULT 'server', wave_id TEXT REFERENCES waves(id) ON DELETE CASCADE, rsvp_enabled INTEGER DEFAULT 0, recurrence TEXT, recurrence_end_date TEXT);
+, event_time TEXT, event_end_time TEXT, timezone TEXT, location TEXT, scope TEXT NOT NULL DEFAULT 'server', wave_id TEXT REFERENCES waves(id) ON DELETE CASCADE, rsvp_enabled INTEGER DEFAULT 0, recurrence TEXT, recurrence_end_date TEXT, rsvp_deadline TEXT, capacity INTEGER);
 CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);
 CREATE INDEX IF NOT EXISTS idx_events_recurring ON events(recurring);
 CREATE INDEX IF NOT EXISTS idx_events_scope ON events(scope);
@@ -981,18 +981,6 @@ CREATE INDEX IF NOT EXISTS idx_plex_connections_user
         ON plex_connections(user_id);
 CREATE INDEX IF NOT EXISTS idx_plex_connections_status
         ON plex_connections(status);
-
-CREATE TABLE IF NOT EXISTS event_rsvp (
-          id         TEXT PRIMARY KEY,
-          event_id   TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-          user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          status     TEXT NOT NULL CHECK(status IN ('going','maybe','not_going')),
-          created_at TEXT NOT NULL,
-          updated_at TEXT,
-          UNIQUE(event_id, user_id)
-        );
-CREATE INDEX IF NOT EXISTS idx_event_rsvp_event ON event_rsvp(event_id);
-CREATE INDEX IF NOT EXISTS idx_event_rsvp_user  ON event_rsvp(user_id);
 
 CREATE TABLE IF NOT EXISTS event_reminder_sent (
           id       TEXT PRIMARY KEY,
@@ -1189,6 +1177,52 @@ CREATE TABLE IF NOT EXISTS wave_roles_encrypted (
           iv TEXT NOT NULL DEFAULT '',
           updated_at INTEGER DEFAULT (strftime('%s', 'now'))
         );
+
+CREATE TABLE IF NOT EXISTS "event_rsvp" (
+          id              TEXT PRIMARY KEY,
+          event_id        TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          occurrence_date TEXT NOT NULL DEFAULT '',
+          status          TEXT NOT NULL CHECK(status IN ('going','maybe','not_going')),
+          waitlisted      INTEGER NOT NULL DEFAULT 0,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT,
+          UNIQUE(event_id, user_id, occurrence_date)
+        );
+CREATE INDEX IF NOT EXISTS idx_event_rsvp_event ON event_rsvp(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_rsvp_user  ON event_rsvp(user_id);
+CREATE INDEX IF NOT EXISTS idx_event_rsvp_occurrence ON event_rsvp(event_id, occurrence_date);
+
+CREATE TABLE IF NOT EXISTS event_invites (
+          id              TEXT PRIMARY KEY,
+          event_id        TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          occurrence_date TEXT NOT NULL,
+          user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- 'direct', or the crew id the invitation came through. Kept so the
+          -- organiser can see WHY someone is on the list, and so re-inviting a
+          -- crew does not duplicate people already invited by name.
+          invited_via     TEXT NOT NULL DEFAULT 'direct',
+          invited_by      TEXT REFERENCES users(id) ON DELETE SET NULL,
+          invited_at      TEXT NOT NULL,
+          UNIQUE(event_id, occurrence_date, user_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_event_invites_event ON event_invites(event_id, occurrence_date);
+CREATE INDEX IF NOT EXISTS idx_event_invites_user ON event_invites(user_id);
+
+CREATE TABLE IF NOT EXISTS event_attendance (
+          event_id        TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          occurrence_date TEXT NOT NULL,
+          user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- What happened, not what they said. Someone can answer "going" and
+          -- not turn up, which is exactly the gap an attendance register exists
+          -- to record.
+          attended        INTEGER NOT NULL DEFAULT 0,
+          marked_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+          marked_at       TEXT NOT NULL,
+          PRIMARY KEY (event_id, occurrence_date, user_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_event_attendance_event ON event_attendance(event_id, occurrence_date);
+CREATE INDEX IF NOT EXISTS idx_event_attendance_user ON event_attendance(user_id);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN

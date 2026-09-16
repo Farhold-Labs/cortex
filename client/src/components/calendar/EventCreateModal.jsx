@@ -54,6 +54,10 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
   const [recurrence,         setRecurrence]         = useState(editEvent?.recurrence         || '');
   const [recurrenceEndDate,  setRecurrenceEndDate]  = useState(editEvent?.recurrenceEndDate  || '');
   const [rsvpEnabled,        setRsvpEnabled]        = useState(editEvent?.rsvpEnabled        || false);
+  // v2.90.0 — a reply-by date and a cap on numbers.
+  const [rsvpDeadline,       setRsvpDeadline]       = useState(editEvent?.rsvpDeadline?.slice(0, 10) || '');
+  const [capacity,           setCapacity]           = useState(
+    editEvent?.capacity != null ? String(editEvent.capacity) : '');
   const [saving,             setSaving]             = useState(false);
 
   const canServerScope = currentUser?.role === 'admin' || currentUser?.role === 'moderator';
@@ -79,6 +83,10 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
         recurrence: recurrence || null,
         recurrenceEndDate: (recurrence && recurrenceEndDate) ? recurrenceEndDate : null,
         rsvpEnabled,
+        // Sent as end-of-day so "reply by the 14th" means the whole of the 14th,
+        // not midnight at its start — which would close answers a day early.
+        rsvpDeadline: rsvpEnabled && rsvpDeadline ? `${rsvpDeadline}T23:59:59` : null,
+        capacity: rsvpEnabled && /^\d+$/.test(capacity) && Number(capacity) > 0 ? Number(capacity) : null,
       };
       let event;
       if (editEvent) {
@@ -222,6 +230,27 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
               <input type="checkbox" checked={rsvpEnabled} onChange={e => setRsvpEnabled(e.target.checked)} />
               <span style={{ ...labelStyle, margin: 0 }}>ENABLE RSVP</span>
             </label>
+
+            {rsvpEnabled && (
+              <div style={{ display: 'flex', gap: '10px', marginTop: '12px', flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+                  <div style={labelStyle}>REPLY BY (OPTIONAL)</div>
+                  <input
+                    type="date" value={rsvpDeadline}
+                    onChange={e => setRsvpDeadline(e.target.value)}
+                    style={inputStyle}
+                  />
+                </div>
+                <div style={{ flex: '1 1 110px', minWidth: 0 }}>
+                  <div style={labelStyle}>MAX PLACES (OPTIONAL)</div>
+                  <input
+                    type="number" min="1" value={capacity} placeholder="no limit"
+                    onChange={e => setCapacity(e.target.value)}
+                    style={inputStyle}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Buttons */}
