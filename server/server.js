@@ -12148,7 +12148,8 @@ app.post('/api/events', authenticateToken, (req, res) => {
   try {
     const user = db.findUserById(req.user.userId);
     const { title, description, eventDate, eventTime, eventEndTime, timezone, location,
-            recurrence, recurrenceEndDate, category, scope, waveId, rsvpEnabled } = req.body;
+            recurrence, recurrenceEndDate, category, scope, waveId, rsvpEnabled,
+            rsvpDeadline, capacity } = req.body;
 
     const resolvedScope = scope || 'personal';
 
@@ -12186,6 +12187,8 @@ app.post('/api/events', authenticateToken, (req, res) => {
       recurrence: recurrence || null, recurrenceEndDate: recurrenceEndDate || null,
       category: category || 'general',
       scope: resolvedScope, waveId: waveId || null, rsvpEnabled: !!rsvpEnabled,
+      rsvpDeadline: typeof rsvpDeadline === 'string' && rsvpDeadline.trim() ? rsvpDeadline.trim() : null,
+      capacity: Number.isInteger(capacity) && capacity > 0 ? capacity : null,
       createdBy: user.id,
     });
 
@@ -12234,7 +12237,7 @@ app.put('/api/events/:id', authenticateToken, (req, res) => {
       return res.status(403).json({ error: 'Cannot edit this event' });
     }
     const updates = {};
-    const fields = ['title','description','eventDate','eventTime','eventEndTime','timezone','location','recurrence','recurrenceEndDate','category','rsvpEnabled'];
+    const fields = ['title','description','eventDate','eventTime','eventEndTime','timezone','location','recurrence','recurrenceEndDate','category','rsvpEnabled','rsvpDeadline','capacity'];
     for (const f of fields) { if (req.body[f] !== undefined) updates[f] = req.body[f]; }
     if (updates.title) updates.title = sanitizeInput(updates.title.trim());
     if (updates.description) updates.description = sanitizeInput(updates.description.trim());
@@ -12310,6 +12313,73 @@ app.delete('/api/events/:id', authenticateToken, (req, res) => {
   }
 });
 
+// ============ Attendance tracking (v2.90.0) ============
+//
+// The events subsystem could record answers but not questions: there was no
+// record of who had been ASKED, so "who hasn't replied?" was unanswerable.
+// Invitations, answers and attendance are all scoped to one OCCURRENCE — a
+// recurring rehearsal is one row and many dates, and an answer that silently
+// covered every future date was the old behaviour, not a feature.
+
+/** Validate ?date= against the event's real occurrences; null means "reject, response already sent". */
+function eventOccurrenceDate(event, rawDate, res) {
+  const occurrence = resolveOccurrence(event, rawDate);
+  if (occurrence === false) {
+    res.status(404).json({ error: 'That date is not an occurrence of this event' });
+    return null;
+  }
+  return occurrence.eventDate;
+}
+
+/**
+ * Who may run an event: invite people, chase non-responders, take the register.
+ * The creator, staff of the wave it belongs to (v2.88.0 — so delegating a wave
+ * delegates its events too, which is the whole point of that feature), or an
+ * instance moderator.
+ */
+function canManageEvent(event, userId) {
+  if (!event) return false;
+  if (event.createdBy === userId) return true;
+  if (event.scope === 'wave' && event.waveId) {
+    const wave = db.getWave(event.waveId);
+    if (wave && canModerateWave(wave, userId)) return true;
+  }
+  return hasRole(db.findUserById(userId), ROLES.MODERATOR);
+}
+
+/** Tell people the waiting list moved. Routed through shouldCreateNotification so wave mutes still apply. */
+function notifyWaitlistPromotions(event, occurrenceDate, userIds) {
+  for (const userId of userIds || []) {
+    if (!shouldCreateNotification(userId, 'event_reminder', event.waveId || null)) continue;
+    const notification = db.createNotification({
+      userId,
+      type: 'event_reminder',
+      waveId: event.waveId || null,
+      actorId: null,
+      title: `A place opened up: ${event.title}`,
+      body: `You are now confirmed for ${occurrenceDate}.`,
+      groupKey: `event-waitlist:${event.id}:${occurrenceDate}:${userId}`,
+    });
+    if (notification) {
+      db.markNotificationPushSent(notification.id);
+      sendPushNotification(userId, {
+        type: 'event_reminder',
+        title: notification.title,
+        body: notification.body,
+        url: `/?event=${event.id}&date=${occurrenceDate}`,
+      });
+    }
+  }
+}
+
+/** Answers close at the deadline. Organisers are exempt — someone has to fix mistakes. */
+function rsvpClosed(event, userId) {
+  if (!event.rsvpDeadline) return false;
+  if (canManageEvent(event, userId)) return false;
+  const deadline = new Date(event.rsvpDeadline);
+  return !isNaN(deadline) && Date.now() > deadline.getTime();
+}
+
 // POST /api/events/:id/rsvp — set RSVP status
 app.post('/api/events/:id/rsvp', authenticateToken, (req, res) => {
   try {
@@ -12323,8 +12393,26 @@ app.post('/api/events/:id/rsvp', authenticateToken, (req, res) => {
     if (!['going','maybe','not_going'].includes(status)) {
       return res.status(400).json({ error: 'status must be going, maybe, or not_going' });
     }
-    db.upsertRsvp({ eventId: req.params.id, userId: req.user.userId, status });
-    res.json({ success: true, status });
+    const occurrenceDate = eventOccurrenceDate(event, req.body.date ?? req.query.date, res);
+    if (!occurrenceDate) return;
+    if (rsvpClosed(event, req.user.userId)) {
+      return res.status(409).json({ error: 'Responses for this event have closed', code: 'RSVP_CLOSED' });
+    }
+
+    const before = db.getUserRsvp(req.params.id, req.user.userId, occurrenceDate);
+    const result = db.upsertRsvp({
+      eventId: req.params.id, userId: req.user.userId, occurrenceDate,
+      status, capacity: event.capacity,
+    });
+
+    // Giving up a seat frees it, so someone queued behind can take it. Promoting
+    // silently would be worse than having no waiting list at all, because they
+    // would never learn they are now expected — so they are told.
+    if (before && before.status === 'going' && !before.waitlisted && status !== 'going') {
+      notifyWaitlistPromotions(event, occurrenceDate,
+        db.promoteFromWaitlist(req.params.id, occurrenceDate, event.capacity));
+    }
+    res.json({ success: true, status: result.status, waitlisted: result.waitlisted, occurrenceDate });
   } catch (err) {
     console.error('RSVP error:', err);
     res.status(500).json({ error: 'Failed to set RSVP' });
@@ -12372,8 +12460,10 @@ app.get('/api/events/:id/rsvp', authenticateToken, (req, res) => {
     if (!canSeeEventRsvps(event, req.user.userId)) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    const rsvps = db.getRsvps(req.params.id);
-    const userRsvp = db.getUserRsvp(req.params.id, req.user.userId);
+    const occurrenceDate = eventOccurrenceDate(event, req.query.date, res);
+    if (!occurrenceDate) return;
+    const rsvps = db.getRsvps(req.params.id, occurrenceDate);
+    const userRsvp = db.getUserRsvp(req.params.id, req.user.userId, occurrenceDate);
     // Guests too, so the in-app view agrees with the counts and with the
     // moderator list. Names only — a guest's email address stays behind the
     // moderator-only attendee endpoint, since anyone in the wave sees this.
@@ -12384,6 +12474,10 @@ app.get('/api/events/:id/rsvp', authenticateToken, (req, res) => {
       guests,
       counts: db.getRsvpCountsCombined(req.params.id),
       userRsvp: userRsvp?.status || null,
+      userWaitlisted: !!userRsvp?.waitlisted,
+      occurrenceDate,
+      capacity: event.capacity,
+      rsvpDeadline: event.rsvpDeadline,
     });
   } catch (err) {
     console.error('Get RSVP error:', err);
@@ -12394,11 +12488,221 @@ app.get('/api/events/:id/rsvp', authenticateToken, (req, res) => {
 // DELETE /api/events/:id/rsvp — remove own RSVP
 app.delete('/api/events/:id/rsvp', authenticateToken, (req, res) => {
   try {
-    db.deleteRsvp(req.params.id, req.user.userId);
+    const event = db.getEvent(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    const occurrenceDate = eventOccurrenceDate(event, req.body?.date ?? req.query.date, res);
+    if (!occurrenceDate) return;
+
+    const before = db.getUserRsvp(req.params.id, req.user.userId, occurrenceDate);
+    db.deleteRsvp(req.params.id, req.user.userId, occurrenceDate);
+    if (before && before.status === 'going' && !before.waitlisted) {
+      notifyWaitlistPromotions(event, occurrenceDate,
+        db.promoteFromWaitlist(req.params.id, occurrenceDate, event.capacity));
+    }
     res.json({ success: true });
   } catch (err) {
     console.error('Delete RSVP error:', err);
     res.status(500).json({ error: 'Failed to remove RSVP' });
+  }
+});
+
+// ============ Invitations, roster, chasing and the register (v2.90.0) ============
+
+/** Resolve an event + occurrence + manage rights in one go; returns null once a response is sent. */
+function requireManagedOccurrence(req, res) {
+  const event = db.getEvent(req.params.id);
+  if (!event) { res.status(404).json({ error: 'Event not found' }); return null; }
+  if (!canManageEvent(event, req.user.userId)) {
+    res.status(403).json({ error: 'Only the event organiser can do that' });
+    return null;
+  }
+  const occurrenceDate = eventOccurrenceDate(event, req.body?.date ?? req.query.date, res);
+  if (!occurrenceDate) return null;
+  return { event, occurrenceDate };
+}
+
+// POST /api/events/:id/invites — invite people and/or whole crews
+app.post('/api/events/:id/invites', authenticateToken, (req, res) => {
+  try {
+    const ctx = requireManagedOccurrence(req, res);
+    if (!ctx) return;
+    const { event, occurrenceDate } = ctx;
+
+    const userIds = Array.isArray(req.body.userIds) ? req.body.userIds.map(sanitizeInput).filter(Boolean) : [];
+    const crewIds = Array.isArray(req.body.crewIds) ? req.body.crewIds.map(sanitizeInput).filter(Boolean) : [];
+    if (!userIds.length && !crewIds.length) {
+      return res.status(400).json({ error: 'Provide userIds and/or crewIds' });
+    }
+
+    const invited = [];
+    for (const userId of userIds) {
+      if (!db.findUserById(userId)) continue;
+      invited.push(...db.addEventInvites({
+        eventId: event.id, occurrenceDate, userIds: [userId],
+        invitedVia: 'direct', invitedBy: req.user.userId,
+      }));
+    }
+
+    // Crew membership is resolved NOW, not stored as a reference. Someone who
+    // joins the crew next week was not invited to this rehearsal, and someone
+    // who leaves it should not vanish from a register that already has their
+    // answer on it.
+    for (const crewId of crewIds) {
+      if (!db.isGroupMember(crewId, req.user.userId) && !hasRole(db.findUserById(req.user.userId), ROLES.MODERATOR)) {
+        continue;
+      }
+      const members = (db.getGroupMembers(crewId) || []).map(m => m.id || m.userId).filter(Boolean);
+      if (!members.length) continue;
+      invited.push(...db.addEventInvites({
+        eventId: event.id, occurrenceDate, userIds: members,
+        invitedVia: crewId, invitedBy: req.user.userId,
+      }));
+    }
+
+    const unique = [...new Set(invited)];
+    for (const userId of unique) {
+      if (userId === req.user.userId) continue;
+      if (!shouldCreateNotification(userId, 'event_reminder', event.waveId || null)) continue;
+      const notification = db.createNotification({
+        userId,
+        type: 'event_reminder',
+        waveId: event.waveId || null,
+        actorId: req.user.userId,
+        title: `You're invited: ${event.title}`,
+        body: `${occurrenceDate}${event.eventTime ? ' at ' + event.eventTime : ''}`,
+        groupKey: `event-invite:${event.id}:${occurrenceDate}:${userId}`,
+      });
+      if (notification) {
+        db.markNotificationPushSent(notification.id);
+        sendPushNotification(userId, {
+          type: 'event_reminder', title: notification.title, body: notification.body,
+          url: `/?event=${event.id}&date=${occurrenceDate}`,
+        });
+      }
+    }
+
+    res.status(201).json({ invited: unique.length, roster: db.getEventRoster(event.id, occurrenceDate) });
+  } catch (err) {
+    console.error('Invite to event error:', err);
+    res.status(500).json({ error: 'Failed to invite' });
+  }
+});
+
+// DELETE /api/events/:id/invites/:userId — take someone off the list
+app.delete('/api/events/:id/invites/:userId', authenticateToken, (req, res) => {
+  try {
+    const ctx = requireManagedOccurrence(req, res);
+    if (!ctx) return;
+    const { event, occurrenceDate } = ctx;
+    const removed = db.removeEventInvite(event.id, occurrenceDate, sanitizeInput(req.params.userId));
+    if (!removed) return res.status(404).json({ error: 'That person is not on the invite list' });
+    // Their answer is deliberately left alone: uninviting someone who already
+    // replied should not quietly erase the fact that they had said yes.
+    res.json({ success: true, roster: db.getEventRoster(event.id, occurrenceDate) });
+  } catch (err) {
+    console.error('Remove invite error:', err);
+    res.status(500).json({ error: 'Failed to remove invite' });
+  }
+});
+
+// GET /api/events/:id/roster — who was asked, what they said, whether they came
+app.get('/api/events/:id/roster', authenticateToken, (req, res) => {
+  try {
+    const event = db.getEvent(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!canSeeEventRsvps(event, req.user.userId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const occurrenceDate = eventOccurrenceDate(event, req.query.date, res);
+    if (!occurrenceDate) return;
+
+    const roster = db.getEventRoster(event.id, occurrenceDate);
+    const counts = { going: 0, maybe: 0, not_going: 0, no_response: 0, waitlisted: 0, attended: 0 };
+    for (const r of roster) {
+      if (!r.status) counts.no_response += 1;
+      else counts[r.status] += 1;
+      if (r.waitlisted) counts.waitlisted += 1;
+      if (r.attended) counts.attended += 1;
+    }
+
+    res.json({
+      occurrenceDate,
+      invitedCount: roster.length,
+      counts,
+      capacity: event.capacity,
+      rsvpDeadline: event.rsvpDeadline,
+      canManage: canManageEvent(event, req.user.userId),
+      roster,
+    });
+  } catch (err) {
+    console.error('Event roster error:', err);
+    res.status(500).json({ error: 'Failed to load roster' });
+  }
+});
+
+// POST /api/events/:id/remind — nudge the people who have not answered
+app.post('/api/events/:id/remind', authenticateToken, (req, res) => {
+  try {
+    const ctx = requireManagedOccurrence(req, res);
+    if (!ctx) return;
+    const { event, occurrenceDate } = ctx;
+
+    const pending = db.getEventNonResponders(event.id, occurrenceDate);
+    let sent = 0;
+    for (const person of pending) {
+      // Deliberately NOT gated on a debounce window: this is a human pressing a
+      // button about one specific event, not the automatic sweep. It is also
+      // still routed through shouldCreateNotification, so a muted wave stays muted.
+      if (!shouldCreateNotification(person.user_id, 'event_reminder', event.waveId || null)) continue;
+      const notification = db.createNotification({
+        userId: person.user_id,
+        type: 'event_reminder',
+        waveId: event.waveId || null,
+        actorId: req.user.userId,
+        title: `Still need your answer: ${event.title}`,
+        body: `${occurrenceDate}${event.eventTime ? ' at ' + event.eventTime : ''}`,
+        groupKey: `event-chase:${event.id}:${occurrenceDate}:${person.user_id}`,
+      });
+      if (notification) {
+        db.markNotificationPushSent(notification.id);
+        sendPushNotification(person.user_id, {
+          type: 'event_reminder', title: notification.title, body: notification.body,
+          url: `/?event=${event.id}&date=${occurrenceDate}`,
+        });
+        sent += 1;
+      }
+    }
+    res.json({ pending: pending.length, reminded: sent });
+  } catch (err) {
+    console.error('Event reminder error:', err);
+    res.status(500).json({ error: 'Failed to send reminders' });
+  }
+});
+
+// POST /api/events/:id/attendance — take the register
+app.post('/api/events/:id/attendance', authenticateToken, (req, res) => {
+  try {
+    const ctx = requireManagedOccurrence(req, res);
+    if (!ctx) return;
+    const { event, occurrenceDate } = ctx;
+
+    const entries = Array.isArray(req.body.entries) ? req.body.entries : [];
+    if (!entries.length) return res.status(400).json({ error: 'entries required' });
+
+    let marked = 0;
+    for (const entry of entries) {
+      const userId = sanitizeInput(entry?.userId || '');
+      if (!userId || !db.findUserById(userId)) continue;
+      db.markAttendance({
+        eventId: event.id, occurrenceDate, userId,
+        attended: !!entry.attended, markedBy: req.user.userId,
+      });
+      marked += 1;
+    }
+    res.json({ marked, roster: db.getEventRoster(event.id, occurrenceDate) });
+  } catch (err) {
+    console.error('Attendance error:', err);
+    res.status(500).json({ error: 'Failed to record attendance' });
   }
 });
 
