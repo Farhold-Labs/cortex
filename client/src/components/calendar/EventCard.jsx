@@ -48,6 +48,11 @@ const EventCard = ({ eventId, fetchAPI, currentUser, isMobile, waveEncrypted, on
   const [gone, setGone] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // v2.90.0 — answers are per occurrence now. A card in a wave references the
+  // SERIES, not a date, so it acts on the event's own date: the only occurrence
+  // a one-off has, and the anchor of a repeating one. Picking a specific week
+  // from a card would need the card to say which week it meant; until it does,
+  // this keeps the card's behaviour identical to before rather than guessing.
   const loadRsvp = useCallback(() => {
     fetchAPI(`/events/${eventId}/rsvp`)
       .then(d => { setCounts(d.counts || null); setMyRsvp(d.userRsvp || null); })
@@ -95,12 +100,14 @@ const EventCard = ({ eventId, fetchAPI, currentUser, isMobile, waveEncrypted, on
   const sendRsvp = async (status) => {
     setBusy(true);
     try {
+      const date = event?.eventDate;
       if (myRsvp === status) {
-        await fetchAPI(`/events/${eventId}/rsvp`, { method: 'DELETE' });
+        await fetchAPI(`/events/${eventId}/rsvp?date=${encodeURIComponent(date)}`, { method: 'DELETE' });
         setMyRsvp(null);
       } else {
-        await fetchAPI(`/events/${eventId}/rsvp`, { method: 'POST', body: { status } });
+        const result = await fetchAPI(`/events/${eventId}/rsvp`, { method: 'POST', body: { status, date } });
         setMyRsvp(status);
+        if (result?.waitlisted) showToast?.('That event is full — you are on the waiting list', 'info');
       }
       loadRsvp();
     } catch (err) {

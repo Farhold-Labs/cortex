@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CATEGORY_COLORS, SCOPE_LABELS, formatEventDate, formatEventTime } from './calendarUtils.js';
+import EventRosterPanel from './EventRosterPanel.jsx';
 
 const RSVP_OPTIONS = [
   { value: 'going',     label: '✓ Going',   color: 'var(--accent-green)' },
@@ -9,6 +10,12 @@ const RSVP_OPTIONS = [
 
 const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, currentUser, onEdit, onDelete }) => {
   const [event, setEvent]       = useState(initialEvent);
+  // v2.90.0 — answers, invitations and attendance all belong to ONE occurrence.
+  // Captured from the event we were opened with, because refetching /events/:id
+  // returns the series row, whose eventDate is the anchor date — reading the
+  // date off `event` after that would silently move every action to week one.
+  const [occurrenceDate] = useState(initialEvent.eventDate);
+  const occQuery = `?date=${encodeURIComponent(occurrenceDate)}`;
   const [rsvps, setRsvps]       = useState([]);
   const [guests, setGuests]     = useState([]);   // public RSVPs (names only)
   const [counts, setCounts]     = useState(null); // members + guests combined
@@ -16,6 +23,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
   const [userRsvp, setUserRsvp] = useState(null);
   const [showRsvps, setShowRsvps] = useState(false);
   const [rsvpLoading, setRsvpLoading] = useState(false);
+  const [waitlisted, setWaitlisted] = useState(false);
 
   useEffect(() => {
     fetchAPI(`/events/${event.id}`)
@@ -26,12 +34,13 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
       })
       .catch(() => {});
     if (event.rsvpEnabled) {
-      fetchAPI(`/events/${event.id}/rsvp`)
+      fetchAPI(`/events/${event.id}/rsvp${occQuery}`)
         .then(data => {
           setRsvps(data.rsvps || []);
           setGuests(data.guests || []);
           setCounts(data.counts || null);
           setUserRsvp(data.userRsvp);
+          setWaitlisted(!!data.userWaitlisted);
         })
         .catch(() => {});
     }
@@ -41,18 +50,29 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
     setRsvpLoading(true);
     try {
       if (userRsvp === status) {
-        await fetchAPI(`/events/${event.id}/rsvp`, { method: 'DELETE' });
+        await fetchAPI(`/events/${event.id}/rsvp${occQuery}`, { method: 'DELETE' });
         setUserRsvp(null);
+        setWaitlisted(false);
       } else {
-        await fetchAPI(`/events/${event.id}/rsvp`, { method: 'POST', body: { status } });
+        const result = await fetchAPI(`/events/${event.id}/rsvp`, {
+          method: 'POST', body: { status, date: occurrenceDate },
+        });
         setUserRsvp(status);
+        setWaitlisted(!!result?.waitlisted);
+        if (result?.waitlisted) {
+          showToast('This event is full — you are on the waiting list', 'info');
+        }
       }
-      const data = await fetchAPI(`/events/${event.id}/rsvp`);
+      const data = await fetchAPI(`/events/${event.id}/rsvp${occQuery}`);
       setRsvps(data.rsvps || []);
       setGuests(data.guests || []);
       setCounts(data.counts || null);
     } catch (err) {
-      showToast(err.message || 'Failed to update RSVP', 'error');
+      // The server closes answers at the deadline; say so rather than "failed".
+      const msg = /closed/i.test(err.message || '')
+        ? 'Responses for this event have closed'
+        : (err.message || 'Failed to update RSVP');
+      showToast(msg, 'error');
     }
     setRsvpLoading(false);
   };
@@ -197,6 +217,28 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
                 </div>
               )}
             </div>
+          )}
+
+          {/* Waiting list (v2.90.0) — said yes, but the room was already full.
+              Worth stating plainly: "going" and "going, seventh in the queue"
+              are very different things to turn up on. */}
+          {waitlisted && (
+            <div style={{
+              marginBottom: '16px', padding: '8px 10px', fontFamily: 'monospace', fontSize: '0.72rem',
+              background: 'var(--bg-base)', border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)',
+            }}>
+              This event is full — you are on the waiting list. You will be told if a place opens up.
+            </div>
+          )}
+
+          {/* Who was asked, what they said, and who turned up (v2.90.0). */}
+          {event.rsvpEnabled && (
+            <EventRosterPanel
+              eventId={event.id}
+              occurrenceDate={occurrenceDate}
+              fetchAPI={fetchAPI}
+              showToast={showToast}
+            />
           )}
 
           {/* Is this wave's calendar public? Shown for wave events only. */}
