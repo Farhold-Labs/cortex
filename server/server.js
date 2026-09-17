@@ -12219,6 +12219,16 @@ app.post('/api/events', authenticateToken, (req, res) => {
         console.error('Event card ping failed:', pingErr.message);
       }
       broadcastToWave(waveId, { type: 'wave_event_created', event });
+
+      // v2.92.0 — followers hear about a new event in their next digest.
+      try {
+        db.enqueueForWaveFollowers({
+          waveId, kind: 'event', refId: event.id, title: event.title,
+          summary: [event.eventDate, event.eventTime, event.location].filter(Boolean).join(' · '),
+        });
+      } catch (qErr) {
+        console.error('[follow] queue event failed:', qErr.message);
+      }
     }
 
     res.status(201).json({ event });
@@ -14490,6 +14500,24 @@ async function handleGuestRsvp(req, res, event, cancelPath) {
     name, email, guestCount, status, cancelTokenHash,
   });
 
+  // v2.92.0 — one identity per address. Ten RSVPs used to mean ten unrelated
+  // guest rows with ten cancel links; now they all hang off one follower, so
+  // unsubscribing once actually stops everything.
+  //
+  // The address is confirmed ONCE, here, rather than never: if this is the
+  // first time we have seen it, the confirmation email below carries the
+  // verification link, and reminders wait until it is clicked.
+  let followerVerifyToken = null;
+  let followerAlreadyVerified = false;   // reported back so the UI can say whether to check email
+  try {
+    const f = db.createOrGetFollower({ name, email });
+    followerVerifyToken = f.verifyToken;
+    followerAlreadyVerified = f.follower.verified;
+    db.linkGuestRsvpToFollower(result.id, f.follower.id);
+  } catch (linkErr) {
+    console.error('[follow] linking RSVP to follower failed:', linkErr.message);
+  }
+
   // Confirmation email is best-effort: an SMTP outage must not fail the RSVP.
   let emailed = false;
   if (!result.updated) {
@@ -14509,6 +14537,13 @@ async function handleGuestRsvp(req, res, event, cancelPath) {
             ``,
             `Can't make it after all? Cancel here:`,
             `${base}${cancelPath}?cancel=${cancelToken}`,
+            followerVerifyToken ? `` : null,
+            followerVerifyToken
+              ? `One more thing — confirm this address so we can send you reminders:`
+              : null,
+            followerVerifyToken
+              ? `${base}${cancelPath}?confirm=${followerVerifyToken}`
+              : null,
           ].filter(Boolean).join('\n'),
         });
         emailed = true;
@@ -14743,6 +14778,144 @@ app.post('/api/public/events/server/:eventId/rsvp', publicRsvpLimiter, async (re
 });
 
 // GET /api/public/events/:slug — the event list for one wave
+// ============ Followers (v2.92.0) ============
+//
+// Someone who wants to hear about a company's events without becoming a Cortex
+// user. No handle, no password, no session, no access to anything private —
+// deliberately not a half-built account.
+//
+// Every response here is uniform on purpose: whether an address is already
+// subscribed, was never subscribed, or has just been created, the caller is
+// told the same thing. Otherwise the endpoint becomes a way to test which
+// addresses are on a company's list.
+
+const FOLLOW_FREQUENCIES = ['immediate', 'daily', 'weekly'];
+const UNIFORM_FOLLOW_REPLY = { ok: true, message: 'Check your email to confirm.' };
+
+function publicFollowBaseUrl(req) {
+  return process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+}
+
+// POST /api/public/follow — ask to be kept up to date with a public wave
+app.post('/api/public/follow', publicRsvpLimiter, async (req, res) => {
+  try {
+    if (!isFeatureEnabled('publicPortal')) return res.status(404).json({ error: 'Not found' });
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const name = sanitizeInput(String(req.body?.name || '').trim()).slice(0, 80) || null;
+    const frequency = FOLLOW_FREQUENCIES.includes(req.body?.frequency) ? req.body.frequency : 'daily';
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 254) {
+      return res.status(400).json({ error: 'A valid email address is required' });
+    }
+
+    const entry = resolveEventSlug(req.body?.slug, res);
+    if (!entry) return;
+
+    // Per-address ceiling as well as the per-IP limiter: one address cannot be
+    // used to hammer the mail service from many IPs.
+    if (!consumeRateLimit(`follow:email:${hashEmail(email)}`, 5, 60 * 60 * 1000)) {
+      return res.json(UNIFORM_FOLLOW_REPLY);
+    }
+
+    const { follower, created, verifyToken } = db.createOrGetFollower({ name, email, frequency });
+    db.subscribeFollowerToWave(follower.id, entry.wave_id);
+
+    const base = publicFollowBaseUrl(req);
+    const emailService = getEmailService();
+    if (emailService.isConfigured()) {
+      try {
+        if (created && verifyToken) {
+          // The ONLY message an unconfirmed address ever receives.
+          await emailService.sendEmail({
+            to: email,
+            subject: `Confirm: updates from ${entry.label || entry.title}`,
+            text: [
+              name ? `Hello ${name},` : 'Hello,',
+              ``,
+              `Someone asked for updates from "${entry.label || entry.title}" to be sent to this address.`,
+              `If that was you, confirm here:`,
+              `${base}/events/${entry.slug}?confirm=${verifyToken}`,
+              ``,
+              `If it wasn't you, ignore this message — nothing else will be sent,`,
+              `and the request is discarded after a week.`,
+            ].join('\n'),
+          });
+        } else if (follower.verified) {
+          await emailService.sendEmail({
+            to: email,
+            subject: `You're already following ${entry.label || entry.title}`,
+            text: [
+              `This address is already set up for updates from "${entry.label || entry.title}".`,
+              ``,
+              `Nothing has changed. To stop them, use the unsubscribe link in any`,
+              `update you have received.`,
+            ].join('\n'),
+          });
+        }
+      } catch (mailErr) {
+        console.error('[follow] confirmation email failed:', mailErr.message);
+      }
+    }
+
+    // Same answer either way — see the note above.
+    res.json(UNIFORM_FOLLOW_REPLY);
+  } catch (err) {
+    console.error('Follow error:', err);
+    res.status(500).json({ error: 'Could not sign you up' });
+  }
+});
+
+// POST /api/public/follow/confirm — consume the emailed token
+app.post('/api/public/follow/confirm', publicRsvpLimiter, (req, res) => {
+  try {
+    const token = String(req.body?.token || '');
+    if (!/^[a-f0-9]{48}$/.test(token)) return res.status(400).json({ error: 'Invalid confirmation link' });
+    const follower = db.verifyFollowerByToken(token);
+    // A spent token and a forged one look identical.
+    if (!follower) return res.status(404).json({ error: 'That link is no longer valid' });
+    res.json({ ok: true, frequency: follower.frequency });
+  } catch (err) {
+    console.error('Follow confirm error:', err);
+    res.status(500).json({ error: 'Could not confirm' });
+  }
+});
+
+// GET /api/public/follow/manage?token= — what this address is signed up for
+app.get('/api/public/follow/manage', publicRsvpLimiter, (req, res) => {
+  const token = String(req.query?.token || '');
+  if (!/^[a-f0-9]{48}$/.test(token)) return res.status(400).json({ error: 'Invalid link' });
+  const follower = db.getFollowerByUnsubscribeToken(token);
+  if (!follower) return res.status(404).json({ error: 'That link is no longer valid' });
+  res.json({
+    name: follower.name,
+    frequency: follower.frequency,
+    following: db.getFollowerSubscriptions(follower.id).map(w => w.title),
+  });
+});
+
+// POST /api/public/follow/frequency — how often, without an account
+app.post('/api/public/follow/frequency', publicRsvpLimiter, (req, res) => {
+  const token = String(req.body?.token || '');
+  const frequency = req.body?.frequency;
+  if (!/^[a-f0-9]{48}$/.test(token)) return res.status(400).json({ error: 'Invalid link' });
+  if (!FOLLOW_FREQUENCIES.includes(frequency)) {
+    return res.status(400).json({ error: `frequency must be one of: ${FOLLOW_FREQUENCIES.join(', ')}` });
+  }
+  if (!db.setFollowerFrequencyByToken(token, frequency)) {
+    return res.status(404).json({ error: 'That link is no longer valid' });
+  }
+  res.json({ ok: true, frequency });
+});
+
+// POST /api/public/follow/unsubscribe — one link stops all of it
+app.post('/api/public/follow/unsubscribe', publicRsvpLimiter, (req, res) => {
+  const token = String(req.body?.token || '');
+  if (!/^[a-f0-9]{48}$/.test(token)) return res.status(400).json({ error: 'Invalid link' });
+  // Uniform: already-unsubscribed and never-subscribed answer the same.
+  db.deleteFollowerByUnsubscribeToken(token);
+  res.json({ ok: true, message: 'You have been unsubscribed.' });
+});
+
 app.get('/api/public/events/:slug', (req, res) => {
   try {
     if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')) {
@@ -23171,10 +23344,39 @@ async function sendEmailNotificationIfOffline(userId, type, emailData) {
 }
 
 // Create notifications for a new ping
+/**
+ * Queue a new post for the email-only followers of a public wave (v2.92.0).
+ *
+ * Only waves actually published to the portal, and never encrypted content —
+ * a follower has no keys and no account, so there is nothing to decrypt with
+ * and nothing that should leave the node in the clear.
+ */
+function queueForFollowers(ping, wave, preview) {
+  try {
+    if (!wave?.id || !preview) return;
+    if (!isFeatureEnabled('publicPortal')) return;
+    const portal = db.getPortalWaveByWaveId ? db.getPortalWaveByWaveId(wave.id) : null;
+    if (!portal) return;
+    db.enqueueForWaveFollowers({
+      waveId: wave.id,
+      kind: 'announcement',
+      refId: ping.id,
+      title: wave.title,
+      summary: preview.slice(0, 200),
+    });
+  } catch (err) {
+    console.error('[follow] queue announcement failed:', err.message);
+  }
+}
+
 function createPingNotifications(ping, wave, author) {
   const notificationsToSend = [];
   const isEncrypted = !!(ping.encrypted || ping.nonce);
   const contentPreview = isEncrypted ? '[E2E encrypted]' : ping.content.replace(/<[^>]*>/g, '').substring(0, 100);
+
+  // v2.92.0 — email-only followers of a public wave. Hooked here rather than at
+  // each posting route, because there are four of those and they drift.
+  queueForFollowers(ping, wave, isEncrypted ? null : contentPreview);
   // For bot posts, owner_user_id is used only as a FK reference — not the real author
   const isBot = !!(ping.botId || ping.isBot || ping.bot_id);
 
@@ -23978,6 +24180,10 @@ server.listen(PORT, BIND_HOST, () => {
           if (win.key === '1day' || win.key === '1hour') {
             for (const guest of db.getGuestRsvpsForReminder(event.id)) {
               if (db.wasGuestReminderSent(event.id, guest.id, win.key)) continue;
+              // v2.92.0 — an address linked to an UNCONFIRMED follower gets
+              // nothing. Rows predating v2.92.0 have no follower_id and are
+              // left exactly as they were, so nobody's existing reminders stop.
+              if (guest.follower_id && !db.isFollowerVerified(guest.follower_id)) continue;
               try {
                 const emailService = getEmailService();
                 if (!emailService.isConfigured()) break;   // no SMTP: don't mark as sent
@@ -24017,6 +24223,97 @@ server.listen(PORT, BIND_HOST, () => {
   }
 
   setInterval(processEventReminders, REMINDER_CHECK_INTERVAL);
+
+  // ============ Follower digests (v2.92.0) ============
+  //
+  // One queue, one sweep, and the frequency decides how long an item waits.
+  // Crucially, EVERY frequency batches — "immediate" means "in the next sweep",
+  // not "one email per item". Posting ten events in an evening is one email to
+  // each follower whatever they chose, which is the whole point.
+  //
+  // Reminders are deliberately NOT part of this. "Your event is in an hour"
+  // cannot wait for a daily digest, so per-event reminders stay on the existing
+  // immediate path and are only sent to people who actually RSVP'd.
+  const DIGEST_SWEEP_INTERVAL = 5 * 60 * 1000;
+  const DIGEST_WAIT_MS = {
+    immediate: 0,
+    daily: 24 * 60 * 60 * 1000,
+    weekly: 7 * 24 * 60 * 60 * 1000,
+  };
+
+  async function processFollowerDigests() {
+    try {
+      const emailService = getEmailService();
+      if (!emailService.isConfigured()) return;
+
+      const due = db.getFollowersWithPendingDigest();
+      if (!due.length) return;
+      const base = process.env.BASE_URL || getAppBaseUrl();
+
+      for (const row of due) {
+        const wait = DIGEST_WAIT_MS[row.frequency] ?? DIGEST_WAIT_MS.daily;
+        const since = row.last_digest_at ? Date.parse(row.last_digest_at) : 0;
+        if (wait > 0 && since && Date.now() - since < wait) continue;
+
+        const items = db.getPendingDigestItems(row.id);
+        if (!items.length) continue;
+
+        const email = db.getFollowerEmail(row.id);
+        if (!email || String(email).startsWith('[protected:')) continue;
+
+        const unsubToken = db.getFollowerUnsubscribeToken(row.id);
+        const events = items.filter(i => i.kind === 'event');
+        const posts = items.filter(i => i.kind === 'announcement');
+
+        const lines = [];
+        if (row.name) lines.push(`Hello ${row.name},`, '');
+        lines.push(items.length === 1 ? 'There is one update:' : `There are ${items.length} updates:`, '');
+        if (events.length) {
+          lines.push(events.length === 1 ? 'New event:' : `New events (${events.length}):`);
+          for (const e of events) lines.push(`  • ${e.title}${e.summary ? ' — ' + e.summary : ''}`);
+          lines.push('');
+        }
+        if (posts.length) {
+          lines.push(posts.length === 1 ? 'New post:' : `New posts (${posts.length}):`);
+          for (const p of posts) lines.push(`  • ${p.summary || p.title}`);
+          lines.push('');
+        }
+        lines.push(`See everything: ${base}/events`);
+        lines.push('');
+        lines.push('You are receiving this because you asked for updates, and confirmed the address.');
+        if (unsubToken) {
+          lines.push(`Change how often, or stop entirely: ${base}/events?manage=${unsubToken}`);
+        }
+
+        try {
+          await emailService.sendEmail({
+            to: email,
+            subject: items.length === 1
+              ? `Update: ${items[0].title || 'something new'}`
+              : `${items.length} updates`,
+            text: lines.join('\n'),
+          });
+          db.markDigestItemsSent(items.map(i => i.id));
+        } catch (mailErr) {
+          // Left queued deliberately: a failed send should retry next sweep
+          // rather than silently swallow the only notice someone gets.
+          console.error(`[digest] send failed for follower ${row.id}:`, mailErr.message);
+        }
+      }
+    } catch (err) {
+      console.error('[digest] sweep failed:', err.message);
+    }
+  }
+
+  setInterval(processFollowerDigests, DIGEST_SWEEP_INTERVAL);
+  // Sign-ups that were never confirmed are not kept.
+  setInterval(() => {
+    try {
+      const purged = db.purgeUnverifiedFollowers(7);
+      if (purged) console.log(`🧹 Purged ${purged} unconfirmed follower sign-up(s)`);
+    } catch (err) { console.error('[follow] purge failed:', err.message); }
+  }, 6 * 60 * 60 * 1000);
+  console.log('📬 Follower digest sweep enabled (every 5 min)');
   console.log('📅 Calendar reminder job enabled (checking every 5 min)');
 
   // Probe the mail server once, in the background (v2.75.1). "Email service

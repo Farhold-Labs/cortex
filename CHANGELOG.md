@@ -5,6 +5,29 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.92.0] - 2026-09-17
+
+### Added
+
+- **Anyone can follow a public event page by email, without creating an account.** A visitor to `/events/<slug>` can now ask to be kept up to date — an address, optionally a name, and how often they want to hear. No handle, no password, no session: deliberately not a half-built account, and no access to anything that was not already public.
+  - **Ten events posted in one evening is one email, not ten.** Everything queues, and a sweep drains the queue into a single message. This holds for *every* frequency — "as things happen" means "in the next sweep, batched", so a burst of posts can never turn into a burst of mail.
+  - Frequency is the follower's choice — **once a day by default**, with as-things-happen and once-a-week available, changeable later from a link in any email without logging in to anything.
+  - **Double opt-in.** Signing up sends exactly one email, containing a confirmation link, and nothing else is ever sent until it is clicked. An unconfirmed address is not even queued, so confirming cannot release a backlog. Unconfirmed sign-ups are discarded after a week.
+    - Guest RSVP has always recorded an address without proving ownership, which is defensible for a single event with a cancel link in every message. An open-ended subscription is not: mailing an unverified address indefinitely is how a sending domain's reputation dies, and how Cortex becomes a way to sign a stranger up for post.
+  - **One identity per address, and one link that stops everything.** Ten RSVPs used to mean ten unrelated guest records with ten separate cancel links; they now hang off a single follower, so unsubscribing once genuinely ends it. The unsubscribe link is stable rather than rotated, because people unsubscribe from whichever email they still have, months later, and a dead unsubscribe link is how a sender earns complaints.
+  - Addresses are encrypted at rest with a hash for lookup, matching how guest RSVP emails are already held. Unsubscribing **deletes** the record rather than flagging it — an address that asked to be forgotten should not sit in the table.
+  - Every response from the sign-up endpoint is identical whether the address is new, already subscribed, or invalid, so the form cannot be used to test which addresses are on a company's list.
+
+### Changed
+
+- **Guest RSVP now confirms the address once.** The existing confirmation email carries the verification link, and event reminders wait until it is clicked. Records created before this release have no follower attached and are untouched, so nobody's existing reminders stop.
+
+### Technical
+
+- Reminders are deliberately **not** part of the digest. "Your event is in an hour" cannot wait for a daily batch, so per-event reminders stay on the immediate path and go only to people who actually RSVP'd.
+- Followers are queued only for waves actually published to the portal, and encrypted content is never queued — a follower has no keys and no account.
+- The queue holds one row per follower per item, so a digest is a query rather than a recomputation and an item can never be sent twice. A failed send leaves items queued to retry rather than silently swallowing the only notice someone gets.
+
 ## [2.91.0] - 2026-09-17
 
 ### Added
