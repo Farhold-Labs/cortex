@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.93.0] - 2026-09-17
+
+### Added
+
+- **Links in an event's description are now clickable.** A ticket link pasted into a description rendered as text to be retyped by hand — on a public page where the whole point is for someone to go and buy a ticket. They are now links, on the public event pages, in the in-app event detail, and on the event card in a wave.
+  - Only explicit `http://` and `https://` addresses are linked. Bare domains are deliberately left alone, because matching them turns "Sat." and "e.g." into links and the cure is worse than the disease.
+  - Trailing punctuation stays out of the link, so "tickets at https://example.com/show." links the address and leaves the full stop behind. Brackets are balanced rather than blindly trimmed, so a Wikipedia-style `..._(opera)` URL survives intact.
+  - Links open in a new tab with `noopener`, and clicking one inside an event card no longer also opens the event behind it.
+
+### Fixed
+
+- **Line breaks in an event description no longer collapse inside the app.** The public pages have always preserved them; the in-app event detail did not, so the same description read as one run-on block.
+
+### Technical
+
+- The linkifier returns text/link *segments* and the component builds React elements from them, so no HTML string is ever generated and there is nothing for markup to be smuggled into. Only a string already matched against an `http(s)` pattern can become an `href`, which is what makes `javascript:` and `data:` unreachable rather than filtered.
+
 ## [2.92.2] - 2026-09-17
 
 ### Fixed

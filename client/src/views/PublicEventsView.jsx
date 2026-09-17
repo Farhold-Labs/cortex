@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import FollowBox from '../components/public/FollowBox.jsx';
+import LinkedText from '../components/ui/LinkedText.jsx';
 import { API_URL } from '../config/constants.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
 
@@ -375,7 +376,7 @@ const EventDetail = ({ slug, eventId, onBack, navigate }) => {
           <div style={{
             color: 'var(--text-secondary, #b8ccb8)', lineHeight: 1.6,
             whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          }}>{ev.description}</div>
+          }}><LinkedText text={ev.description} /></div>
         )}
 
         {ev.recurrence && (
