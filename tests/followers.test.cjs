@@ -49,6 +49,14 @@ test('followers: double opt-in, batching, and one unsubscribe', async (t) => {
     db.db.prepare(`INSERT INTO portal_waves (wave_id, slug, label, events_enabled, display_order, added_at)
                    VALUES (?, ?, ?, 1, 0, ?)`)
       .run(wave.id, 'pmp', 'Potter McKean Players', new Date().toISOString());
+
+    // A portal wave used purely for announcements — events switched OFF. This is
+    // the shape that used to 404 on follow, because the gate was the events-page
+    // gate. It is also exactly what someone on /portal wants to follow.
+    const notices = db.createWave({ title: 'Notices', createdBy: 'director', privacy: 'public' });
+    db.db.prepare(`INSERT INTO portal_waves (wave_id, slug, label, events_enabled, display_order, added_at)
+                   VALUES (?, ?, ?, 0, 1, ?)`)
+      .run(notices.id, 'notices', 'Notices', new Date().toISOString());
     db.db.close();
 
     fs.appendFileSync(
@@ -111,15 +119,27 @@ test('followers: double opt-in, batching, and one unsubscribe', async (t) => {
       assert.equal((await post('/api/public/follow', { email: 'x@example.test', slug: 'nope' })).status, 404);
     });
 
+    await t.test('a portal wave with events OFF can still be followed (v2.92.1)', async () => {
+      // The /portal page offers no events, but "tell me when you post" is the
+      // whole reason someone is standing there.
+      const res = await post('/api/public/follow', { email: 'reader@example.test', slug: 'notices' });
+      assert.equal(res.status, 200);
+      assert.equal(peek().rows.length, 2, 'a second follower was recorded');
+
+      // And the events-page gate is unchanged: its own endpoint still 404s.
+      const evRes = await fetch(base + '/api/public/events/notices');
+      assert.equal(evRes.status, 404, 'events are still switched off for that wave');
+    });
+
     await t.test('a bad address is rejected', async () => {
       assert.equal((await post('/api/public/follow', { email: 'not-an-email', slug: 'pmp' })).status, 400);
-      assert.equal(peek().rows.length, 1, 'and nothing was stored');
+      assert.equal(peek().rows.length, 2, 'and nothing new was stored');
     });
 
     await t.test('signing up twice does not create a second identity', async () => {
       const res = await post('/api/public/follow', { email: 'watcher@example.test', slug: 'pmp' });
       assert.equal(res.status, 200);
-      assert.equal(peek().rows.length, 1, 'one address, one record, one unsubscribe link');
+      assert.equal(peek().rows.length, 2, 'one address, one record, one unsubscribe link');
     });
 
     await t.test('an UNCONFIRMED follower is queued nothing at all', async () => {
@@ -150,7 +170,9 @@ test('followers: double opt-in, batching, and one unsubscribe', async (t) => {
     await t.test('ten items posted in one evening queue ten rows, not ten emails', async () => {
       // Confirm the follower directly, since the raw token never leaves the mail.
       const w = new Database(dbPath);
-      w.prepare("UPDATE followers SET verified_at = ?, verify_token_hash = NULL")
+      // Only the follower under test — a blanket update would also confirm the
+      // announcements-only follower and muddy the later assertions.
+      w.prepare("UPDATE followers SET verified_at = ?, verify_token_hash = NULL WHERE name = 'Watcher'")
         .run(new Date().toISOString());
       w.close();
 
@@ -170,9 +192,13 @@ test('followers: double opt-in, batching, and one unsubscribe', async (t) => {
 
     await t.test('the unsubscribe token is reproducible, so old emails keep working', async () => {
       const d = new Database(dbPath, { readonly: true });
-      const id = d.prepare('SELECT id FROM followers').get().id;
+      // Target the confirmed follower specifically — there is also an
+      // announcements-only follower from the /portal case above.
+      const id = d.prepare('SELECT id FROM followers WHERE verified_at IS NOT NULL').get().id;
       const enc = d.prepare('SELECT unsubscribe_token_enc e FROM followers WHERE id = ?').get(id).e;
+      const before = d.prepare('SELECT COUNT(*) c FROM followers').get().c;
       d.close();
+      assert.equal(before, 2);
       assert.ok(enc, 'stored encrypted rather than discarded');
 
       const { DatabaseSQLite } = await import('../server/database-sqlite.js');
@@ -183,8 +209,10 @@ test('followers: double opt-in, batching, and one unsubscribe', async (t) => {
       // And it actually works, and is uniform about it.
       const res = await post('/api/public/follow/unsubscribe', { token });
       assert.equal(res.status, 200);
-      assert.equal(rw.db.prepare('SELECT COUNT(*) c FROM followers').get().c, 0,
+      assert.equal(rw.db.prepare('SELECT COUNT(*) c FROM followers').get().c, before - 1,
         'the record goes — an address that asked to be forgotten is not kept');
+      assert.equal(rw.db.prepare('SELECT COUNT(*) c FROM followers WHERE verified_at IS NOT NULL').get().c, 0,
+        'and it was the right one');
       rw.db.close();
 
       // Unsubscribing twice answers the same, so the endpoint cannot be used to
