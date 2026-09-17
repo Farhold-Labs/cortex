@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.92.2] - 2026-09-17
+
+### Fixed
+
+- **Following a second page before confirming sent no email, while the page said to check your inbox.** Reported from a real sign-up: two waves followed with one address, two "check your email" messages, one email. The subscription was recorded correctly and the single confirmation did cover both — but from the outside it looked broken.
+  - A repeat sign-up from an unconfirmed address now **resends the same confirmation link**. Deliberately the same one rather than a fresh one: rotating it would quietly kill the link in the email they already have, which is worse than the problem being fixed. The existing per-address rate limit still applies.
+  - The confirmation message no longer claims an email was sent when none was. It now reads "You're on the list. If this address isn't confirmed yet, check your email for the link" — true whether the address is new, already pending, or already confirmed, so it still gives nothing away about which.
+- **The sign-up form no longer has to be retyped for each page followed.** The address and name are remembered in the browser and prefilled, and the box mentions that one confirmation covers everything you follow. Stored locally only — it never leaves the device, and the server still requires the address on every request.
+
 ## [2.92.1] - 2026-09-17
 
 ### Fixed
