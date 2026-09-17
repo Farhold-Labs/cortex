@@ -2591,6 +2591,11 @@ export class DatabaseSQLite {
           -- send an unproven address.
           verified_at            TEXT,
           verify_token_hash      TEXT UNIQUE,
+          -- Stored encrypted as well as hashed so a repeat sign-up can RESEND
+          -- the same link. Rotating it instead would quietly kill the link in
+          -- the email they already have, which is worse than the problem.
+          verify_token_enc       TEXT,
+          verify_token_iv        TEXT,
           -- One link, in every email, that stops all of it.
           --
           -- Hashed for lookup AND stored encrypted, because unlike a
@@ -2644,6 +2649,14 @@ export class DatabaseSQLite {
     // and adding columns to a guarded CREATE TABLE does nothing for it — so the
     // columns get their own migration, the same as any other added column.
     const followerCols = this.db.prepare(`PRAGMA table_info(followers)`).all();
+    if (followerCols.length && !followerCols.some(c => c.name === 'verify_token_enc')) {
+      console.log('📝 Adding resendable verify token to followers (v2.92.2)...');
+      this.db.exec(`
+        ALTER TABLE followers ADD COLUMN verify_token_enc TEXT;
+        ALTER TABLE followers ADD COLUMN verify_token_iv  TEXT;
+      `);
+      console.log('✅ followers: verify_token_enc/iv added');
+    }
     if (followerCols.length && !followerCols.some(c => c.name === 'unsubscribe_token_enc')) {
       console.log('📝 Adding recoverable unsubscribe token to followers (v2.92.0)...');
       this.db.exec(`
@@ -11486,7 +11499,18 @@ export class DatabaseSQLite {
       if (name && !existing.name) {
         this.db.prepare('UPDATE followers SET name = ?, updated_at = ? WHERE id = ?').run(name, now, existing.id);
       }
-      return { follower: this.rowToFollower(existing), created: false, verifyToken: null };
+      // Still unconfirmed? Hand the SAME pending token back so the caller can
+      // resend it. Someone signing up a second time has usually lost the first
+      // email, and telling them to check their inbox while sending nothing is
+      // how they conclude the thing is broken.
+      const pending = (!existing.verified_at && existing.verify_token_enc)
+        ? decryptEmail(existing.verify_token_enc, existing.verify_token_iv)
+        : null;
+      return {
+        follower: this.rowToFollower(existing),
+        created: false,
+        verifyToken: (pending && !String(pending).startsWith('[protected:')) ? pending : null,
+      };
     }
 
     const enc = encryptEmail(email);
@@ -11496,14 +11520,17 @@ export class DatabaseSQLite {
     // encryptEmail returns null when EMAIL_ENCRYPTION_KEY is unset. Degrade the
     // same way guest RSVP does rather than throwing: the hash still dedupes, and
     // an instance with no key cannot send mail anyway.
+    const verifyEnc = encryptEmail(verifyToken);
     const unsubEnc = encryptEmail(unsubToken);
     this.db.prepare(`
       INSERT INTO followers (id, name, email_encrypted, email_iv, email_hash,
-        verify_token_hash, unsubscribe_token_hash, unsubscribe_token_enc, unsubscribe_token_iv,
+        verify_token_hash, verify_token_enc, verify_token_iv,
+        unsubscribe_token_hash, unsubscribe_token_enc, unsubscribe_token_iv,
         frequency, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, name || null, enc?.encrypted || null, enc?.iv || null, hash,
       crypto.createHash('sha256').update(verifyToken).digest('hex'),
+      verifyEnc?.encrypted || null, verifyEnc?.iv || null,
       crypto.createHash('sha256').update(unsubToken).digest('hex'),
       unsubEnc?.encrypted || null, unsubEnc?.iv || null,
       ['immediate', 'daily', 'weekly'].includes(frequency) ? frequency : 'daily', now);

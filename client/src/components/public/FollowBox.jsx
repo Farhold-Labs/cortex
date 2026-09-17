@@ -35,8 +35,16 @@ const FollowBox = ({ slug, title }) => {
   const confirmToken = params.get('confirm');
   const manageToken = params.get('manage');
 
-  const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
+  // v2.92.2 — remember the address in this browser so following a second wave
+  // on the same portal is not a retyping exercise. Local only: it never leaves
+  // the device, and the server still requires the address every time.
+  const remembered = (() => {
+    try { return JSON.parse(localStorage.getItem('cortex_follow_me') || 'null') || {}; }
+    catch { return {}; }
+  })();
+
+  const [email, setEmail] = useState(remembered.email || '');
+  const [name, setName] = useState(remembered.name || '');
   const [frequency, setFrequency] = useState('daily');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
@@ -80,9 +88,12 @@ const FollowBox = ({ slug, title }) => {
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { setError(d.error || 'Could not sign you up.'); return; }
+      try {
+        localStorage.setItem('cortex_follow_me', JSON.stringify({ email, name }));
+      } catch { /* private browsing — the form simply will not prefill */ }
       // Deliberately the same message whatever happened server-side, so this
       // form cannot be used to find out whether an address is already on a list.
-      setDone(d.message || 'Check your email to confirm.');
+      setDone(d.message || "You're on the list.");
     } catch {
       setError('Could not reach the server.');
     } finally {
@@ -162,6 +173,7 @@ const FollowBox = ({ slug, title }) => {
       <div style={{ color: 'var(--text-dim, #8aa08a)', fontSize: '0.8rem', marginBottom: 10, lineHeight: 1.5 }}>
         Get an email when {title || 'this page'} posts something new. No account needed —
         just an address, and one link in every email to stop or change it.
+        {remembered.email ? ' You only confirm once, however many of these you follow.' : ''}
       </div>
       <form onSubmit={signUp}>
         <input style={input} type="email" required value={email} placeholder="you@example.com"
