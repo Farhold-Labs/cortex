@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CATEGORY_COLORS, SCOPE_LABELS, formatEventDate, formatEventTime } from './calendarUtils.js';
 import EventRosterPanel from './EventRosterPanel.jsx';
+import LinkedText from '../ui/LinkedText.jsx';
 
 const RSVP_OPTIONS = [
   { value: 'going',     label: '✓ Going',   color: 'var(--accent-green)' },
@@ -155,8 +156,14 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
 
           {/* Description */}
           {event.description && (
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 16px', lineHeight: 1.5 }}>
-              {event.description}
+            <p style={{
+              color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 16px', lineHeight: 1.5,
+              // v2.93.0 — the public page has always preserved line breaks and
+              // this did not, so the same description read as one run-on block
+              // inside the app.
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              <LinkedText text={event.description} />
             </p>
           )}
 
