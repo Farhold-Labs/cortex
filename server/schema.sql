@@ -1244,7 +1244,7 @@ CREATE TABLE IF NOT EXISTS followers (
           last_digest_at         TEXT,
           created_at             TEXT NOT NULL,
           updated_at             TEXT
-        , unsubscribe_token_enc TEXT, unsubscribe_token_iv  TEXT);
+        , unsubscribe_token_enc TEXT, unsubscribe_token_iv  TEXT, verify_token_enc TEXT, verify_token_iv  TEXT);
 CREATE INDEX IF NOT EXISTS idx_followers_verified ON followers(verified_at);
 
 CREATE TABLE IF NOT EXISTS follower_subscriptions (

@@ -14809,7 +14809,13 @@ function resolveFollowSlug(slug, res) {
 }
 
 const FOLLOW_FREQUENCIES = ['immediate', 'daily', 'weekly'];
-const UNIFORM_FOLLOW_REPLY = { ok: true, message: 'Check your email to confirm.' };
+// Deliberately true whatever happened — new sign-up, repeat while unconfirmed,
+// or an address already confirmed — so the endpoint cannot be used to work out
+// which. "Check your email" alone was a lie in the already-confirmed case.
+const UNIFORM_FOLLOW_REPLY = {
+  ok: true,
+  message: "You're on the list. If this address isn't confirmed yet, check your email for the link.",
+};
 
 function publicFollowBaseUrl(req) {
   return process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
@@ -14847,7 +14853,11 @@ app.post('/api/public/follow', publicRsvpLimiter, async (req, res) => {
     const emailService = getEmailService();
     if (emailService.isConfigured()) {
       try {
-        if (created && verifyToken) {
+        // `verifyToken` is present for a NEW sign-up and for a repeat one that
+        // is still unconfirmed — in the second case it is the SAME link, resent.
+        // Following a second wave before confirming used to send nothing at all
+        // while the page said "check your email", which reads as broken.
+        if (verifyToken) {
           // The ONLY message an unconfirmed address ever receives.
           await emailService.sendEmail({
             to: email,
