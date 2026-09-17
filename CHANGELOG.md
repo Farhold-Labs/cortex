@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.90.1] - 2026-09-16
+
+### Fixed
+
+- **An event can now be edited from the wave it belongs to.** Opening an event from a wave gave you a read-only view: to correct a time you had to leave, go to the calendar, find the same event and open it again. The original note called the wave "a read/RSVP surface", which sounded reasonable until you were looking straight at an event with the wrong time on it. Edit and delete now appear there, exactly as they do in the calendar.
+- **Wave staff can edit the events they already organise.** v2.90.0 let a wave's admins and moderators invite people, chase non-responders and take the register — but editing stayed creator-only, so they could run an event without being able to fix its start time. Editing and deleting now use the same check as organising it.
+  - The edit and delete buttons follow the server's answer rather than guessing from the event's creator, so what is shown matches what will actually be accepted.
+  - Deleting still asks for confirmation. An event is shared state, and removing one takes everyone else's answers with it.
+  - Editing a server-wide event from inside a wave cannot silently re-scope it to that wave.
+
 ## [2.90.0] - 2026-09-16
 
 ### Added
