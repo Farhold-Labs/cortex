@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.92.1] - 2026-09-17
+
+### Fixed
+
+- **The portal had no way to be kept posted.** v2.92.0 added following to the public *events* pages and missed `/portal` entirely, which offered only "view in Cortex" or "sign in" — so a visitor who simply wanted to be told when something new was posted had nowhere to say so. The sign-up box now appears under each wave on the portal too.
+- **A wave with events switched off could not be followed at all.** The follow endpoint reused the events-page gate, which requires `events_enabled` — so a portal wave used purely for announcements, which is exactly the thing someone standing on `/portal` wants to follow, returned a 404. Following now only requires that the wave is published to the portal and has a slug. The events pages themselves are unchanged and still refuse a wave with events off.
+- The portal's payload now includes each wave's slug. Following is keyed on the slug, and without it the portal had nothing to offer a follow box *with*.
+
+### Technical
+
+- The sign-up box moved to `client/src/components/public/FollowBox.jsx` and is shared by both public views rather than copied into the second one.
+
 ## [2.92.0] - 2026-09-17
 
 ### Added
