@@ -14409,6 +14409,10 @@ app.get('/api/public/portal', (req, res) => {
       title: w.label || w.title,
       topic: w.topic || null,
       displayOrder: w.display_order,
+      // v2.92.1 — the portal could not offer a "keep me posted" box without
+      // this: following is keyed by slug, and the payload never carried one.
+      // Null for a portal wave that has no slug, and the box simply is not shown.
+      slug: w.slug || null,
     }))});
   } catch (err) {
     console.error('Public portal list error:', err);
@@ -14789,6 +14793,21 @@ app.post('/api/public/events/server/:eventId/rsvp', publicRsvpLimiter, async (re
 // told the same thing. Otherwise the endpoint becomes a way to test which
 // addresses are on a company's list.
 
+/**
+ * A wave may be followed when it is in the portal and has a slug. Same uniform
+ * 404 as everywhere else on these routes — unknown slug and not-in-portal are
+ * indistinguishable, so the endpoint cannot be used to probe for waves.
+ */
+function resolveFollowSlug(slug, res) {
+  const clean = sanitizeInput(String(slug || '')).toLowerCase();
+  const entry = clean ? db.getPortalWaveBySlug(clean) : null;
+  if (!entry) {
+    res.status(404).json({ error: 'Not found' });
+    return null;
+  }
+  return entry;
+}
+
 const FOLLOW_FREQUENCIES = ['immediate', 'daily', 'weekly'];
 const UNIFORM_FOLLOW_REPLY = { ok: true, message: 'Check your email to confirm.' };
 
@@ -14808,7 +14827,11 @@ app.post('/api/public/follow', publicRsvpLimiter, async (req, res) => {
       return res.status(400).json({ error: 'A valid email address is required' });
     }
 
-    const entry = resolveEventSlug(req.body?.slug, res);
+    // Deliberately NOT resolveEventSlug: that gate requires events_enabled,
+    // because it guards the events pages. Following is about the wave being
+    // published to the portal at all — a wave used purely for announcements is
+    // precisely what someone wants to follow, and would have 404'd here.
+    const entry = resolveFollowSlug(req.body?.slug, res);
     if (!entry) return;
 
     // Per-address ceiling as well as the per-IP limiter: one address cannot be

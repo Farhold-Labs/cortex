@@ -3,6 +3,8 @@ import { API_URL } from '../config/constants.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
 import { T } from '../config/terminology.js';
 
+import FollowBox from '../components/public/FollowBox.jsx';
+
 const isEmbed = new URLSearchParams(window.location.search).get('embed') === '1';
 const preselectedWave = new URLSearchParams(window.location.search).get('wave');
 
@@ -128,6 +130,12 @@ const WavePane = ({ wave, appUrl }) => {
       ) : (
         messages.map(msg => <PortalMessage key={msg.id} msg={msg} waveId={wave.waveId} />)
       )}
+      {/* v2.92.1 — the portal previously offered only "view in Cortex" or
+          "sign in", so a visitor who simply wanted to be told about new posts
+          had nowhere to say so. Shown only when the wave has a slug, which is
+          what following is keyed on. */}
+      {wave.slug && <FollowBox slug={wave.slug} title={wave.title} />}
+
       {hasMore && (
         <div style={{ textAlign: 'center', padding: '12px 0' }}>
           <button
