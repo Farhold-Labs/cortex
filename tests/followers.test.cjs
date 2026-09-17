@@ -142,6 +142,27 @@ test('followers: double opt-in, batching, and one unsubscribe', async (t) => {
       assert.equal(peek().rows.length, 2, 'one address, one record, one unsubscribe link');
     });
 
+    await t.test('a repeat sign-up while unconfirmed reuses the SAME link (v2.92.2)', async () => {
+      const d = new Database(dbPath, { readonly: true });
+      const before = d.prepare("SELECT verify_token_hash h FROM followers WHERE name = 'Watcher'").get().h;
+      d.close();
+      assert.ok(before, 'a pending token exists');
+
+      // Following a second wave with the same address, still unconfirmed.
+      const res = await post('/api/public/follow', { email: 'watcher@example.test', slug: 'notices' });
+      assert.equal(res.status, 200);
+
+      const d2 = new Database(dbPath, { readonly: true });
+      const after = d2.prepare("SELECT verify_token_hash h FROM followers WHERE name = 'Watcher'").get().h;
+      const subs = d2.prepare(`SELECT COUNT(*) c FROM follower_subscriptions s
+        JOIN followers f ON f.id = s.follower_id WHERE f.name = 'Watcher'`).get().c;
+      d2.close();
+
+      // Rotating would silently kill the link in the email they already have.
+      assert.equal(after, before, 'the pending link is reused, not replaced');
+      assert.equal(subs, 2, 'and the second wave was actually subscribed');
+    });
+
     await t.test('an UNCONFIRMED follower is queued nothing at all', async () => {
       // Post an event to the followed wave while the address is unconfirmed.
       const login = await (await post('/api/auth/login', { handle: 'director', password: 'Followers123!' })).json();
