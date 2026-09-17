@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import LinkedText from '../ui/LinkedText.jsx';
 
 // An event card in the wave timeline (v2.72.0).
 //
@@ -167,7 +168,7 @@ const EventCard = ({ eventId, fetchAPI, currentUser, isMobile, waveEncrypted, on
             color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: 6, lineHeight: 1.45,
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
           }}>
-            {event.description}
+            <LinkedText text={event.description} />
           </div>
         )}
 
