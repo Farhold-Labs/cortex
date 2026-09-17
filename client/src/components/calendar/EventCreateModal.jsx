@@ -58,10 +58,24 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
   const [rsvpDeadline,       setRsvpDeadline]       = useState(editEvent?.rsvpDeadline?.slice(0, 10) || '');
   const [capacity,           setCapacity]           = useState(
     editEvent?.capacity != null ? String(editEvent.capacity) : '');
+  // v2.91.0 — whether to tell people the event changed. Explicitly null until
+  // touched, so an untouched box follows whether anything material moved rather
+  // than whatever it happened to be initialised to.
+  const [notifyAttendees, setNotifyAttendees] = useState(null);
   const [saving,             setSaving]             = useState(false);
 
   const canServerScope = currentUser?.role === 'admin' || currentUser?.role === 'moderator';
   const needsEndDate = recurrence && recurrence !== 'yearly';
+
+  // The same four fields the server treats as material. Anything else — a typo
+  // in the description, a category change — is not worth interrupting people for.
+  const materialChange = !!editEvent && (
+    eventDate !== (editEvent.eventDate || '') ||
+    eventTime !== (editEvent.eventTime || '') ||
+    eventEndTime !== (editEvent.eventEndTime || '') ||
+    location !== (editEvent.location || '')
+  );
+  const willNotify = notifyAttendees === null ? materialChange : notifyAttendees;
 
   const handleSave = async () => {
     if (!title.trim()) { showToast('Title is required', 'error'); return; }
@@ -90,7 +104,7 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
       };
       let event;
       if (editEvent) {
-        const data = await fetchAPI(`/events/${editEvent.id}`, { method: 'PUT', body });
+        const data = await fetchAPI(`/events/${editEvent.id}`, { method: 'PUT', body: { ...body, notifyAttendees: willNotify } });
         event = data.event;
         showToast('Event updated', 'success');
       } else {
@@ -230,6 +244,28 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
               <input type="checkbox" checked={rsvpEnabled} onChange={e => setRsvpEnabled(e.target.checked)} />
               <span style={{ ...labelStyle, margin: 0 }}>ENABLE RSVP</span>
             </label>
+
+            {/* v2.91.0 — only when editing: creating an event notifies nobody,
+                because nobody has been invited to it yet. */}
+            {editEvent && (
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '12px',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={willNotify}
+                  onChange={e => setNotifyAttendees(e.target.checked)}
+                />
+                <span style={{ ...labelStyle, margin: 0 }}>
+                  TELL PEOPLE WHO ARE GOING
+                  <span style={{ display: 'block', color: 'var(--text-muted)', letterSpacing: 0, marginTop: '2px' }}>
+                    {materialChange
+                      ? 'the time or place moved, so this is on by default'
+                      : 'nothing that affects anyone’s plans has changed'}
+                  </span>
+                </span>
+              </label>
+            )}
 
             {rsvpEnabled && (
               <div style={{ display: 'flex', gap: '10px', marginTop: '12px', flexWrap: 'wrap' }}>
