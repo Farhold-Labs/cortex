@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.91.0] - 2026-09-17
+
+### Added
+
+- **Changing an event now tells the people it affects.** Editing one previously broadcast the change over the live connection and did nothing else, so it reached only whoever happened to be connected and looking at that wave at that moment. Move a rehearsal from 7pm to 6pm and the people most affected — the ones who had already answered and stopped thinking about it — were told nothing at all. They found out next time they opened the event, if they did.
+  - Notifications go to everyone with a **stake** in the event: invited to it, or having answered. Not everyone who can see the wave, and not the person making the edit.
+  - In-app and push immediately; email follows the existing rule of reaching only people who are offline, since anyone looking at the app has already been told in it. Per-wave mutes still apply.
+  - The message says what actually moved — "moved to 2026-10-03", "start time now 18:00", "now at Studio 2" — rather than a bare "an event changed".
+  - **Only material changes count**: the date, start time, end time or location. Fixing a typo in the description interrupts nobody, because a notification people learn to ignore is worse than none.
+  - The edit form has a **TELL PEOPLE WHO ARE GOING** checkbox, on by default exactly when something material moved, and off otherwise. Tick it to announce a change that would not normally qualify, or untick it to correct a mistake quietly.
+  - A client that says nothing at all falls back to notifying when something material moved. The alternative default is silence, which is the behaviour being fixed.
+
 ## [2.90.1] - 2026-09-16
 
 ### Fixed

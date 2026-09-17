@@ -12650,6 +12650,22 @@ export class DatabaseSQLite {
     `).run(eventId, occurrenceDate, userId, attended ? 1 : 0, markedBy, new Date().toISOString());
   }
 
+  /**
+   * Everyone with a stake in this event: invited, or answered, across every
+   * occurrence (v2.91.0). Used when an event changes — the people who need to
+   * know a rehearsal moved are the ones who were asked to it or said they were
+   * coming, not everyone who can see the wave.
+   */
+  getEventStakeholders(eventId) {
+    return this.db.prepare(`
+      SELECT DISTINCT user_id FROM (
+        SELECT user_id FROM event_invites WHERE event_id = ?
+        UNION
+        SELECT user_id FROM event_rsvp   WHERE event_id = ?
+      )
+    `).all(eventId, eventId).map(r => r.user_id);
+  }
+
   /** One person's record across occurrences — "has missed three rehearsals". */
   getUserAttendanceHistory(userId, limit = 50) {
     return this.db.prepare(`

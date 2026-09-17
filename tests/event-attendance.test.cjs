@@ -232,6 +232,72 @@ test('event attendance: invites, chasing, capacity and the register', async (t) 
         { method: 'POST', body: { date: firstDate, entries: [{ userId: 'bob', attended: true }] } })).status, 403);
     });
 
+    await t.test('a material change tells the people with a stake in it (v2.91.0)', async () => {
+      const notesFor = async (who) => {
+        const res = await req('/api/notifications?limit=50', who);
+        const body = await res.json();
+        const list = Array.isArray(body) ? body : (body.notifications || []);
+        return list.filter(n => /^Changed: /.test(n.title || ''));
+      };
+
+      // carol is invited and answered; dave is invited; 'director' is editing.
+      const beforeCarol = (await notesFor('carol')).length;
+      const beforeDirector = (await notesFor('director')).length;
+
+      const res = await req(`/api/events/${workshop.id}`, 'director', {
+        method: 'PUT', body: { eventTime: '18:00', location: 'Studio 2' },
+      });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.deepEqual(body.changed.sort(), ['eventTime', 'location']);
+      assert.ok(body.notified > 0, 'somebody was told');
+
+      const carol = await notesFor('carol');
+      assert.equal(carol.length, beforeCarol + 1, 'carol had answered, so carol is told');
+      assert.match(carol[0].body, /18:00|Studio 2/);
+
+      // The person who made the change does not need telling about it.
+      assert.equal((await notesFor('director')).length, beforeDirector,
+        'the editor is not notified of their own edit');
+    });
+
+    await t.test('a cosmetic change tells nobody', async () => {
+      const before = (await (await req('/api/notifications?limit=50', 'carol')).json());
+      const count = (Array.isArray(before) ? before : before.notifications || [])
+        .filter(n => /^Changed: /.test(n.title || '')).length;
+
+      const res = await req(`/api/events/${workshop.id}`, 'director', {
+        method: 'PUT', body: { description: 'bring comfortable shoes' },
+      });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.deepEqual(body.changed, [], 'description is not a material change');
+      assert.equal(body.notified, 0);
+
+      const after = (await (await req('/api/notifications?limit=50', 'carol')).json());
+      const countAfter = (Array.isArray(after) ? after : after.notifications || [])
+        .filter(n => /^Changed: /.test(n.title || '')).length;
+      assert.equal(countAfter, count, 'no new noise for a typo fix');
+    });
+
+    await t.test('the organiser can suppress the alert for a material change', async () => {
+      const notes = async () => {
+        const body = await (await req('/api/notifications?limit=50', 'carol')).json();
+        return (Array.isArray(body) ? body : body.notifications || [])
+          .filter(n => /^Changed: /.test(n.title || '')).length;
+      };
+      const before = await notes();
+
+      const res = await req(`/api/events/${workshop.id}`, 'director', {
+        method: 'PUT', body: { location: 'Studio 3', notifyAttendees: false },
+      });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.deepEqual(body.changed, ['location'], 'it did change');
+      assert.equal(body.notified, 0, 'but nobody was told, because it was asked not to');
+      assert.equal(await notes(), before);
+    });
+
     await t.test('wave staff can edit an event they did not create (v2.90.1)', async () => {
       // bob is nobody here yet, so this must fail first — otherwise the
       // promotion below would prove nothing.
