@@ -2562,6 +2562,106 @@ export class DatabaseSQLite {
       console.log('✅ event_invites table created');
     }
 
+    // ===== v2.92.0 — followers: email-only subscribers with no account =====
+    //
+    // Someone who wants to hear about a company's events without becoming a
+    // Cortex user. Deliberately NOT a half-built user: no handle, no password,
+    // no session, no access to anything private. Just a confirmed address, what
+    // it follows, and how often it wants to hear.
+    //
+    // Everything is DOUBLE OPT-IN. Guest RSVP (v2.68.0) records an address
+    // immediately without proving ownership, which is defensible for a single
+    // event with a cancel link in every mail. An open-ended subscription is
+    // different: mailing an unverified address indefinitely is how a domain's
+    // sending reputation dies, and how Cortex becomes a way to sign a stranger
+    // up for post.
+    const followersExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='followers'`
+    ).get();
+    if (!followersExist) {
+      console.log('📝 Creating followers tables (v2.92.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS followers (
+          id                     TEXT PRIMARY KEY,
+          name                   TEXT,
+          email_encrypted        TEXT,
+          email_iv               TEXT,
+          email_hash             TEXT NOT NULL UNIQUE,
+          -- NULL until they click the link in the one email we are willing to
+          -- send an unproven address.
+          verified_at            TEXT,
+          verify_token_hash      TEXT UNIQUE,
+          -- One link, in every email, that stops all of it.
+          --
+          -- Hashed for lookup AND stored encrypted, because unlike a
+          -- cancel-this-RSVP token it has to be REPRODUCIBLE: people
+          -- unsubscribe from whichever email they still have, months later, and
+          -- a dead unsubscribe link is how a sender earns spam complaints.
+          -- Rotating it per send (what guest reminders do) would break exactly
+          -- that case, so it is encrypted at rest instead of discarded.
+          unsubscribe_token_hash TEXT NOT NULL UNIQUE,
+          unsubscribe_token_enc  TEXT,
+          unsubscribe_token_iv   TEXT,
+          -- 'immediate' still batches: it means "next sweep", not "one email
+          -- per item". Ten events posted in an evening is one email either way.
+          frequency              TEXT NOT NULL DEFAULT 'daily'
+                                   CHECK(frequency IN ('immediate','daily','weekly')),
+          last_digest_at         TEXT,
+          created_at             TEXT NOT NULL,
+          updated_at             TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_followers_verified ON followers(verified_at);
+
+        CREATE TABLE IF NOT EXISTS follower_subscriptions (
+          follower_id TEXT NOT NULL REFERENCES followers(id) ON DELETE CASCADE,
+          wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          created_at  TEXT NOT NULL,
+          PRIMARY KEY (follower_id, wave_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_follower_subs_wave ON follower_subscriptions(wave_id);
+
+        -- What is waiting to go out. One row per follower per item, so a
+        -- digest is a query rather than a recomputation, and an item already
+        -- sent can never be sent twice.
+        CREATE TABLE IF NOT EXISTS follower_digest_queue (
+          id          TEXT PRIMARY KEY,
+          follower_id TEXT NOT NULL REFERENCES followers(id) ON DELETE CASCADE,
+          wave_id     TEXT REFERENCES waves(id) ON DELETE CASCADE,
+          kind        TEXT NOT NULL,
+          ref_id      TEXT,
+          title       TEXT,
+          summary     TEXT,
+          occurred_at TEXT NOT NULL,
+          sent_at     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_digest_pending ON follower_digest_queue(follower_id, sent_at);
+      `);
+      console.log('✅ followers, follower_subscriptions, follower_digest_queue created');
+    }
+
+    // The CREATE TABLE above only runs for a database that has never had the
+    // table. Anything created by an earlier build of v2.92.0 has the old shape,
+    // and adding columns to a guarded CREATE TABLE does nothing for it — so the
+    // columns get their own migration, the same as any other added column.
+    const followerCols = this.db.prepare(`PRAGMA table_info(followers)`).all();
+    if (followerCols.length && !followerCols.some(c => c.name === 'unsubscribe_token_enc')) {
+      console.log('📝 Adding recoverable unsubscribe token to followers (v2.92.0)...');
+      this.db.exec(`
+        ALTER TABLE followers ADD COLUMN unsubscribe_token_enc TEXT;
+        ALTER TABLE followers ADD COLUMN unsubscribe_token_iv  TEXT;
+      `);
+      console.log('✅ followers: unsubscribe_token_enc/iv added');
+    }
+
+    // Tie a guest RSVP to a follower, so ten RSVPs are one person with one
+    // unsubscribe rather than ten unrelated strangers.
+    const guestCols = this.db.prepare(`PRAGMA table_info(event_rsvp_guest)`).all();
+    if (guestCols.length && !guestCols.some(c => c.name === 'follower_id')) {
+      console.log('📝 Linking event_rsvp_guest to followers (v2.92.0)...');
+      this.db.exec(`ALTER TABLE event_rsvp_guest ADD COLUMN follower_id TEXT REFERENCES followers(id) ON DELETE SET NULL;`);
+      console.log('✅ event_rsvp_guest.follower_id added');
+    }
+
     const attendanceExist = this.db.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='event_attendance'`
     ).get();
@@ -11147,6 +11247,16 @@ export class DatabaseSQLite {
 
   // The slug is the public URL, so this is the entry point for every public
   // event request. Only ever returns waves an admin put in the portal.
+  // v2.92.0 — the reverse lookup, for deciding whether a wave is published at
+  // all before queueing anything for its followers.
+  getPortalWaveByWaveId(waveId) {
+    return this.db.prepare(`
+      SELECT pw.*, w.title FROM portal_waves pw
+      JOIN waves w ON w.id = pw.wave_id
+      WHERE pw.wave_id = ?
+    `).get(waveId);
+  }
+
   getPortalWaveBySlug(slug) {
     return this.db.prepare(`
       SELECT pw.*, w.title, w.topic, w.privacy, w.encrypted
@@ -11358,6 +11468,196 @@ export class DatabaseSQLite {
   }
 
   // Moderator-only: the actual attendee list, emails decrypted for display.
+  // ===== Followers (v2.92.0) — email-only subscribers, no account =====
+
+  /**
+   * Find or create by email. A repeat sign-up returns the existing record
+   * rather than stacking duplicates, so someone who signs up twice does not end
+   * up with two unsubscribe links, only one of which works.
+   *
+   * Returns { follower, created, verifyToken }. verifyToken is the RAW token and
+   * is returned exactly once, at creation — only its hash is stored.
+   */
+  createOrGetFollower({ name, email, frequency = 'daily' }) {
+    const hash = hashEmail(email);
+    const now = new Date().toISOString();
+    const existing = this.db.prepare('SELECT * FROM followers WHERE email_hash = ?').get(hash);
+    if (existing) {
+      if (name && !existing.name) {
+        this.db.prepare('UPDATE followers SET name = ?, updated_at = ? WHERE id = ?').run(name, now, existing.id);
+      }
+      return { follower: this.rowToFollower(existing), created: false, verifyToken: null };
+    }
+
+    const enc = encryptEmail(email);
+    const verifyToken = crypto.randomBytes(24).toString('hex');
+    const unsubToken = crypto.randomBytes(24).toString('hex');
+    const id = `flw-${crypto.randomUUID()}`;
+    // encryptEmail returns null when EMAIL_ENCRYPTION_KEY is unset. Degrade the
+    // same way guest RSVP does rather than throwing: the hash still dedupes, and
+    // an instance with no key cannot send mail anyway.
+    const unsubEnc = encryptEmail(unsubToken);
+    this.db.prepare(`
+      INSERT INTO followers (id, name, email_encrypted, email_iv, email_hash,
+        verify_token_hash, unsubscribe_token_hash, unsubscribe_token_enc, unsubscribe_token_iv,
+        frequency, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, name || null, enc?.encrypted || null, enc?.iv || null, hash,
+      crypto.createHash('sha256').update(verifyToken).digest('hex'),
+      crypto.createHash('sha256').update(unsubToken).digest('hex'),
+      unsubEnc?.encrypted || null, unsubEnc?.iv || null,
+      ['immediate', 'daily', 'weekly'].includes(frequency) ? frequency : 'daily', now);
+
+    const row = this.db.prepare('SELECT * FROM followers WHERE id = ?').get(id);
+    return { follower: this.rowToFollower(row), created: true, verifyToken, unsubscribeToken: unsubToken };
+  }
+
+  rowToFollower(row) {
+    if (!row) return null;
+    return {
+      id: row.id,
+      name: row.name || null,
+      verified: !!row.verified_at,
+      verifiedAt: row.verified_at || null,
+      frequency: row.frequency,
+      lastDigestAt: row.last_digest_at || null,
+      createdAt: row.created_at,
+    };
+  }
+
+  /** The stable unsubscribe token, for putting a working link in every email. */
+  isFollowerVerified(followerId) {
+    const row = this.db.prepare('SELECT verified_at FROM followers WHERE id = ?').get(followerId);
+    return !!(row && row.verified_at);
+  }
+
+  getFollowerUnsubscribeToken(followerId) {
+    const row = this.db.prepare(
+      'SELECT unsubscribe_token_enc, unsubscribe_token_iv FROM followers WHERE id = ?'
+    ).get(followerId);
+    if (!row || !row.unsubscribe_token_enc) return null;
+    const token = decryptEmail(row.unsubscribe_token_enc, row.unsubscribe_token_iv);
+    return token && !String(token).startsWith('[protected:') ? token : null;
+  }
+
+  getFollowerEmail(followerId) {
+    const row = this.db.prepare('SELECT email_encrypted, email_iv FROM followers WHERE id = ?').get(followerId);
+    return row ? decryptEmail(row.email_encrypted, row.email_iv) : null;
+  }
+
+  /** Consumes the verification token; returns the follower or null. */
+  verifyFollowerByToken(rawToken) {
+    const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const row = this.db.prepare('SELECT * FROM followers WHERE verify_token_hash = ?').get(hash);
+    if (!row) return null;
+    const now = new Date().toISOString();
+    // Token is single-use: cleared on confirm, so a forwarded email cannot be
+    // replayed and a spent link looks exactly like a forged one.
+    this.db.prepare('UPDATE followers SET verified_at = COALESCE(verified_at, ?), verify_token_hash = NULL, updated_at = ? WHERE id = ?')
+      .run(now, now, row.id);
+    return this.rowToFollower(this.db.prepare('SELECT * FROM followers WHERE id = ?').get(row.id));
+  }
+
+  getFollowerByUnsubscribeToken(rawToken) {
+    const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const row = this.db.prepare('SELECT * FROM followers WHERE unsubscribe_token_hash = ?').get(hash);
+    return row ? this.rowToFollower(row) : null;
+  }
+
+  /** One link stops everything. The record goes rather than being flagged —
+   *  an address that asked to be forgotten should not sit in the table. */
+  deleteFollowerByUnsubscribeToken(rawToken) {
+    const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    return this.db.prepare('DELETE FROM followers WHERE unsubscribe_token_hash = ?').run(hash).changes > 0;
+  }
+
+  setFollowerFrequencyByToken(rawToken, frequency) {
+    if (!['immediate', 'daily', 'weekly'].includes(frequency)) return false;
+    const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    return this.db.prepare('UPDATE followers SET frequency = ?, updated_at = ? WHERE unsubscribe_token_hash = ?')
+      .run(frequency, new Date().toISOString(), hash).changes > 0;
+  }
+
+  subscribeFollowerToWave(followerId, waveId) {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO follower_subscriptions (follower_id, wave_id, created_at) VALUES (?, ?, ?)
+    `).run(followerId, waveId, new Date().toISOString());
+  }
+
+  getFollowerSubscriptions(followerId) {
+    return this.db.prepare(`
+      SELECT s.wave_id, w.title FROM follower_subscriptions s
+      JOIN waves w ON w.id = s.wave_id WHERE s.follower_id = ?
+    `).all(followerId);
+  }
+
+  /**
+   * Fan one new item out to everyone following that wave. Only VERIFIED
+   * followers are queued — an unconfirmed address must never accumulate a
+   * backlog waiting to be sent the moment it confirms.
+   */
+  enqueueForWaveFollowers({ waveId, kind, refId, title, summary }) {
+    const followers = this.db.prepare(`
+      SELECT f.id FROM followers f
+      JOIN follower_subscriptions s ON s.follower_id = f.id
+      WHERE s.wave_id = ? AND f.verified_at IS NOT NULL
+    `).all(waveId);
+    if (!followers.length) return 0;
+
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      INSERT INTO follower_digest_queue (id, follower_id, wave_id, kind, ref_id, title, summary, occurred_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const run = this.db.transaction(() => {
+      for (const f of followers) {
+        stmt.run(`dq-${crypto.randomUUID()}`, f.id, waveId, kind, refId || null, title || null, summary || null, now);
+      }
+    });
+    run();
+    return followers.length;
+  }
+
+  /** Verified followers with something waiting. The caller decides who is due. */
+  getFollowersWithPendingDigest() {
+    return this.db.prepare(`
+      SELECT f.*, COUNT(q.id) AS pending
+      FROM followers f
+      JOIN follower_digest_queue q ON q.follower_id = f.id AND q.sent_at IS NULL
+      WHERE f.verified_at IS NOT NULL
+      GROUP BY f.id
+    `).all();
+  }
+
+  getPendingDigestItems(followerId) {
+    return this.db.prepare(`
+      SELECT id, wave_id, kind, ref_id, title, summary, occurred_at
+      FROM follower_digest_queue
+      WHERE follower_id = ? AND sent_at IS NULL
+      ORDER BY occurred_at ASC
+    `).all(followerId);
+  }
+
+  markDigestItemsSent(ids) {
+    if (!ids || !ids.length) return;
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare('UPDATE follower_digest_queue SET sent_at = ? WHERE id = ?');
+    const run = this.db.transaction(() => { for (const id of ids) stmt.run(now, id); });
+    run();
+    this.db.prepare('UPDATE followers SET last_digest_at = ? WHERE id = (SELECT follower_id FROM follower_digest_queue WHERE id = ?)')
+      .run(now, ids[0]);
+  }
+
+  /** Housekeeping: unconfirmed sign-ups are not kept indefinitely. */
+  purgeUnverifiedFollowers(olderThanDays = 7) {
+    const cutoff = new Date(Date.now() - olderThanDays * 86400000).toISOString();
+    return this.db.prepare('DELETE FROM followers WHERE verified_at IS NULL AND created_at < ?').run(cutoff).changes;
+  }
+
+  linkGuestRsvpToFollower(guestRsvpId, followerId) {
+    this.db.prepare('UPDATE event_rsvp_guest SET follower_id = ? WHERE id = ?').run(followerId, guestRsvpId);
+  }
+
   getGuestRsvpsForEvent(eventId) {
     return this.db.prepare(`
       SELECT id, name, email_encrypted, email_iv, guest_count, status, created_at, updated_at
@@ -11412,7 +11712,7 @@ export class DatabaseSQLite {
   // the reminder job and carries the row id needed for bookkeeping.
   getGuestRsvpsForReminder(eventId) {
     return this.db.prepare(`
-      SELECT id, name, email_encrypted, email_iv, status, guest_count
+      SELECT id, name, email_encrypted, email_iv, status, guest_count, follower_id
       FROM event_rsvp_guest WHERE event_id = ?
     `).all(eventId).map(r => ({
       id: r.id,
@@ -11420,6 +11720,9 @@ export class DatabaseSQLite {
       email: decryptEmail(r.email_encrypted, r.email_iv),
       status: r.status,
       guestCount: r.guest_count,
+      // v2.92.0 — the caller skips reminders to an unconfirmed address. Without
+      // selecting this the check reads undefined and silently never fires.
+      follower_id: r.follower_id || null,
     })).filter(g => !!g.email);
   }
 

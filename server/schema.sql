@@ -1098,7 +1098,7 @@ CREATE TABLE IF NOT EXISTS event_rsvp_guest (
           status          TEXT NOT NULL DEFAULT 'going' CHECK(status IN ('going','maybe','not_going')),
           cancel_token_hash TEXT UNIQUE,
           created_at      TEXT NOT NULL,
-          updated_at      TEXT,
+          updated_at      TEXT, follower_id TEXT REFERENCES followers(id) ON DELETE SET NULL,
           UNIQUE(event_id, email_hash)
         );
 CREATE INDEX IF NOT EXISTS idx_event_rsvp_guest_event ON event_rsvp_guest(event_id);
@@ -1223,6 +1223,50 @@ CREATE TABLE IF NOT EXISTS event_attendance (
         );
 CREATE INDEX IF NOT EXISTS idx_event_attendance_event ON event_attendance(event_id, occurrence_date);
 CREATE INDEX IF NOT EXISTS idx_event_attendance_user ON event_attendance(user_id);
+
+CREATE TABLE IF NOT EXISTS followers (
+          id                     TEXT PRIMARY KEY,
+          name                   TEXT,
+          email_encrypted        TEXT,
+          email_iv               TEXT,
+          email_hash             TEXT NOT NULL UNIQUE,
+          -- NULL until they click the link in the one email we are willing to
+          -- send an unproven address.
+          verified_at            TEXT,
+          verify_token_hash      TEXT UNIQUE,
+          -- One link, in every email, that stops all of it. Hashed, so a
+          -- database leak yields no working unsubscribe links.
+          unsubscribe_token_hash TEXT NOT NULL UNIQUE,
+          -- 'immediate' still batches: it means "next sweep", not "one email
+          -- per item". Ten events posted in an evening is one email either way.
+          frequency              TEXT NOT NULL DEFAULT 'daily'
+                                   CHECK(frequency IN ('immediate','daily','weekly')),
+          last_digest_at         TEXT,
+          created_at             TEXT NOT NULL,
+          updated_at             TEXT
+        , unsubscribe_token_enc TEXT, unsubscribe_token_iv  TEXT);
+CREATE INDEX IF NOT EXISTS idx_followers_verified ON followers(verified_at);
+
+CREATE TABLE IF NOT EXISTS follower_subscriptions (
+          follower_id TEXT NOT NULL REFERENCES followers(id) ON DELETE CASCADE,
+          wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          created_at  TEXT NOT NULL,
+          PRIMARY KEY (follower_id, wave_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_follower_subs_wave ON follower_subscriptions(wave_id);
+
+CREATE TABLE IF NOT EXISTS follower_digest_queue (
+          id          TEXT PRIMARY KEY,
+          follower_id TEXT NOT NULL REFERENCES followers(id) ON DELETE CASCADE,
+          wave_id     TEXT REFERENCES waves(id) ON DELETE CASCADE,
+          kind        TEXT NOT NULL,
+          ref_id      TEXT,
+          title       TEXT,
+          summary     TEXT,
+          occurred_at TEXT NOT NULL,
+          sent_at     TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_digest_pending ON follower_digest_queue(follower_id, sent_at);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
