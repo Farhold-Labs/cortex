@@ -12290,7 +12290,21 @@ app.put('/api/events/:id', authenticateToken, (req, res) => {
     for (const waveId of new Set([before, after].filter(Boolean))) {
       broadcastToWave(waveId, { type: 'wave_event_updated', event: updated });
     }
-    res.json({ event: updated });
+
+    // v2.91.0 — that broadcast only reaches people currently connected and
+    // looking. Anyone with a stake in the event gets told properly.
+    //
+    // The client sends notifyAttendees explicitly. When it does not say (an
+    // older client, or a script), fall back to "notify if something material
+    // moved" — the alternative default is silence, and silence is the bug this
+    // fixes.
+    const changes = describeEventChanges(event, updated);
+    const wantsNotify = req.body.notifyAttendees === undefined
+      ? changes.length > 0
+      : !!req.body.notifyAttendees;
+    const notified = wantsNotify ? notifyEventChanged({ event: updated, changes, actorId: user.id }) : 0;
+
+    res.json({ event: updated, changed: changes.map(c => c.field), notified });
   } catch (err) {
     console.error('Update event error:', err);
     res.status(500).json({ error: 'Failed to update event' });
@@ -12349,6 +12363,87 @@ function canManageEvent(event, userId) {
     if (wave && canModerateWave(wave, userId)) return true;
   }
   return hasRole(db.findUserById(userId), ROLES.MODERATOR);
+}
+
+/**
+ * Tell people an event changed (v2.91.0).
+ *
+ * Editing an event used to broadcast `wave_event_updated` over the WebSocket and
+ * nothing else, so a change only reached whoever happened to be connected and
+ * looking at that wave. Move a rehearsal from 7pm to 6pm and the people most
+ * affected — the ones who already answered and stopped thinking about it — were
+ * told nothing at all.
+ *
+ * Only *material* changes count. Fixing a typo in the description should not
+ * buzz twenty phones, or people learn to ignore the ones that matter.
+ */
+const EVENT_MATERIAL_FIELDS = [
+  ['eventDate', 'date'],
+  ['eventTime', 'start time'],
+  ['eventEndTime', 'end time'],
+  ['location', 'location'],
+];
+
+function describeEventChanges(before, after) {
+  const changed = [];
+  for (const [field, label] of EVENT_MATERIAL_FIELDS) {
+    const from = before?.[field] || null;
+    const to = after?.[field] || null;
+    if (from !== to) changed.push({ field, label, from, to });
+  }
+  return changed;
+}
+
+function notifyEventChanged({ event, changes, actorId }) {
+  if (!changes.length) return 0;
+
+  const summary = changes.map(c => {
+    if (c.field === 'location') return c.to ? `now at ${c.to}` : 'location removed';
+    if (c.field === 'eventDate') return `moved to ${c.to}`;
+    if (!c.to) return `${c.label} removed`;
+    return `${c.label} now ${c.to}`;
+  }).join(', ');
+
+  const recipients = (db.getEventStakeholders ? db.getEventStakeholders(event.id) : [])
+    .filter(id => id && id !== actorId);
+
+  let sent = 0;
+  for (const userId of recipients) {
+    // Same gate as everything else, so a muted wave stays muted.
+    if (!shouldCreateNotification(userId, 'event_reminder', event.waveId || null)) continue;
+    const notification = db.createNotification({
+      userId,
+      type: 'event_reminder',
+      waveId: event.waveId || null,
+      actorId: actorId || null,
+      title: `Changed: ${event.title}`,
+      body: summary,
+      // Keyed on the change itself, so two different edits are two
+      // notifications rather than one silently replacing the other.
+      groupKey: `event-changed:${event.id}:${changes.map(c => c.field).join('-')}:${userId}`,
+    });
+    if (!notification) continue;
+    db.markNotificationPushSent(notification.id);
+    sendPushNotification(userId, {
+      type: 'event_reminder',
+      title: notification.title,
+      body: summary,
+      url: `/?event=${event.id}`,
+    });
+    // Email reaches only people who are offline — by design, since anyone
+    // looking at the app has already been told in it.
+    sendEmailNotificationIfOffline(userId, 'calendar', {
+      waveId: event.waveId || null,
+      eventTitle: `${event.title} — ${summary}`,
+      eventDate: event.eventDate,
+      eventTime: event.eventTime || null,
+      location: event.location || null,
+      waveUrl: event.waveId ? `${getAppBaseUrl()}/?wave=${event.waveId}` : null,
+      window: 'changed',
+    });
+    sent += 1;
+  }
+  return sent;
 }
 
 /** Tell people the waiting list moved. Routed through shouldCreateNotification so wave mutes still apply. */
