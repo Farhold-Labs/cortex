@@ -24,6 +24,10 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
   const [showRsvps, setShowRsvps] = useState(false);
   const [rsvpLoading, setRsvpLoading] = useState(false);
   const [waitlisted, setWaitlisted] = useState(false);
+  // v2.90.1 — the server answers who may edit this event (creator, wave staff,
+  // or instance moderator). Deriving it from createdBy alone hid the buttons
+  // from wave staff who could organise the event but not fix its time.
+  const [canManage, setCanManage] = useState(false);
 
   useEffect(() => {
     fetchAPI(`/events/${event.id}`)
@@ -31,6 +35,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
         setEvent(data.event);
         setUserRsvp(data.userRsvp);
         setPublishing(data.publishing || null);
+        setCanManage(!!data.canManage);
       })
       .catch(() => {});
     if (event.rsvpEnabled) {
@@ -286,7 +291,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
 
           {/* Edit / Delete / Close */}
           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-            {(isCreator) && onEdit && (
+            {(isCreator || canManage) && onEdit && (
               <button onClick={() => onEdit(event)} style={{
                 padding: '8px 14px', background: 'transparent', fontFamily: 'monospace', fontSize: '0.8rem',
                 border: '1px solid var(--border-secondary)', color: 'var(--text-secondary)', cursor: 'pointer',
@@ -294,7 +299,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
                 EDIT
               </button>
             )}
-            {(isCreator) && onDelete && (
+            {(isCreator || canManage) && onDelete && (
               <button onClick={() => onDelete(event)} style={{
                 padding: '8px 14px', background: 'transparent', fontFamily: 'monospace', fontSize: '0.8rem',
                 border: '1px solid var(--accent-red, #ff4444)', color: 'var(--accent-red, #ff4444)', cursor: 'pointer',

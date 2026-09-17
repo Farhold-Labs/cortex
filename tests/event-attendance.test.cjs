@@ -232,6 +232,29 @@ test('event attendance: invites, chasing, capacity and the register', async (t) 
         { method: 'POST', body: { date: firstDate, entries: [{ userId: 'bob', attended: true }] } })).status, 403);
     });
 
+    await t.test('wave staff can edit an event they did not create (v2.90.1)', async () => {
+      // bob is nobody here yet, so this must fail first — otherwise the
+      // promotion below would prove nothing.
+      assert.equal((await req(`/api/events/${weekly.id}`, 'bob',
+        { method: 'PUT', body: { location: 'Studio 2' } })).status, 403);
+
+      // Make bob a moderator of the wave the event belongs to.
+      assert.equal((await req(`/api/waves/${wave.id}/roles/bob`, 'director',
+        { method: 'PUT', body: { role: 'moderator' } })).status, 200);
+
+      assert.equal((await req(`/api/events/${weekly.id}`, 'bob',
+        { method: 'PUT', body: { location: 'Studio 2' } })).status, 200,
+        'wave staff may fix the event they are already allowed to organise');
+
+      const detail = await (await req(`/api/events/${weekly.id}`, 'bob')).json();
+      assert.equal(detail.event.location, 'Studio 2');
+      assert.equal(detail.canManage, true, 'so the client can show the edit button');
+
+      // Someone with no standing still cannot, and is told so.
+      const outsider = await (await req(`/api/events/${weekly.id}`, 'dave')).json();
+      assert.equal(outsider.canManage, false);
+    });
+
     await t.test('a closed deadline stops answers but not the organiser', async () => {
       const past = new Date(Date.now() - 60_000).toISOString();
       assert.equal((await req(`/api/events/${workshop.id}`, 'director',
