@@ -411,6 +411,7 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 - [docs/MEDIA-SECURITY.md](docs/MEDIA-SECURITY.md) — Jellyfin/Plex grant model and playback proxy
 - [docs/SECRET-AUDIT.md](docs/SECRET-AUDIT.md) — Git-history credential audit, method and findings
 - [docs/PLAN-federated-push.md](docs/PLAN-federated-push.md) — Why native push is hard in a federated app, and the options
+- [docs/communities/](docs/communities/) — Federated Communities: existing architecture, threat model and implementation plan (Phase 0, not built)
 - [docs/PRIVACY.md](docs/PRIVACY.md) — Privacy policy
 - [CLAUDE.md](CLAUDE.md) — Developer workflow, branching, and architecture notes
 - [OUTSTANDING-FEATURES.md](OUTSTANDING-FEATURES.md) — Future roadmap
