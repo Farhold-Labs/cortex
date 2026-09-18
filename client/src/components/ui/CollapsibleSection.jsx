@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false }) => {
+const CollapsibleSection = ({ title, subtitle, action, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
 
   const isOpen = onToggle ? controlledIsOpen : internalIsOpen;
@@ -24,6 +24,9 @@ const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: contr
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
             <span style={{ color: titleColor, fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
+            {subtitle && (
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{subtitle}</span>
+            )}
             {badge && (
               <span style={{
                 color: 'var(--text-muted)',
@@ -50,6 +53,17 @@ const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: contr
                 lineHeight: 1,
               }}>{unreadCount > 99 ? '99+' : unreadCount}</span>
             )}
+            {action && (
+              // stopPropagation so managing a group does not also collapse it.
+              <button
+                title={action.title}
+                onClick={(e) => { e.stopPropagation(); action.onClick(); }}
+                style={{
+                  background: 'transparent', border: 'none', color: 'var(--text-dim)',
+                  cursor: 'pointer', fontSize: '0.8rem', padding: '0 4px', lineHeight: 1,
+                }}
+              >{action.label}</button>
+            )}
             <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace' }}>
               {isOpen ? '▾' : '▸'}
             </span>
@@ -74,6 +88,9 @@ const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: contr
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{ color: titleColor, fontSize: '0.8rem', fontWeight: 500 }}>{title}</div>
+          {subtitle && (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{subtitle}</div>
+          )}
           {badge && (
             <span style={{
               padding: '2px 6px',

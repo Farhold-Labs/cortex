@@ -12,14 +12,14 @@ import { T } from '../../config/terminology.js';
 // the categorised one ever had this menu, so anyone who had not created a
 // category saw no ⋮ at all: Pin was unreachable, and Mute (v2.84.0) never
 // appeared for them. Extracted rather than copied so the two cannot drift.
-const WaveRowMenu = ({ wave, categories = [], isOpen, onToggle, onWavePin, onWaveMute, onWaveMove }) => (
+const WaveRowMenu = ({ wave, categories = [], channels = [], isOpen, onToggle, onWavePin, onWaveMute, onWaveMove, onWaveFile }) => (
   <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
     <button
       onClick={(e) => {
         e.stopPropagation();
         onToggle(isOpen ? null : wave.id);
       }}
-      title={`Move ${T.wave} to category`}
+      title={`Move ${T.wave}`}
       style={{
         background: 'transparent',
         border: 'none',
@@ -113,6 +113,61 @@ const WaveRowMenu = ({ wave, categories = [], isOpen, onToggle, onWavePin, onWav
               {wave.category_id === cat.id ? '✓ ' : ''}{cat.name}
             </div>
           ))}
+          {/* Community channels (v2.99.0).
+              A channel is the SHARED version of a category, so it belongs in
+              the same menu — this is where people already look to move a wave,
+              and a separate screen for it was the thing that made Communities
+              feel bolted on. */}
+          {channels.length > 0 && (
+            <div style={{
+              padding: '6px 12px 2px', fontSize: '0.65rem', letterSpacing: '0.08em',
+              color: 'var(--text-muted)', borderTop: '1px solid var(--border-subtle)',
+            }}>COMMUNITY CHANNELS</div>
+          )}
+          {channels.map(ch => (
+            <div
+              key={ch.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                onWaveFile && onWaveFile(wave, ch);
+                onToggle(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                color: 'var(--text-primary)',
+                background: wave.channelId === ch.id ? 'var(--accent-amber)20' : 'transparent',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = wave.channelId === ch.id ? 'var(--accent-amber)20' : 'transparent'}
+              title={`${ch.communityName} — filing a ${T.wave} here does not change who can read it`}
+            >
+              {wave.channelId === ch.id ? '✓ ' : ''}# {ch.name}
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: 6 }}>
+                {ch.communityName}
+              </span>
+            </div>
+          ))}
+          {wave.channelId && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onWaveFile && onWaveFile(wave, null);
+                onToggle(null);
+              }}
+              style={{
+                padding: '8px 12px', cursor: 'pointer', fontSize: '0.8rem',
+                color: 'var(--text-primary)', background: 'transparent',
+                borderTop: '1px solid var(--border-subtle)',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              Remove from channel
+            </div>
+          )}
+
           {/* Uncategorized option */}
           {wave.category_id && (
             <div
@@ -141,7 +196,7 @@ const WaveRowMenu = ({ wave, categories = [], isOpen, onToggle, onWavePin, onWav
   </div>
 );
 
-const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWavePin, onWaveMute, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
+const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
@@ -159,15 +214,25 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
   // Group waves by category
   const groupedWaves = useMemo(() => {
     const pinned = waves.filter(w => w.pinned);
-    const uncategorized = waves.filter(w => !w.pinned && !w.category_id);
+
+    // A wave filed in a community channel is listed under that channel, not
+    // under a personal category — the shared grouping wins, because that is the
+    // one other people can also see.
+    const byChannel = {};
+    channels.forEach(ch => {
+      byChannel[ch.id] = waves.filter(w => !w.pinned && w.channelId === ch.id);
+    });
+    const filedIds = new Set(Object.values(byChannel).flat().map(w => w.id));
+
+    const uncategorized = waves.filter(w => !w.pinned && !w.category_id && !filedIds.has(w.id));
 
     const categorized = {};
     categories.forEach(cat => {
-      categorized[cat.id] = waves.filter(w => !w.pinned && w.category_id === cat.id);
+      categorized[cat.id] = waves.filter(w => !w.pinned && w.category_id === cat.id && !filedIds.has(w.id));
     });
 
-    return { pinned, uncategorized, categorized };
-  }, [waves, categories]);
+    return { pinned, uncategorized, categorized, byChannel };
+  }, [waves, categories, channels]);
 
   // Calculate unread count for a group of waves
   const getGroupUnreadCount = (wavesInGroup) => {
@@ -288,6 +353,8 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
             <WaveRowMenu
               wave={wave}
               categories={categories}
+              channels={channels}
+              onWaveFile={onWaveFile}
               isOpen={moveMenuOpen === wave.id}
               onToggle={setMoveMenuOpen}
               onWavePin={onWavePin}
@@ -362,6 +429,42 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
         </div>
       )}
 
+      {/* Community channel sections (v2.99.0).
+          Above the personal categories because a shared grouping is the more
+          significant one: other people can see it, and it is where a
+          conversation lives rather than how one person happens to file it. */}
+      {channels.map(channel => {
+        const chWaves = groupedWaves.byChannel[channel.id] || [];
+        return (
+          <div key={channel.id} style={{ marginBottom: '1px' }}>
+            <CollapsibleSection
+              title={`# ${channel.name.toUpperCase()}`}
+              subtitle={channel.communityName}
+              badge={chWaves.length.toString()}
+              unreadCount={getGroupUnreadCount(chWaves)}
+              defaultOpen={true}
+              titleColor="var(--accent-amber)"
+              accentColor="var(--accent-amber)"
+              isMobile={isMobile}
+              compact
+              action={onManageCommunity ? {
+                label: '⚙',
+                title: `Manage ${channel.communityName}`,
+                onClick: () => onManageCommunity(channel),
+              } : undefined}
+            >
+              {chWaves.length === 0 ? (
+                <div style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
+                  No {T.waves} filed here yet
+                </div>
+              ) : (
+                chWaves.map(wave => renderWaveItem(wave, true))
+              )}
+            </CollapsibleSection>
+          </div>
+        );
+      })}
+
       {/* Category Sections */}
       {categories.map(category => {
         const categoryWaves = groupedWaves.categorized[category.id] || [];
@@ -422,7 +525,7 @@ const WaveCategoryList = ({ waves, categories, selectedWave, onSelectWave, onCat
   );
 };
 
-const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWavePin, onWaveMute, onManageCategories, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh }) => {
+const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh }) => {
   // Pull down at the top of the list to reload it (v2.77.0). Additive: the list
   // already refreshes itself on websocket events; this is for the moments when
   // someone wants to be sure.
@@ -471,6 +574,14 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
               // create their first: the only entry point to the category manager
               // was hidden until they already had one. The manager itself has
               // always handled the empty case — it opens on a create form.
+              // NB: the key is `action`, not `onClick` — the renderer below calls
+              // `item.action?.()`, so an `onClick` here is silently inert. It was,
+              // until a browser caught it.
+              ...(communitiesEnabled ? [{
+                label: '⚙ Communities',
+                color: 'var(--text-primary)',
+                action: onManageCommunities,
+              }] : []),
               { label: categories.length > 0 ? '⚙ Manage Categories' : '⚙ Create Category',
                 color: 'var(--text-primary)', action: onManageCategories },
               { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol', color: ghostMode ? 'var(--accent-orange)' : 'var(--text-primary)', action: onToggleGhostProtocol },
@@ -510,15 +621,21 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
         {refreshing ? '⟳ REFRESHING…' : (pullDistance >= 60 ? '↻ RELEASE TO REFRESH' : '↓ PULL TO REFRESH')}
       </div>
     )}
-    {categories.length > 0 ? (
+    {/* Grouped whenever there is anything to group BY. Previously this was
+        categories alone, which would have hidden every community channel from
+        the many people who have never made a category. */}
+    {(categories.length > 0 || channels.length > 0) ? (
       <WaveCategoryList
         scrollRef={listScrollRef}
         waves={waves}
         categories={categories}
+        channels={channels}
         selectedWave={selectedWave}
         onSelectWave={onSelectWave}
         onCategoryToggle={onCategoryToggle}
         onWaveMove={onWaveMove}
+        onWaveFile={onWaveFile}
+        onManageCommunity={onManageCommunity}
         onWavePin={onWavePin}
         onWaveMute={onWaveMute}
         isMobile={isMobile}
@@ -629,6 +746,8 @@ const WaveList = ({ waves, categories = [], selectedWave, onSelectWave, onNewWav
                 <WaveRowMenu
                   wave={wave}
                   categories={categories}
+                  channels={channels}
+                  onWaveFile={onWaveFile}
                   isOpen={rowMenuOpen === wave.id}
                   onToggle={setRowMenuOpen}
                   onWavePin={onWavePin}
