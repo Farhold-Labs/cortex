@@ -27,18 +27,25 @@ going the wrong way.
 | --- | --- |
 | How does a remote person hold rights here? | **Cross-port auth (v2.56.0)** — they become a local stub user. No new identity table. |
 | Do Communities span nodes? | **No.** A Community lives on one node; its *members* come from many. |
-| What is a channel? | **A wave** carrying a community id. A sub-conversation is a **threaded ping**. |
+| What is a channel? | **A container that holds waves** — `Community → Channel → Wave → Ping`. A wave keeps its own participants, privacy and E2EE. |
+| Who may create a Community? | **Anyone.** Node-level channels and node-wide public waves remain admin-only. |
+| Community visibility | `PUBLIC` (searchable) / `UNLISTED` (by link) / `PRIVATE` (invite only). |
+| Do waves need a Community? | **No, permanently.** DMs, crew waves and profile waves stay uncontained; all 44 waves in production today are uncontained. |
 | Ban scope | **Per-Community**, escalating to a node or verse-wide ban where warranted. |
-| Migration | Community admin requests; receiving node's admin accepts. **V2/V3.** |
+| Import from another node | Node admin accepts, at the Community owner's request. **V2/V3** — and it moves content, not just authority. |
 
 **Blocking production** (not Phase 1): cross-port sessions are 24h and
 non-renewable, so a remote member re-authenticates daily. A session-policy
 change, fixable independently of Communities — see implementation plan §6a.
 
-Two of those supersede recommendations made earlier in these documents. The
-superseded reasoning is kept in place rather than deleted, because *why* it was
-wrong is the useful part: it assumed a replicated Community, and Cortex was
-being asked for something simpler.
+Two of those supersede recommendations made earlier in these documents, and the
+channel definition was itself revised the same day — from *a channel is a wave*
+to *a channel holds waves*, because the first version turned every migration into
+a mass disclosure. The superseded reasoning is kept in place rather than deleted,
+because *why* it was wrong is the useful part: the identity recommendation assumed
+a replicated Community, and the channel one assumed that inheriting a wave's
+machinery was free when what it actually inherited was the wave's access
+authority.
 
 ## The finding that shapes everything else
 
