@@ -123,7 +123,15 @@ export const BUILT_IN_ROLES = Object.freeze([
     // The default. Note it can start a wave in a channel: a Community where
     // only staff may begin a conversation is a noticeboard, and Cortex already
     // has announcement waves for that.
-    permissions: [C.VIEW_MEMBERS, C.VIEW_CHANNEL, C.CREATE_WAVE],
+    //
+    // MOVE_WAVE is here for consistency rather than generosity. Filing a wave
+    // is double-gated — the mover must hold this AND be able to manage the wave
+    // itself — so a member can only ever move their own. Withholding it would
+    // let them create a wave in a channel but not file an existing one there,
+    // which does not protect anything: they can reach the same end state by
+    // starting a new wave, and the only thing the restriction costs is the
+    // history of the conversation they gave up on moving.
+    permissions: [C.VIEW_MEMBERS, C.VIEW_CHANNEL, C.CREATE_WAVE, C.MOVE_WAVE],
   },
 ]);
 
