@@ -1426,6 +1426,28 @@ CREATE TABLE IF NOT EXISTS community_audit_log (
         );
 CREATE INDEX IF NOT EXISTS idx_community_audit ON community_audit_log(community_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS community_remote_invitations (
+          id            TEXT PRIMARY KEY,
+          community_id  TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          -- The address, not a user id. Stored lowercase for comparison because
+          -- handles are case-insensitive and an invitation that misses on case
+          -- is an invitation that silently never arrives.
+          handle        TEXT NOT NULL,
+          node_name     TEXT NOT NULL,
+          role_id       TEXT REFERENCES community_roles(id) ON DELETE SET NULL,
+          invited_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          state         TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(state IN ('pending','bound','revoked')),
+          -- Filled in when they first cross-port in. Keeping the row after
+          -- binding means an admin can still see who invited whom.
+          bound_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          bound_at      TEXT,
+          created_at    TEXT NOT NULL,
+          UNIQUE(community_id, handle, node_name)
+        );
+CREATE INDEX IF NOT EXISTS idx_remote_invites_address
+          ON community_remote_invitations(node_name, handle, state);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
