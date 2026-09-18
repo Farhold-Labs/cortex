@@ -3242,6 +3242,44 @@ export class DatabaseSQLite {
       console.log('✅ community_invites.role_id added');
     }
 
+    // v2.97.0 — Communities Phase 4: invite someone who has no local row yet.
+    //
+    // A remote person does not exist here until they cross-port in, so an
+    // invitation addressed to them has to be held against their ADDRESS
+    // (handle@node) and bound to a user id at the moment they first arrive.
+    // That is the whole lifecycle problem of this phase: the invitation
+    // outlives the absence of the account it is for.
+    const remoteInvitesExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='community_remote_invitations'`
+    ).get();
+    if (!remoteInvitesExist) {
+      console.log('📝 Creating community_remote_invitations (v2.97.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS community_remote_invitations (
+          id            TEXT PRIMARY KEY,
+          community_id  TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          -- The address, not a user id. Stored lowercase for comparison because
+          -- handles are case-insensitive and an invitation that misses on case
+          -- is an invitation that silently never arrives.
+          handle        TEXT NOT NULL,
+          node_name     TEXT NOT NULL,
+          role_id       TEXT REFERENCES community_roles(id) ON DELETE SET NULL,
+          invited_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          state         TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(state IN ('pending','bound','revoked')),
+          -- Filled in when they first cross-port in. Keeping the row after
+          -- binding means an admin can still see who invited whom.
+          bound_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          bound_at      TEXT,
+          created_at    TEXT NOT NULL,
+          UNIQUE(community_id, handle, node_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_invites_address
+          ON community_remote_invitations(node_name, handle, state);
+      `);
+      console.log('✅ community_remote_invitations created');
+    }
+
     const waveColsForCommunity = this.db.prepare(`PRAGMA table_info(waves)`).all();
     if (waveColsForCommunity.length && !waveColsForCommunity.some(c => c.name === 'community_id')) {
       console.log('📝 Adding wave container columns (v2.94.0)...');
@@ -13845,6 +13883,94 @@ export class DatabaseSQLite {
     });
     tx();
     return !refused;
+  }
+
+
+  // ----- Remote membership (v2.97.0, Phase 4) -----
+
+  /**
+   * Invite `handle@node` to a Community before they have any local row.
+   *
+   * Addressed to an ADDRESS. Nothing is granted here and no account is created:
+   * the invitation simply waits, and is redeemed by the act of that person
+   * cross-porting in for the first time.
+   */
+  createRemoteInvitation({ communityId, handle, nodeName, roleId = null, invitedBy = null }) {
+    const id = uuidv4();
+    this.db.prepare(`
+      INSERT INTO community_remote_invitations
+        (id, community_id, handle, node_name, role_id, invited_by, state, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+      ON CONFLICT(community_id, handle, node_name) DO UPDATE SET
+        role_id = excluded.role_id, invited_by = excluded.invited_by,
+        state = 'pending', bound_user_id = NULL, bound_at = NULL
+    `).run(id, communityId, String(handle).toLowerCase(), String(nodeName).toLowerCase(),
+           roleId, invitedBy, new Date().toISOString());
+    return this.db.prepare(
+      'SELECT * FROM community_remote_invitations WHERE community_id = ? AND handle = ? AND node_name = ?'
+    ).get(communityId, String(handle).toLowerCase(), String(nodeName).toLowerCase());
+  }
+
+  listRemoteInvitations(communityId) {
+    return this.db.prepare(
+      'SELECT * FROM community_remote_invitations WHERE community_id = ? ORDER BY created_at DESC'
+    ).all(communityId);
+  }
+
+  revokeRemoteInvitation(id) {
+    this.db.prepare("UPDATE community_remote_invitations SET state = 'revoked' WHERE id = ? AND state = 'pending'")
+      .run(id);
+  }
+
+  /**
+   * Bind every pending invitation for an address to the user who has just
+   * arrived, and make them a member.
+   *
+   * Called once, at the end of a successful cross-port login. Idempotent: a
+   * second login finds nothing pending, because binding moves the row out of
+   * `pending` in the same transaction that creates the membership.
+   *
+   * `remoteHandle` is the handle AT HOME, which is not necessarily the local
+   * one — cross-port auth suffixes on collision (`alice_pmp`). Matching on the
+   * local handle would miss exactly the people whose names clashed.
+   */
+  bindRemoteInvitations({ userId, remoteHandle, nodeName }) {
+    const handle = String(remoteHandle || '').toLowerCase();
+    const node = String(nodeName || '').toLowerCase();
+    if (!handle || !node) return [];
+
+    const pending = this.db.prepare(`
+      SELECT * FROM community_remote_invitations
+      WHERE handle = ? AND node_name = ? AND state = 'pending'
+    `).all(handle, node);
+    if (!pending.length) return [];
+
+    const bound = [];
+    const now = new Date().toISOString();
+    const tx = this.db.transaction(() => {
+      for (const invite of pending) {
+        const community = this.getCommunityById(invite.community_id);
+        if (!community || community.status !== 'active') continue;
+        // An invitation cannot overrule a ban imposed since it was sent.
+        if (this.getCommunityBan(invite.community_id, userId)) continue;
+
+        const membershipId = this.addCommunityMember(invite.community_id, userId, {
+          state: 'active', invitedBy: invite.invited_by, at: now,
+        });
+        const role = invite.role_id
+          ? this.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(invite.role_id)
+          : this.getCommunityRole(invite.community_id, 'member');
+        if (role) this.grantCommunityRole(membershipId, role.id, { grantedBy: invite.invited_by, at: now });
+
+        this.db.prepare(`
+          UPDATE community_remote_invitations
+          SET state = 'bound', bound_user_id = ?, bound_at = ? WHERE id = ?
+        `).run(userId, now, invite.id);
+        bound.push(invite.community_id);
+      }
+    });
+    tx();
+    return bound;
   }
 
   // ----- Audit -----

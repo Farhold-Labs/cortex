@@ -44,7 +44,7 @@ test('Community authorization evaluator', async (t) => {
   const {
     authorize, resolveActor, canActOnMember, canGrantRole, canEditRole,
     canInviteConferRole, wouldLeaveNoOwner, canDiscoverChannel,
-    assertNeverGrantsWaveAccess, REASON,
+    assertNeverGrantsWaveAccess, homeNodeStanding, effectiveCapabilities, REASON,
   } = authz;
 
   const local = (userId) => ({ kind: 'user', userId });
@@ -147,6 +147,14 @@ test('Community authorization evaluator', async (t) => {
       // Under plan §2 a remote member arrives through cross-port auth and IS a
       // local users row, so this path must work — the evaluator was written to
       // take a possibly-remote actor from day one so Phase 4 need not rewrite it.
+      // Their node must be a live peer before anything else is asked, because
+      // from v2.97.0 standing is checked ahead of membership — a person whose
+      // node is not vouching for them is refused before the question of whether
+      // they belong here even arises.
+      db.db.prepare(`INSERT OR IGNORE INTO federation_nodes (id, node_name, base_url, public_key, status, created_at)
+                     VALUES (?, ?, ?, ?, 'active', ?)`)
+        .run('fed-pmp', 'pmp.example', 'https://pmp.example', 'k', new Date().toISOString());
+
       const stub = db.upsertCrossPortUser({
         homeUserId: 'remote-42', homeNode: 'pmp.example',
         handle: 'jempson', displayName: 'Jempson',
@@ -205,6 +213,62 @@ test('Community authorization evaluator', async (t) => {
       // claiming it must not resolve to it.
       assert.equal(resolveActor(db, { kind: 'federated', handle: 'owner', node: 'evil.example' }), null);
       assert.equal(resolveActor(db, { kind: 'federated', handle: 'owner', node: 'pmp.example' }), null);
+    });
+
+    await t.test('a remote member loses standing when their node stops vouching', () => {
+      // Rights held here by a remote member are BORROWED from the relationship
+      // with their home node. Before v2.97.0 nothing checked this: the stub row
+      // behaved like a local account forever, so unpairing a node left its
+      // people's Community membership entirely intact.
+      const stub = db.upsertCrossPortUser({
+        homeUserId: 'remote-standing', homeNode: 'ally.example',
+        handle: 'ally', displayName: 'Ally', avatar: 'A',
+      });
+      const asserted = { kind: 'federated', handle: 'ally', node: 'ally.example', homeUserId: 'remote-standing' };
+      const mid = db.addCommunityMember(community.id, stub.id, { state: 'active' });
+      db.grantCommunityRole(mid, db.getCommunityRole(community.id, 'member').id);
+
+      // No peer record at all — the node was never paired, or has been removed.
+      assert.equal(homeNodeStanding(db, stub.id).ok, false);
+      assert.equal(authorize(db, asserted, community.id, CAPABILITIES.CREATE_WAVE).reason,
+        REASON.HOME_NODE_INACTIVE);
+      assert.equal(effectiveCapabilities(db, asserted, community.id).size, 0,
+        'and the capability listing must agree with the gate');
+
+      // Paired and active: standing restored, membership never touched.
+      db.db.prepare(`INSERT INTO federation_nodes (id, node_name, base_url, public_key, status, created_at)
+                     VALUES (?, ?, ?, ?, 'active', ?)`)
+        .run('fed-ally', 'ally.example', 'https://ally.example', 'k', new Date().toISOString());
+      assert.equal(homeNodeStanding(db, stub.id).ok, true);
+      assert.ok(authorize(db, asserted, community.id, CAPABILITIES.CREATE_WAVE).allowed);
+
+      // Suspended: withdrawn again, without anyone editing a membership.
+      db.db.prepare("UPDATE federation_nodes SET status = 'suspended' WHERE node_name = 'ally.example'").run();
+      assert.equal(authorize(db, asserted, community.id, CAPABILITIES.CREATE_WAVE).reason,
+        REASON.HOME_NODE_INACTIVE);
+
+      db.db.prepare("UPDATE federation_nodes SET status = 'active' WHERE node_name = 'ally.example'").run();
+    });
+
+    await t.test('a local member has no home node to lose', () => {
+      // The gate must apply to borrowed standing only — nothing about
+      // federation may lock a local user out of their own Community.
+      assert.equal(homeNodeStanding(db, users.owner.id).ok, true);
+      assert.ok(effectiveCapabilities(db, local(users.owner.id), community.id).has(CAPABILITIES.DELETE_COMMUNITY));
+    });
+
+    await t.test('effectiveCapabilities agrees with authorize in every refusing case', () => {
+      // The two must never disagree: a caller that asks "what can they do" and
+      // one that asks "may they do this" have to get consistent answers, which
+      // is the bug the two-node test found.
+      assert.equal(effectiveCapabilities(db, local(users.outsider.id), community.id).size, 0, 'non-member');
+      assert.equal(effectiveCapabilities(db, local(users.banned.id), community.id).size, 0, 'banned');
+      assert.equal(effectiveCapabilities(db, null, community.id).size, 0, 'unresolvable actor');
+      assert.equal(effectiveCapabilities(db, local(users.owner.id), 'no-such-community').size, 0);
+
+      db.updateCommunity(community.id, { status: 'suspended' });
+      assert.equal(effectiveCapabilities(db, local(users.owner.id), community.id).size, 0, 'suspended community');
+      db.updateCommunity(community.id, { status: 'active' });
     });
 
     // ----- A-2: state version -----

@@ -14382,6 +14382,29 @@ app.post('/api/cross-port/session', async (req, res) => {
     createSession(stubUser.id, token, req);
     db.logActivity(stubUser.id, 'cross_port_login', 'user', stubUser.id, { homeNode });
 
+    // Communities Phase 4: an invitation addressed to this person before they
+    // had any local row is redeemed by their arrival. Matched on the handle AT
+    // HOME, which is not necessarily the local one — cross-port auth suffixes
+    // on collision, so matching the local handle would miss exactly the people
+    // whose names clashed with a local account.
+    try {
+      const bound = db.bindRemoteInvitations({
+        userId: stubUser.id,
+        remoteHandle: exchangeData.handle,
+        nodeName: exchangeData.homeNode || homeNode,
+      });
+      for (const communityId of bound) {
+        db.logCommunityAudit(communityId, {
+          actorId: stubUser.id, action: 'member.join_remote',
+          targetType: 'user', targetId: stubUser.id,
+          metadata: { homeNode: exchangeData.homeNode || homeNode },
+        });
+      }
+    } catch (err) {
+      // A failure here must not cost them the login they have just completed.
+      console.error('Cross-port community binding failed:', err);
+    }
+
     res.json({
       token,
       user: {
@@ -22764,10 +22787,15 @@ app.get('/api/communities/:id', authenticateToken, (req, res) => {
   const isMember = membership && membership.state === 'active';
   if (community.visibility !== 'public' && !isMember) return res.status(404).json({ error: 'Not found' });
 
+  // Through the evaluator, not `db.getMemberCapabilities` — the database method
+  // knows about roles and nothing about standing, so asking it directly would
+  // report a full capability list for someone whose home node has been
+  // unpaired, while every gated endpoint refused them. A two-node test caught
+  // precisely that.
   res.json({
     community,
     membership: isMember ? membership : null,
-    capabilities: isMember ? [...db.getMemberCapabilities(community.id, req.user.userId)] : [],
+    capabilities: [...communityAuthz.effectiveCapabilities(db, communityActor(req), community.id)],
   });
 });
 
@@ -23131,6 +23159,75 @@ app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticat
     actorId: req.user.userId, action: 'wave.unfile', targetType: 'wave', targetId: req.params.waveId,
   });
   res.json({ wave: updated });
+});
+
+
+// ----- Remote membership (v2.97.0, Phase 4) -----
+//
+// A person on an allied node has no local row until they cross-port in, so an
+// invitation for them is addressed to `handle@node` and waits. Their first
+// cross-port login binds it. Nothing here creates an account, and nothing here
+// grants anything on the strength of a name alone — the address only matches
+// once that node has actually authenticated the person to us.
+
+app.post('/api/communities/:id/members/remote', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
+  if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled on this server' });
+
+  const address = String(req.body.address || '').trim().replace(/^@/, '');
+  const match = address.match(/^([a-zA-Z0-9_.-]{1,64})@([a-zA-Z0-9.:-]{3,253})$/);
+  if (!match) return res.status(400).json({ error: 'Address must look like handle@node' });
+  const [, handle, nodeName] = match;
+
+  // The node must be a peer we are actually federated with. Allowing an
+  // arbitrary hostname would let anyone create invitations addressed into
+  // domains this node has no relationship with, which is a way to make
+  // `community_remote_invitations` a free-text store keyed by attacker input.
+  const node = db.getFederationNodeByName(nodeName);
+  if (!node || node.status !== 'active') {
+    return res.status(403).json({ error: `${nodeName} is not a federated peer of this server` });
+  }
+  if (nodeName.toLowerCase() === String(FEDERATION_NODE_NAME || '').toLowerCase()) {
+    return res.status(400).json({ error: 'That is this server — invite them as a local member' });
+  }
+
+  let role = null;
+  if (req.body.roleId) {
+    role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.body.roleId);
+    if (!role || role.community_id !== req.params.id) return res.status(404).json({ error: 'Role not found' });
+
+    // The same rule as any other invite: a link or an address cannot be a route
+    // to administrative powers, and the inviter cannot confer what they lack.
+    if (!communityAuthz.canInviteConferRole(role).allowed) {
+      return res.status(403).json({ error: 'An invitation cannot grant that role' });
+    }
+    const grantable = communityAuthz.canGrantRole(db, req.user.userId, req.params.id, role);
+    if (!grantable.allowed) return res.status(403).json({ error: 'Forbidden', reason: grantable.reason });
+  }
+
+  const invitation = db.createRemoteInvitation({
+    communityId: req.params.id, handle, nodeName,
+    roleId: role ? role.id : null, invitedBy: req.user.userId,
+  });
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'member.invite_remote',
+    targetType: 'address', targetId: `${handle}@${nodeName}`,
+  });
+  res.status(201).json({ invitation });
+});
+
+app.get('/api/communities/:id/members/remote', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
+  res.json({ invitations: db.listRemoteInvitations(req.params.id) });
+});
+
+app.delete('/api/communities/:id/members/remote/:invitationId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
+  const row = db.db.prepare('SELECT community_id FROM community_remote_invitations WHERE id = ?')
+    .get(req.params.invitationId);
+  if (!row || row.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
+  db.revokeRemoteInvitation(req.params.invitationId);
+  res.json({ success: true });
 });
 
 // ----- Invites -----
