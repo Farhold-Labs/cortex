@@ -29,6 +29,8 @@ import * as pushSubscriptionCrypto from './lib/push-subscription-crypto.js';
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import * as waveRoles from './lib/wave-roles.js';
+import * as communityAuthz from './lib/communities/authorize.js';
+import { CAPABILITIES as CommunityCaps } from './lib/communities/capabilities.js';
 import { getCurrentHoliday } from './holidays.js';
 // firebase-admin 14 (v2.89.0) removed the namespaced API entirely: the default
 // export no longer carries `credential`, `apps` or `messaging`. Everything now
@@ -22653,6 +22655,583 @@ app.get('/api/search', authenticateToken, (req, res) => {
   });
 
   res.json({ results: accessibleResults, count: accessibleResults.length });
+});
+
+
+// ============ Communities (v2.96.0, Phase 3) ============
+//
+// Local Communities end to end. Per implementation plan §1.2 this phase is
+// DOMAIN MODEL VALIDATION and is explicitly not a licence to shape the API
+// around local-only actors — every handler builds an actor object and hands it
+// to the one evaluator, so Phase 4 adds remote callers rather than rewriting
+// these routes.
+//
+// THE RULE THESE ROUTES LIVE BY: no handler computes a permission inline.
+// `communityAuthz.authorize()` decides, every time, or the decision does not
+// happen. Cortex has had duplicated permission logic before and it has always
+// cost more than it saved.
+//
+// And the invariant from plan §2b, restated because this is where it could be
+// broken by accident: attaching a wave to a channel changes WHERE IT IS LISTED
+// and nothing else. No handler here adds a participant, alters privacy, or
+// touches an encryption key as a side effect of moving a wave.
+
+/** Build the actor the evaluator expects. Local today, remote-shaped already. */
+function communityActor(req) {
+  return { kind: 'user', userId: req.user.userId };
+}
+
+/**
+ * Guard a handler on one capability.
+ *
+ * Returns the decision's reason to the server log and a flat 403 to the caller.
+ * Telling someone precisely which capability they lack is a map of the
+ * permission model, and for a Community they cannot see it also confirms the
+ * Community exists (threat model M-1) — so a refusal is a refusal.
+ */
+function requireCommunityCapability(req, res, communityId, capability, options = {}) {
+  const decision = communityAuthz.authorize(db, communityActor(req), communityId, capability, options);
+  if (!decision.allowed) {
+    console.warn(`[communities] denied ${req.user.userId} ${capability} on ${communityId}: ${decision.reason}`);
+    res.status(decision.reason === communityAuthz.REASON.NO_COMMUNITY ? 404 : 403)
+       .json({ error: decision.reason === communityAuthz.REASON.NO_COMMUNITY ? 'Not found' : 'Forbidden' });
+    return null;
+  }
+  return decision;
+}
+
+/** D-1: bounded strings. A name is a name, not a payload. */
+const COMMUNITY_LIMITS = { name: 80, slug: 60, description: 500, channelName: 60, roleName: 40 };
+function boundedString(value, max) {
+  const clean = sanitizeInput(value);
+  if (typeof clean !== 'string') return null;
+  const trimmed = clean.trim();
+  return trimmed.length === 0 || trimmed.length > max ? null : trimmed;
+}
+
+/** Slugs are user-visible identifiers, so they get a strict shape, not a filter. */
+function communitySlug(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9-]{1,59}$/.test(raw) ? raw : null;
+}
+
+// ----- Communities -----
+
+// Anyone may create a Community. That is deliberate: node-level channels are
+// admin-only, so Community creation is the relief valve that stops every shared
+// space needing an administrator's attention.
+app.post('/api/communities', authenticateToken, apiLimiter, (req, res) => {
+  const name = boundedString(req.body.name, COMMUNITY_LIMITS.name);
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+
+  const slug = communitySlug(req.body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  if (!slug) return res.status(400).json({ error: 'Slug must be 2-60 characters of a-z, 0-9 and hyphens' });
+  if (db.getCommunityBySlug(slug)) return res.status(409).json({ error: 'That address is taken' });
+
+  const visibility = ['public', 'unlisted', 'private'].includes(req.body.visibility)
+    ? req.body.visibility : 'private';
+
+  const community = db.createCommunity({
+    name, slug, visibility,
+    description: req.body.description ? boundedString(req.body.description, COMMUNITY_LIMITS.description) : null,
+    homeNode: FEDERATION_NODE_NAME || null,
+    createdBy: req.user.userId,
+  });
+  db.logCommunityAudit(community.id, { actorId: req.user.userId, action: 'community.create' });
+  res.status(201).json({ community });
+});
+
+// Discovery. Public only — unlisted is excluded by definition, and the filter
+// lives in the query rather than here so a future caller cannot forget it.
+app.get('/api/communities', authenticateToken, apiLimiter, (req, res) => {
+  const q = req.query.q ? String(req.query.q).slice(0, 80) : '';
+  res.json({ communities: q ? db.searchCommunities(q) : db.listPublicCommunities() });
+});
+
+// The rail.
+app.get('/api/communities/mine', authenticateToken, (req, res) => {
+  res.json({ communities: db.listUserCommunities(req.user.userId) });
+});
+
+app.get('/api/communities/:id', authenticateToken, (req, res) => {
+  const community = db.getCommunityById(req.params.id);
+  if (!community || community.status !== 'active') return res.status(404).json({ error: 'Not found' });
+
+  // A public Community is readable by anyone on the node; anything else
+  // requires membership. Returning 404 rather than 403 for a private one keeps
+  // its existence unconfirmed (M-1).
+  const membership = db.getCommunityMembership(community.id, req.user.userId);
+  const isMember = membership && membership.state === 'active';
+  if (community.visibility !== 'public' && !isMember) return res.status(404).json({ error: 'Not found' });
+
+  res.json({
+    community,
+    membership: isMember ? membership : null,
+    capabilities: isMember ? [...db.getMemberCapabilities(community.id, req.user.userId)] : [],
+  });
+});
+
+app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_COMMUNITY,
+    { expectedStateVersion: req.body.expectedStateVersion })) return;
+
+  const fields = {};
+  if (req.body.name !== undefined) {
+    const name = boundedString(req.body.name, COMMUNITY_LIMITS.name);
+    if (!name) return res.status(400).json({ error: 'Invalid name' });
+    fields.name = name;
+  }
+  if (req.body.description !== undefined) {
+    fields.description = req.body.description
+      ? boundedString(req.body.description, COMMUNITY_LIMITS.description) : null;
+  }
+  if (req.body.visibility !== undefined) {
+    if (!['public', 'unlisted', 'private'].includes(req.body.visibility)) {
+      return res.status(400).json({ error: 'Invalid visibility' });
+    }
+    fields.visibility = req.body.visibility;
+  }
+
+  const community = db.updateCommunity(req.params.id, fields);
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'community.update',
+    metadata: { fields: Object.keys(fields) },
+  });
+  res.json({ community });
+});
+
+// Step-up re-auth: this disposes of a shared space and everyone's place in it.
+app.delete('/api/communities/:id', authenticateToken, requireStepUp, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.DELETE_COMMUNITY)) return;
+  db.deleteCommunity(req.params.id);
+  db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'community.delete' });
+  res.json({ success: true });
+});
+
+// ----- Members -----
+
+app.get('/api/communities/:id/members', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_MEMBERS)) return;
+  const members = db.listCommunityMembers(req.params.id).map(m => ({
+    userId: m.user_id, handle: m.handle, displayName: m.display_name,
+    avatarUrl: m.avatar_url, state: m.state, joinedAt: m.joined_at,
+    isCrossPort: m.is_cross_port === 1, homeNode: m.home_node,
+    roles: db.getMemberRoles(req.params.id, m.user_id).map(r => ({ id: r.id, name: r.name, priority: r.priority })),
+  }));
+  res.json({ members });
+});
+
+app.post('/api/communities/:id/members', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
+
+  const user = db.findUserById(req.body.userId) || db.findUserByHandle(req.body.handle);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (db.getCommunityBan(req.params.id, user.id)) {
+    return res.status(409).json({ error: 'That person is banned from this community' });
+  }
+
+  const membershipId = db.addCommunityMember(req.params.id, user.id, {
+    state: 'active', invitedBy: req.user.userId,
+  });
+  const memberRole = db.getCommunityRole(req.params.id, 'member');
+  if (memberRole) db.grantCommunityRole(membershipId, memberRole.id, { grantedBy: req.user.userId });
+
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'member.add', targetType: 'user', targetId: user.id,
+  });
+  res.status(201).json({ membership: db.getCommunityMembership(req.params.id, user.id) });
+});
+
+app.delete('/api/communities/:id/members/:userId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.REMOVE_MEMBER)) return;
+
+  // Holding `member.remove` is not permission to remove ANY member — priority
+  // decides, so that nobody can remove a peer or someone above them.
+  const rank = communityAuthz.canActOnMember(db, req.user.userId, req.params.userId, req.params.id);
+  if (!rank.allowed) return res.status(403).json({ error: 'Forbidden' });
+
+  db.setCommunityMemberState(req.params.id, req.params.userId, 'removed');
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'member.remove', targetType: 'user', targetId: req.params.userId,
+  });
+  res.json({ success: true });
+});
+
+// Leaving is not being removed, so it needs no capability — but it must not
+// strand the Community without an owner, and that check runs inside the same
+// transaction as the write.
+app.post('/api/communities/:id/leave', authenticateToken, (req, res) => {
+  const membership = db.getCommunityMembership(req.params.id, req.user.userId);
+  if (!membership || membership.state !== 'active') return res.status(404).json({ error: 'Not a member' });
+
+  const left = db.leaveCommunity(req.params.id, req.user.userId, {
+    wouldOrphan: communityAuthz.wouldLeaveNoOwner,
+  });
+  if (!left) {
+    return res.status(409).json({
+      error: 'Transfer ownership or appoint another owner before leaving',
+    });
+  }
+  db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'member.leave' });
+  res.json({ success: true });
+});
+
+app.post('/api/communities/:id/bans', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.BAN_MEMBER)) return;
+
+  const targetId = String(req.body.userId || '');
+  const rank = communityAuthz.canActOnMember(db, req.user.userId, targetId, req.params.id);
+  if (!rank.allowed) return res.status(403).json({ error: 'Forbidden' });
+
+  db.banFromCommunity(req.params.id, targetId, {
+    reason: req.body.reason ? boundedString(req.body.reason, COMMUNITY_LIMITS.description) : null,
+    bannedBy: req.user.userId,
+    expiresAt: req.body.expiresAt || null,
+  });
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'member.ban', targetType: 'user', targetId,
+  });
+  res.status(201).json({ success: true });
+});
+
+app.delete('/api/communities/:id/bans/:userId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.BAN_MEMBER)) return;
+  db.db.prepare('DELETE FROM community_bans WHERE community_id = ? AND user_id = ?')
+    .run(req.params.id, req.params.userId);
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'member.unban', targetType: 'user', targetId: req.params.userId,
+  });
+  res.json({ success: true });
+});
+
+// ----- Roles -----
+
+app.get('/api/communities/:id/roles', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_MEMBERS)) return;
+  res.json({ roles: db.listCommunityRoles(req.params.id) });
+});
+
+app.post('/api/communities/:id/roles', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_ROLES)) return;
+
+  const name = boundedString(req.body.name, COMMUNITY_LIMITS.roleName);
+  if (!name) return res.status(400).json({ error: 'Role name is required' });
+
+  const permissions = Array.isArray(req.body.permissions) ? req.body.permissions : [];
+  const priority = Number.isInteger(req.body.priority) ? req.body.priority : 100;
+
+  // You cannot create a role holding powers you do not hold, or one that would
+  // outrank you — the same rule as granting, applied at the point of minting.
+  const check = communityAuthz.canGrantRole(db, req.user.userId, req.params.id, { permissions, priority });
+  if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
+
+  const role = db.createCommunityRole(req.params.id, { name, priority, permissions });
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'role.create', targetType: 'role', targetId: role.id,
+  });
+  res.status(201).json({ role });
+});
+
+app.patch('/api/communities/:id/roles/:roleId', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_ROLES,
+    { resource: { type: 'role', id: req.params.roleId } })) return;
+
+  const role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.params.roleId);
+  const next = Array.isArray(req.body.permissions) ? req.body.permissions : null;
+  const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role, next);
+  if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
+
+  const updated = db.updateCommunityRole(req.params.roleId, {
+    name: req.body.name !== undefined ? boundedString(req.body.name, COMMUNITY_LIMITS.roleName) : undefined,
+    priority: Number.isInteger(req.body.priority) ? req.body.priority : undefined,
+    permissions: next || undefined,
+  });
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'role.update', targetType: 'role', targetId: req.params.roleId,
+  });
+  res.json({ role: updated });
+});
+
+app.delete('/api/communities/:id/roles/:roleId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_ROLES,
+    { resource: { type: 'role', id: req.params.roleId } })) return;
+
+  const role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.params.roleId);
+  const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role);
+  if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
+
+  if (!db.deleteCommunityRole(req.params.roleId)) {
+    return res.status(409).json({ error: 'Built-in roles cannot be deleted' });
+  }
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'role.delete', targetType: 'role', targetId: req.params.roleId,
+  });
+  res.json({ success: true });
+});
+
+app.put('/api/communities/:id/members/:userId/roles/:roleId', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_ROLES,
+    { resource: { type: 'role', id: req.params.roleId } })) return;
+
+  const role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.params.roleId);
+  if (!role) return res.status(404).json({ error: 'Role not found' });
+
+  // The rule that stops an admin minting an owner: you cannot grant a
+  // capability you do not hold, and the role must sit below your own priority.
+  const check = communityAuthz.canGrantRole(db, req.user.userId, req.params.id, role);
+  if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
+
+  const membership = db.getCommunityMembership(req.params.id, req.params.userId);
+  if (!membership) return res.status(404).json({ error: 'Not a member' });
+
+  db.grantCommunityRole(membership.id, role.id, { grantedBy: req.user.userId });
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'role.grant', targetType: 'user', targetId: req.params.userId,
+    metadata: { role: role.name },
+  });
+  res.json({ roles: db.getMemberRoles(req.params.id, req.params.userId) });
+});
+
+app.delete('/api/communities/:id/members/:userId/roles/:roleId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_ROLES,
+    { resource: { type: 'role', id: req.params.roleId } })) return;
+
+  const rank = communityAuthz.canActOnMember(db, req.user.userId, req.params.userId, req.params.id);
+  if (!rank.allowed) return res.status(403).json({ error: 'Forbidden' });
+
+  const membership = db.getCommunityMembership(req.params.id, req.params.userId);
+  if (!membership) return res.status(404).json({ error: 'Not a member' });
+
+  // Revoking the last owner's owner-role is the same hazard as them leaving.
+  const role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.params.roleId);
+  if (role && role.name === 'owner' &&
+      communityAuthz.wouldLeaveNoOwner(db, req.params.id, req.params.userId)) {
+    return res.status(409).json({ error: 'A community must keep at least one owner' });
+  }
+
+  db.revokeCommunityRole(membership.id, req.params.roleId);
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'role.revoke', targetType: 'user', targetId: req.params.userId,
+  });
+  res.json({ roles: db.getMemberRoles(req.params.id, req.params.userId) });
+});
+
+// ----- Channels: containers for waves -----
+
+app.get('/api/communities/:id/channels', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_CHANNEL)) return;
+  const channels = db.listChannels(req.params.id).map(c => ({
+    ...c,
+    // The wave list per channel is deliberately NOT expanded here. Which waves
+    // a given member may see is the waves' decision, not the channel's, so it
+    // is fetched through the normal wave routes that already enforce it.
+    waveCount: db.listWavesInChannel(c.id).length,
+  }));
+  res.json({ channels });
+});
+
+app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS)) return;
+
+  const name = boundedString(req.body.name, COMMUNITY_LIMITS.channelName);
+  if (!name) return res.status(400).json({ error: 'Channel name is required' });
+  const slug = communitySlug(req.body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  if (!slug) return res.status(400).json({ error: 'Invalid channel address' });
+
+  try {
+    const channel = db.createChannel({
+      communityId: req.params.id, name, slug,
+      description: req.body.description ? boundedString(req.body.description, COMMUNITY_LIMITS.description) : null,
+      type: ['text', 'announcement'].includes(req.body.type) ? req.body.type : 'text',
+      visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
+      sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
+      createdBy: req.user.userId,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.create', targetType: 'channel', targetId: channel.id,
+    });
+    res.status(201).json({ channel });
+  } catch (err) {
+    if (/UNIQUE/.test(err.message)) return res.status(409).json({ error: 'That channel address is taken' });
+    throw err;
+  }
+});
+
+app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS,
+    { resource: { type: 'channel', id: req.params.channelId } })) return;
+
+  const fields = {};
+  if (req.body.name !== undefined) {
+    const name = boundedString(req.body.name, COMMUNITY_LIMITS.channelName);
+    if (!name) return res.status(400).json({ error: 'Invalid name' });
+    fields.name = name;
+  }
+  if (req.body.description !== undefined) {
+    fields.description = req.body.description
+      ? boundedString(req.body.description, COMMUNITY_LIMITS.description) : null;
+  }
+  if (['text', 'announcement'].includes(req.body.type)) fields.type = req.body.type;
+  if (['members', 'restricted'].includes(req.body.visibility)) fields.visibility = req.body.visibility;
+  if (Number.isInteger(req.body.sortOrder)) fields.sort_order = req.body.sortOrder;
+
+  res.json({ channel: db.updateChannel(req.params.channelId, fields) });
+});
+
+app.delete('/api/communities/:id/channels/:channelId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS,
+    { resource: { type: 'channel', id: req.params.channelId } })) return;
+
+  // Waves inside fall back to uncontained. Deleting a container must never
+  // delete the conversations in it.
+  db.deleteChannel(req.params.channelId);
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'channel.delete', targetType: 'channel', targetId: req.params.channelId,
+  });
+  res.json({ success: true });
+});
+
+// ----- Filing a wave into a channel -----
+//
+// The operation the whole container model exists to make safe. It changes where
+// a wave is LISTED. It does not touch participants, privacy or keys, and the
+// caller must be able to manage the wave in its own right — Community staff do
+// not acquire authority over a wave by virtue of it being filed near them.
+app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MOVE_WAVE,
+    { resource: { type: 'channel', id: req.params.channelId } })) return;
+
+  const wave = db.getWave(req.params.waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+
+  // Authority over the wave itself, from the wave's own rules. Without this a
+  // Community moderator could file anyone's private wave into their Community.
+  if (!canManageWave(wave, req.user.userId)) {
+    return res.status(403).json({ error: 'You cannot move that wave' });
+  }
+
+  const updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'wave.file', targetType: 'wave', targetId: req.params.waveId,
+  });
+  res.json({ wave: updated });
+});
+
+app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MOVE_WAVE,
+    { resource: { type: 'channel', id: req.params.channelId } })) return;
+
+  const wave = db.getWave(req.params.waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+  if (!canManageWave(wave, req.user.userId)) {
+    return res.status(403).json({ error: 'You cannot move that wave' });
+  }
+  const updated = db.setWaveChannel(req.params.waveId, null);
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'wave.unfile', targetType: 'wave', targetId: req.params.waveId,
+  });
+  res.json({ wave: updated });
+});
+
+// ----- Invites -----
+
+app.post('/api/communities/:id/invites', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
+
+  let role = null;
+  if (req.body.roleId) {
+    role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.body.roleId);
+    if (!role || role.community_id !== req.params.id) return res.status(404).json({ error: 'Role not found' });
+
+    // Brief §17: an invite link is a bearer token that travels through chat and
+    // email. One that makes its redeemer an administrator gives the Community
+    // away to whoever forwards it.
+    const conferrable = communityAuthz.canInviteConferRole(role);
+    if (!conferrable.allowed) {
+      return res.status(403).json({ error: 'An invite cannot grant that role' });
+    }
+    const grantable = communityAuthz.canGrantRole(db, req.user.userId, req.params.id, role);
+    if (!grantable.allowed) return res.status(403).json({ error: 'Forbidden', reason: grantable.reason });
+  }
+
+  const maxUses = Number.isInteger(req.body.maxUses) && req.body.maxUses > 0
+    ? Math.min(req.body.maxUses, 1000) : null;
+
+  const { id, token } = db.createCommunityInvite({
+    communityId: req.params.id, createdBy: req.user.userId,
+    roleId: role ? role.id : null, maxUses, expiresAt: req.body.expiresAt || null,
+  });
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'invite.create', targetType: 'invite', targetId: id,
+  });
+  // The only time the token is ever readable. Only its hash is stored.
+  res.status(201).json({ invite: { id, token } });
+});
+
+app.get('/api/communities/:id/invites', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
+  res.json({ invites: db.listCommunityInvites(req.params.id) });
+});
+
+app.delete('/api/communities/:id/invites/:inviteId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
+  const invite = db.db.prepare('SELECT community_id FROM community_invites WHERE id = ?').get(req.params.inviteId);
+  if (!invite || invite.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
+  db.revokeCommunityInvite(req.params.inviteId);
+  res.json({ success: true });
+});
+
+// Redeem. Rate limited hard: this endpoint takes a secret and says whether it
+// was right, which is the shape of something worth guessing at.
+app.post('/api/communities/join', authenticateToken, loginLimiter, (req, res) => {
+  const token = String(req.body.token || '');
+  if (!token) return res.status(400).json({ error: 'Invite token required' });
+
+  const invite = db.getCommunityInviteByToken(token);
+  // One message for "no such invite", "revoked", "expired" and "used up": each
+  // distinct answer tells someone holding a guess how close they are.
+  if (!invite) return res.status(404).json({ error: 'That invite is not valid' });
+
+  const community = db.getCommunityById(invite.community_id);
+  if (!community || community.status !== 'active') return res.status(404).json({ error: 'That invite is not valid' });
+
+  if (db.getCommunityBan(invite.community_id, req.user.userId)) {
+    return res.status(403).json({ error: 'You cannot join this community' });
+  }
+
+  // Atomic. The guard is in the UPDATE's WHERE clause, so concurrent redeemers
+  // of a single-use invite cannot both win (threat model I-2).
+  if (!db.claimCommunityInviteUse(invite.id)) {
+    return res.status(404).json({ error: 'That invite is not valid' });
+  }
+
+  const membershipId = db.addCommunityMember(invite.community_id, req.user.userId, {
+    state: 'active', invitedBy: invite.created_by,
+  });
+  const role = invite.role_id
+    ? db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(invite.role_id)
+    : db.getCommunityRole(invite.community_id, 'member');
+
+  // Re-checked at redemption, not only at minting: the role may have been
+  // edited into something administrative since the invite was created.
+  if (role && communityAuthz.canInviteConferRole(role).allowed) {
+    db.grantCommunityRole(membershipId, role.id, { grantedBy: invite.created_by });
+  } else {
+    const fallback = db.getCommunityRole(invite.community_id, 'member');
+    if (fallback) db.grantCommunityRole(membershipId, fallback.id, { grantedBy: invite.created_by });
+  }
+
+  db.logCommunityAudit(invite.community_id, {
+    actorId: req.user.userId, action: 'invite.redeem', targetType: 'invite', targetId: invite.id,
+  });
+  res.json({ community: db.getCommunityById(invite.community_id) });
+});
+
+// ----- Audit -----
+
+app.get('/api/communities/:id/audit', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_AUDIT_LOG)) return;
+  res.json({ entries: db.listCommunityAudit(req.params.id, { limit: 200 }) });
 });
 
 // ============ Health Check ============

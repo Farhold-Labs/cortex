@@ -183,7 +183,7 @@ not exist, which is refused rather than ignored, so a bad id can never read as
 
 ## 4. Membership and privacy
 
-### M-1 — enumeration **[design gap, precedent exists]**
+### M-1 — enumeration **[ADDRESSED v2.96.0]**
 
 The brief's §22 is right, and Cortex already has the house pattern: unknown
 slug, unpublished wave and disabled feature all return an **identical 404**, and
@@ -207,14 +207,14 @@ to enforce anything, but never needs to read message content.
 
 ## 5. Invitations
 
-### I-1 — token handling **[precedent exists]**
+### I-1 — token handling **[ADDRESSED v2.96.0]**
 
 Cortex already does this correctly twice — account invitations (v2.67.0) and
 follower confirmations store **only a hash**, show the raw value once, and
 answer uniformly for spent versus forged tokens. Communities should reuse the
 pattern rather than reinvent it.
 
-### I-2 — use-count races **[design gap]**
+### I-2 — use-count races **[ADDRESSED v2.96.0]**
 
 `max_uses` checked and then incremented non-atomically is a classic
 over-redemption bug; concurrent redemptions of a 1-use invite can both succeed.
