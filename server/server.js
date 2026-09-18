@@ -16774,11 +16774,48 @@ function parseHttpSignature(signatureHeader) {
   return parts;
 }
 
-function verifyHttpSignature(req, publicKey) {
+// v2.93.1 — a signature is only worth what it covers.
+//
+// The verifier rebuilds the signing string from the header list inside the
+// sender's own Signature header. Without a floor, a peer could sign
+// `(request-target)` alone and everything else — host, date, and the body
+// digest — would be outside the signature:
+//
+//   * no signed `date` meant the 5-minute freshness window was handed
+//     `new Date(undefined)`, so `Math.abs(now - Invalid) / 60000` was NaN and
+//     `NaN > 5` is false — the check passed and the request was replayable
+//     indefinitely;
+//   * no signed `digest` meant the body was unauthenticated. The digest header
+//     was still recomputed and compared, but an unsigned digest can be swapped
+//     along with the body it describes, so the comparison proved nothing.
+//
+// Forging a signature was never possible without the private key. The exposure
+// was replay of genuine captured traffic — including from a node since
+// suspended — which is exactly what a freshness window exists to stop.
+//
+// Every Cortex node has always SENT `(request-target) host date` plus `digest`
+// when there is a body (see createHttpSignatureFromString), so requiring them
+// rejects nothing that a Cortex node has ever legitimately produced.
+const REQUIRED_SIGNED_HEADERS = ['(request-target)', 'host', 'date'];
+
+function verifyHttpSignature(req, publicKey, { requireSignedDigest = false } = {}) {
   const signatureParts = parseHttpSignature(req.headers['signature']);
   if (!signatureParts) return false;
 
   const headersList = signatureParts.headers.split(' ');
+  const signed = new Set(headersList.map(h => h.toLowerCase()));
+
+  for (const required of REQUIRED_SIGNED_HEADERS) {
+    if (!signed.has(required)) {
+      console.warn(`[federation] signature omits required header "${required}" — rejected`);
+      return false;
+    }
+  }
+  // A body must be covered by the signature, not merely accompanied by a digest.
+  if (requireSignedDigest && !signed.has('digest')) {
+    console.warn('[federation] request has a body but does not sign its digest — rejected');
+    return false;
+  }
 
   // Reconstruct signing string
   const signingParts = headersList.map(header => {
@@ -16846,7 +16883,15 @@ function createFederationAuthMiddleware(allowedStatuses = ['active']) {
       return res.status(403).json({ error: 'No public key for this node' });
     }
 
-    // Verify digest if present
+    // v2.93.1 — a request carrying a body must carry a digest, and that digest
+    // must be inside the signature (enforced below). Without the first half a
+    // peer can simply omit the header; without the second the header can be
+    // rewritten alongside the body it describes.
+    const hasBody = !!req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0;
+    if (hasBody && !req.headers['digest']) {
+      return res.status(401).json({ error: 'Body requires a Digest header' });
+    }
+
     if (req.headers['digest']) {
       const bodyString = JSON.stringify(req.body);
       const expectedDigest = `SHA-256=${crypto.createHash('sha256').update(bodyString).digest('base64')}`;
@@ -16855,15 +16900,21 @@ function createFederationAuthMiddleware(allowedStatuses = ['active']) {
       }
     }
 
-    // Verify signature
-    if (!verifyHttpSignature(req, node.publicKey)) {
+    // Verify signature. The minimum signed set is enforced inside, so a
+    // signature that does not cover the date or the body is refused here
+    // rather than being waved through by the checks that follow.
+    if (!verifyHttpSignature(req, node.publicKey, { requireSignedDigest: hasBody })) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    // Check date is within acceptable window (5 minutes)
+    // Freshness. `date` is guaranteed present and signed by this point, but an
+    // unparseable value would still yield NaN — and `NaN > 5` is false, which
+    // would pass. Reject explicitly rather than relying on the comparison.
     const requestDate = new Date(req.headers['date']);
-    const now = new Date();
-    const diffMinutes = Math.abs(now - requestDate) / (1000 * 60);
+    if (Number.isNaN(requestDate.getTime())) {
+      return res.status(401).json({ error: 'Invalid Date header' });
+    }
+    const diffMinutes = Math.abs(Date.now() - requestDate.getTime()) / (1000 * 60);
     if (diffMinutes > 5) {
       return res.status(401).json({ error: 'Request date too old or in future' });
     }
@@ -17631,9 +17682,34 @@ app.post('/api/federation/inbox/request', federationRequestLimiter, async (req, 
     return res.status(401).json({ error: 'Signature keyId does not match fromNodeName' });
   }
 
-  // Verify the signature using the provided public key
+  // Verify the signature using the provided public key.
+  //
+  // v2.93.1 — this is the LEAST trusted signature check in the system: the key
+  // arrives in the request itself, so all the signature proves is that whoever
+  // sent it holds the matching private key. The minimum signed set therefore
+  // matters more here than anywhere else, and the body must be covered — a
+  // federation request whose payload sits outside the signature is a pairing
+  // request that could be rewritten in flight.
   try {
-    const isValid = verifyHttpSignature(req, fromPublicKey);
+    const bootstrapHasBody = !!req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0;
+    if (bootstrapHasBody && !req.headers['digest']) {
+      return res.status(401).json({ error: 'Body requires a Digest header' });
+    }
+    if (req.headers['digest']) {
+      const expected = `SHA-256=${crypto.createHash('sha256').update(JSON.stringify(req.body)).digest('base64')}`;
+      if (req.headers['digest'] !== expected) {
+        return res.status(401).json({ error: 'Digest mismatch' });
+      }
+    }
+    const requestDate = new Date(req.headers['date']);
+    if (Number.isNaN(requestDate.getTime())) {
+      return res.status(401).json({ error: 'Invalid Date header' });
+    }
+    if (Math.abs(Date.now() - requestDate.getTime()) / (1000 * 60) > 5) {
+      return res.status(401).json({ error: 'Request date too old or in future' });
+    }
+
+    const isValid = verifyHttpSignature(req, fromPublicKey, { requireSignedDigest: bootstrapHasBody });
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
