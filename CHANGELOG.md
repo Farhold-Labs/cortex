@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.97.0] - 2026-09-18
+
+### Security
+
+- **A remote member's standing is now re-checked, not assumed permanent.** Once cross-port auth created a local stub row, nothing ever asked again whether the node that vouched for that person still did — so suspending or unpairing a federation peer left its users' Community membership entirely intact. `authorize()` now refuses a cross-port actor whose home node is not an **active** peer. Suspension is reversible: re-activating the peer restores standing without anyone re-inviting members, and a local user has no home node to lose.
+  - **Scoped deliberately, and the wider question is left open on purpose.** This gates Communities only. A cross-port user whose node has been unpaired keeps any existing session and any wave participation they already held, because revoking those is a node-wide authentication decision rather than one for the Communities evaluator to make by itself. Recorded as S-1 in the threat model: someone should decide what unpairing a node is meant to mean for sessions and waves, because today it means nothing.
+- **A route was computing its own capability list.** Phase 3's rule is that no handler decides a permission inline; `GET /api/communities/:id` broke it for the listing case by calling `db.getMemberCapabilities` directly, which knows about roles and nothing about standing. It reported a remote member's full capabilities while every gated endpoint correctly refused them. The evaluator gained `effectiveCapabilities()` so that "what can they do" and "may they do this" cannot disagree. Found by the two-node test.
+
+### Added
+
+- **Communities, Phase 4 — remote membership.** Someone with an account on an allied node can now be invited to, and hold roles in, a Community here. No state replication: a Community still lives on exactly one node and its members come from many.
+  - **Invitations are addressed to `handle@node`, before that person has any local row.** A remote person does not exist here until they cross-port in, so the invitation waits against the address and binds on their first arrival — that lifecycle, an invitation outliving the absence of the account it is for, is the substance of this phase. Matching uses the handle **at home**, not the local one, because cross-port auth suffixes handles on collision and matching the local form would miss exactly the people whose names clashed.
+  - The target node must be an **active federation peer**; an arbitrary hostname would make the invitations table a free-text store keyed by attacker input. An address is no more entitled to confer an administrative role than a link is, and binding cannot overrule a ban imposed after the invitation was sent.
+  - Binding is idempotent and cannot cost someone the login they have just completed: a failure there is logged, not raised.
+  - Remote members are visibly remote in the member list, with their home node shown, so an operator can see whose user an account actually is.
+- **A two-node integration test.** Two real servers are started, paired as federation peers with real keypairs, and the **actual** cross-port handshake is run — initiate, approve at home, signed server-to-server exchange, session — with nothing simulated but the browser redirect. It then suspends the home node and asserts the borrowed rights are withdrawn, restores it and asserts they come back. 11 tests; suite 194 → 208.
+
 ## [2.96.0] - 2026-09-18
 
 ### Added
