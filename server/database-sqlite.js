@@ -19,6 +19,7 @@ import bcrypt from 'bcryptjs';
 import sanitizeHtml from 'sanitize-html';
 import crypto from 'crypto';
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
+import { BUILT_IN_ROLES, isCapability, unionCapabilities } from './lib/communities/capabilities.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -3020,6 +3021,228 @@ export class DatabaseSQLite {
       }
       if (cleaned > 0) console.log(`✅ Cleared legacy default preferences on ${cleaned} user(s) — they now follow instance defaults`);
     }
+
+    // ===== v2.94.0 — Communities, Phase 1: domain model only =====
+    //
+    // Tables and nothing else. No routes, no federation, no UI — per
+    // docs/communities/02-implementation-plan.md the authorization evaluator is
+    // Phase 2 and anything user-facing is Phase 3+. These tables are inert until
+    // then, which is deliberate: the schema is the part that is expensive to
+    // change once there is data in it.
+    //
+    // The structural decision that shapes all of this (§2b): a CHANNEL IS A
+    // CONTAINER THAT HOLDS WAVES. It is not a wave. A wave keeps its own
+    // participants, privacy and encryption keys and merely gains a channel_id,
+    // which is why moving one in or out of a Community changes nobody's access.
+    // The earlier design had the channel *be* the wave, and that made every
+    // migration a mass disclosure.
+    const communitiesExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='communities'`
+    ).get();
+    if (!communitiesExist) {
+      console.log('📝 Creating Communities tables (v2.94.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS communities (
+          id            TEXT PRIMARY KEY,
+          slug          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          name          TEXT NOT NULL,
+          description   TEXT,
+          -- public   = listed in search
+          -- unlisted = reachable by link or invite, never listed
+          -- private  = invite only
+          --
+          -- Three values although the UI may offer two. Unlisted costs nothing
+          -- now and is unpleasant to retrofit once real Communities exist.
+          visibility    TEXT NOT NULL DEFAULT 'private'
+                          CHECK(visibility IN ('public','unlisted','private')),
+          -- The authoritative node. Stored, never derived from the hostname at
+          -- read time, so that importing a Community to another node is a data
+          -- change rather than a change of identity.
+          home_node     TEXT,
+          status        TEXT NOT NULL DEFAULT 'active'
+                          CHECK(status IN ('active','suspended','deleted')),
+          -- Bumped on every state-changing write. Not consensus machinery —
+          -- one node is authoritative — but federation needs a cheap "is what
+          -- you have current" answer.
+          state_version INTEGER NOT NULL DEFAULT 1,
+          created_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at    TEXT NOT NULL,
+          updated_at    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_communities_visibility ON communities(visibility, status);
+
+        -- Containers for waves. community_id NULL means NODE-LEVEL: the node
+        -- behaves as an implicit Community everyone belongs to, in which only
+        -- admins may create channels. There is deliberately no literal "node
+        -- Community" row — one would invite questions with no good answers
+        -- (can you leave it, who owns it, does it federate).
+        CREATE TABLE IF NOT EXISTS channels (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT REFERENCES communities(id) ON DELETE CASCADE,
+          name         TEXT NOT NULL,
+          slug         TEXT NOT NULL,
+          description  TEXT,
+          type         TEXT NOT NULL DEFAULT 'text'
+                         CHECK(type IN ('text','announcement')),
+          -- Channel visibility gates DISCOVERY. Wave privacy still gates
+          -- CONTENT — a private wave inside a visible channel stays private and
+          -- is simply not listed for non-participants.
+          visibility   TEXT NOT NULL DEFAULT 'members'
+                         CHECK(visibility IN ('members','restricted')),
+          sort_order   INTEGER NOT NULL DEFAULT 0,
+          created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL
+        );
+        -- IFNULL rather than UNIQUE(community_id, slug), because in SQLite two
+        -- NULLs are distinct in a unique constraint — which would let a node
+        -- accumulate any number of channels all slugged 'general'.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_slug
+          ON channels(IFNULL(community_id, '~node~'), slug);
+        CREATE INDEX IF NOT EXISTS idx_channels_community ON channels(community_id, sort_order);
+
+        -- Membership references users(id) and nothing else. A remote member
+        -- arrives through cross-port auth (v2.56.0) and IS a local users row,
+        -- so there is no second identity table to keep in step.
+        CREATE TABLE IF NOT EXISTS community_memberships (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- Soft-delete: 'left' and 'removed' keep the row, because audit and
+          -- federation both need to know a membership existed.
+          state        TEXT NOT NULL DEFAULT 'active'
+                         CHECK(state IN ('invited','active','left','removed')),
+          invited_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+          joined_at    TEXT,
+          updated_at   TEXT NOT NULL,
+          version      INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(community_id, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_memberships_user ON community_memberships(user_id, state);
+
+        CREATE TABLE IF NOT EXISTS community_roles (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          name         TEXT NOT NULL,
+          -- Higher outranks lower. Used for "may this member act on that one".
+          priority     INTEGER NOT NULL DEFAULT 0,
+          -- JSON array of capability strings. See lib/communities/capabilities.js.
+          permissions  TEXT NOT NULL DEFAULT '[]',
+          -- Built-in roles seeded with the Community. Cannot be deleted, and
+          -- the owner role cannot have its capabilities edited away.
+          managed      INTEGER NOT NULL DEFAULT 0,
+          created_at   TEXT NOT NULL,
+          UNIQUE(community_id, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS community_membership_roles (
+          membership_id TEXT NOT NULL REFERENCES community_memberships(id) ON DELETE CASCADE,
+          role_id       TEXT NOT NULL REFERENCES community_roles(id) ON DELETE CASCADE,
+          granted_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          granted_at    TEXT NOT NULL,
+          PRIMARY KEY (membership_id, role_id)
+        );
+
+        -- Schema present from Phase 1, evaluator support deferred to Phase 2.
+        -- Present now because adding a permission surface later tends to mean
+        -- rewriting every call site that assumed it did not exist.
+        CREATE TABLE IF NOT EXISTS channel_permissions (
+          channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+          role_id    TEXT NOT NULL REFERENCES community_roles(id) ON DELETE CASCADE,
+          allow      TEXT NOT NULL DEFAULT '[]',
+          deny       TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY (channel_id, role_id)
+        );
+
+        -- HASH ONLY. The token itself is shown once to whoever minted it and
+        -- never stored, so a database read cannot yield a working invite.
+        CREATE TABLE IF NOT EXISTS community_invites (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          token_hash   TEXT NOT NULL UNIQUE,
+          created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+          max_uses     INTEGER,
+          use_count    INTEGER NOT NULL DEFAULT 0,
+          expires_at   TEXT,
+          revoked_at   TEXT,
+          created_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_invites_community ON community_invites(community_id, revoked_at);
+
+        -- RESTRICT on user_id: a ban that disappears when the row it points at
+        -- is deleted is not a ban. Deleting a banned user must fail loudly
+        -- rather than quietly readmit them.
+        CREATE TABLE IF NOT EXISTS community_bans (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+          reason       TEXT,
+          banned_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          expires_at   TEXT,
+          created_at   TEXT NOT NULL,
+          UNIQUE(community_id, user_id)
+        );
+
+        -- Append-only. Never updated, never deleted while the Community lives.
+        CREATE TABLE IF NOT EXISTS community_events (
+          id            TEXT PRIMARY KEY,
+          community_id  TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          sequence      INTEGER NOT NULL,
+          state_version INTEGER NOT NULL,
+          type          TEXT NOT NULL,
+          payload       TEXT NOT NULL,
+          origin_node   TEXT,
+          -- Replay safety, the same shape as federation_inbox_log.
+          dedupe_key    TEXT NOT NULL,
+          created_at    TEXT NOT NULL,
+          UNIQUE(community_id, sequence),
+          UNIQUE(community_id, dedupe_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS community_federation_nodes (
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          node_name    TEXT NOT NULL,
+          added_at     TEXT NOT NULL,
+          PRIMARY KEY (community_id, node_name)
+        );
+
+        -- Metadata only. Never a token, never a key, never message content.
+        CREATE TABLE IF NOT EXISTS community_audit_log (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          actor_id     TEXT REFERENCES users(id) ON DELETE SET NULL,
+          action       TEXT NOT NULL,
+          target_type  TEXT,
+          target_id    TEXT,
+          metadata     TEXT,
+          created_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_community_audit ON community_audit_log(community_id, created_at DESC);
+      `);
+      console.log('✅ Communities tables created (inert until Phase 2)');
+    }
+
+    // Waves gain their container ids. Separate from the CREATE TABLE above
+    // because `waves` long predates it — and because a guarded CREATE TABLE
+    // never gains columns for a database that already had the table.
+    //
+    // BOTH ARE NULLABLE AND STAY THAT WAY. An uncontained wave is the normal
+    // case, permanently, not a migration backlog: direct messages, crew waves
+    // and profile waves have no business belonging to a Community, and forcing
+    // a two-person conversation into one would hand that Community's staff a
+    // structural claim over it.
+    const waveColsForCommunity = this.db.prepare(`PRAGMA table_info(waves)`).all();
+    if (waveColsForCommunity.length && !waveColsForCommunity.some(c => c.name === 'community_id')) {
+      console.log('📝 Adding wave container columns (v2.94.0)...');
+      this.db.exec(`
+        ALTER TABLE waves ADD COLUMN community_id TEXT REFERENCES communities(id) ON DELETE SET NULL;
+        ALTER TABLE waves ADD COLUMN channel_id   TEXT REFERENCES channels(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_waves_community ON waves(community_id);
+        CREATE INDEX IF NOT EXISTS idx_waves_channel   ON waves(channel_id);
+      `);
+      console.log('✅ waves.community_id / waves.channel_id added');
+    }
+
   }
 
   prepareStatements() {
@@ -5620,6 +5843,10 @@ export class DatabaseSQLite {
       postPolicy: r.post_policy || 'all',
       allowReplies: r.allow_replies == null ? true : r.allow_replies === 1,
       allowReactions: r.allow_reactions == null ? true : r.allow_reactions === 1,
+      // Container (v2.94.0) — see rowToWave. A list needs these to group a wave
+      // under its channel without a second round trip.
+      communityId: r.community_id || null,
+      channelId: r.channel_id || null,
       muted: mutedWaveIds.has(r.id),
     }));
   }
@@ -5756,6 +5983,10 @@ export class DatabaseSQLite {
       postPolicy: r.post_policy || 'all',
       allowReplies: r.allow_replies == null ? true : r.allow_replies === 1,
       allowReactions: r.allow_reactions == null ? true : r.allow_reactions === 1,
+      // Container (v2.94.0) — see rowToWave. A list needs these to group a wave
+      // under its channel without a second round trip.
+      communityId: r.community_id || null,
+      channelId: r.channel_id || null,
       muted: mutedWaveIds.has(r.id),
       updatedAt: r.updated_at,
       encrypted: r.encrypted === 1,
@@ -5801,6 +6032,15 @@ export class DatabaseSQLite {
       postPolicy: row.post_policy || 'all',
       allowReplies: row.allow_replies == null ? true : row.allow_replies === 1,
       allowReactions: row.allow_reactions == null ? true : row.allow_reactions === 1,
+      // Container (v2.94.0). Null is the normal case, not a missing value: a
+      // wave belongs to a channel only if someone put it in one, and direct
+      // messages and crew waves never will.
+      //
+      // Carried by ALL THREE wave mappers on purpose. A column no mapper
+      // exposes is a column no reader can see, and this file having three of
+      // them is a documented trap (CLAUDE.md) that has cost time before.
+      communityId: row.community_id || null,
+      channelId: row.channel_id || null,
     };
   }
 
@@ -13129,6 +13369,334 @@ export class DatabaseSQLite {
   saveGroupInvitations() {}
   saveModeration() {}
   savePushSubscriptions() {}
+
+  // ============ Communities (v2.94.0, Phase 1) ============
+  //
+  // The domain model only. There are no routes on any of this yet, and no
+  // authorization: every method here does what it is told. The single evaluator
+  // that decides whether a caller MAY is `lib/communities/authorize.js`, Phase 2.
+  //
+  // The property to preserve while extending this: attaching or detaching a wave
+  // changes the wave's container and NOTHING about who can read it. Wave
+  // participants, privacy and encryption keys are untouched by every method
+  // below. That is the whole reason a channel is a container rather than a wave.
+
+  createCommunity({ name, slug, description = null, visibility = 'private', homeNode = null, createdBy = null }) {
+    const now = new Date().toISOString();
+    const id = uuidv4();
+    const cleanSlug = String(slug || '').trim().toLowerCase();
+    if (!cleanSlug) throw new Error('Community slug is required');
+
+    // One transaction: a Community that exists without its built-in roles is a
+    // Community nobody can administer, including the person who just made it.
+    const tx = this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO communities (id, slug, name, description, visibility, home_node, status, state_version, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?)
+      `).run(id, cleanSlug, name, description, visibility, homeNode, createdBy, now, now);
+
+      const insertRole = this.db.prepare(`
+        INSERT INTO community_roles (id, community_id, name, priority, permissions, managed, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?)
+      `);
+      for (const role of BUILT_IN_ROLES) {
+        insertRole.run(uuidv4(), id, role.name, role.priority, JSON.stringify(role.permissions), now);
+      }
+
+      // The creator is the owner, and is a member like anyone else — ownership
+      // is a role, not a column, so there is one place to read it from.
+      if (createdBy) {
+        const membershipId = this.addCommunityMember(id, createdBy, { state: 'active', at: now });
+        this.grantCommunityRole(membershipId, this.getCommunityRole(id, 'owner').id, { grantedBy: createdBy, at: now });
+      }
+    });
+    tx();
+    return this.getCommunityById(id);
+  }
+
+  getCommunityById(id) {
+    return this.db.prepare('SELECT * FROM communities WHERE id = ?').get(id) || null;
+  }
+
+  getCommunityBySlug(slug) {
+    return this.db.prepare('SELECT * FROM communities WHERE slug = ? COLLATE NOCASE')
+      .get(String(slug || '').trim().toLowerCase()) || null;
+  }
+
+  /**
+   * Communities a stranger may find. `unlisted` is deliberately excluded —
+   * that is the entire difference between it and `public`.
+   */
+  listPublicCommunities({ limit = 50 } = {}) {
+    return this.db.prepare(`
+      SELECT * FROM communities
+      WHERE visibility = 'public' AND status = 'active'
+      ORDER BY name COLLATE NOCASE ASC LIMIT ?
+    `).all(limit);
+  }
+
+  updateCommunity(id, fields = {}) {
+    const allowed = ['name', 'description', 'visibility', 'status', 'home_node'];
+    const sets = [], values = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (!allowed.includes(key)) continue;
+      sets.push(`${key} = ?`);
+      values.push(value);
+    }
+    if (!sets.length) return this.getCommunityById(id);
+    // state_version bumps on every state change, so a peer can ask "is what I
+    // hold current" without diffing the whole Community.
+    sets.push('state_version = state_version + 1', 'updated_at = ?');
+    values.push(new Date().toISOString(), id);
+    this.db.prepare(`UPDATE communities SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return this.getCommunityById(id);
+  }
+
+  // ----- Membership -----
+
+  addCommunityMember(communityId, userId, { state = 'active', invitedBy = null, at = null } = {}) {
+    const now = at || new Date().toISOString();
+    const existing = this.db.prepare(
+      'SELECT * FROM community_memberships WHERE community_id = ? AND user_id = ?'
+    ).get(communityId, userId);
+
+    // Rejoining reuses the row. A new one would orphan the role grants and lose
+    // the fact that this person was here before, which moderation cares about.
+    if (existing) {
+      this.db.prepare(`
+        UPDATE community_memberships
+        SET state = ?, joined_at = COALESCE(joined_at, ?), updated_at = ?, version = version + 1
+        WHERE id = ?
+      `).run(state, state === 'active' ? now : null, now, existing.id);
+      return existing.id;
+    }
+
+    const id = uuidv4();
+    this.db.prepare(`
+      INSERT INTO community_memberships (id, community_id, user_id, state, invited_by, joined_at, updated_at, version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    `).run(id, communityId, userId, state, invitedBy, state === 'active' ? now : null, now);
+    return id;
+  }
+
+  getCommunityMembership(communityId, userId) {
+    return this.db.prepare(
+      'SELECT * FROM community_memberships WHERE community_id = ? AND user_id = ?'
+    ).get(communityId, userId) || null;
+  }
+
+  /**
+   * Soft-delete. The row survives as 'left' or 'removed' because audit and
+   * federation both need to know the membership existed — and because a ban
+   * applied after a departure must still have something to refer to.
+   */
+  setCommunityMemberState(communityId, userId, state) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE community_memberships SET state = ?, updated_at = ?, version = version + 1
+      WHERE community_id = ? AND user_id = ?
+    `).run(state, now, communityId, userId);
+    return this.getCommunityMembership(communityId, userId);
+  }
+
+  listCommunityMembers(communityId, { state = 'active' } = {}) {
+    return this.db.prepare(`
+      SELECT m.*, u.handle, u.display_name, u.avatar_url, u.is_cross_port, u.home_node
+      FROM community_memberships m
+      JOIN users u ON u.id = m.user_id
+      WHERE m.community_id = ? AND (? IS NULL OR m.state = ?)
+      ORDER BY u.display_name COLLATE NOCASE ASC
+    `).all(communityId, state, state);
+  }
+
+  // ----- Roles -----
+
+  getCommunityRole(communityId, name) {
+    return this.db.prepare(
+      'SELECT * FROM community_roles WHERE community_id = ? AND name = ?'
+    ).get(communityId, name) || null;
+  }
+
+  listCommunityRoles(communityId) {
+    return this.db.prepare(
+      'SELECT * FROM community_roles WHERE community_id = ? ORDER BY priority DESC'
+    ).all(communityId);
+  }
+
+  createCommunityRole(communityId, { name, priority = 100, permissions = [] }) {
+    const id = uuidv4();
+    this.db.prepare(`
+      INSERT INTO community_roles (id, community_id, name, priority, permissions, managed, created_at)
+      VALUES (?, ?, ?, ?, ?, 0, ?)
+    `).run(id, communityId, name, priority, JSON.stringify(permissions.filter(isCapability)), new Date().toISOString());
+    return this.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(id);
+  }
+
+  /**
+   * Built-in roles cannot be deleted. Removing `owner` or `member` from under a
+   * live Community leaves members holding a dangling grant and no way to
+   * restore the role that administers the place.
+   */
+  deleteCommunityRole(roleId) {
+    const role = this.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(roleId);
+    if (!role) return false;
+    if (role.managed) return false;
+    this.db.prepare('DELETE FROM community_roles WHERE id = ?').run(roleId);
+    return true;
+  }
+
+  grantCommunityRole(membershipId, roleId, { grantedBy = null, at = null } = {}) {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO community_membership_roles (membership_id, role_id, granted_by, granted_at)
+      VALUES (?, ?, ?, ?)
+    `).run(membershipId, roleId, grantedBy, at || new Date().toISOString());
+  }
+
+  revokeCommunityRole(membershipId, roleId) {
+    this.db.prepare(
+      'DELETE FROM community_membership_roles WHERE membership_id = ? AND role_id = ?'
+    ).run(membershipId, roleId);
+  }
+
+  getMemberRoles(communityId, userId) {
+    return this.db.prepare(`
+      SELECT r.* FROM community_membership_roles mr
+      JOIN community_roles r      ON r.id = mr.role_id
+      JOIN community_memberships m ON m.id = mr.membership_id
+      WHERE m.community_id = ? AND m.user_id = ?
+      ORDER BY r.priority DESC
+    `).all(communityId, userId);
+  }
+
+  /**
+   * The capability set a member actually holds — the union of their roles.
+   *
+   * Returns an EMPTY set for anyone whose membership is not 'active'. Someone
+   * who has left or been removed keeps their role rows (see
+   * setCommunityMemberState) so that rejoining restores them, and reading those
+   * rows as live powers would make "removed" mean nothing at all.
+   *
+   * Phase 2's evaluator is the only thing that should consume this.
+   */
+  getMemberCapabilities(communityId, userId) {
+    const membership = this.getCommunityMembership(communityId, userId);
+    if (!membership || membership.state !== 'active') return new Set();
+    return unionCapabilities(this.getMemberRoles(communityId, userId));
+  }
+
+  /** Highest priority held, for "may A act on B" comparisons. */
+  getMemberPriority(communityId, userId) {
+    const membership = this.getCommunityMembership(communityId, userId);
+    if (!membership || membership.state !== 'active') return -1;
+    const roles = this.getMemberRoles(communityId, userId);
+    return roles.length ? Math.max(...roles.map(r => r.priority)) : 0;
+  }
+
+  // ----- Bans -----
+
+  banFromCommunity(communityId, userId, { reason = null, bannedBy = null, expiresAt = null } = {}) {
+    const now = new Date().toISOString();
+    const tx = this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO community_bans (id, community_id, user_id, reason, banned_by, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(community_id, user_id) DO UPDATE SET
+          reason = excluded.reason, banned_by = excluded.banned_by,
+          expires_at = excluded.expires_at, created_at = excluded.created_at
+      `).run(uuidv4(), communityId, userId, reason, bannedBy, expiresAt, now);
+      // A ban that leaves the membership active is not a ban.
+      if (this.getCommunityMembership(communityId, userId)) {
+        this.setCommunityMemberState(communityId, userId, 'removed');
+      }
+    });
+    tx();
+  }
+
+  getCommunityBan(communityId, userId) {
+    const ban = this.db.prepare(
+      'SELECT * FROM community_bans WHERE community_id = ? AND user_id = ?'
+    ).get(communityId, userId);
+    if (!ban) return null;
+    // An expired ban is reported as absent rather than deleted, so the record
+    // of it having happened survives for moderators to see.
+    if (ban.expires_at && new Date(ban.expires_at) <= new Date()) return null;
+    return ban;
+  }
+
+  // ----- Channels: containers for waves -----
+
+  /**
+   * `communityId` of null creates a NODE-LEVEL channel. Whether the caller is
+   * allowed to do that (admins only) is Phase 2's decision, not this method's.
+   */
+  createChannel({ communityId = null, name, slug, description = null, type = 'text', visibility = 'members', sortOrder = 0, createdBy = null }) {
+    const now = new Date().toISOString();
+    const id = uuidv4();
+    this.db.prepare(`
+      INSERT INTO channels (id, community_id, name, slug, description, type, visibility, sort_order, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, communityId, name, String(slug || '').trim().toLowerCase(), description, type, visibility, sortOrder, createdBy, now, now);
+    return this.getChannelById(id);
+  }
+
+  getChannelById(id) {
+    return this.db.prepare('SELECT * FROM channels WHERE id = ?').get(id) || null;
+  }
+
+  listChannels(communityId = null) {
+    return communityId === null
+      ? this.db.prepare('SELECT * FROM channels WHERE community_id IS NULL ORDER BY sort_order, name').all()
+      : this.db.prepare('SELECT * FROM channels WHERE community_id = ? ORDER BY sort_order, name').all(communityId);
+  }
+
+  deleteChannel(id) {
+    // ON DELETE SET NULL on waves.channel_id: deleting a container must never
+    // delete the conversations inside it. They fall back to uncontained, which
+    // is a state the rest of Cortex already handles because it is the normal one.
+    this.db.prepare('DELETE FROM channels WHERE id = ?').run(id);
+  }
+
+  // ----- Attaching waves to channels -----
+
+  /**
+   * Move a wave into a channel, or out of one with `channelId = null`.
+   *
+   * THIS CHANGES NOBODY'S ACCESS. The wave keeps its participants, its privacy
+   * and its encryption keys; all that changes is where it is listed. That is
+   * what makes the operation safe in both directions, and it is the invariant
+   * to defend if this method is ever extended — the moment attaching a wave
+   * starts implying who may read it, migrating one becomes a disclosure.
+   */
+  setWaveChannel(waveId, channelId) {
+    const channel = channelId ? this.getChannelById(channelId) : null;
+    if (channelId && !channel) throw new Error('Channel not found');
+    this.db.prepare('UPDATE waves SET community_id = ?, channel_id = ?, updated_at = ? WHERE id = ?')
+      .run(channel ? channel.community_id : null, channelId || null, new Date().toISOString(), waveId);
+    return this.db.prepare('SELECT id, title, privacy, community_id, channel_id FROM waves WHERE id = ?').get(waveId);
+  }
+
+  listWavesInChannel(channelId) {
+    return this.db.prepare(
+      'SELECT * FROM waves WHERE channel_id = ? ORDER BY updated_at DESC'
+    ).all(channelId);
+  }
+
+  // ----- Audit -----
+
+  logCommunityAudit(communityId, { actorId = null, action, targetType = null, targetId = null, metadata = null }) {
+    this.db.prepare(`
+      INSERT INTO community_audit_log (id, community_id, actor_id, action, target_type, target_id, metadata, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(uuidv4(), communityId, actorId, action, targetType, targetId,
+           metadata ? JSON.stringify(metadata) : null, new Date().toISOString());
+  }
+
+  listCommunityAudit(communityId, { limit = 100 } = {}) {
+    return this.db.prepare(
+      'SELECT * FROM community_audit_log WHERE community_id = ? ORDER BY created_at DESC LIMIT ?'
+    ).all(communityId, limit);
+  }
+
   saveAll() {}
 
   // Close database connection

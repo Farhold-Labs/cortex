@@ -34,9 +34,13 @@ going the wrong way.
 | Ban scope | **Per-Community**, escalating to a node or verse-wide ban where warranted. |
 | Import from another node | Node admin accepts, at the Community owner's request. **V2/V3** — and it moves content, not just authority. |
 
-**Blocking production** (not Phase 1): cross-port sessions are 24h and
-non-renewable, so a remote member re-authenticates daily. A session-policy
-change, fixable independently of Communities — see implementation plan §6a.
+**Accepted limitation** (2026-09-18): cross-port sessions are 24h and
+non-renewable, so a remote member re-authenticates daily. This was briefly
+recorded as blocking production; it is not. The behaviour **fails closed** — the
+cost is convenience, not safety — and the obvious fix (a sliding refresh session)
+would grant a 90-day credential to someone their home node could ban tomorrow.
+A correct fix needs home-node revalidation on refresh, which is federation work
+and cannot bite before Phase 4. See implementation plan §6a.
 
 Two of those supersede recommendations made earlier in these documents, and the
 channel definition was itself revised the same day — from *a channel is a wave*

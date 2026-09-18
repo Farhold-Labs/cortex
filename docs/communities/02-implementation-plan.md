@@ -321,8 +321,8 @@ about ORM defaults — though note Cortex uses no ORM, so every FK is written by
 | Table | Notes |
 | --- | --- |
 | `communities` | `id` opaque; `state_version` from V1; `home_node`; `status` |
-| `federated_identities` | `handle@node` → stable id (§2 option c) |
-| `community_memberships` | exactly one of `user_id` / `federated_identity_id`; `state`; `version` |
+| ~~`federated_identities`~~ | **Not built** — §2 dissolved it. A remote member is a local `users` row via cross-port auth. |
+| `community_memberships` | `user_id` only, per §2. `state` (soft-delete via `left`/`removed`); `version` |
 | `community_roles` | `priority`, `permissions` (capability list), `managed` |
 | `community_membership_roles` | join table |
 | `communities` (cont.) | `visibility` ∈ `PUBLIC` / `UNLISTED` / `PRIVATE` — §2b |
@@ -354,10 +354,10 @@ Phase numbering follows the brief. Each gate is human review.
 
 | Phase | Deliverable | Gate |
 | --- | --- | --- |
-| **0** | *This document set* | **← we are here** |
-| **0.5** | *Proposed:* F-1 federation signing fix, released on its own | Tests; normal release train |
-| **1** | Domain model + migrations + unit tests. No federation, no routes. | Schema check; full suite |
-| **2** | `authorize()` and capabilities. Actor type accommodates remote from day one. | The full authorization matrix from brief §29, including `remote user` |
+| **0** | *This document set* | **✅ DONE — on master** |
+| **0.5** | F-1 federation signing fix, released on its own | **✅ DONE — shipped as v2.93.1** |
+| **1** | Domain model + migrations + unit tests. No federation, no routes. | Schema check; full suite — **✅ DELIVERED v2.94.0**, 23 model tests, suite 123 → 146 |
+| **2** | `authorize()`. Capability constants and built-in roles already exist from Phase 1 (`lib/communities/capabilities.js`); this phase adds the evaluator. Actor type accommodates remote from day one. | The full authorization matrix from brief §29, including `remote user` |
 | **3** | Local Communities end to end: create, invite, join, leave, roles, channels, messages, moderation | Suite; **explicitly not** a licence to shape the API around local-only |
 | **4** | Remote membership via cross-port: invite an identity from an allied node, join, hold roles, post in channels. **No state replication** (see §2) — the work is authorization and lifecycle for stub users, not consensus. Two-node harness suffices; a third adds little once there is a single authority. | Integration tests across two nodes, plus the relevant chaos cases from brief §30 |
 | **5** | Abuse and limits: rate limits, payload caps, replay/dedupe, audit log, malformed-event rejection, TOCTOU (brief §31) | Security test suite |
@@ -397,10 +397,12 @@ UI must not claim more than a given member's session can provide.
 
 Recorded 2026-09-18 so they are not rediscovered at deployment.
 
-### P-1 — cross-port sessions are 24h and non-renewable **[blocking full production]**
+### P-1 — cross-port sessions are 24h and non-renewable **[ACCEPTED LIMITATION 2026-09-18]**
 
 Jared, on reviewing this plan: *"I would want to fix the 24-hour non-renewable
-sessions issue before fully deploying to production."*
+sessions issue before fully deploying to production."* **Revised the same day**,
+once the cost of fixing it properly was understood: *"acceptable limitation at
+this time."* Phase 1 proceeds with it in place.
 
 Ordinary Cortex sessions are a 60-minute rotating access token over a 90-day
 sliding refresh session (v2.75.0). **Cross-port sessions are neither** — 24 hours,
@@ -425,8 +427,35 @@ done independently of Communities:
 - and consider whether the operator should be able to set it, since
   `instance_config.security` already carries the local policy.
 
-**Gate: do not open Communities to production traffic until this is settled.**
-Phase 1 to 3 are unaffected — they involve no cross-port members.
+### Why this is a limitation and not a gap
+
+The distinction matters, and it is the reason the gate was lifted.
+
+**The current behaviour fails closed.** A 24-hour non-renewable session cannot
+outlive the member's standing at home by more than a day, because it cannot be
+extended at all. What it costs is convenience: a remote member re-runs the full
+approve-at-home redirect daily, on a flow with more steps than a login.
+
+**The obvious fix would open a real gap.** `POST /api/cross-port/session`
+(`server/server.js:14375`) hand-rolls its own token rather than calling
+`issueAuthCredentials` — the same bypass class as the v2.81.2 bug recorded in
+CLAUDE.md. Routing it through `issueAuthCredentials` with `supportsRefresh` is a
+one-line change and would grant a **90-day sliding session** to a user whose home
+node may ban or delete them on day two, with nothing on this side to notice. That
+trades a daily annoyance for a months-long stale credential.
+
+**So a correct fix needs home-node revalidation on refresh** — a federation
+endpoint that answers "is this identity still in good standing", plus a
+cross-port branch in the refresh path that calls it and revokes the family when
+the answer is no. That is federation work, which is why it does not belong in
+Phase 1 ("domain model + migrations + unit tests. No federation, no routes"), and
+why it is not a one-liner.
+
+**When it actually bites: Phase 4.** Phases 1–3 are local-only and involve no
+cross-port members at all, so nothing is blocked and nothing accrues. The natural
+point to settle it is when remote membership becomes real — either as its own
+small release, the way the F-1 signing fix was handled, or as a named piece of
+Phase 4.
 
 ### P-2 — stub-user leakage audit
 
