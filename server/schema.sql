@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS waves (
     -- Profile Wave fields (v2.9.0)
     is_profile_wave INTEGER DEFAULT 0,      -- 1 if this is a user's profile video wave
     profile_owner_id TEXT REFERENCES users(id) -- Owner of the profile wave
-, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL, post_policy TEXT NOT NULL DEFAULT 'all', allow_replies INTEGER NOT NULL DEFAULT 1, allow_reactions INTEGER NOT NULL DEFAULT 1);
+, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL, post_policy TEXT NOT NULL DEFAULT 'all', allow_replies INTEGER NOT NULL DEFAULT 1, allow_reactions INTEGER NOT NULL DEFAULT 1, community_id TEXT REFERENCES communities(id) ON DELETE SET NULL, channel_id   TEXT REFERENCES channels(id) ON DELETE SET NULL);
 CREATE INDEX IF NOT EXISTS idx_waves_created_by ON waves(created_by);
 CREATE INDEX IF NOT EXISTS idx_waves_privacy ON waves(privacy);
 CREATE INDEX IF NOT EXISTS idx_waves_crew ON waves(crew_id);
@@ -116,6 +116,8 @@ CREATE INDEX IF NOT EXISTS idx_waves_updated ON waves(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_waves_root_ping ON waves(root_ping_id);
 CREATE INDEX IF NOT EXISTS idx_waves_broken_out_from ON waves(broken_out_from);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_waves_profile_owner ON waves(profile_owner_id) WHERE is_profile_wave = 1;
+CREATE INDEX IF NOT EXISTS idx_waves_community ON waves(community_id);
+CREATE INDEX IF NOT EXISTS idx_waves_channel   ON waves(channel_id);
 
 CREATE TABLE IF NOT EXISTS wave_participants (
     wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
@@ -1267,6 +1269,162 @@ CREATE TABLE IF NOT EXISTS follower_digest_queue (
           sent_at     TEXT
         );
 CREATE INDEX IF NOT EXISTS idx_digest_pending ON follower_digest_queue(follower_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS communities (
+          id            TEXT PRIMARY KEY,
+          slug          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          name          TEXT NOT NULL,
+          description   TEXT,
+          -- public   = listed in search
+          -- unlisted = reachable by link or invite, never listed
+          -- private  = invite only
+          --
+          -- Three values although the UI may offer two. Unlisted costs nothing
+          -- now and is unpleasant to retrofit once real Communities exist.
+          visibility    TEXT NOT NULL DEFAULT 'private'
+                          CHECK(visibility IN ('public','unlisted','private')),
+          -- The authoritative node. Stored, never derived from the hostname at
+          -- read time, so that importing a Community to another node is a data
+          -- change rather than a change of identity.
+          home_node     TEXT,
+          status        TEXT NOT NULL DEFAULT 'active'
+                          CHECK(status IN ('active','suspended','deleted')),
+          -- Bumped on every state-changing write. Not consensus machinery —
+          -- one node is authoritative — but federation needs a cheap "is what
+          -- you have current" answer.
+          state_version INTEGER NOT NULL DEFAULT 1,
+          created_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at    TEXT NOT NULL,
+          updated_at    TEXT NOT NULL
+        );
+CREATE INDEX IF NOT EXISTS idx_communities_visibility ON communities(visibility, status);
+
+CREATE TABLE IF NOT EXISTS channels (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT REFERENCES communities(id) ON DELETE CASCADE,
+          name         TEXT NOT NULL,
+          slug         TEXT NOT NULL,
+          description  TEXT,
+          type         TEXT NOT NULL DEFAULT 'text'
+                         CHECK(type IN ('text','announcement')),
+          -- Channel visibility gates DISCOVERY. Wave privacy still gates
+          -- CONTENT — a private wave inside a visible channel stays private and
+          -- is simply not listed for non-participants.
+          visibility   TEXT NOT NULL DEFAULT 'members'
+                         CHECK(visibility IN ('members','restricted')),
+          sort_order   INTEGER NOT NULL DEFAULT 0,
+          created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL
+        );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_slug
+          ON channels(IFNULL(community_id, '~node~'), slug);
+CREATE INDEX IF NOT EXISTS idx_channels_community ON channels(community_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS community_memberships (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- Soft-delete: 'left' and 'removed' keep the row, because audit and
+          -- federation both need to know a membership existed.
+          state        TEXT NOT NULL DEFAULT 'active'
+                         CHECK(state IN ('invited','active','left','removed')),
+          invited_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+          joined_at    TEXT,
+          updated_at   TEXT NOT NULL,
+          version      INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(community_id, user_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_memberships_user ON community_memberships(user_id, state);
+
+CREATE TABLE IF NOT EXISTS community_roles (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          name         TEXT NOT NULL,
+          -- Higher outranks lower. Used for "may this member act on that one".
+          priority     INTEGER NOT NULL DEFAULT 0,
+          -- JSON array of capability strings. See lib/communities/capabilities.js.
+          permissions  TEXT NOT NULL DEFAULT '[]',
+          -- Built-in roles seeded with the Community. Cannot be deleted, and
+          -- the owner role cannot have its capabilities edited away.
+          managed      INTEGER NOT NULL DEFAULT 0,
+          created_at   TEXT NOT NULL,
+          UNIQUE(community_id, name)
+        );
+
+CREATE TABLE IF NOT EXISTS community_membership_roles (
+          membership_id TEXT NOT NULL REFERENCES community_memberships(id) ON DELETE CASCADE,
+          role_id       TEXT NOT NULL REFERENCES community_roles(id) ON DELETE CASCADE,
+          granted_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          granted_at    TEXT NOT NULL,
+          PRIMARY KEY (membership_id, role_id)
+        );
+
+CREATE TABLE IF NOT EXISTS channel_permissions (
+          channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+          role_id    TEXT NOT NULL REFERENCES community_roles(id) ON DELETE CASCADE,
+          allow      TEXT NOT NULL DEFAULT '[]',
+          deny       TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY (channel_id, role_id)
+        );
+
+CREATE TABLE IF NOT EXISTS community_invites (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          token_hash   TEXT NOT NULL UNIQUE,
+          created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+          max_uses     INTEGER,
+          use_count    INTEGER NOT NULL DEFAULT 0,
+          expires_at   TEXT,
+          revoked_at   TEXT,
+          created_at   TEXT NOT NULL
+        );
+CREATE INDEX IF NOT EXISTS idx_invites_community ON community_invites(community_id, revoked_at);
+
+CREATE TABLE IF NOT EXISTS community_bans (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+          reason       TEXT,
+          banned_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+          expires_at   TEXT,
+          created_at   TEXT NOT NULL,
+          UNIQUE(community_id, user_id)
+        );
+
+CREATE TABLE IF NOT EXISTS community_events (
+          id            TEXT PRIMARY KEY,
+          community_id  TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          sequence      INTEGER NOT NULL,
+          state_version INTEGER NOT NULL,
+          type          TEXT NOT NULL,
+          payload       TEXT NOT NULL,
+          origin_node   TEXT,
+          -- Replay safety, the same shape as federation_inbox_log.
+          dedupe_key    TEXT NOT NULL,
+          created_at    TEXT NOT NULL,
+          UNIQUE(community_id, sequence),
+          UNIQUE(community_id, dedupe_key)
+        );
+
+CREATE TABLE IF NOT EXISTS community_federation_nodes (
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          node_name    TEXT NOT NULL,
+          added_at     TEXT NOT NULL,
+          PRIMARY KEY (community_id, node_name)
+        );
+
+CREATE TABLE IF NOT EXISTS community_audit_log (
+          id           TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          actor_id     TEXT REFERENCES users(id) ON DELETE SET NULL,
+          action       TEXT NOT NULL,
+          target_type  TEXT,
+          target_id    TEXT,
+          metadata     TEXT,
+          created_at   TEXT NOT NULL
+        );
+CREATE INDEX IF NOT EXISTS idx_community_audit ON community_audit_log(community_id, created_at DESC);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
