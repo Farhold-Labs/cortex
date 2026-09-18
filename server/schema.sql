@@ -1378,7 +1378,7 @@ CREATE TABLE IF NOT EXISTS community_invites (
           expires_at   TEXT,
           revoked_at   TEXT,
           created_at   TEXT NOT NULL
-        );
+        , role_id TEXT REFERENCES community_roles(id) ON DELETE SET NULL);
 CREATE INDEX IF NOT EXISTS idx_invites_community ON community_invites(community_id, revoked_at);
 
 CREATE TABLE IF NOT EXISTS community_bans (
