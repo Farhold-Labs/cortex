@@ -37,6 +37,18 @@ test('Community limits and node-admin controls', async (t) => {
     fs.cpSync(path.join(root, 'server/lib'), path.join(serverDir, 'lib'), { recursive: true });
     fs.symlinkSync(path.join(root, 'server/node_modules'), path.join(serverDir, 'node_modules'), 'dir');
     fs.mkdirSync(path.join(serverDir, 'data'));
+// Communities is an OPT-IN instance feature from v2.99.0, so a fresh database
+// has it switched off and every route below would answer 403. The feature is
+// enabled here BEFORE the server boots — the same shape as the federation test
+// seeding its pairing — so that these tests exercise the feature rather than
+// the gate. The gate has its own test.
+    {
+      const { DatabaseSQLite } = await import('../server/database-sqlite.js');
+      const seedDb = new DatabaseSQLite({ dbPath: path.join(serverDir, 'data/farhold.db') });
+      seedDb.updateInstanceConfig({ features: { communities: true } });
+      seedDb.db.close();
+    }
+
     fs.appendFileSync(path.join(serverDir, 'server.js'),
       "\nserver.on('listening', () => console.log('LIM_PORT=' + server.address().port));\n");
 

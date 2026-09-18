@@ -35,6 +35,7 @@ import CalendarView from './CalendarView.jsx';
 import CalendarReminderAlert from '../components/calendar/CalendarReminderAlert.jsx';
 import ProfileSettings from '../components/profile/ProfileSettings.jsx';
 import VideoFeedView from '../components/feed/VideoFeedView.jsx';
+import CommunitiesView from '../components/communities/CommunitiesView.jsx';
 import { useVoiceCall } from '../hooks/useVoiceCall.js';
 import { initializeCustomTheme, applyCustomTheme, removeCustomTheme, getCurrentCustomTheme } from '../hooks/useTheme.js';
 import DockedCallWindow from '../components/calls/DockedCallWindow.jsx';
@@ -1399,12 +1400,20 @@ function MainApp({ sharePingId }) {
   // v2.65.0: the 'settings' view is the former 'profile' view — it was always mostly
   // settings, with profile editing as its first section. Feed is hidden when the admin
   // has switched the instance feature off.
-  const navItems = ['waves', 'feed', 'people', 'calendar', 'settings'].filter(
+  const navItems = ['waves', 'feed', 'communities', 'people', 'calendar', 'settings'].filter(view => {
     // Wait for the flags before showing FEED, otherwise it appears for a moment
     // on an instance that has the video feed switched off and then vanishes.
-    view => view !== 'feed' || (instanceFeaturesLoaded && instanceFeatures.videoFeed !== false)
-  );
-  const navLabels = { waves: `${T.WAVES}`, feed: 'FEED', people: 'PEOPLE', calendar: 'CALENDAR', settings: 'SETTINGS' };
+    if (view === 'feed') return instanceFeaturesLoaded && instanceFeatures.videoFeed !== false;
+    // COMMUNITIES is opt-IN, so the test is `=== true` rather than `!== false`:
+    // an operator switches it on deliberately and a node must never acquire it
+    // by upgrading. The same wait applies, for the same reason.
+    if (view === 'communities') return instanceFeaturesLoaded && instanceFeatures.communities === true;
+    return true;
+  });
+  const navLabels = {
+    waves: `${T.WAVES}`, feed: 'FEED', communities: 'COMMUNITIES',
+    people: 'PEOPLE', calendar: 'CALENDAR', settings: 'SETTINGS',
+  };
 
   const scanLinesEnabled = user?.preferences?.scanLines !== false; // Default to true
 
@@ -1942,6 +1951,21 @@ function MainApp({ sharePingId }) {
               )}
             </div>
           </>
+        )}
+
+        {activeView === 'communities' && instanceFeatures.communities === true && (
+          <CommunitiesView
+            fetchAPI={fetchAPI}
+            showToast={showToastMsg}
+            currentUser={user}
+            onOpenWave={(wave) => {
+              // A wave inside a channel is an ordinary wave, so opening one
+              // hands straight off to the normal wave view rather than
+              // rendering a second, subtly different copy of it here.
+              openWaveTab(wave);
+              setActiveView('waves');
+            }}
+          />
         )}
 
         {activeView === 'feed' && instanceFeatures.videoFeed !== false && (

@@ -7380,7 +7380,10 @@ const INSTANCE_FEATURES = ['videoFeed', 'crawlBar', 'calendar', 'publicPortal', 
 // unless switched off — right for things already visible to members. Publishing
 // server-wide events to the open internet is a disclosure, so it has to be
 // switched on deliberately and must never appear by upgrading.
-const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents'];
+// `communities` joins this list rather than the one above: it is a whole new
+// social surface, and a node that upgrades must not wake up hosting one. An
+// operator turns it on when they mean to.
+const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents', 'communities'];
 const ALL_INSTANCE_FEATURES = [...INSTANCE_FEATURES, ...INSTANCE_OPT_IN_FEATURES];
 
 // Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
@@ -22699,6 +22702,17 @@ app.get('/api/search', authenticateToken, (req, res) => {
 // broken by accident: attaching a wave to a channel changes WHERE IT IS LISTED
 // and nothing else. No handler here adds a participant, alters privacy, or
 // touches an encryption key as a side effect of moving a wave.
+
+// The feature gate. Registered before the routes so there is no way to add one
+// that forgets it — hiding the UI is a courtesy, never the control.
+app.use('/api/communities', (req, res, next) => {
+  if (!requireFeature('communities', res)) return;
+  next();
+});
+app.use('/api/admin/communities', (req, res, next) => {
+  if (!requireFeature('communities', res)) return;
+  next();
+});
 
 /** Build the actor the evaluator expects. Local today, remote-shaped already. */
 function communityActor(req) {
