@@ -31,6 +31,7 @@ import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import * as waveRoles from './lib/wave-roles.js';
 import * as communityAuthz from './lib/communities/authorize.js';
 import { CAPABILITIES as CommunityCaps } from './lib/communities/capabilities.js';
+import * as communityLimits from './lib/communities/limits.js';
 import { getCurrentHoliday } from './holidays.js';
 // firebase-admin 14 (v2.89.0) removed the namespaced API entirely: the default
 // export no longer carries `credential`, `apps` or `messaging`. Everything now
@@ -22723,13 +22724,82 @@ function requireCommunityCapability(req, res, communityId, capability, options =
   return decision;
 }
 
-/** D-1: bounded strings. A name is a name, not a payload. */
-const COMMUNITY_LIMITS = { name: 80, slug: 60, description: 500, channelName: 60, roleName: 40 };
+/**
+ * D-1: bounded strings. A name is a name, not a payload.
+ * Lengths live in lib/communities/limits.js alongside the count caps, so there
+ * is one place to look for "what are the limits" rather than two.
+ */
+const COMMUNITY_LIMITS = {
+  name: communityLimits.LENGTHS.communityName,
+  slug: communityLimits.LENGTHS.communitySlug,
+  description: communityLimits.LENGTHS.description,
+  channelName: communityLimits.LENGTHS.channelName,
+  roleName: communityLimits.LENGTHS.roleName,
+};
+
+/**
+ * D-2: a per-actor, per-Community budget for state-CHANGING actions.
+ *
+ * Distinct from the HTTP limiters on purpose. Once a Community has
+ * participating nodes, one local action becomes N signed requests, so a member
+ * looping create/delete is a fan-out attack on peers rather than a noisy
+ * neighbour — and the limit that matters there is per actor per Community, not
+ * per IP.
+ *
+ * Charged only where the mutation is actually about to happen. Charging earlier
+ * would let a probe burn someone else's budget by making requests that were
+ * going to be refused anyway.
+ */
+function chargeCommunityMutation(req, res, communityId) {
+  const charge = communityLimits.chargeMutation(req.user.userId, communityId);
+  if (!charge.ok) {
+    res.set('Retry-After', String(charge.retryAfterSeconds));
+    res.status(429).json({ error: 'Too many changes to this community — slow down' });
+    return false;
+  }
+  return true;
+}
+
+/** Refuse creation past a ceiling, naming the ceiling so the message is useful. */
+function requireRoomFor(res, db_, what, communityId) {
+  const room = communityLimits.hasRoomFor(db_, what, communityId);
+  if (!room.ok) {
+    res.status(409).json({
+      error: `This community has reached its limit of ${room.limit} ${what}s`,
+      limit: room.limit, current: room.current,
+    });
+    return false;
+  }
+  return true;
+}
+
 function boundedString(value, max) {
   const clean = sanitizeInput(value);
   if (typeof clean !== 'string') return null;
   const trimmed = clean.trim();
   return trimmed.length === 0 || trimmed.length > max ? null : trimmed;
+}
+
+/**
+ * The same bound, for a field that is allowed to be empty.
+ *
+ * `boundedString` collapses "you sent nothing" and "you sent far too much" into
+ * the same `null`, which is right for a REQUIRED field — both are a 400 — and
+ * quietly wrong for an optional one: an over-long description was being stored
+ * as `null`, so submitting too much text silently ERASED the description
+ * instead of being refused. Silent data loss is a worse outcome than the
+ * validation error it was standing in for.
+ *
+ * Returns `{ ok, value }` so a caller can tell the two apart.
+ */
+function boundedOptional(value, max) {
+  if (value === null || value === undefined || value === '') return { ok: true, value: null };
+  const clean = sanitizeInput(value);
+  if (typeof clean !== 'string') return { ok: false };
+  const trimmed = clean.trim();
+  if (trimmed.length === 0) return { ok: true, value: null };
+  if (trimmed.length > max) return { ok: false };
+  return { ok: true, value: trimmed };
 }
 
 /** Slugs are user-visible identifiers, so they get a strict shape, not a filter. */
@@ -22754,9 +22824,23 @@ app.post('/api/communities', authenticateToken, apiLimiter, (req, res) => {
   const visibility = ['public', 'unlisted', 'private'].includes(req.body.visibility)
     ? req.body.visibility : 'private';
 
+  // Anyone may create a Community — that openness is what makes admin-only node
+  // channels tolerable. The ceiling is what stops one account creating
+  // thousands of them on a shared node.
+  const owned = communityLimits.ownedCommunityCount(db, req.user.userId);
+  if (owned >= communityLimits.CAPS.communitiesOwnedPerUser) {
+    return res.status(409).json({
+      error: `You already own ${owned} communities, which is the limit`,
+      limit: communityLimits.CAPS.communitiesOwnedPerUser,
+    });
+  }
+
+  const createDesc = boundedOptional(req.body.description, COMMUNITY_LIMITS.description);
+  if (!createDesc.ok) return res.status(400).json({ error: 'Description is too long' });
+
   const community = db.createCommunity({
     name, slug, visibility,
-    description: req.body.description ? boundedString(req.body.description, COMMUNITY_LIMITS.description) : null,
+    description: createDesc.value,
     homeNode: FEDERATION_NODE_NAME || null,
     createdBy: req.user.userId,
   });
@@ -22810,8 +22894,9 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
     fields.name = name;
   }
   if (req.body.description !== undefined) {
-    fields.description = req.body.description
-      ? boundedString(req.body.description, COMMUNITY_LIMITS.description) : null;
+    const desc = boundedOptional(req.body.description, COMMUNITY_LIMITS.description);
+    if (!desc.ok) return res.status(400).json({ error: 'Description is too long' });
+    fields.description = desc.value;
   }
   if (req.body.visibility !== undefined) {
     if (!['public', 'unlisted', 'private'].includes(req.body.visibility)) {
@@ -22820,6 +22905,7 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
     fields.visibility = req.body.visibility;
   }
 
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
   const community = db.updateCommunity(req.params.id, fields);
   db.logCommunityAudit(req.params.id, {
     actorId: req.user.userId, action: 'community.update',
@@ -22857,6 +22943,9 @@ app.post('/api/communities/:id/members', authenticateToken, apiLimiter, (req, re
   if (db.getCommunityBan(req.params.id, user.id)) {
     return res.status(409).json({ error: 'That person is banned from this community' });
   }
+
+  if (!requireRoomFor(res, db, 'member', req.params.id)) return;
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
   const membershipId = db.addCommunityMember(req.params.id, user.id, {
     state: 'active', invitedBy: req.user.userId,
@@ -22911,8 +23000,11 @@ app.post('/api/communities/:id/bans', authenticateToken, apiLimiter, (req, res) 
   const rank = communityAuthz.canActOnMember(db, req.user.userId, targetId, req.params.id);
   if (!rank.allowed) return res.status(403).json({ error: 'Forbidden' });
 
+  const banReason = boundedOptional(req.body.reason, communityLimits.LENGTHS.banReason);
+  if (!banReason.ok) return res.status(400).json({ error: 'Reason is too long' });
+
   db.banFromCommunity(req.params.id, targetId, {
-    reason: req.body.reason ? boundedString(req.body.reason, COMMUNITY_LIMITS.description) : null,
+    reason: banReason.value,
     bannedBy: req.user.userId,
     expiresAt: req.body.expiresAt || null,
   });
@@ -22952,6 +23044,8 @@ app.post('/api/communities/:id/roles', authenticateToken, apiLimiter, (req, res)
   // outrank you — the same rule as granting, applied at the point of minting.
   const check = communityAuthz.canGrantRole(db, req.user.userId, req.params.id, { permissions, priority });
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
+  if (!requireRoomFor(res, db, 'role', req.params.id)) return;
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
   const role = db.createCommunityRole(req.params.id, { name, priority, permissions });
   db.logCommunityAudit(req.params.id, {
@@ -23065,11 +23159,16 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
   if (!name) return res.status(400).json({ error: 'Channel name is required' });
   const slug = communitySlug(req.body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
   if (!slug) return res.status(400).json({ error: 'Invalid channel address' });
+  if (!requireRoomFor(res, db, 'channel', req.params.id)) return;
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
   try {
+    const chDesc = boundedOptional(req.body.description, COMMUNITY_LIMITS.description);
+    if (!chDesc.ok) return res.status(400).json({ error: 'Description is too long' });
+
     const channel = db.createChannel({
       communityId: req.params.id, name, slug,
-      description: req.body.description ? boundedString(req.body.description, COMMUNITY_LIMITS.description) : null,
+      description: chDesc.value,
       type: ['text', 'announcement'].includes(req.body.type) ? req.body.type : 'text',
       visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
       sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
@@ -23096,8 +23195,9 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
     fields.name = name;
   }
   if (req.body.description !== undefined) {
-    fields.description = req.body.description
-      ? boundedString(req.body.description, COMMUNITY_LIMITS.description) : null;
+    const desc = boundedOptional(req.body.description, COMMUNITY_LIMITS.description);
+    if (!desc.ok) return res.status(400).json({ error: 'Description is too long' });
+    fields.description = desc.value;
   }
   if (['text', 'announcement'].includes(req.body.type)) fields.type = req.body.type;
   if (['members', 'restricted'].includes(req.body.visibility)) fields.visibility = req.body.visibility;
@@ -23205,6 +23305,9 @@ app.post('/api/communities/:id/members/remote', authenticateToken, apiLimiter, (
     if (!grantable.allowed) return res.status(403).json({ error: 'Forbidden', reason: grantable.reason });
   }
 
+  if (!requireRoomFor(res, db, 'remoteInvitation', req.params.id)) return;
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
+
   const invitation = db.createRemoteInvitation({
     communityId: req.params.id, handle, nodeName,
     roleId: role ? role.id : null, invitedBy: req.user.userId,
@@ -23250,6 +23353,9 @@ app.post('/api/communities/:id/invites', authenticateToken, apiLimiter, (req, re
     const grantable = communityAuthz.canGrantRole(db, req.user.userId, req.params.id, role);
     if (!grantable.allowed) return res.status(403).json({ error: 'Forbidden', reason: grantable.reason });
   }
+
+  if (!requireRoomFor(res, db, 'invite', req.params.id)) return;
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
   const maxUses = Number.isInteger(req.body.maxUses) && req.body.maxUses > 0
     ? Math.min(req.body.maxUses, 1000) : null;
@@ -23324,11 +23430,79 @@ app.post('/api/communities/join', authenticateToken, loginLimiter, (req, res) =>
   res.json({ community: db.getCommunityById(invite.community_id) });
 });
 
+
+// ----- Node-admin controls (v2.98.0, Phase 5) -----
+//
+// A node admin acts on a Community from OUTSIDE it. They are not a member and
+// hold no Community capability — that is the point: openness (anyone may create
+// a Community) needs a way for the person responsible for the node to deal with
+// one that is being abused, without first having to be invited into it.
+//
+// Deliberately NOT a Community capability. Modelling this as "node admins
+// implicitly hold every capability everywhere" would mean the evaluator quietly
+// grants an admin the ability to read a Community's private business, which is
+// a different power from being able to suspend it.
+
+app.get('/api/admin/communities', authenticateToken, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+
+  const rows = db.db.prepare(`
+    SELECT c.*,
+      (SELECT COUNT(*) FROM community_memberships m WHERE m.community_id = c.id AND m.state = 'active') AS member_count,
+      (SELECT COUNT(*) FROM channels ch WHERE ch.community_id = c.id) AS channel_count
+    FROM communities c ORDER BY c.created_at DESC LIMIT 500
+  `).all();
+  res.json({ communities: rows });
+});
+
+// The role is checked BEFORE step-up, deliberately. Running step-up first asks
+// someone who could never perform this action to re-authenticate for it, which
+// is both confusing and a small disclosure — it implies the action exists and
+// that proving themselves is all that stands between them and it.
+app.post('/api/admin/communities/:id/suspend', authenticateToken, (req, res, next) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+  requireStepUp(req, res, next);
+}, (req, res) => {
+  const community = db.getCommunityById(req.params.id);
+  if (!community) return res.status(404).json({ error: 'Not found' });
+
+  const suspend = req.body.suspended !== false;
+  // Suspension freezes a Community for everyone including its owner, and is
+  // reversible — the memberships, roles and channels are all left intact.
+  db.updateCommunity(req.params.id, { status: suspend ? 'suspended' : 'active' });
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId,
+    action: suspend ? 'community.suspend_by_node_admin' : 'community.unsuspend_by_node_admin',
+    metadata: { reason: req.body.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
+  });
+  db.logActivity(req.user.userId, suspend ? 'community_suspended' : 'community_unsuspended',
+                 'community', req.params.id, {});
+  res.json({ community: db.getCommunityById(req.params.id) });
+});
+
+app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+  requireStepUp(req, res, next);
+}, (req, res) => {
+  if (!db.getCommunityById(req.params.id)) return res.status(404).json({ error: 'Not found' });
+
+  // Soft delete, and the waves inside are detached rather than destroyed — a
+  // node admin closing a Community must not take conversations with it.
+  db.deleteCommunity(req.params.id);
+  db.logActivity(req.user.userId, 'community_deleted', 'community', req.params.id, {});
+  res.json({ success: true });
+});
+
 // ----- Audit -----
 
 app.get('/api/communities/:id/audit', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_AUDIT_LOG)) return;
-  res.json({ entries: db.listCommunityAudit(req.params.id, { limit: 200 }) });
+  // A LISTING limit truncates rather than refuses — limits should degrade, not
+  // discard, which is the lesson BROADCAST_PING_LIMIT was added to record.
+  res.json({ entries: db.listCommunityAudit(req.params.id, { limit: communityLimits.CAPS.auditPageSize }) });
 });
 
 // ============ Health Check ============
