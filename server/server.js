@@ -19850,6 +19850,29 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   const privacy = ['private', 'group', 'crossServer', 'public'].includes(req.body.privacy)
     ? req.body.privacy : 'private';
 
+  // Starting a wave directly inside a Community channel (v2.99.0).
+  //
+  // Validated BEFORE the wave is created and filed as part of the same request,
+  // rather than create-then-file: a failure between those two steps leaves an
+  // orphan wave nobody asked for and nobody can find. The two authorizations
+  // remain separate and both must pass — the capability to start a wave in that
+  // channel, and the channel belonging to the Community it claims to.
+  let targetChannel = null;
+  if (req.body.channelId) {
+    targetChannel = db.getChannelById(req.body.channelId);
+    if (!targetChannel) return res.status(404).json({ error: 'Channel not found' });
+    if (!targetChannel.community_id) {
+      return res.status(400).json({ error: 'That channel is not part of a community' });
+    }
+    const decision = communityAuthz.authorize(
+      db, { kind: 'user', userId: req.user.userId }, targetChannel.community_id,
+      CommunityCaps.CREATE_WAVE, { resource: { type: 'channel', id: targetChannel.id } }
+    );
+    if (!decision.allowed) {
+      return res.status(403).json({ error: 'You cannot start a conversation in that channel' });
+    }
+  }
+
   // Validate group access for group waves
   if (privacy === 'group') {
     const groupId = sanitizeInput(req.body.groupId);
@@ -19900,6 +19923,19 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     participants: localParticipantIds,
     encrypted,
   });
+
+  // File it into the channel it was started in. This sets where the wave is
+  // LISTED and nothing else — participants, privacy and keys are exactly as
+  // createWave left them.
+  if (targetChannel) {
+    db.setWaveChannel(wave.id, targetChannel.id);
+    db.logCommunityAudit(targetChannel.community_id, {
+      actorId: req.user.userId, action: 'wave.create_in_channel',
+      targetType: 'wave', targetId: wave.id,
+    });
+    wave.communityId = targetChannel.community_id;
+    wave.channelId = targetChannel.id;
+  }
 
   // Sync participation cache after wave creation (v2.21.0)
   participation.syncWaveFromDb(wave.id);

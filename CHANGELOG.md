@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The channel's wave list shows only what the caller can already see.** Community membership does not grant access to the waves filed in a Community, so a fuller count would be a slow leak of a private wave's existence. The screen says as much, in place: *filing a wave here does not change who can read it.*
   - Controls render from the **capability list the server returned**, not from a role name — so a Community with custom roles gets a UI that matches what its people can actually do. Hiding a control remains a courtesy; the server refuses regardless.
   - An invite code is displayed once, with a note saying so, because only its hash is stored and there is no way to show it again.
+  - **Starting a wave in a channel, and filing an existing one into it.** `POST /api/waves` accepts a `channelId` and creates-and-files in a **single request** — create-then-file is two, and a failure between them leaves an orphan wave nobody asked for and nobody can find. The two authorizations stay separate and both must pass. From the channel view you can also file one of your unfiled waves, or take one back out again.
+  - Filing still changes only where a wave is **listed**: privacy is whatever was asked for, never inherited from the channel.
 
 ### Changed
 

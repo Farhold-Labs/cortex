@@ -397,6 +397,45 @@ test('Communities API', async (t) => {
         `the Community owner must not be able to read a private wave filed in their channel (got ${asOwner.status})`);
     });
 
+    await t.test('a wave can be started directly in a channel, in one request', async () => {
+      // Create-then-file is two requests, and a failure between them leaves an
+      // orphan wave the person never asked for and cannot find. This is one.
+      const res = await api('POST', '/api/waves', {
+        token: member.token,
+        body: { title: 'Born in a channel', privacy: 'private', channelId: channel.id },
+      });
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+      const created = res.body.wave || res.body;
+      assert.equal(created.channelId ?? created.channel_id, channel.id);
+
+      const listed = await api('GET', `/api/waves/${created.id}`, { token: member.token });
+      const w = listed.body.wave || listed.body;
+      assert.equal(w.channelId ?? w.channel_id, channel.id, 'and it is really filed there');
+      assert.equal(w.privacy, 'private', 'privacy is whatever was asked for, not inherited from the channel');
+    });
+
+    await t.test('someone outside the Community cannot start a wave in its channel', async () => {
+      const res = await api('POST', '/api/waves', {
+        token: outsider.token,
+        body: { title: 'Trespass', privacy: 'private', channelId: channel.id },
+      });
+      assert.equal(res.status, 403);
+
+      // And the wave must not have been created anyway — an authorization
+      // failure that still leaves a row behind is not a refusal.
+      const mine = await api('GET', '/api/waves', { token: outsider.token });
+      const list = Array.isArray(mine.body) ? mine.body : (mine.body.waves || []);
+      assert.ok(!list.some(w => w.title === 'Trespass'), 'no orphan wave was left behind');
+    });
+
+    await t.test('a channel id that belongs to no Community is refused', async () => {
+      const nodeChannel = await api('POST', '/api/waves', {
+        token: member.token,
+        body: { title: 'Nowhere', privacy: 'private', channelId: 'channel-does-not-exist' },
+      });
+      assert.equal(nodeChannel.status, 404);
+    });
+
     await t.test('deleting a channel leaves its waves alone', async () => {
       const doomed = await api('POST', `/api/communities/${community.id}/channels`, {
         token: owner.token, body: { name: 'Temp', slug: 'temp' },

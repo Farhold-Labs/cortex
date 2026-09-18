@@ -35,6 +35,8 @@ const CommunitiesView = ({ fetchAPI, showToast, onOpenWave, currentUser }) => {
   const [discover, setDiscover] = useState(null);
   const [joinToken, setJoinToken] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [newWaveTitle, setNewWaveTitle] = useState('');
+  const [filePicker, setFilePicker] = useState(null);   // waves this person could file here
 
   const loadMine = useCallback(async () => {
     try {
@@ -118,6 +120,70 @@ const CommunitiesView = ({ fetchAPI, showToast, onOpenWave, currentUser }) => {
       setDiscover(data.communities || []);
     } catch {
       showToast('Could not search communities', 'error');
+    }
+  };
+
+  /**
+   * Start a wave inside the selected channel.
+   *
+   * One request: the server creates it and files it together, so a failure
+   * cannot leave an orphan wave the person never asked for and cannot find.
+   */
+  const createWaveHere = async () => {
+    const title = newWaveTitle.trim();
+    if (!title || !selectedChannel) return;
+    try {
+      const wave = await fetchAPI('/waves', {
+        method: 'POST',
+        body: { title, privacy: 'private', channelId: selectedChannel.id },
+      });
+      setNewWaveTitle('');
+      showToast(`${title} created`, 'success');
+      await openChannel(selectedChannel);
+      onOpenWave && onOpenWave(wave.wave || wave);
+    } catch (err) {
+      showToast(err?.error || `Could not start a ${T.wave} here`, 'error');
+    }
+  };
+
+  /**
+   * Offer the waves this person could file here: ones they created that are not
+   * already in a channel. Filtered client-side for convenience only — the
+   * server checks authority over the wave itself and will refuse the rest.
+   */
+  const openFilePicker = async () => {
+    try {
+      const data = await fetchAPI('/waves');
+      const list = Array.isArray(data) ? data : (data.waves || []);
+      setFilePicker(list.filter(w =>
+        !(w.channelId || w.channel_id) && w.createdBy === currentUser?.id));
+    } catch {
+      showToast(`Could not list your ${T.waves}`, 'error');
+    }
+  };
+
+  const fileWave = async (wave) => {
+    try {
+      await fetchAPI(
+        `/communities/${detail.community.id}/channels/${selectedChannel.id}/waves/${wave.id}`,
+        { method: 'PUT' });
+      setFilePicker(null);
+      showToast(`${wave.title} filed in #${selectedChannel.name}`, 'success');
+      openChannel(selectedChannel);
+    } catch (err) {
+      showToast(err?.error || `Could not file that ${T.wave}`, 'error');
+    }
+  };
+
+  const unfileWave = async (wave) => {
+    try {
+      await fetchAPI(
+        `/communities/${detail.community.id}/channels/${selectedChannel.id}/waves/${wave.id}`,
+        { method: 'DELETE' });
+      showToast(`${wave.title} removed from #${selectedChannel.name}`, 'success');
+      openChannel(selectedChannel);
+    } catch (err) {
+      showToast(err?.error || `Could not remove that ${T.wave}`, 'error');
     }
   };
 
@@ -284,13 +350,63 @@ const CommunitiesView = ({ fetchAPI, showToast, onOpenWave, currentUser }) => {
                   </div>
                 )}
                 {channelWaves.map(w => (
-                  <button key={w.id} style={btn(false)} onClick={() => onOpenWave && onOpenWave(w)}>
-                    {w.title}
-                    <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginLeft: 6 }}>
-                      {w.privacy === 'private' ? '· private' : ''}
-                    </span>
-                  </button>
+                  <div key={w.id} style={{ display: 'flex', gap: '0.35rem', alignItems: 'stretch' }}>
+                    <button style={{ ...btn(false), flex: 1 }} onClick={() => onOpenWave && onOpenWave(w)}>
+                      {w.title}
+                      <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginLeft: 6 }}>
+                        {w.privacy === 'private' ? '· private' : ''}
+                      </span>
+                    </button>
+                    {can('channel.move_wave') && (
+                      <button
+                        title={`Remove from #${selectedChannel.name}`}
+                        onClick={() => unfileWave(w)}
+                        style={{ ...btn(false), width: 'auto', padding: '0.5rem 0.6rem' }}
+                      >×</button>
+                    )}
+                  </div>
                 ))}
+
+                {can('channel.create_wave') && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <input
+                      value={newWaveTitle}
+                      onChange={e => setNewWaveTitle(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') createWaveHere(); }}
+                      placeholder={`Start a ${T.wave} in #${selectedChannel.name}`}
+                      maxLength={200}
+                      style={{ width: '100%', padding: '0.4rem', fontFamily: 'inherit' }}
+                    />
+                    <button onClick={createWaveHere} style={btn(false)}>
+                      + New {T.wave} here
+                    </button>
+                  </div>
+                )}
+
+                {can('channel.move_wave') && (
+                  <div style={{ marginTop: '0.3rem' }}>
+                    {filePicker === null ? (
+                      <button onClick={openFilePicker} style={btn(false)}>
+                        File an existing {T.wave} here
+                      </button>
+                    ) : (
+                      <>
+                        {filePicker.length === 0 && (
+                          <div style={{ color: 'var(--text-dim)', fontSize: '0.78rem', padding: '0.3rem 0' }}>
+                            You have no unfiled {T.waves} to move.
+                          </div>
+                        )}
+                        {filePicker.map(w => (
+                          <button key={w.id} style={btn(false)} onClick={() => fileWave(w)}>
+                            {w.title}
+                          </button>
+                        ))}
+                        <button onClick={() => setFilePicker(null)} style={btn(false)}>Cancel</button>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginTop: '0.4rem' }}>
                   Filing a {T.wave} here does not change who can read it.
                 </div>
