@@ -21,6 +21,21 @@ going the wrong way.
 | [01-threat-model.md](01-threat-model.md) | What Communities would be exposed to, and what the current stack does and does not defend |
 | [02-implementation-plan.md](02-implementation-plan.md) | The proposed build, mapped onto real Cortex modules, in gated phases |
 
+## Decisions taken 2026-09-18
+
+| Question | Decision |
+| --- | --- |
+| How does a remote person hold rights here? | **Cross-port auth (v2.56.0)** — they become a local stub user. No new identity table. |
+| Do Communities span nodes? | **No.** A Community lives on one node; its *members* come from many. |
+| What is a channel? | **A wave** carrying a community id. A sub-conversation is a **threaded ping**. |
+| Ban scope | **Per-Community**, escalating to a node or verse-wide ban where warranted. |
+| Migration | Community admin requests; receiving node's admin accepts. **V2/V3.** |
+
+Two of those supersede recommendations made earlier in these documents. The
+superseded reasoning is kept in place rather than deleted, because *why* it was
+wrong is the useful part: it assumed a replicated Community, and Cortex was
+being asked for something simpler.
+
 ## The finding that shapes everything else
 
 Cortex federation today is **node-to-node, not identity-to-identity**.
@@ -36,7 +51,9 @@ Communities as specified require the opposite: one membership list spanning
 nodes, roles held by remote identities, and authorization decisions made about
 actors who have no local account.
 
-**That is the single largest piece of work in this project, and it is not an
-extension of the existing federation model — it is a new capability alongside
-it.** Everything in the implementation plan follows from taking that seriously
-rather than discovering it in Phase 4.
+**Amended 2026-09-18.** That remains true of *wave* federation, and it is why
+wave roles do not federate. But Communities no longer needs to solve it:
+cross-port auth already turns a remote person into a local user with a real row,
+and a Community lives on a single node. The largest piece of work in the project
+therefore is not building cross-node identity — it is **membership, capabilities
+and channels on one node**, with some members arriving by cross-port.

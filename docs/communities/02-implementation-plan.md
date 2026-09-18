@@ -33,57 +33,100 @@ and explicitly do not let it set the shape of the authorization API. Write
 `authorize()` from the start to take an actor that **may be remote**, even while
 every caller in Phase 3 passes a local one. Otherwise Phase 4 rewrites it.
 
-### 1.3 The three-node lab belongs in Phase 4, not Phase 7
+### 1.3 The three-node lab belongs in Phase 4, not Phase 7 — *largely moot after §2*
 
 Two nodes hide symmetry assumptions; the brief says so in §33 and then schedules
 the lab at deployment. Several failure classes — split state, a node that is
 behind, a peer that disappears — cannot be tested with two.
 
-**Recommendation:** stand up the three-node harness *as the Phase 4 deliverable*,
-in the existing disposable-server style (three servers, three temp SQLites,
-`PORT=0`). Cortex already spawns real servers in tests; three is not much harder
-than one.
+**Recommendation:** stand up the harness *as the Phase 4 deliverable*, in the
+existing disposable-server style. **Amended 2026-09-18:** with a single
+authoritative node per Community (§2), the third node buys much less — most of
+what it would have caught was replication disagreement, which no longer exists.
+Two nodes is the sensible V1 harness; revisit if Communities ever replicate.
 
-### 1.4 Say plainly that Community channels are not E2EE in V1
+### 1.4 E2EE — *corrected 2026-09-18*
 
-`wave_encryption_keys.user_id` references `users(id)`, so a remote member cannot
-hold a content key. Cross-node E2EE needs new key distribution, which is its own
-project.
+The original claim here was that a remote member cannot hold a content key,
+because `wave_encryption_keys.user_id` references `users(id)`. **That is true of
+`remote_users` under wave federation, and false under the architecture in §2:** a
+cross-port member *is* a local `users` row, so nothing structural stops them
+holding wave keys.
 
-**Recommendation:** V1 Community channels are explicitly **not** end-to-end
-encrypted, stated in the UI. Preserve the metadata/content split so it can be
-added later. A channel that appears encrypted but is readable by every
-participating node's operator is worse than one that admits it is not.
+What remains true is that they will not have any **until E2EE is set up for that
+session on that node** — keys are generated client-side. The live cross-port user
+on PMP holds none.
 
----
-
-## 2. The identity problem, concretely
-
-Communities requires a subject that can hold rights and may be remote. Three
-options:
-
-**(a) Extend `users` with remote rows.** Cheapest to write, worst to live with:
-every existing query that assumes `users` means "people with accounts here"
-becomes subtly wrong, including authentication.
-
-**(b) A separate `community_actors` table**, one row per (community, identity),
-where identity is `local_user_id` *or* `handle@node`. Contained, but membership
-tables then join to a Community-scoped identity, and cross-Community identity
-correlation gets awkward.
-
-**(c) A node-wide `federated_identities` table** — one row per `handle@node`
-ever seen, referenced by Community membership. Remote-only; local users continue
-to use `users(id)`.
-
-**Recommendation: (c)**, with membership carrying a nullable `user_id` *and* a
-nullable `federated_identity_id`, exactly one non-null. It keeps local
-authentication untouched, gives remote identities a stable primary key for
-membership and roles, and leaves room for key material later.
-
-This is the single biggest design decision in the project and the main thing to
-push back on before Phase 1.
+**Recommendation:** treat Community channel encryption as exactly the same
+question as wave encryption, because a channel is a wave (§6.3). Decide in Phase
+3 whether a cross-port session performs E2EE setup; do not claim encryption in
+the UI that a given member's session cannot actually provide.
 
 ---
+
+## 2. Identity — DECIDED 2026-09-18
+
+**Decision: reuse cross-port auth. No new identity table in V1.**
+
+This supersedes the three options originally proposed here, and supersedes the
+recommendation that went with them. Recording the reasoning because the
+superseded version was wrong for a specific and instructive reason.
+
+### What was originally proposed
+
+Three ways to give Communities a subject that can hold rights and may be remote:
+(a) remote rows in `users`, (b) a per-Community `community_actors` table,
+(c) a node-wide `federated_identities` table — recommended.
+
+### Why that was the wrong question
+
+All three assumed a Community **replicated across nodes**, where a node must
+reason about an identity it does not host. Jared's model is different and
+simpler:
+
+> A Community lives on one node. Its **members** may come from other nodes.
+> "I could invite jempson@pmp to the gaming community on cortex.farhold."
+
+For that, Cortex already has the mechanism — **cross-port auth, v2.56.0** —
+and it is in production use today.
+
+### How it actually works
+
+`POST /api/cross-port/initiate` → redirect to the home node →
+`POST /api/cross-port/approve` (user authenticates **at home**) → single-use code
+→ `POST /api/federation/cross-port/exchange` (server-to-server, RSA HTTP
+signatures, the same path hardened in v2.93.1) → `POST /api/cross-port/session`.
+
+The guest node ends up with a **cross-port stub user**: an ordinary `users` row
+with `is_cross_port = 1`, `home_node`, `home_user_id`. Handle collisions take a
+`_<shortnode>` suffix.
+
+**That row is a local user for every purpose.** Membership, roles, channel
+participation, encryption keys and audit all reference `users(id)` and need no
+new identity concept. Verified in production: PMP holds one cross-port user
+(`oldwulf`, home node farhold) which already participates in a wave.
+
+### What this costs, stated plainly
+
+- **Mutual federation is required** — both nodes must list each other `active`.
+  Members can be invited from allied ports, not from the federation at large.
+- **Cross-port sessions are 24h, non-renewable** (ordinary sessions are 7d
+  renewable). A remote member re-authenticates daily. If that proves annoying in
+  practice it is a session-policy change, not an architecture change.
+- Cross-port users cannot themselves grant cross-port access.
+- A stub user is a real row in `users`, so it appears anywhere users are
+  enumerated. Admin surfaces and user search should be checked for leakage
+  during Phase 1 rather than after.
+
+### Consequences for the rest of the plan
+
+- **No `federated_identities` table.** Membership references `users(id)`.
+- **No replicated state machine.** One Community, one authoritative node.
+  State versioning conflicts, split-brain and cross-node TOCTOU (threat model
+  A-2) stop being V1 problems — see §5.
+- **Migration** is an authority handoff: the Community admin requests, the
+  receiving node's admin accepts. Still V2/V3, but the schema must not derive
+  Community identity from hostname or local row id, per the brief's §25.
 
 ## 3. Proposed module layout
 
@@ -157,7 +200,7 @@ Phase numbering follows the brief. Each gate is human review.
 | **1** | Domain model + migrations + unit tests. No federation, no routes. | Schema check; full suite |
 | **2** | `authorize()` and capabilities. Actor type accommodates remote from day one. | The full authorization matrix from brief §29, including `remote user` |
 | **3** | Local Communities end to end: create, invite, join, leave, roles, channels, messages, moderation | Suite; **explicitly not** a licence to shape the API around local-only |
-| **4** | Federation: resolution, state sync, remote membership, signed events, remote authorization, federated channel messaging — **plus the three-node harness** | Three-node integration tests including the chaos list, brief §30 |
+| **4** | Remote membership via cross-port: invite an identity from an allied node, join, hold roles, post in channels. **No state replication** (see §2) — the work is authorization and lifecycle for stub users, not consensus. Two-node harness suffices; a third adds little once there is a single authority. | Integration tests across two nodes, plus the relevant chaos cases from brief §30 |
 | **5** | Abuse and limits: rate limits, payload caps, replay/dedupe, audit log, malformed-event rejection, TOCTOU (brief §31) | Security test suite |
 | **6** | UI | Backend stable first |
 | **7** | Hardening only: fuzz, load, federation failure, migration, backward compatibility | Then Codex |
@@ -173,16 +216,19 @@ Community channels in V1 are not E2EE and say so.
 
 1. **Identity model** — §2 above. Everything downstream depends on it.
 2. **Whether 0.5 happens first.** My recommendation is yes.
-3. **Whether Communities and waves converge or coexist.** A Community channel and
-   a wave are close cousins. Reusing the ping engine for content is settled; what
-   is *not* settled is whether a Community channel eventually **is** a wave with
-   a community id, or stays a separate object. Deciding late means a migration.
-4. **How much state a non-member node may hold.** "Only participating nodes
-   receive private Community state" (brief §13) needs a precise definition of
-   participating — is a node with one member a full state replica?
-5. **Ban scope across Communities.** Brief §18 separates Community ban, node
-   block and identity block. Worth confirming a Community ban is per-Community
-   only, with no cross-Community propagation, in V1.
+3. ~~Whether Communities and waves converge~~ — **DECIDED**: a Community channel
+   **is a wave** carrying a community id, and a sub-conversation within a channel
+   is a **threaded ping**. This is the largest simplification available: channels
+   inherit privacy, E2EE, pings, threads, pins, reactions and the realtime
+   delivery path unchanged. Phase 1 must reconcile `wave_participants` against
+   Community membership — the likely rule being that membership *drives*
+   participation rather than duplicating it.
+4. ~~How much state a non-member node may hold~~ — **DISSOLVED** by §2. With one
+   authoritative node per Community there is no replica to scope.
+5. ~~Ban scope~~ — **DECIDED**: per-Community, with escalation to a node or
+   verse-wide ban where warranted. Both already exist separately
+   (`federation_nodes.status`, user blocking) and must stay distinct per brief §18;
+   escalation is an admin action, never an automatic consequence.
 
 ---
 

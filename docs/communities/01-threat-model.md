@@ -9,6 +9,17 @@ that is broken.
 
 ---
 
+## 0. Architecture this assumes
+
+Updated 2026-09-18 after the decisions in implementation plan §2. A Community
+**lives on one node**; its members may hold accounts elsewhere and arrive via
+cross-port auth as local stub users. There is no replicated Community state.
+
+That removes several threat classes outright (split-brain, replication
+disagreement, cross-node TOCTOU) and sharpens what remains: the trust boundary
+is **the cross-port exchange and the node signature behind it**, not a consensus
+protocol.
+
 ## 1. Adversaries
 
 | | Capability |
@@ -16,7 +27,7 @@ that is broken.
 | **Anonymous internet** | Can reach `/api/public/*` and `/api/federation/identity`. Cannot pass node auth. |
 | **Local member** | Authenticated on this node. Holds whatever roles they were given. The privilege-escalation adversary. |
 | **Remote member** | Authenticated on *their* node, a member of a shared Community. **We never see their credentials** — we see their node's assertion about them. |
-| **Malicious allied node** | Holds a valid federation keypair and `active` status. Can sign anything. **The primary Communities adversary.** |
+| **Malicious allied node** | Holds a valid federation keypair and `active` status. Can sign anything — **including asserting that any handle on it just authenticated**, since cross-port codes are minted by the home node. Mutual federation is therefore a real trust decision, not a routing detail. **The primary Communities adversary.** |
 | **Compromised-then-revoked node** | Was allied, holds captured traffic, has since been suspended. |
 | **Buggy peer** | Not hostile; sends duplicates, reordering, stale state, malformed payloads. Must fail safely. |
 | **Network attacker** | Between nodes. Largely handled by TLS; signatures are defence in depth. |
@@ -102,7 +113,12 @@ is well-signed by Alice's node, without checking that Alice held `member.ban` in
 *this node's* view of Community state. That is trusting the peer's conclusion
 instead of verifying its premises.
 
-### A-2 — TOCTOU on stale authority **[design gap]**
+### A-2 — TOCTOU on stale authority **[design gap — largely dissolved 2026-09-18]**
+
+**With a single authoritative node per Community (implementation plan §2), there
+is no second node evaluating authority against its own copy of state, and this
+class mostly disappears.** It returns the moment Communities replicate, so the
+requirement below is recorded for whenever that happens rather than deleted.
 
 The brief's §31 case, which has no existing machinery at all:
 
@@ -224,11 +240,20 @@ need to be bounded, cached, and rate-limited per peer.
 
 ## 7. Encryption
 
-### E-1 — E2EE is local-only today **[verified]**
+### E-1 — corrected 2026-09-18 **[superseded in part]**
 
-`wave_encryption_keys.user_id REFERENCES users(id)`. A remote identity cannot
-hold a content key, so a federated Community channel **cannot be end-to-end
-encrypted to remote members** without new key distribution.
+*Original finding:* `wave_encryption_keys.user_id REFERENCES users(id)`, so a
+remote identity cannot hold a content key and a Community channel cannot be E2EE
+to remote members.
+
+**That holds for `remote_users` under wave federation. It does not hold under the
+architecture since decided** (implementation plan §2): a member arriving by
+cross-port auth *is* a local `users` row, so nothing structural prevents them
+holding wave keys.
+
+What remains true is narrower and still worth stating: they hold none until E2EE
+is set up for that session on that node, because keys are generated client-side.
+The one cross-port user in production holds zero.
 
 This must be stated plainly in the UI rather than implied. The v2.86.0 review
 already established the house position that a security control which silently
@@ -255,7 +280,7 @@ require re-architecting membership.
 | --- | --- | --- |
 | **1** | F-1 — minimum signed headers, reject unparseable `Date` | Verified, small, and everything else rides on node auth |
 | **2** | A-1 — remote authorization chain | The feature cannot be correct without it |
-| **3** | A-2 — state-version-linked authorization | Designed in from V1 or retrofitted never |
+| — | A-2 — state-version-linked authorization | **Deferred**: dissolved by the single-authority decision; revisit if Communities ever replicate |
 | **4** | A-3 — escalation invariants | Highest-likelihood exploit class |
 | **5** | I-2 — atomic invite redemption | Easy to get wrong, easy to get right |
 | **6** | D-1 — payload and count limits | Cheap now, expensive after a public beta |
