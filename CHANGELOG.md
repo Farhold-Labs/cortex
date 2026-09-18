@@ -5,6 +5,25 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.98.0] - 2026-09-18
+
+### Added
+
+- **Communities, Phase 5 — abuse limits and node-admin controls.** `server/lib/communities/limits.js` holds every ceiling in one place, so "what are the limits" has one answer rather than several. Backend only; still no UI.
+  - **Per-actor, per-Community mutation budget (D-2).** Distinct from the HTTP rate limiters on purpose: once a Community has participating nodes, one local action becomes N signed requests, so a member looping create/delete is a fan-out attack on peers rather than a noisy neighbour — and the limit that matters there is per actor per Community, not per IP. 60 changes a minute, with `Retry-After`. Reads are never charged, and being throttled in one Community does not affect another.
+  - **Creation caps (D-1)** on channels, roles, members, live invites, pending remote invitations, and Communities owned per user. Refusals name the ceiling, so a caller can tell a limit from a malfunction. The per-user ownership cap is what makes "anyone may create a Community" safe on a shared node.
+  - **Listing limits truncate; only creation limits refuse.** This is the lesson `BROADCAST_PING_LIMIT` was added to record — a very long wave once produced a federation request that receiving nodes rejected outright, losing the entire broadcast rather than most of it. Limits should degrade, not discard.
+  - **Node-admin controls**: list, suspend, unsuspend and close a Community from *outside* it. Deliberately not modelled as "node admins implicitly hold every Community capability", which would quietly grant an admin the ability to read a Community's private business — a different power from being able to stop it. Suspension freezes a Community for its owner too and is fully reversible; closing one detaches its waves rather than destroying them. Both are audited inside the Community and in the node activity log.
+
+### Fixed
+
+- **An over-long optional field silently erased it.** `boundedString` collapsed "you sent nothing" and "you sent far too much" into the same `null` — correct for a required field, where both are a 400, and quietly wrong for an optional one: submitting a description past the limit stored `null`, so too much text *deleted* the description instead of being refused. Affected the Community description on create and update, the channel description on create and update, and the ban reason. Silent data loss is a worse outcome than the validation error it was standing in for.
+- **Step-up re-authentication ran before the permission check** on the new admin routes, so someone who was not an admin at all was asked to confirm their password for an action they could never perform. Beyond being confusing, it implies the action exists and that proving themselves is all that stands between them and it. The role is now established first.
+
+### Notes
+
+- **F-2 and D-3 remain open and are not yet reachable.** No Community action produces a federated event — membership is local to the hosting node, `community_events` is written by nobody, and there is no snapshot endpoint for a peer to force a resync of. Both requirements are kept intact in the threat model for whenever Communities replicate. What exists today is the mutation budget, which bounds how fast such events could ever be produced.
+
 ## [2.97.0] - 2026-09-18
 
 ### Security

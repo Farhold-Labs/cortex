@@ -222,7 +222,7 @@ The increment must be a conditional single-statement update
 (`UPDATE ... SET use_count = use_count + 1 WHERE id = ? AND use_count < max_uses`)
 and the join must be gated on it having changed a row.
 
-### I-3 — federated invite resolution **[design gap]**
+### I-3 — federated invite resolution **[ADDRESSED v2.98.0]**
 
 An invite must resolve to the **immutable Community id**, never a hostname —
 otherwise a migrated Community's outstanding invites either break or, worse,
@@ -232,7 +232,7 @@ point somewhere else.
 
 ## 6. Denial of service
 
-### D-1 — unbounded payloads **[design gap]**
+### D-1 — unbounded payloads **[ADDRESSED v2.98.0]**
 
 The brief's §12 list is not optional. There is a partial precedent:
 `BROADCAST_PING_LIMIT` caps wave broadcasts at 1000 pings, added after a very
@@ -244,14 +244,19 @@ Needs explicit caps: name/description/channel/role lengths, counts of roles,
 channels, members and federation participants, event payload size, and a bound
 on state-snapshot size.
 
-### D-2 — federation amplification **[design gap]**
+### D-2 — federation amplification **[ADDRESSED v2.98.0]**
 
 A Community with N participating nodes turns one local action into N signed
 requests. A malicious member creating and deleting channels in a loop becomes a
 fan-out attack on peers. Needs per-actor rate limits on *state-mutating* events,
 not only on HTTP.
 
-### D-3 — state resynchronisation cost **[design gap]**
+### D-3 — state resynchronisation cost **[DEFERRED — nothing to resynchronise yet]**
+
+*As of v2.98.0:* there is no state replication and no snapshot endpoint, so
+there is nothing a peer can force a resync of. This becomes live the moment
+Communities replicate, and the requirement below is kept intact for then.
+
 
 "Reject and resynchronise" (A-2) is the right conflict answer, but a peer that
 can force repeated full-state syncs has a cheap amplification vector. Snapshots
