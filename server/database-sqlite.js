@@ -11428,10 +11428,15 @@ export class DatabaseSQLite {
     ).get(homeNode, homeUserId);
 
     if (existing) {
+      // `avatar` is NOT NULL with a DEFAULT, and a column DEFAULT applies only
+      // when the column is OMITTED — passing an explicit NULL still violates the
+      // constraint. createUser has always defended with `|| '?'`; this path did
+      // not, so a remote user whose profile carried no avatar could not complete
+      // a cross-port login at all (500, "Failed to create local user").
       this.db.prepare(`
         UPDATE users SET display_name = ?, avatar = ?, avatar_url = ?, last_seen = ?
         WHERE id = ?
-      `).run(displayName || null, avatar || null, avatarUrl || null, new Date().toISOString(), existing.id);
+      `).run(displayName || null, avatar || '?', avatarUrl || null, new Date().toISOString(), existing.id);
       return this.findUserById(existing.id);
     }
 
@@ -11449,7 +11454,7 @@ export class DatabaseSQLite {
       INSERT INTO users (id, handle, display_name, avatar, avatar_url, password_hash, role,
                          is_cross_port, home_node, home_user_id, created_at, last_seen, preferences)
       VALUES (?, ?, ?, ?, ?, '', 'user', 1, ?, ?, ?, ?, '{}')
-    `).run(id, localHandle, displayName || handle, avatar || null, avatarUrl || null,
+    `).run(id, localHandle, displayName || handle, avatar || '?', avatarUrl || null,
            homeNode, homeUserId, now, now);
 
     return this.findUserById(id);

@@ -357,7 +357,7 @@ Phase numbering follows the brief. Each gate is human review.
 | **0** | *This document set* | **✅ DONE — on master** |
 | **0.5** | F-1 federation signing fix, released on its own | **✅ DONE — shipped as v2.93.1** |
 | **1** | Domain model + migrations + unit tests. No federation, no routes. | Schema check; full suite — **✅ DELIVERED v2.94.0**, 23 model tests, suite 123 → 146 |
-| **2** | `authorize()`. Capability constants and built-in roles already exist from Phase 1 (`lib/communities/capabilities.js`); this phase adds the evaluator. Actor type accommodates remote from day one. | The full authorization matrix from brief §29, including `remote user` |
+| **2** | `authorize()`. Capability constants and built-in roles already exist from Phase 1 (`lib/communities/capabilities.js`); this phase adds the evaluator. Actor type accommodates remote from day one. | The full authorization matrix from brief §29, including `remote user` — **✅ DELIVERED v2.95.0**: `lib/communities/authorize.js`, 25 tests covering A-1 to A-4, suite 146 → 171 |
 | **3** | Local Communities end to end: create, invite, join, leave, roles, channels, messages, moderation | Suite; **explicitly not** a licence to shape the API around local-only |
 | **4** | Remote membership via cross-port: invite an identity from an allied node, join, hold roles, post in channels. **No state replication** (see §2) — the work is authorization and lifecycle for stub users, not consensus. Two-node harness suffices; a third adds little once there is a single authority. | Integration tests across two nodes, plus the relevant chaos cases from brief §30 |
 | **5** | Abuse and limits: rate limits, payload caps, replay/dedupe, audit log, malformed-event rejection, TOCTOU (brief §31) | Security test suite |
