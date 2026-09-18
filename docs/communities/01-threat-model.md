@@ -96,7 +96,7 @@ and always dedupe.
 
 ## 3. Authorization
 
-### A-1 — no authorization path for remote actors exists **[design gap]**
+### A-1 — no authorization path for remote actors exists **[ADDRESSED v2.95.0]**
 
 Every authorization helper takes a local `userId` and consults local tables.
 Communities is the first feature where the *actor may not exist locally*.
@@ -112,6 +112,14 @@ Risk if rushed: a receiving node accepts "Alice banned Bob" because the envelope
 is well-signed by Alice's node, without checking that Alice held `member.ban` in
 *this node's* view of Community state. That is trusting the peer's conclusion
 instead of verifying its premises.
+
+**Addressed in v2.95.0.** `lib/communities/authorize.js` takes an actor of kind
+`user` or `federated`. A federated actor is resolved against the cross-port stub
+rows by `(home_node, home_user_id)` — never by handle alone, since handles
+collide across nodes — and is **denied outright if no local row exists**. Holding
+a local row is then still not membership, and membership is still not capability.
+Each of those three steps has its own test, as does the case of a peer claiming a
+purely local account.
 
 ### A-2 — TOCTOU on stale authority **[design gap — largely dissolved 2026-09-18]**
 
@@ -137,7 +145,7 @@ On mismatch, **reject or defer and resynchronise** — never merge
 security-sensitive state silently. Detecting a conflict and refusing is an
 acceptable V1; guessing is not.
 
-### A-3 — privilege escalation within a Community **[design gap]**
+### A-3 — privilege escalation within a Community **[ADDRESSED v2.95.0]**
 
 Classic, and entirely on us to prevent:
 
@@ -152,11 +160,24 @@ capability you do not hold**; role priority compared on assignment and on role
 edit; invites forbidden from conferring OWNER/ADMIN (brief §17); the
 `>= 1 owner` invariant enforced in the same transaction as the mutation.
 
-### A-4 — cross-Community IDOR **[design gap]**
+**Addressed in v2.95.0**, each as a named function rather than left to callers:
+`canGrantRole` (unheld capabilities and priority), `canEditRole` (inversion, and
+managed roles immutable), `canActOnMember` (strictly greater priority — equal is
+refused, so two admins cannot remove each other), `canInviteConferRole` (checks
+**capabilities, not the role name**, so a custom role holding `member.roles` is
+caught too), and `wouldLeaveNoOwner`. The last must still be called inside the
+transaction it guards; the function exists, the discipline is Phase 3's.
+
+### A-4 — cross-Community IDOR **[ADDRESSED v2.95.0]**
 
 `channel_id` and `membership_id` will be opaque and globally unique, which makes
 guessing hard but authorization-by-obscurity. Every handler must verify the
 resource belongs to the Community in the path, not merely that it exists.
+
+**Addressed in v2.95.0.** `authorize()` takes an optional `resource`
+`{ type, id }` and refuses when it belongs to another Community — or when it does
+not exist, which is refused rather than ignored, so a bad id can never read as
+"no constraint given".
 
 ---
 
