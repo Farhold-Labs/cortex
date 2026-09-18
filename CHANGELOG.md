@@ -5,6 +5,20 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.93.1] - 2026-09-18
+
+### Security
+
+- **A federation signature must now cover the date and the request body.** The verifier rebuilt its signing string from the header list inside the sender's own `Signature` header, with no floor on what that list had to contain — so a peer could sign `(request-target)` alone and leave everything else outside the signature.
+  - **No signed date meant no freshness check.** The 5-minute replay window received `new Date(undefined)`, computed `NaN`, and `NaN > 5` is false — so it passed. A captured request stayed replayable indefinitely, including one captured from a node that has since been suspended.
+  - **No signed digest meant an unauthenticated body.** The digest header was still recomputed and compared, but a digest outside the signature can be rewritten alongside the body it describes, so the comparison proved nothing.
+  - Forging a signature was never possible without the private key; the exposure was replay of genuine captured traffic, which is exactly what a freshness window exists to prevent.
+  - `(request-target)`, `host` and `date` must now be signed, plus `digest` whenever the request carries a body; a body without a digest is refused, and an unparseable date is rejected explicitly rather than evaluating to `NaN`.
+  - The same floor is applied to the **bootstrap pairing path**, which is the least trusted signature check in the system — the key arrives in the request itself, so all the signature proves is that the sender holds the matching private key.
+  - **No legitimate Cortex traffic is affected.** Every node has always signed `(request-target) host date` plus `digest` when a body is present, so the requirement rejects nothing a Cortex node has ever produced.
+
+Found during Communities Phase 0 reconnaissance (`docs/communities/01-threat-model.md`, finding F-1) and fixed on its own rather than inside that project, since it affects federation as it ships.
+
 ## [2.93.0] - 2026-09-17
 
 ### Added
