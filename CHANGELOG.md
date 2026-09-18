@@ -5,6 +5,22 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.95.0] - 2026-09-18
+
+### Added
+
+- **Communities, Phase 2 — the authorization evaluator.** `server/lib/communities/authorize.js`: the single place that answers "may this actor do this here". Still no routes and no UI; this is the security boundary the rest of the project will be built on, so it ships and is tested on its own. 25 tests, one per threat-model finding it addresses.
+  - **Actors may be remote from day one (threat model A-1).** An actor is `{ kind: 'user' }` or `{ kind: 'federated', handle, node, homeUserId }`. A federated actor resolves against the cross-port stub rows by `(home_node, home_user_id)` — **never by handle alone**, because handles collide across nodes and cross-port auth already suffixes them for that reason — and is denied outright when no local row exists. A well-signed envelope proves the peer *said* "Alice banned Bob"; it is not evidence that Alice held `member.ban` here. Holding a local row is still not membership, and membership is still not capability; each step is tested separately, including a peer claiming a purely local account.
+  - **Privilege escalation is blocked by named functions, not by caller discipline (A-3).** `canGrantRole` enforces that **you cannot grant a capability you do not hold** and that the granted role sits strictly below your own priority. `canEditRole` blocks priority inversion — a moderator editing the admin role rewrites the powers of people above them without touching a membership — and refuses managed roles entirely. `canActOnMember` requires *strictly* greater priority, so two admins cannot remove each other. `canInviteConferRole` checks **capabilities rather than the role name**, so a custom role quietly holding `member.roles` is caught as readily as one called "admin". `wouldLeaveNoOwner` guards the last-owner case.
+  - **Cross-Community IDOR is refused (A-4).** `authorize()` takes an optional resource and verifies it belongs to the Community in the request. A resource that does not exist is refused rather than ignored, so a bad id can never read as "no constraint given".
+  - **Mutations may commit to a state version (A-2)** rather than being judged against wall-clock time, since timestamps are attacker-controlled and clocks disagree. Refusing on conflict is the V1 behaviour; guessing is not.
+  - **Fails closed throughout:** unknown capability, missing or suspended Community, unresolvable actor, corrupt role data and thrown exceptions all deny. A ban outranks a role that was never revoked, and a suspended Community is frozen for its owner too.
+  - **It cannot grant access to a wave, by construction.** Channel visibility gates discovery; wave privacy gates content. There is deliberately no `canReadWave`, no capability whose name could be mistaken for one, and a named `assertNeverGrantsWaveAccess` guard that a future refactor would have to delete on purpose. The test asserts that a Community owner holding every capability is still not a participant of a private wave filed in their own channel — if that ever changes, moving a wave into a Community becomes a mass disclosure.
+
+### Fixed
+
+- **A remote user with no avatar could not complete a cross-port login.** `users.avatar` is `NOT NULL DEFAULT '?'`, and a column default applies only when the column is *omitted* — passing an explicit `NULL` still violates the constraint. `upsertCrossPortUser` passed `avatar || null` on both its insert and its update path, so any home node whose exchange payload carried no avatar produced `500 Failed to create local user`, with the cause invisible from the response. `createUser` had always defended with `|| '?'`; this path now matches it. Found while building the Phase 2 remote-actor tests, which is exactly the case it breaks.
+
 ## [2.94.0] - 2026-09-18
 
 ### Added
