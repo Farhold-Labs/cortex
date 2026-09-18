@@ -310,3 +310,44 @@ require re-architecting membership.
 
 **F-1 is worth fixing on its own merits, before any Communities code**, since it
 affects federation as it ships today.
+
+---
+
+## 10. Found while building Phase 4 — 2026-09-18
+
+### S-1 — a cross-port user's standing was never re-checked **[ADDRESSED for Communities in v2.97.0]**
+
+Once cross-port auth created a stub row, nothing ever asked again whether the
+node that vouched for that person still did. Suspending or unpairing a
+federation peer left its users' local rows — and everything those rows could
+reach — completely intact.
+
+`authorize()` now refuses a cross-port actor whose `home_node` is not an
+**active** federation peer, and `effectiveCapabilities()` returns an empty set
+for them. Suspension is reversible: re-activating the peer restores standing
+without anyone re-inviting members.
+
+**Deliberately scoped, and still open beyond Communities.** This gate covers
+Communities only. A cross-port user whose node has been unpaired keeps any
+existing session and any wave participation they already held, because
+revoking those is a node-wide authentication decision rather than one for this
+evaluator to make unilaterally. **Someone should decide what unpairing a node is
+meant to mean for sessions and waves** — the answer is not obviously "nothing",
+which is what it means today.
+
+### S-2 — a handler computing its own capability list **[FIXED v2.97.0]**
+
+Phase 3's rule is that no handler computes a permission inline. `GET
+/api/communities/:id` broke it for the *listing* case: it called
+`db.getMemberCapabilities` directly, which knows about roles and nothing about
+standing. The result was a route that reported a remote member's full capability
+list while every gated endpoint correctly refused them.
+
+The two-node test caught it. The fix was to give the evaluator an
+`effectiveCapabilities()` that applies the same gates as `authorize()`, so the
+"what can they do" and "may they do this" questions cannot disagree.
+
+The general lesson, which is why this is recorded here rather than only in the
+changelog: **a rule that says "always go through X" needs X to answer every
+shape of the question.** Leaving a gap makes the bypass the path of least
+resistance.

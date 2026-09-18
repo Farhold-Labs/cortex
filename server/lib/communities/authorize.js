@@ -58,6 +58,7 @@ export const REASON = {
   CANNOT_GRANT_UNHELD: 'cannot_grant_capability_not_held',
   LAST_OWNER: 'would_leave_community_without_an_owner',
   INVITE_CANNOT_CONFER: 'invite_may_not_confer_this_role',
+  HOME_NODE_INACTIVE: 'home_node_no_longer_federated',
 };
 
 const deny = (reason, detail) => ({ allowed: false, reason, ...(detail ? { detail } : {}) });
@@ -95,6 +96,34 @@ export function resolveActor(db, actor) {
   }
 
   return null;
+}
+
+
+/**
+ * Is a cross-port member's home node still vouching for them?
+ *
+ * Local users always pass — they have no home node but this one. For a
+ * cross-port user the answer is whether their `home_node` is still an **active**
+ * federation peer: a suspended or removed node means the party that vouched for
+ * this person no longer does, and the rights they hold here were only ever
+ * borrowed from that relationship.
+ *
+ * NOTE, deliberately scoped: this gates COMMUNITIES only. A cross-port user
+ * whose node is unpaired keeps any local session and any wave participation
+ * they already had — changing that is a node-wide authentication decision, not
+ * one for this evaluator to make unilaterally. It is recorded in the threat
+ * model as an open question rather than silently decided here.
+ */
+export function homeNodeStanding(db, userId) {
+  const user = db.db.prepare('SELECT is_cross_port, home_node FROM users WHERE id = ?').get(userId);
+  if (!user) return { ok: false, detail: 'no such user' };
+  if (!user.is_cross_port) return { ok: true };
+  if (!user.home_node) return { ok: false, detail: 'cross-port user with no home node' };
+
+  const node = db.getFederationNodeByName(user.home_node);
+  if (!node) return { ok: false, detail: `${user.home_node} is no longer a peer` };
+  if (node.status !== 'active') return { ok: false, detail: `${user.home_node} is ${node.status}` };
+  return { ok: true };
 }
 
 /**
@@ -142,6 +171,16 @@ export function authorize(db, actor, communityId, capability, options = {}) {
         `expected ${options.expectedStateVersion}, current ${community.state_version}`);
     }
 
+    // A remote member's standing here is borrowed from their home node, and a
+    // borrowed thing has to be given back when the lender withdraws.
+    //
+    // Before v2.97.0 nothing checked this: a cross-port user's stub row behaved
+    // like a local account forever, so suspending or unpairing the node that
+    // vouched for them left their Community membership fully intact. Unpairing
+    // a node has to mean something.
+    const standing = homeNodeStanding(db, userId);
+    if (!standing.ok) return deny(REASON.HOME_NODE_INACTIVE, standing.detail);
+
     // A ban outranks every capability, including one held through a role that
     // was never revoked.
     if (db.getCommunityBan(communityId, userId)) return deny(REASON.BANNED);
@@ -154,6 +193,41 @@ export function authorize(db, actor, communityId, capability, options = {}) {
     if (!held.has(capability)) return deny(REASON.MISSING_CAPABILITY, capability);
 
     return allow({ userId });
+  } catch (err) {
+    console.error('[communities/authorize] evaluation failed:', err);
+    return deny(REASON.ACTOR_UNRESOLVED, 'evaluation error');
+  }
+}
+
+/**
+ * Every capability an actor effectively holds here, with the same gates applied
+ * as a single check — inactive Community, withdrawn home node, ban, lapsed
+ * membership all produce an EMPTY set.
+ *
+ * This exists because a caller that wants the whole list would otherwise reach
+ * past the evaluator to `db.getMemberCapabilities`, which knows about roles and
+ * nothing about standing. A two-node test caught exactly that: suspending a
+ * remote member's home node correctly refused every gated endpoint while the
+ * Community detail route cheerfully went on reporting her full capability list,
+ * because it was computing it itself.
+ *
+ * So: anything that needs to know what an actor can do asks here, and policy
+ * stays in one place.
+ */
+export function effectiveCapabilities(db, actor, communityId) {
+  try {
+    const community = db.getCommunityById(communityId);
+    if (!community || community.status !== 'active') return new Set();
+
+    const userId = resolveActor(db, actor);
+    if (!userId) return new Set();
+    if (!homeNodeStanding(db, userId).ok) return new Set();
+    if (db.getCommunityBan(communityId, userId)) return new Set();
+
+    const membership = db.getCommunityMembership(communityId, userId);
+    if (!membership || membership.state !== 'active') return new Set();
+
+    return db.getMemberCapabilities(communityId, userId);
   } catch (err) {
     // An exception inside an authorization check is an outage if it propagates
     // and a vulnerability if it is swallowed into an allow. Deny, loudly.
