@@ -31,6 +31,10 @@ going the wrong way.
 | Ban scope | **Per-Community**, escalating to a node or verse-wide ban where warranted. |
 | Migration | Community admin requests; receiving node's admin accepts. **V2/V3.** |
 
+**Blocking production** (not Phase 1): cross-port sessions are 24h and
+non-renewable, so a remote member re-authenticates daily. A session-policy
+change, fixable independently of Communities — see implementation plan §6a.
+
 Two of those supersede recommendations made earlier in these documents. The
 superseded reasoning is kept in place rather than deleted, because *why* it was
 wrong is the useful part: it assumed a replicated Community, and Cortex was

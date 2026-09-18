@@ -232,6 +232,47 @@ Community channels in V1 are not E2EE and say so.
 
 ---
 
+## 6a. Prerequisites for production — not for Phase 1
+
+Recorded 2026-09-18 so they are not rediscovered at deployment.
+
+### P-1 — cross-port sessions are 24h and non-renewable **[blocking full production]**
+
+Jared, on reviewing this plan: *"I would want to fix the 24-hour non-renewable
+sessions issue before fully deploying to production."*
+
+Ordinary Cortex sessions are a 60-minute rotating access token over a 90-day
+sliding refresh session (v2.75.0). **Cross-port sessions are neither** — 24 hours,
+no renewal — which was a reasonable conservatism when cross-port meant an
+occasional visit, and is the wrong shape when it is how a Community member
+attends every week.
+
+The effect is that a remote member re-runs the full approve-at-home redirect
+daily, on a flow with more steps than a login.
+
+This is a **session-policy change, not an architecture change**, and it can be
+done independently of Communities:
+
+- decide the lifetime deliberately rather than inheriting 24h — the v2.75.0
+  argument applies here too, that forced re-authentication mostly punishes the
+  people the feature exists for;
+- consider a refresh path for cross-port sessions with reuse detection, as
+  local sessions already have;
+- keep the home node authoritative — a renewal must not outlive the member's
+  standing at home, which is the reason the short lifetime was chosen and must
+  not simply be discarded;
+- and consider whether the operator should be able to set it, since
+  `instance_config.security` already carries the local policy.
+
+**Gate: do not open Communities to production traffic until this is settled.**
+Phase 1 to 3 are unaffected — they involve no cross-port members.
+
+### P-2 — stub-user leakage audit
+
+A cross-port stub user is an ordinary `users` row and therefore appears anywhere
+users are enumerated: search, admin lists, mention autocomplete, member pickers.
+Audit before production, not after.
+
 ## 7. Honest estimate of scale
 
 For calibration against recent work: per-wave roles (v2.88.0) — one table, one
