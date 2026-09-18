@@ -5,6 +5,25 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.94.0] - 2026-09-18
+
+### Added
+
+- **Communities, Phase 1 — the domain model.** Tables, capability vocabulary and the data layer for a first-class Communities layer. Deliberately inert: no routes, no federation, no UI, and nothing in the running application reads any of it yet. The authorization evaluator is Phase 2 and anything user-facing is Phase 3+. The schema is the expensive part to change once there is data in it, which is why it goes first and alone.
+  - **A channel is a container that holds waves, not a wave.** `Community → Channel → Wave → Ping`. A wave keeps its own participants, privacy and encryption keys and merely gains a `channel_id`, so moving one into or out of a Community changes nobody's access. The earlier design had the channel *be* the wave, which meant a four-person private wave joining a forty-member Community would have disclosed its whole history to thirty-six people at the moment it moved. Four tests guard that invariant directly.
+  - **Both containers are nullable, permanently.** An uncontained wave is the normal case, not a migration backlog — all 44 waves across the two production nodes are uncontained today. Direct messages, crew waves and profile waves must stay that way: forcing a two-person conversation into a Community would hand that Community's staff a structural claim over it.
+  - **Node-level channels use `community_id IS NULL`** rather than a literal "node Community" row, which would invite questions with no good answers (can you leave it, who owns it, does it federate). The uniqueness index is on `IFNULL(community_id, '~node~')` because in SQLite two NULLs are distinct in a UNIQUE constraint — without it a node could accumulate any number of channels slugged `general`.
+  - **Roles hold capability sets, not ranks.** The instance ladder (admin > moderator > user) and the per-wave ladder both work by rank because their powers nest; Community powers do not — a Community may want someone who runs events but does not touch members. `priority` exists only to answer "may this member act on that one". Four built-in roles are seeded with every Community, and `owner` cannot be deleted or edited away, because a Community whose owner has revoked their own ability to manage it has no route back that does not involve a node admin.
+  - **A removed member keeps their role rows and loses every power.** The grants survive so rejoining restores standing; reading them as live capabilities would make "removed" mean nothing.
+  - **Bans use `ON DELETE RESTRICT`** — deleting a banned user fails loudly rather than quietly readmitting them. Foreign keys are enforced, so this is tested rather than asserted in a comment.
+  - **Visibility is `public` / `unlisted` / `private`.** Unlisted is reachable by link and never listed. Included although the UI may offer two, because it costs nothing now and is unpleasant to retrofit once real Communities exist.
+  - Corrupt data in a `permissions` blob reads as "holds nothing" rather than throwing — an exception inside an authorization check is an outage, an empty set merely denies.
+  - **All three wave mappers carry the container ids.** This file has three and they drift, which CLAUDE.md records as a standing trap; a column no mapper exposes is a column no reader can see, and Phase 3 would otherwise have found channels that appear empty.
+
+### Changed
+
+- **The cross-port session limitation is no longer recorded as blocking production.** Cross-port sessions are 24 hours and non-renewable, so a remote member re-authenticates daily. That is a convenience cost, not a security gap: the behaviour **fails closed**, and the obvious fix is worse. `POST /api/cross-port/session` hand-rolls its own token instead of calling `issueAuthCredentials` — the same bypass class as the v2.81.2 bug — and routing it through with `supportsRefresh` is a one-line change that would grant a 90-day sliding session to someone their home node could ban tomorrow. A correct fix needs home-node revalidation on refresh, which is federation work and cannot bite before Phase 4.
+
 ## [2.93.1] - 2026-09-18
 
 ### Security
