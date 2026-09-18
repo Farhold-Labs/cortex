@@ -57,10 +57,14 @@ What remains true is that they will not have any **until E2EE is set up for that
 session on that node** — keys are generated client-side. The live cross-port user
 on PMP holds none.
 
-**Recommendation:** treat Community channel encryption as exactly the same
-question as wave encryption, because a channel is a wave (§6.3). Decide in Phase
-3 whether a cross-port session performs E2EE setup; do not claim encryption in
-the UI that a given member's session cannot actually provide.
+**Recommendation:** treat Community encryption as exactly the same question as
+wave encryption — under §2b it *is* the same question, because the waves inside a
+channel are ordinary waves and keep their own keys. A channel may therefore
+contain encrypted waves in V1 with no new cryptography at all; what V1 does not
+get is an encrypted *channel-wide* stream, which was never a separate thing once
+channels became containers. Decide in Phase 3 whether a cross-port session
+performs E2EE setup, and do not claim encryption in the UI that a given member's
+session cannot actually provide.
 
 ---
 
@@ -127,6 +131,159 @@ new identity concept. Verified in production: PMP holds one cross-port user
 - **Migration** is an authority handoff: the Community admin requests, the
   receiving node's admin accepts. Still V2/V3, but the schema must not derive
   Community identity from hostname or local row id, per the brief's §25.
+  *Amended by §2b — it is a content migration as well as an authority handoff.*
+
+## 2b. Structure — DECIDED 2026-09-18
+
+**Supersedes §6.3**, which had a Community channel *be* a wave. The superseded
+reasoning is left in place below for the same reason as §2: why it was wrong is
+the useful part.
+
+### The model
+
+```
+Community
+└── Channel            container — organises waves, is not itself a conversation
+    └── Wave           the conversation, unchanged from what Cortex has today
+        └── Ping
+            └── threaded pings
+```
+
+A channel **holds** waves. It does not replace them.
+
+### Why this beat channel-as-wave
+
+**1. It removes the migration hazard.** Under channel-as-wave, moving an
+existing wave into a Community flipped its access authority from
+`wave_participants` to Community membership — a four-person private wave joining
+a forty-member Community would disclose its entire history to thirty-six people,
+irreversibly. Under containers the wave keeps its own participant list and
+privacy and merely gains a `channel_id`. Migration in becomes a label change:
+safe, and reversible.
+
+It also disarms the two awkward populations measured on farhold — **12 encrypted
+waves** (no re-keying required, because the key holders do not change) and **14
+crew-owned waves** (no collision between crew and Community membership, because
+crew membership still governs the wave).
+
+And it dissolves the problem in the other direction. Under channel-as-wave,
+moving a wave *out* had no defensible default, because a channel has no
+participant list of its own — "everyone in the Community", "everyone who posted"
+and "staff only" were all wrong in different ways. Under containers the wave
+already has its participants, so leaving is clearing `channel_id` and nobody's
+access changes. **Both directions are in scope for V1**, which was not true of
+the superseded model.
+
+**2. Waves keep their meaning.** No redefinition of the object every user already
+understands, and no pressure on threaded pings to carry sub-conversation load
+they were not built for.
+
+**3. It matches how the nodes are actually used.** A theatre node wants a
+*Productions* channel holding a wave per production. Under channel-as-wave that
+is a channel per production, and the rail becomes unusable within a season.
+Containers give a handful of stable channels with waves flowing through them.
+
+**4. Cortex already has the concept.** `wave_categories` +
+`wave_category_assignments` (`server/schema.sql:134`) are exactly "a thing that
+organises waves." They are **per-user** (`user_id NOT NULL`,
+`UNIQUE(user_id, name)`). A channel is the same idea made **shared and
+container-scoped**. This is a promotion of an existing level, not a new one.
+
+### The cost, stated plainly
+
+Three authorization layers instead of two: Community membership → channel
+visibility → wave privacy and participants. Without one clear rule this becomes
+a permanent bug source. The rule:
+
+> **Channel visibility gates discovery. Wave privacy gates content.**
+
+You must be able to see the channel to find the waves listed in it; whether you
+may *open* a given wave still follows today's wave rules, unchanged. A private
+wave inside a public channel stays private and is simply not listed for
+non-participants.
+
+**One wrinkle to write into the schema comment**, because someone will otherwise
+assume the other thing: a wave marked `public` *inside a Community* means
+visible to Community members, not to the internet. `privacy` is read relative to
+its container.
+
+Secondary costs, both accepted: navigation is four levels deep
+(community → channel → wave → thread), which needs care on mobile; and posting
+always requires a wave to exist first — which is how Cortex already works, so it
+should read as native rather than as friction.
+
+### Containers are nullable, and that is permanent
+
+Every one of the 44 waves across both production nodes today belongs to no
+Community. Both `community_id` and `channel_id` are nullable on waves, and
+uncontained waves are the **normal case indefinitely** — not a migration
+backlog to be drained.
+
+Framing that collapses this to one model: **the node behaves as an implicit
+Community that everyone on it belongs to**, in which only admins may create
+channels. The rail renders the node at the top and Communities beneath it.
+
+**Do not insert a literal "node Community" row.** `community_id IS NULL` *means*
+node-level. A real row invites questions with no good answers — can you leave
+it, who owns it, does it federate. Channels take a nullable `community_id` on
+the same basis, so a channel belongs either to a Community or to the node.
+
+### Who may create what
+
+| Action | Who |
+| --- | --- |
+| Create a **Community** | anyone |
+| **Import** a Community from another node | node admin, at the Community owner's request |
+| Create a **node-level channel** | node admin |
+| Create a **node-level public wave** | node admin |
+| Create a private or crew wave | anyone — no container, unchanged, forever |
+| Profile wave | automatic, per user; exempt |
+| Create a wave inside a Community channel | per Community role |
+
+Forcing DMs and crew waves into a Community would be actively wrong: it would
+give Community staff a structural claim over private conversations between two
+people, which is the opposite of what Cortex is for. The restriction is on
+**discoverable** things, not on waves.
+
+Gating node-level public waves costs nothing today. Measured on farhold
+2026-09-18: all six node-wide public waves were created by an admin already; the
+only two created by a non-admin are auto-created profile waves, which the table
+exempts. The gate formalises existing practice and grandfathers nothing.
+
+Because anyone may create a Community, Community creation is the relief valve
+that makes admin-only node channels tolerable — a member who wants a space makes
+one rather than queueing for an admin. Two consequences to handle in Phase 5
+rather than Phase 1: a **per-user creation cap**, and a node-admin power to
+**suspend or delete** a Community, since open creation is an abuse surface.
+
+### Community visibility
+
+Three values, not two. `PRIVATE` and `PUBLIC` are what was asked for; `UNLISTED`
+is included because it costs nothing at schema time and is unpleasant to
+retrofit once real Communities exist.
+
+| Value | Discoverable in search | Joinable |
+| --- | --- | --- |
+| `PUBLIC` | yes | per join policy |
+| `UNLISTED` | no | by link or invite |
+| `PRIVATE` | no | invite only |
+
+The UI may expose only two at first. The column should hold three.
+
+### Correction to §2: import is not only an authority handoff
+
+§2 describes migration as an authority handoff. With waves living inside
+channels, a Community's *content* is waves and pings stored on its home node —
+so handing over authority without the data leaves the conversations behind.
+Importing a Community means **moving waves, pings, attachments and reactions
+across nodes**, which Cortex has never done: federation replicates, it does not
+hand over.
+
+That does not change any decision here. It does mean import is substantially
+more work than the admin-approval handshake makes it sound, and it belongs in
+V2/V3 with that understood rather than discovered.
+
+---
 
 ## 3. Proposed module layout
 
@@ -168,8 +325,10 @@ about ORM defaults — though note Cortex uses no ORM, so every FK is written by
 | `community_memberships` | exactly one of `user_id` / `federated_identity_id`; `state`; `version` |
 | `community_roles` | `priority`, `permissions` (capability list), `managed` |
 | `community_membership_roles` | join table |
-| `community_channels` | `type` ∈ TEXT, ANNOUNCEMENT for V1 |
-| `community_channel_permissions` | schema present, evaluator support deferred |
+| `communities` (cont.) | `visibility` ∈ `PUBLIC` / `UNLISTED` / `PRIVATE` — §2b |
+| `channels` | container for waves, **not** a wave. `community_id` **nullable** — `NULL` means node-level (§2b). `type` ∈ TEXT, ANNOUNCEMENT for V1 |
+| `channel_permissions` | schema present, evaluator support deferred |
+| `waves` (existing) | gains nullable `community_id` and `channel_id`. Uncontained is the normal case, permanently — all 44 waves in production today are uncontained |
 | `community_invites` | **hash only**, `max_uses`, `use_count`, `expires_at`, `revoked_at` |
 | `community_bans` | survives membership deletion — a ban that vanishes with the row is not a ban |
 | `community_events` | append-only, `sequence`, `state_version`, dedupe key |
@@ -207,8 +366,9 @@ Phase numbering follows the brief. Each gate is human review.
 
 ### Definition of done
 
-The brief's §37 list, unchanged, with the one amendment from §1.4 above:
-Community channels in V1 are not E2EE and say so.
+The brief's §37 list, unchanged, with the one amendment from §1.4 above: a
+channel is a container, so encryption is a per-wave property inside it, and the
+UI must not claim more than a given member's session can provide.
 
 ---
 
@@ -216,13 +376,14 @@ Community channels in V1 are not E2EE and say so.
 
 1. **Identity model** — §2 above. Everything downstream depends on it.
 2. **Whether 0.5 happens first.** My recommendation is yes.
-3. ~~Whether Communities and waves converge~~ — **DECIDED**: a Community channel
-   **is a wave** carrying a community id, and a sub-conversation within a channel
-   is a **threaded ping**. This is the largest simplification available: channels
-   inherit privacy, E2EE, pings, threads, pins, reactions and the realtime
-   delivery path unchanged. Phase 1 must reconcile `wave_participants` against
-   Community membership — the likely rule being that membership *drives*
-   participation rather than duplicating it.
+3. ~~Whether Communities and waves converge~~ — **DECIDED, then revised. See §2b.**
+   The first answer was that a channel *is* a wave. It was replaced on the same
+   day by the container model: **a channel holds waves**, and a wave keeps its own
+   participants, privacy and encryption. The reason for the change is the one that
+   matters — channel-as-wave made every migration a mass disclosure, because the
+   wave's access authority flipped to Community membership at the moment it moved.
+   Containers keep `wave_participants` authoritative, so there is nothing to
+   reconcile against membership.
 4. ~~How much state a non-member node may hold~~ — **DISSOLVED** by §2. With one
    authoritative node per Community there is no replica to scope.
 5. ~~Ban scope~~ — **DECIDED**: per-Community, with escalation to a node or
