@@ -3231,6 +3231,17 @@ export class DatabaseSQLite {
     // and profile waves have no business belonging to a Community, and forcing
     // a two-person conversation into one would hand that Community's staff a
     // structural claim over it.
+    // v2.96.0 — an invite may carry a role. Phase 1 shipped the invites table
+    // without one; `canInviteConferRole` exists to police WHICH role, so the
+    // column is what was missing rather than the rule. Its own ALTER because a
+    // guarded CREATE TABLE never gains columns for a database that already ran it.
+    const inviteCols = this.db.prepare(`PRAGMA table_info(community_invites)`).all();
+    if (inviteCols.length && !inviteCols.some(c => c.name === 'role_id')) {
+      console.log('📝 Adding community_invites.role_id (v2.96.0)...');
+      this.db.exec(`ALTER TABLE community_invites ADD COLUMN role_id TEXT REFERENCES community_roles(id) ON DELETE SET NULL;`);
+      console.log('✅ community_invites.role_id added');
+    }
+
     const waveColsForCommunity = this.db.prepare(`PRAGMA table_info(waves)`).all();
     if (waveColsForCommunity.length && !waveColsForCommunity.some(c => c.name === 'community_id')) {
       console.log('📝 Adding wave container columns (v2.94.0)...');
@@ -13684,6 +13695,156 @@ export class DatabaseSQLite {
     return this.db.prepare(
       'SELECT * FROM waves WHERE channel_id = ? ORDER BY updated_at DESC'
     ).all(channelId);
+  }
+
+
+  // ----- Communities: Phase 3 additions (v2.96.0) -----
+
+  /** The Communities a person belongs to — what the rail renders. */
+  listUserCommunities(userId) {
+    return this.db.prepare(`
+      SELECT c.*, m.state AS membership_state
+      FROM community_memberships m
+      JOIN communities c ON c.id = m.community_id
+      WHERE m.user_id = ? AND m.state = 'active' AND c.status = 'active'
+      ORDER BY c.name COLLATE NOCASE ASC
+    `).all(userId);
+  }
+
+  /**
+   * Search discoverable Communities.
+   *
+   * `public` only. Unlisted is excluded by definition — that is the whole
+   * difference between the two — and excluding it here rather than at the
+   * caller means a new caller cannot leak them by forgetting (threat model M-1).
+   */
+  searchCommunities(query, { limit = 25 } = {}) {
+    const q = `%${String(query || '').trim()}%`;
+    return this.db.prepare(`
+      SELECT id, slug, name, description, visibility, created_at FROM communities
+      WHERE visibility = 'public' AND status = 'active' AND (name LIKE ? OR slug LIKE ?)
+      ORDER BY name COLLATE NOCASE ASC LIMIT ?
+    `).all(q, q, limit);
+  }
+
+  updateCommunityRole(roleId, { name, priority, permissions }) {
+    const role = this.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(roleId);
+    if (!role || role.managed) return null;
+    this.db.prepare('UPDATE community_roles SET name = ?, priority = ?, permissions = ? WHERE id = ?')
+      .run(name ?? role.name, priority ?? role.priority,
+           permissions ? JSON.stringify(permissions.filter(isCapability)) : role.permissions, roleId);
+    return this.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(roleId);
+  }
+
+  updateChannel(id, fields = {}) {
+    const allowed = ['name', 'description', 'type', 'visibility', 'sort_order'];
+    const sets = [], values = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (!allowed.includes(key)) continue;
+      sets.push(`${key} = ?`); values.push(value);
+    }
+    if (!sets.length) return this.getChannelById(id);
+    sets.push('updated_at = ?'); values.push(new Date().toISOString(), id);
+    this.db.prepare(`UPDATE channels SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return this.getChannelById(id);
+  }
+
+  /**
+   * Soft-delete. The row stays so that its waves keep a coherent history and an
+   * audit trail still resolves; `status` gates every read path.
+   *
+   * Waves are deliberately NOT deleted — a container disappearing must never
+   * take conversations with it. They fall back to uncontained, which is the
+   * normal state for the great majority of waves anyway.
+   */
+  deleteCommunity(id) {
+    const now = new Date().toISOString();
+    const tx = this.db.transaction(() => {
+      this.db.prepare('UPDATE waves SET community_id = NULL, channel_id = NULL WHERE community_id = ?').run(id);
+      this.db.prepare('DELETE FROM channels WHERE community_id = ?').run(id);
+      this.db.prepare("UPDATE communities SET status = 'deleted', updated_at = ?, state_version = state_version + 1 WHERE id = ?")
+        .run(now, id);
+    });
+    tx();
+  }
+
+  // ----- Invites -----
+
+  /**
+   * Mint an invite. Returns the plaintext token ONCE — only its hash is stored,
+   * so a database read cannot yield a working invite (threat model I-1).
+   */
+  createCommunityInvite({ communityId, createdBy = null, roleId = null, maxUses = null, expiresAt = null }) {
+    const token = crypto.randomBytes(24).toString('base64url');
+    const id = uuidv4();
+    this.db.prepare(`
+      INSERT INTO community_invites (id, community_id, token_hash, created_by, role_id, max_uses, use_count, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(id, communityId, this.hashInviteToken(token), createdBy, roleId, maxUses, expiresAt, new Date().toISOString());
+    return { id, token };
+  }
+
+  hashInviteToken(token) {
+    return crypto.createHash('sha256').update(String(token)).digest('hex');
+  }
+
+  getCommunityInviteByToken(token) {
+    return this.db.prepare('SELECT * FROM community_invites WHERE token_hash = ?')
+      .get(this.hashInviteToken(token)) || null;
+  }
+
+  listCommunityInvites(communityId) {
+    // Never returns token_hash. There is nothing a caller can do with it except
+    // leak it, and an invite list is a screen an admin looks at.
+    return this.db.prepare(`
+      SELECT id, community_id, created_by, role_id, max_uses, use_count, expires_at, revoked_at, created_at
+      FROM community_invites WHERE community_id = ? ORDER BY created_at DESC
+    `).all(communityId);
+  }
+
+  revokeCommunityInvite(id) {
+    this.db.prepare('UPDATE community_invites SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
+      .run(new Date().toISOString(), id);
+  }
+
+  /**
+   * Claim one use of an invite, atomically.
+   *
+   * Threat model I-2: read-then-write loses the race, and the prize for winning
+   * it is a single-use invite redeemed by several people. The guard lives in the
+   * UPDATE's WHERE clause so the database decides, and `changes === 1` is the
+   * only evidence that this caller — not a concurrent one — got the use.
+   */
+  claimCommunityInviteUse(inviteId) {
+    const now = new Date().toISOString();
+    const result = this.db.prepare(`
+      UPDATE community_invites SET use_count = use_count + 1
+      WHERE id = ?
+        AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > ?)
+        AND (max_uses IS NULL OR use_count < max_uses)
+    `).run(inviteId, now);
+    return result.changes === 1;
+  }
+
+  /**
+   * Leave a Community, refusing if it would leave nobody able to administer it.
+   *
+   * The check and the write are in ONE transaction on purpose: checking first
+   * and writing afterwards is a race whose failure mode is a Community that
+   * nobody can administer and only a node admin can rescue.
+   */
+  leaveCommunity(communityId, userId, { wouldOrphan }) {
+    let refused = false;
+    const tx = this.db.transaction(() => {
+      if (wouldOrphan(this, communityId, userId)) { refused = true; return; }
+      const membership = this.getCommunityMembership(communityId, userId);
+      if (!membership) { refused = true; return; }
+      this.db.prepare("UPDATE community_memberships SET state = 'left', updated_at = ?, version = version + 1 WHERE id = ?")
+        .run(new Date().toISOString(), membership.id);
+    });
+    tx();
+    return !refused;
   }
 
   // ----- Audit -----

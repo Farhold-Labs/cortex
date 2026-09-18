@@ -5,6 +5,28 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.96.0] - 2026-09-18
+
+### Added
+
+- **Communities, Phase 3 — the API.** 29 routes covering create, discover, join, leave, members, roles, channels, invites, bans and the audit log. Backend only; no UI yet. Per implementation plan §1.2 this phase validates the domain model and is explicitly **not** a licence to shape the API around local-only actors — every handler builds an actor object and hands it to the one evaluator, so Phase 4 adds remote callers instead of rewriting these routes.
+  - **No handler computes a permission inline.** `requireCommunityCapability()` calls `authorize()` or the decision does not happen. Where holding a capability is not sufficient — removing a member, granting a role, filing a wave — the handler additionally calls the matching named guard from Phase 2.
+  - **Filing a wave requires authority over the wave, not merely over the channel.** A Community owner holding every capability still cannot file someone else's private wave into their own channel; the wave's own rules decide. Tested from both directions, including that the owner still cannot read a private wave sitting in their channel afterwards.
+  - **Invites: I-1 and I-2.** Only a hash is stored, so a database read cannot yield a working invite, and the plaintext token is returned exactly once at creation — the listing endpoint returns neither the token nor its hash. Redemption claims a use through a single guarded `UPDATE`, so the database decides the race: six concurrent redemptions of a single-use invite produce exactly one member. An invite may never confer an administrative role, checked **by capability rather than by role name**, and re-checked at redemption in case the role was edited into something administrative after the link was sent.
+  - **Enumeration (M-1).** A private Community answers 404 rather than 403 to a non-member, because 403 confirms it exists. "No such invite", "revoked", "expired" and "used up" all return one identical response, since distinct answers tell someone holding a guess how close they are.
+  - **The last owner cannot leave**, and the check runs inside the transaction that would perform the write — checking first and writing afterwards is a race whose failure mode is a Community only a node admin can rescue.
+  - Deleting a Community or a channel never deletes the waves inside; they fall back to uncontained, which is the normal state for the great majority of waves.
+  - Bounded string lengths on every user-supplied field, strict slug shapes, and `apiLimiter` throughout; invite redemption is rate-limited as a credential endpoint, because it takes a secret and reports whether it was right.
+  - Deleting a Community requires step-up re-authentication.
+
+### Changed
+
+- **The `member` role now holds `channel.move_wave`.** Members could create a wave in a channel but not file an existing one there, which protected nothing — filing is double-gated, so a member can only ever move a wave they already control, and the restriction merely pushed people towards re-creating conversations and losing the history. Found because an end-to-end test of the ordinary case failed.
+
+### Fixed
+
+- `community_invites` gained the `role_id` column it needed. Phase 1 shipped the table without one while Phase 2 shipped the rule policing *which* role an invite may confer, so the column was the missing half.
+
 ## [2.95.0] - 2026-09-18
 
 ### Added
