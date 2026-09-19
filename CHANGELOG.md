@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.99.1] - 2026-09-18
+
+### Added
+
+- **Search for people on this server and add them to a community directly.** The invite code works for anyone you can reach; this is for people who already have an account here, and it was the half that had no UI — `POST /api/communities/:id/members` has accepted a handle or user id since Phase 3, and nothing called it.
+  - Debounced search against `/api/users/search`, with current members filtered out so the list never offers to add somebody who is already in. Two characters minimum, which is the server's rule rather than the screen's.
+  - Gated on `member.invite`, like every other way of bringing someone in — an ordinary member cannot add people, which is asserted in the tests rather than merely hidden in the UI.
+  - **Adding is not inviting.** It puts them in straight away rather than asking them, and the screen says so in place. An accept-or-decline flow would be better manners and is a larger piece of work — Cortex crews have one, communities do not.
+
 ## [2.99.0] - 2026-09-18
 
 ### Added

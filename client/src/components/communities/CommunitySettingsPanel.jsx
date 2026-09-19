@@ -18,6 +18,8 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
   const [mintedToken, setMintedToken] = useState(null);
   const [channelName, setChannelName] = useState('');
   const [remoteAddress, setRemoteAddress] = useState('');
+  const [memberSearch, setMemberSearch] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
 
   const load = useCallback(async () => {
     if (can('member.view')) {
@@ -36,6 +38,41 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
   }, [community.id, fetchAPI, capabilities]);
 
   useEffect(() => { load(); }, [load]);
+
+  /**
+   * Find people on this node to add directly.
+   *
+   * Debounced, and the current members are filtered out so the list does not
+   * offer to add somebody who is already here. Two characters minimum is the
+   * server's rule, not ours — it refuses shorter queries rather than returning
+   * the whole directory.
+   */
+  useEffect(() => {
+    if (memberSearch.trim().length < 2) { setSearchResults([]); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const results = await fetchAPI(`/users/search?q=${encodeURIComponent(memberSearch.trim())}`);
+        const existing = new Set(members.map(m => m.userId));
+        setSearchResults((Array.isArray(results) ? results : []).filter(u => !existing.has(u.id)));
+      } catch { setSearchResults([]); }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [memberSearch, fetchAPI, members]);
+
+  const addMember = async (user) => {
+    try {
+      await fetchAPI(`/communities/${community.id}/members`, {
+        method: 'POST', body: { userId: user.id },
+      });
+      showToast(`${user.displayName || user.handle} added`, 'success');
+      setMemberSearch('');
+      setSearchResults([]);
+      load();
+      onChanged && onChanged();
+    } catch (err) {
+      showToast(err?.error || 'Could not add that person', 'error');
+    }
+  };
 
   const createChannel = async () => {
     const name = channelName.trim();
@@ -161,6 +198,41 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
               They do not need an account here. The invitation waits until they
               first sign in from their own server.
             </div>
+          </div>
+        </div>
+      )}
+
+      {can('member.invite') && (
+        <div style={box}>
+          <div style={label}>ADD SOMEONE FROM THIS SERVER</div>
+          <input
+            value={memberSearch}
+            onChange={e => setMemberSearch(e.target.value)}
+            placeholder="Search by name or handle"
+            style={input}
+          />
+          {memberSearch.trim().length === 1 && (
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>Keep typing…</div>
+          )}
+          {searchResults.map(u => (
+            <div key={u.id} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              gap: '0.5rem', padding: '0.25rem 0',
+            }}>
+              <span style={{ fontSize: '0.8rem', minWidth: 0 }}>
+                {u.displayName || u.handle}
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginLeft: 6 }}>@{u.handle}</span>
+              </span>
+              <button onClick={() => addMember(u)} style={{ ...action, marginTop: 0, flexShrink: 0 }}>Add</button>
+            </div>
+          ))}
+          {memberSearch.trim().length >= 2 && searchResults.length === 0 && (
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+              Nobody found who is not already a member.
+            </div>
+          )}
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.3rem' }}>
+            They join straight away — this adds them rather than asking them.
           </div>
         </div>
       )}
