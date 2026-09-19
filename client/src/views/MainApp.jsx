@@ -90,6 +90,10 @@ function MainApp({ sharePingId }) {
   const [scrollToMessageId, setScrollToMessageId] = useState(null); // Ping to scroll to after wave loads
   const [focusStack, setFocusStack] = useState([]); // Array of { waveId, pingId, ping } for Focus View navigation
   const [showNewWave, setShowNewWave] = useState(false);
+  // Where a new wave was started FROM, when it was started from a group header
+  // rather than the generic button: { channelId } or { categoryId }, plus a
+  // label so the modal can say where it is about to put it.
+  const [newWaveContainer, setNewWaveContainer] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [waveReloadTrigger, setWaveReloadTrigger] = useState(0); // Increment to trigger WaveView reload
@@ -479,7 +483,7 @@ function MainApp({ sharePingId }) {
   // nested under a community — nesting is what made the first version of this
   // feel like a separate application.
   const [communityChannels, setCommunityChannels] = useState([]);
-  const [communityPanelFor, setCommunityPanelFor] = useState(null); // null | { communityId }
+  const [communityPanelFor, setCommunityPanelFor] = useState(null); // null | { communityId, focus }
 
   const loadCommunityChannels = useCallback(async () => {
     if (!instanceFeatures.communities) { setCommunityChannels([]); return; }
@@ -1410,14 +1414,47 @@ function MainApp({ sharePingId }) {
         }
       }
 
-      await fetchAPI('/waves', { method: 'POST', body });
+      // Started from a channel header: file it in the same request.
+      if (newWaveContainer?.channelId) body = { ...body, channelId: newWaveContainer.channelId };
+
+      const created = await fetchAPI('/waves', { method: 'POST', body });
+
+      // Started from a category header: categories are a per-user label with no
+      // create-time route, so apply it straight after. If this fails the wave
+      // still exists, uncategorised, which the list already copes with.
+      if (newWaveContainer?.categoryId) {
+        const waveId = (created && (created.wave?.id || created.id)) || null;
+        if (waveId) {
+          try {
+            await fetchAPI(`/waves/${waveId}/category`, {
+              method: 'PUT', body: { category_id: newWaveContainer.categoryId },
+            });
+          } catch (e) { console.warn('Could not file the new wave in its category:', e); }
+        }
+      }
+
+      setNewWaveContainer(null);
       showToastMsg(SUCCESS.waveCreated, 'success');
       loadWaves();
+      loadCommunityChannels();
     } catch (err) {
       console.error('Failed to create wave:', err);
       showToastMsg(err.message || formatError(`Failed to create ${T.wave}`), 'error');
     }
   };
+
+  /**
+   * Start a wave from a group header.
+   *
+   * A channel is filed server-side in the same request that creates the wave,
+   * so a failure cannot leave an orphan. A category is a per-user label with no
+   * such route, so it is applied immediately afterwards — worst case the wave
+   * exists uncategorised, which is a state the list already handles.
+   */
+  const handleNewWaveIn = useCallback((container) => {
+    setNewWaveContainer(container);
+    setShowNewWave(true);
+  }, []);
 
   const handleSearchResultClick = (result) => {
     // Find the wave and open it
@@ -1750,7 +1787,9 @@ function MainApp({ sharePingId }) {
                   onWaveFile={handleWaveFile}
                   communitiesEnabled={instanceFeatures.communities === true}
                   onManageCommunities={() => setCommunityPanelFor({ communityId: null })}
-                  onManageCommunity={(channel) => setCommunityPanelFor({ communityId: channel.communityId })}
+                  onManageCommunity={(channel, focus) =>
+                    setCommunityPanelFor({ communityId: channel.communityId, focus })}
+                  onNewWaveIn={handleNewWaveIn}
                   ghostMode={ghostMode}
                   onToggleGhostProtocol={handleToggleGhostProtocol}
                   density={user?.preferences?.waveDensity}
@@ -2097,7 +2136,9 @@ function MainApp({ sharePingId }) {
         />
       )}
 
-      <NewWaveModal isOpen={showNewWave} onClose={() => setShowNewWave(false)}
+      <NewWaveModal isOpen={showNewWave}
+        onClose={() => { setShowNewWave(false); setNewWaveContainer(null); }}
+        containerLabel={newWaveContainer?.label || null}
         onCreate={handleCreateWave} contacts={contacts} groups={groups} federationEnabled={federationEnabled} />
 
       {showSearch && (

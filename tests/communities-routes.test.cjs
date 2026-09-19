@@ -582,6 +582,31 @@ test('Communities API', async (t) => {
       assert.equal(nodeChannel.status, 404);
     });
 
+    await t.test('low-bandwidth mode still says which channel a wave is in', async () => {
+      // The client asks for minimal=true on a slow connection, and that query
+      // did not SELECT the container columns — so the key was present and the
+      // value was null, and every community channel looked empty to anyone on
+      // a poor connection. No other test caught it because tests are never slow.
+      const wave = await api('POST', '/api/waves', {
+        token: member.token,
+        body: { title: 'Visible when slow', privacy: 'private', channelId: channel.id },
+      });
+      assert.equal(wave.status, 201);
+
+      const full = await api('GET', '/api/waves?archived=false', { token: member.token });
+      const fullList = Array.isArray(full.body) ? full.body : (full.body.waves || []);
+      const inFull = fullList.find(w => w.title === 'Visible when slow');
+      assert.equal(inFull.channelId, channel.id, 'precondition: the full list carries it');
+
+      const min = await api('GET', '/api/waves?archived=false&minimal=true', { token: member.token });
+      const minList = Array.isArray(min.body) ? min.body : (min.body.waves || []);
+      const inMin = minList.find(w => w.title === 'Visible when slow');
+      assert.ok(inMin, 'the wave is in the minimal list');
+      assert.equal(inMin.channelId, channel.id,
+        'and minimal mode must carry the channel, not just the key');
+      assert.equal(inMin.communityId, community.id);
+    });
+
     await t.test('deleting a channel leaves its waves alone', async () => {
       const doomed = await api('POST', `/api/communities/${community.id}/channels`, {
         token: owner.token, body: { name: 'Temp', slug: 'temp' },

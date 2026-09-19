@@ -196,7 +196,7 @@ const WaveRowMenu = ({ wave, categories = [], channels = [], isOpen, onToggle, o
   </div>
 );
 
-const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
+const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, onManageCategories, onNewWaveIn, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
@@ -482,11 +482,12 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
               accentColor="var(--accent-amber)"
               isMobile={isMobile}
               compact
-              action={onManageCommunity ? {
-                label: '⚙',
-                title: `Manage ${group.communityName}`,
-                onClick: () => onManageCommunity(group.channels[0] || { communityId: group.communityId }),
-              } : undefined}
+              menuTitle={`${group.communityName} options`}
+              menu={onManageCommunity ? [
+                { label: '+ New Channel', onClick: () => onManageCommunity({ communityId: group.communityId }, 'channels') },
+                { label: '👤 Invite People', onClick: () => onManageCommunity({ communityId: group.communityId }, 'invites') },
+                { label: '⚙ Manage Community', onClick: () => onManageCommunity({ communityId: group.communityId }) },
+              ] : undefined}
             >
               {group.channels.length === 0 && (
                 <div style={{ padding: '10px 24px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
@@ -507,6 +508,17 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
                     isMobile={isMobile}
                     compact
                     indent={1}
+                    menuTitle={`#${channel.name} options`}
+                    menu={[
+                      ...(onNewWaveIn ? [{
+                        label: `+ New ${T.Wave} Here`,
+                        onClick: () => onNewWaveIn({ channelId: channel.id, label: `#${channel.name}` }),
+                      }] : []),
+                      ...(onManageCommunity ? [
+                        { label: '✎ Rename Channel', onClick: () => onManageCommunity(channel, 'channels') },
+                        { label: '⚙ Manage Community', onClick: () => onManageCommunity(channel) },
+                      ] : []),
+                    ]}
                   >
                     {chWaves.length === 0 ? (
                       <div style={{ padding: '8px 32px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
@@ -540,6 +552,16 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
               accentColor={category.color}
               isMobile={isMobile}
               compact
+              menuTitle={`${category.name} options`}
+              menu={[
+                ...(onNewWaveIn ? [{
+                  label: `+ New ${T.Wave} Here`,
+                  onClick: () => onNewWaveIn({ categoryId: category.id, label: category.name }),
+                }] : []),
+                ...(onManageCategories ? [{
+                  label: '⚙ Manage Categories', onClick: onManageCategories,
+                }] : []),
+              ]}
             >
               {renderDropZone(category.id, category.name)}
               {categoryWaves.length === 0 ? (
@@ -583,7 +605,7 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
   );
 };
 
-const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh }) => {
+const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, onNewWaveIn, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh }) => {
   // Pull down at the top of the list to reload it (v2.77.0). Additive: the list
   // already refreshes itself on websocket events; this is for the moments when
   // someone wants to be sure.
@@ -694,6 +716,8 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
         onWaveMove={onWaveMove}
         onWaveFile={onWaveFile}
         onManageCommunity={onManageCommunity}
+        onManageCategories={onManageCategories}
+        onNewWaveIn={onNewWaveIn}
         onWavePin={onWavePin}
         onWaveMute={onWaveMute}
         isMobile={isMobile}

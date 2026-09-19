@@ -5976,6 +5976,12 @@ export class DatabaseSQLite {
     const rows = this.db.prepare(`
       SELECT w.id, w.title, w.topic, w.privacy, w.updated_at, w.created_by, w.encrypted,
         w.post_policy, w.allow_replies, w.allow_reactions,
+        -- v2.100.0: the container ids. The shared mapper has carried these
+        -- since v2.94.0, but this query never SELECTed them, so low-bandwidth
+        -- mode returned a null channelId for every wave: the key present and
+        -- the value gone. Anyone on a slow connection saw all their community
+        -- channels as empty, and no test noticed because tests are never slow.
+        w.community_id, w.channel_id,
         (SELECT COUNT(*) FROM pings WHERE wave_id = w.id AND deleted = 0) as ping_count,
         (SELECT COUNT(*) FROM wave_participants WHERE wave_id = w.id) as participant_count
       FROM waves w
