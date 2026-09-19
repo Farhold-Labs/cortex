@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The sidebar nests: community → channels → waves, each level collapsible.** The community name was first rendered as a subtitle squeezed beside the channel name, and in a narrow sidebar the two truncated into each other and neither could be read. Nesting says the same thing legibly, and gives somewhere to fold away a whole community you are not using today. Collapse state is per viewer in `localStorage` — personal categories persist theirs on the category row, but which groups someone folds away is local to the browser they are sitting at, and failing to read it back should cost nothing.
 - **Communities is not a tab.** The first cut made it a top-level destination that also listed the waves in each channel — so reading one conversation spanned two views: you picked a wave inside a channel and were thrown into a different tab to read it. Cortex had already solved this problem once, with wave categories, and a community channel is simply the *shared* version of a category. So channels now appear as groups in the wave list beside your own categories, `⋮ → move` offers channels alongside categories, and a wave in a channel opens where every other wave opens. Managing a community is a panel, reached from the ⚙ on a channel group or from the wave-list options menu.
   - The grouped list is now used whenever there are categories **or** channels. It was categories alone, which would have hidden every channel from anyone who had never made a category.
 

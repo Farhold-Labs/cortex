@@ -212,6 +212,40 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
   }, [moveMenuOpen]);
 
   // Group waves by category
+  // Channels arrive flat; the sidebar shows them under their community.
+  const communityGroups = useMemo(() => {
+    const byCommunity = new Map();
+    for (const ch of channels) {
+      if (!byCommunity.has(ch.communityId)) {
+        byCommunity.set(ch.communityId, {
+          communityId: ch.communityId, communityName: ch.communityName, channels: [],
+        });
+      }
+      byCommunity.get(ch.communityId).channels.push(ch);
+    }
+    return [...byCommunity.values()];
+  }, [channels]);
+
+  /**
+   * Collapse state, per viewer, in localStorage.
+   *
+   * Personal categories persist this server-side on the category row. Channels
+   * have no such column and it is not worth one: which groups someone folds
+   * away is a convenience local to the browser they are sitting at, and a
+   * failure to read it back should cost nothing.
+   */
+  const [collapsedKeys, setCollapsedKeys] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('farhold_community_collapsed') || '{}'); }
+    catch { return {}; }
+  });
+  const toggleCollapsed = (key) => {
+    setCollapsedKeys(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem('farhold_community_collapsed', JSON.stringify(next)); } catch { /* private mode */ }
+      return next;
+    });
+  };
+
   const groupedWaves = useMemo(() => {
     const pinned = waves.filter(w => w.pinned);
 
@@ -429,37 +463,61 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
         </div>
       )}
 
-      {/* Community channel sections (v2.99.0).
-          Above the personal categories because a shared grouping is the more
-          significant one: other people can see it, and it is where a
-          conversation lives rather than how one person happens to file it. */}
-      {channels.map(channel => {
-        const chWaves = groupedWaves.byChannel[channel.id] || [];
+      {/* Communities: community -> channels -> waves, each level collapsible.
+          The community name was previously a subtitle squeezed beside the
+          channel name, and in a narrow sidebar the two ran into each other and
+          neither could be read. Nesting says the same thing legibly, and gives
+          somewhere to collapse a whole community you are not using today. */}
+      {communityGroups.map(group => {
+        const groupWaves = group.channels.flatMap(ch => groupedWaves.byChannel[ch.id] || []);
         return (
-          <div key={channel.id} style={{ marginBottom: '1px' }}>
+          <div key={group.communityId} style={{ marginBottom: '1px' }}>
             <CollapsibleSection
-              title={`# ${channel.name.toUpperCase()}`}
-              subtitle={channel.communityName}
-              badge={chWaves.length.toString()}
-              unreadCount={getGroupUnreadCount(chWaves)}
-              defaultOpen={true}
+              title={group.communityName.toUpperCase()}
+              badge={groupWaves.length.toString()}
+              unreadCount={getGroupUnreadCount(groupWaves)}
+              isOpen={!collapsedKeys[`c:${group.communityId}`]}
+              onToggle={() => toggleCollapsed(`c:${group.communityId}`)}
               titleColor="var(--accent-amber)"
               accentColor="var(--accent-amber)"
               isMobile={isMobile}
               compact
               action={onManageCommunity ? {
                 label: '⚙',
-                title: `Manage ${channel.communityName}`,
-                onClick: () => onManageCommunity(channel),
+                title: `Manage ${group.communityName}`,
+                onClick: () => onManageCommunity(group.channels[0] || { communityId: group.communityId }),
               } : undefined}
             >
-              {chWaves.length === 0 ? (
-                <div style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
-                  No {T.waves} filed here yet
+              {group.channels.length === 0 && (
+                <div style={{ padding: '10px 24px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                  No channels yet
                 </div>
-              ) : (
-                chWaves.map(wave => renderWaveItem(wave, true))
               )}
+              {group.channels.map(channel => {
+                const chWaves = groupedWaves.byChannel[channel.id] || [];
+                return (
+                  <CollapsibleSection
+                    key={channel.id}
+                    title={`# ${channel.name}`}
+                    badge={chWaves.length.toString()}
+                    unreadCount={getGroupUnreadCount(chWaves)}
+                    isOpen={!collapsedKeys[`ch:${channel.id}`]}
+                    onToggle={() => toggleCollapsed(`ch:${channel.id}`)}
+                    titleColor="var(--text-primary)"
+                    isMobile={isMobile}
+                    compact
+                    indent={1}
+                  >
+                    {chWaves.length === 0 ? (
+                      <div style={{ padding: '8px 32px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                        No {T.waves} filed here yet
+                      </div>
+                    ) : (
+                      chWaves.map(wave => renderWaveItem(wave, true))
+                    )}
+                  </CollapsibleSection>
+                );
+              })}
             </CollapsibleSection>
           </div>
         );
