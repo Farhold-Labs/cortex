@@ -168,6 +168,40 @@ test('Communities API', async (t) => {
       assert.ok(list.body.members.find(m => m.userId === member.id).roles.some(r => r.name === 'member'));
     });
 
+    await t.test('someone can be added directly by handle, and the search finds them', async () => {
+      // The invite code works for people you can reach; adding directly is for
+      // people already on this server.
+      const found = await api('GET', '/api/users/search?q=moduser', { token: owner.token });
+      assert.equal(found.status, 200);
+      assert.ok(found.body.some(u => u.handle === 'moduser'), 'search finds a local person');
+
+      const fresh = await makeUser('addedbyhandle');
+      const res = await api('POST', `/api/communities/${community.id}/members`, {
+        token: owner.token, body: { handle: 'addedbyhandle' },
+      });
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+
+      const mine = await api('GET', '/api/communities/mine', { token: fresh.token });
+      assert.ok(mine.body.communities.some(c => c.id === community.id),
+        'they are in it without redeeming anything');
+
+      // As an ordinary member, not as staff.
+      const detail = await api('GET', `/api/communities/${community.id}`, { token: fresh.token });
+      assert.ok(detail.body.capabilities.includes('channel.create_wave'));
+      assert.ok(!detail.body.capabilities.includes('member.ban'));
+
+      await api('DELETE', `/api/communities/${community.id}/members/${fresh.id}`, { token: owner.token });
+    });
+
+    await t.test('adding a member requires the invite capability', async () => {
+      const outsiderTarget = await makeUser('wouldbeadded');
+      const res = await api('POST', `/api/communities/${community.id}/members`, {
+        token: member.token, body: { handle: 'wouldbeadded' },
+      });
+      assert.equal(res.status, 403, 'an ordinary member cannot add people');
+      assert.ok(outsiderTarget.id);
+    });
+
     await t.test('a non-member cannot read the member list', async () => {
       const res = await api('GET', `/api/communities/${community.id}/members`, { token: outsider.token });
       assert.equal(res.status, 403);
