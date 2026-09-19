@@ -4,7 +4,7 @@ import { FEDERATION } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 import { T } from '../../config/terminology.js';
 
-const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled }) => {
+const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null}) => {
   const [title, setTitle] = useState('');
   const [privacy, setPrivacy] = useState('private');
   const [selectedParticipants, setSelectedParticipants] = useState([]);
@@ -59,7 +59,9 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
         border: '2px solid var(--accent-amber)40', padding: '24px',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <GlowText color="var(--accent-amber)" size="1.1rem">New {T.Wave}</GlowText>
+          <GlowText color="var(--accent-amber)" size="1.1rem">
+            New {T.Wave}{containerLabel ? ` in ${containerLabel}` : ''}
+          </GlowText>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>✕</button>
         </div>
 

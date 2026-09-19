@@ -10,7 +10,7 @@ import { T } from '../../config/terminology.js';
  * from "are they an admin" keeps the UI honest when a Community has custom
  * roles that do not map onto the four built-in ones.
  */
-const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, onChanged }) => {
+const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, onChanged, focus = null }) => {
   const can = (c) => (capabilities || []).includes(c);
 
   const [members, setMembers] = useState([]);
@@ -48,6 +48,17 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
   }, [community.id, fetchAPI, capabilities]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Opened from a menu item that named a section — scroll to it, so "Invite
+  // People" lands on the invites rather than the top of a long panel.
+  const focusRef = React.useRef(null);
+  useEffect(() => {
+    if (!focus || !focusRef.current) return;
+    const timer = setTimeout(() => {
+      try { focusRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { /* older browsers */ }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [focus, channels.length, members.length]);
 
   /**
    * Find people on this node to add directly.
@@ -231,7 +242,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
       )}
 
       {can('channel.manage') && (
-        <div style={box}>
+        <div style={box} ref={focus === 'channels' ? focusRef : undefined}>
           <div style={label}>NEW CHANNEL</div>
           <input
             value={channelName}
@@ -248,7 +259,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
       )}
 
       {can('member.invite') && (
-        <div style={box}>
+        <div style={box} ref={focus === 'invites' ? focusRef : undefined}>
           <div style={label}>INVITES</div>
           <button onClick={mintInvite} style={action}>Create an invite code</button>
           {mintedToken && (

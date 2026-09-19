@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.101.0] - 2026-09-18
+
+### Added
+
+- **Three-dot menus on communities, channels and categories.** The gear on a community header is gone; every group now carries the same `⋮` affordance the wave rows have, so "there are actions here" looks identical everywhere. A community offers **New Channel**, **Invite People** and **Manage Community**; a channel offers **New Wave Here**, **Rename Channel** and **Manage Community**; a category offers **New Wave Here** and **Manage Categories**. Menu items that name a section open the community panel scrolled to it, so "Invite People" lands on the invites rather than the top of a long panel.
+- **Starting a wave from a group header files it there.** From a channel the wave is created and filed in one request, so a failure cannot leave an orphan; from a category the label is applied immediately afterwards, since categories have no create-time route. The new-wave dialogue names where it is about to put it.
+
+### Fixed
+
+- **Community channels looked empty to anyone on a slow connection.** The client requests `minimal=true` in low-bandwidth mode, and that query never selected `community_id` or `channel_id` — so the shared mapper produced the keys with null values, and every channel reported nothing in it. Found only because headless Chrome reports a slow connection and so took the low-bandwidth path by default; no other test is ever slow. This is the fourth time a field has gone missing between the database and the screen in this project, and the first where the mapper was innocent and the query was at fault.
+
 ## [2.100.0] - 2026-09-18
 
 ### Security

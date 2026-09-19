@@ -19,7 +19,7 @@ import CommunitySettingsPanel from './CommunitySettingsPanel.jsx';
  *
  * Opened from the ⚙ on a channel group, or from the {T.wave} list options menu.
  */
-const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommunityId = null }) => {
+const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommunityId = null, focus = null }) => {
   const [communities, setCommunities] = useState([]);
   const [selectedId, setSelectedId] = useState(initialCommunityId);
   const [detail, setDetail] = useState(null);
@@ -249,6 +249,7 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
                 <CommunitySettingsPanel
                   community={detail.community}
                   capabilities={detail.capabilities}
+                  focus={focus}
                   fetchAPI={fetchAPI}
                   showToast={showToast}
                   onChanged={() => { openCommunity(detail.community.id); onChanged && onChanged(); }}
