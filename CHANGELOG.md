@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A public community could be found but not joined.** The only join route took an invite code, so "Public — anyone can find it" was a promise the server could not keep: discovery listed communities that nobody could then get into without someone minting them a token. `POST /api/communities/:id/join` now admits anyone to a **public** community and to an **unlisted** one — not being listed is the whole of what unlisted means, and a person holding the link was given it deliberately. Private stays invite-only and answers **404 rather than 403**, because 403 would confirm a community somebody was not meant to know about exists. A ban still refuses, an open door is not a way around one, and joining twice succeeds quietly rather than erroring on a second click.
+- **The create form no longer remembers the last visibility you chose.** It kept the previous selection, so someone who made a public community and then made another got a second public one without the word ever being shown to them again. A privacy control should not have memory; it resets to private.
 - **Browsing public communities came back.** The rebuilt panel dropped it, which left the person most in need of it — someone who belongs to nothing — with only "create one" and "paste a code".
 
 ### Changed

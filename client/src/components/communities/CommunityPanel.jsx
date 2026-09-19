@@ -60,7 +60,14 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
     if (!name) return;
     try {
       const res = await fetchAPI('/communities', { method: 'POST', body: { name, visibility: newVisibility } });
-      setNewName(''); setCreating(false);
+      setNewName('');
+      setCreating(false);
+      // Reset to the safe value rather than keeping the last choice. Leaving it
+      // set meant the NEXT community silently inherited the previous one's
+      // visibility — so someone who made a public community and then made
+      // another would get a second public one without ever being shown the
+      // word. A privacy control should not have memory.
+      setNewVisibility('private');
       showToast(`${res.community.name} created`, 'success');
       await loadMine();
       openCommunity(res.community.id);
