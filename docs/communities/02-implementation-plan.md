@@ -362,7 +362,7 @@ Phase numbering follows the brief. Each gate is human review.
 | **4** | Remote membership via cross-port: invite an identity from an allied node, join, hold roles, post in channels. **No state replication** (see §2) — the work is authorization and lifecycle for stub users, not consensus. Two-node harness suffices; a third adds little once there is a single authority. | Integration tests across two nodes, plus the relevant chaos cases from brief §30 — **✅ DELIVERED v2.97.0**: 11 tests against two real paired servers running the actual cross-port handshake; suite 194 → 208 |
 | **5** | Abuse and limits: rate limits, payload caps, replay/dedupe, audit log, malformed-event rejection, TOCTOU (brief §31) | Security test suite — **✅ DELIVERED v2.98.0**: `lib/communities/limits.js`, node-admin controls, 15 tests, suite 208 → 223. Replay/dedupe for Community *events* stays deferred while nothing federates them (F-2) |
 | **6** | UI | Backend stable first — **✅ DELIVERED v2.99.0**: rail, channels, settings, invites; gated behind an **opt-in** instance feature. 6 gate tests, suite 223 → 229. **Not verified in a browser** — see below |
-| **7** | Hardening only: fuzz, load, federation failure, migration, backward compatibility | Then Codex |
+| **7** | Hardening only: fuzz, load, federation failure, migration, backward compatibility | Then Codex — **✅ DELIVERED v2.99.2**: 10 hardening tests, suite 237 → 247. Upgrade verified against a **real pre-Communities production database** as well as a synthetic one |
 
 ### A caveat on Phase 6
 
@@ -376,6 +376,17 @@ So what is verified is that it compiles, that every route behind it behaves, and
 that the feature gate holds. What is **not** verified is that it renders, that
 the rail is usable on a phone, or that any button does what it appears to. That
 needs a person clicking it. The feature is switched on for the dev node only.
+
+### What Phase 7 actually established
+
+- **A database that predates Communities upgrades cleanly.** Verified twice: against a synthetic one in CI (strip the schema, reboot, assert it returns with no row lost and the later `ALTER` applied too), and by hand against a **real dev backup taken before v2.94.0** — 7 users, 25 waves, 599 pings, all twelve tables created, both wave columns added, every count identical.
+- **Migrations are idempotent.** They run at every boot, so a third boot must not duplicate or undo anything.
+- **Type confusion is refused rather than coerced.** A name that is an object does not become `[object Object]`; a permissions list that is a string is not iterated a character at a time into a role.
+- **A nonsense `expectedStateVersion` refuses rather than being skipped** — the hazard being a garbage value comparing equal to nothing and bypassing the check.
+- **Hostile strings are data.** SQL fragments, `<script>`, `onerror=` and traversal attempts are stored or refused, never executed, and the table they tried to drop is still there.
+- **A malformed body is a 4xx and the server keeps serving.**
+- **An id from another table is not a way in** — handlers check ownership, not existence.
+- **Federation failure degrades correctly.** A home node going *down* does **not** revoke its remote members: standing is about the pairing, not reachability, so a reboot or a blip must not eject everyone from that node. Only an operator suspending or unpairing does that. A new cross-port login against a dead node fails promptly rather than hanging.
 
 ### Definition of done
 

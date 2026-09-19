@@ -312,6 +312,37 @@ test('Communities across two federated nodes', async (t) => {
       assert.ok(detail.body.capabilities.includes('channel.create_wave'), 'her powers come back');
     });
 
+    await t.test('the home node going DOWN does not revoke a remote member', async () => {
+      // Phase 7, federation failure. Standing is about the PAIRING, not about
+      // reachability: a network blip, a reboot or a slow host must not quietly
+      // eject everyone who came from that node. Only an operator suspending or
+      // unpairing it should do that, and that is a deliberate act.
+      assert.ok((await call(B, 'GET', `/api/communities/${community.id}`, { token: aliceOnB.token }))
+        .body.capabilities.length > 0, 'precondition: she has powers');
+
+      const homeChild = children[0];
+      homeChild.kill('SIGKILL');
+      await new Promise(r => setTimeout(r, 1500));
+
+      const stillUp = await call(B, 'GET', `/api/communities/${community.id}`, { token: aliceOnB.token });
+      assert.equal(stillUp.status, 200, 'B must not fall over because A did');
+      assert.ok(stillUp.body.capabilities.includes('channel.create_wave'),
+        'a remote member keeps working while their node is merely unreachable');
+
+      // And a NEW cross-port login fails cleanly rather than hanging or
+      // returning something that looks like success.
+      const initiate = await call(B, 'POST', '/api/cross-port/initiate', { body: { homeServerUrl: A.url } });
+      assert.equal(initiate.status, 200, 'initiating still works — it only needs local state');
+      const nonce = new URL(initiate.body.redirectUrl).searchParams.get('nonce');
+      const started = Date.now();
+      const session = await call(B, 'POST', '/api/cross-port/session', {
+        body: { code: 'never-issued-because-the-home-node-is-down', state: nonce, homeServerUrl: A.url },
+      });
+      const elapsed = Date.now() - started;
+      assert.ok(session.status >= 400, `a login against a dead node must fail, got ${session.status}`);
+      assert.ok(elapsed < 20000, `it must fail promptly, took ${elapsed}ms`);
+    });
+
     await t.test("a local member's powers are unaffected by any of this", async () => {
       // The gate must apply to borrowed standing only. Bob has no home node but
       // this one, and nothing about federation should be able to lock him out
