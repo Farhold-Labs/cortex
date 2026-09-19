@@ -277,6 +277,98 @@ test('Communities across two federated nodes', async (t) => {
 
     // ----- The borrowed-rights case -----
 
+    // ----- Cross-port session renewal (v2.100.0) -----
+
+    await t.test('a cross-port session is renewable, not a 24-hour dead end', async () => {
+      // It used to be 24 hours with no refresh token at all, so a remote member
+      // re-ran the whole approve-at-home redirect daily.
+      const initiate = await call(B, 'POST', '/api/cross-port/initiate', { body: { homeServerUrl: A.url } });
+      const redirect = new URL(initiate.body.redirectUrl);
+      const approve = await call(A, 'POST', '/api/cross-port/approve', {
+        token: alice.token,
+        body: {
+          guestNode: nodeB,
+          callbackUrl: redirect.searchParams.get('callback'),
+          nonce: redirect.searchParams.get('nonce'),
+          requestId: redirect.searchParams.get('request_id'),
+        },
+      });
+      const session = await call(B, 'POST', '/api/cross-port/session', {
+        body: {
+          code: new URL(approve.body.callbackUrl).searchParams.get('code'),
+          state: redirect.searchParams.get('nonce'),
+          homeServerUrl: A.url,
+        },
+      });
+      assert.equal(session.status, 200);
+      assert.ok(session.body.refreshToken, 'a refresh token is issued, which it never used to be');
+
+      const refreshed = await call(B, 'POST', '/api/auth/token/refresh', {
+        body: { refreshToken: session.body.refreshToken },
+      });
+      assert.equal(refreshed.status, 200, JSON.stringify(refreshed.body));
+      assert.ok(refreshed.body.token, 'and renewing works without going back to the home node by hand');
+      aliceOnB = { token: refreshed.body.token, id: session.body.user.id, refreshToken: refreshed.body.refreshToken };
+    });
+
+    await t.test('a renewal cannot outlive the member standing at home', async () => {
+      // The reason those sessions were short and non-renewable. Suspending
+      // Alice AT HOME must stop the guest node renewing her, and it is the home
+      // node's answer that decides — nothing the client presents can override it.
+      //
+      // Disabling rather than deleting, because it is reversible and because it
+      // is the realistic case: an operator suspends an account far more often
+      // than they erase one.
+      const dbA = new DatabaseSQLite({ dbPath: path.join(A.dir, 'data/farhold.db') });
+      dbA.db.prepare("UPDATE users SET account_status = 'disabled' WHERE handle = 'alice'").run();
+      dbA.db.close();
+
+      // Force the guest to re-ask rather than trust its cached answer.
+      const dbB1 = new DatabaseSQLite({ dbPath: path.join(B.dir, 'data/farhold.db') });
+      dbB1.db.prepare('UPDATE users SET cross_port_verified_at = ? WHERE id = ?')
+        .run(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), aliceOnB.id);
+      dbB1.db.close();
+
+      const denied = await call(B, 'POST', '/api/auth/token/refresh', {
+        body: { refreshToken: aliceOnB.refreshToken },
+      });
+      assert.equal(denied.status, 401, 'the home node said no, so the renewal must fail');
+      assert.equal(denied.body.code, 'SESSION_REVOKED');
+      // The MESSAGE matters: it separates "your home node declined" from "your
+      // home node could not be reached". Accepting the latter would mean the
+      // test proved the grace window rather than the revocation.
+      assert.match(denied.body.error, /no longer authorises/,
+        `expected a decline, got: ${denied.body.error}`);
+
+      // Restore her standing at home.
+      const dbA2 = new DatabaseSQLite({ dbPath: path.join(A.dir, 'data/farhold.db') });
+      dbA2.db.prepare("UPDATE users SET account_status = 'active' WHERE handle = 'alice'").run();
+      dbA2.db.close();
+    });
+
+    await t.test('a fresh sign-in works again afterwards', async () => {
+      const initiate = await call(B, 'POST', '/api/cross-port/initiate', { body: { homeServerUrl: A.url } });
+      const redirect = new URL(initiate.body.redirectUrl);
+      const approve = await call(A, 'POST', '/api/cross-port/approve', {
+        token: alice.token,
+        body: {
+          guestNode: nodeB,
+          callbackUrl: redirect.searchParams.get('callback'),
+          nonce: redirect.searchParams.get('nonce'),
+          requestId: redirect.searchParams.get('request_id'),
+        },
+      });
+      const session = await call(B, 'POST', '/api/cross-port/session', {
+        body: {
+          code: new URL(approve.body.callbackUrl).searchParams.get('code'),
+          state: redirect.searchParams.get('nonce'),
+          homeServerUrl: A.url,
+        },
+      });
+      assert.equal(session.status, 200, JSON.stringify(session.body));
+      aliceOnB = { token: session.body.token, id: session.body.user.id, refreshToken: session.body.refreshToken };
+    });
+
     await t.test('suspending her home node withdraws her Community access', async () => {
       // Rights held here were borrowed from the relationship with her node.
       // Before v2.97.0 nothing checked this: her stub row behaved like a local

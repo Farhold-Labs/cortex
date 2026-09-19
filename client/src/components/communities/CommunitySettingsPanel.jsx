@@ -20,8 +20,18 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
   const [remoteAddress, setRemoteAddress] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [renaming, setRenaming] = useState(null);      // channel id being renamed
+  const [renameTo, setRenameTo] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const load = useCallback(async () => {
+    if (can('channel.view')) {
+      try {
+        const res = await fetchAPI(`/communities/${community.id}/channels`);
+        setChannels(res.channels || []);
+      } catch { /* the rest of the panel is still useful */ }
+    }
     if (can('member.view')) {
       try {
         const m = await fetchAPI(`/communities/${community.id}/members`);
@@ -71,6 +81,41 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
       onChanged && onChanged();
     } catch (err) {
       showToast(err?.error || 'Could not add that person', 'error');
+    }
+  };
+
+  const renameChannel = async (channel) => {
+    const name = renameTo.trim();
+    if (!name || name === channel.name) { setRenaming(null); return; }
+    try {
+      await fetchAPI(`/communities/${community.id}/channels/${channel.id}`, {
+        method: 'PATCH', body: { name },
+      });
+      setRenaming(null);
+      setRenameTo('');
+      showToast('Channel renamed', 'success');
+      load();
+      onChanged && onChanged();
+    } catch (err) {
+      showToast(err?.error || 'Could not rename that channel', 'error');
+    }
+  };
+
+  /**
+   * Deleting a channel does NOT delete the waves in it — they fall back to
+   * uncontained, which is the normal state for most waves anyway. The confirm
+   * step says so, because "delete" is a frightening word next to something
+   * holding conversations.
+   */
+  const deleteChannel = async (channel) => {
+    try {
+      await fetchAPI(`/communities/${community.id}/channels/${channel.id}`, { method: 'DELETE' });
+      setConfirmDelete(null);
+      showToast(`#${channel.name} removed`, 'success');
+      load();
+      onChanged && onChanged();
+    } catch (err) {
+      showToast(err?.error || 'Could not delete that channel', 'error');
     }
   };
 
@@ -134,6 +179,57 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
 
   return (
     <div style={{ marginTop: '0.6rem' }}>
+      {can('channel.view') && channels.length > 0 && (
+        <div style={box}>
+          <div style={label}>CHANNELS ({channels.length})</div>
+          {channels.map(ch => (
+            <div key={ch.id} style={{ padding: '0.3rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+              {renaming === ch.id ? (
+                <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                  <input
+                    value={renameTo}
+                    onChange={e => setRenameTo(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') renameChannel(ch); if (e.key === 'Escape') setRenaming(null); }}
+                    maxLength={60}
+                    autoFocus
+                    style={{ ...input, marginTop: 0, flex: 1 }}
+                  />
+                  <button onClick={() => renameChannel(ch)} style={{ ...action, marginTop: 0 }}>Save</button>
+                  <button onClick={() => setRenaming(null)} style={{ ...action, marginTop: 0 }}>Cancel</button>
+                </div>
+              ) : confirmDelete === ch.id ? (
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.25rem' }}>
+                    Delete #{ch.name}? The {T.waves} in it are not deleted — they go back to
+                    being ordinary {T.waves}.
+                  </div>
+                  <button onClick={() => deleteChannel(ch)} style={{ ...action, marginTop: 0, color: 'var(--accent-orange)' }}>
+                    Yes, delete the channel
+                  </button>
+                  <button onClick={() => setConfirmDelete(null)} style={{ ...action, marginTop: 0 }}>Keep it</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ fontSize: '0.82rem', minWidth: 0 }}># {ch.name}</span>
+                  {can('channel.manage') && (
+                    <span style={{ display: 'flex', gap: '0.3rem', flexShrink: 0 }}>
+                      <button
+                        onClick={() => { setRenaming(ch.id); setRenameTo(ch.name); setConfirmDelete(null); }}
+                        style={{ ...action, marginTop: 0 }}
+                      >Rename</button>
+                      <button
+                        onClick={() => { setConfirmDelete(ch.id); setRenaming(null); }}
+                        style={{ ...action, marginTop: 0 }}
+                      >Delete</button>
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {can('channel.manage') && (
         <div style={box}>
           <div style={label}>NEW CHANNEL</div>
