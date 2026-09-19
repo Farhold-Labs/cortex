@@ -59,7 +59,7 @@ test('Community limits and node-admin controls', async (t) => {
         PATH: process.env.PATH, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: '0',
         USE_SQLITE: 'true', JWT_SECRET: 'test-secret-for-community-limits-00000',
         SEED_DEMO_DATA: 'false',
-        RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000',
+        RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000', RATE_LIMIT_REGISTER_MAX: '10000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

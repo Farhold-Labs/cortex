@@ -23434,6 +23434,46 @@ app.delete('/api/communities/:id/invites/:inviteId', authenticateToken, (req, re
   res.json({ success: true });
 });
 
+
+/**
+ * Join a community directly, without an invite (v2.99.0).
+ *
+ * Public means findable AND joinable — otherwise "anyone can find it" is a
+ * promise the server does not keep, which is exactly the state this endpoint
+ * was added to fix. Unlisted is joinable too: not being listed is the whole of
+ * what unlisted means, and someone who has the link was given it on purpose.
+ * Private is invite-only and answers 404 rather than 403, because 403 would
+ * confirm that a community somebody was not meant to know about exists.
+ */
+app.post('/api/communities/:id/join', authenticateToken, apiLimiter, (req, res) => {
+  const community = db.getCommunityById(req.params.id);
+  if (!community || community.status !== 'active') return res.status(404).json({ error: 'Not found' });
+  if (community.visibility === 'private') return res.status(404).json({ error: 'Not found' });
+
+  if (db.getCommunityBan(community.id, req.user.userId)) {
+    return res.status(403).json({ error: 'You cannot join this community' });
+  }
+
+  // Already in: succeed quietly. A second click on a slow connection should
+  // not read as an error.
+  const existing = db.getCommunityMembership(community.id, req.user.userId);
+  if (existing && existing.state === 'active') return res.json({ community });
+
+  if (!requireRoomFor(res, db, 'member', community.id)) return;
+  if (!chargeCommunityMutation(req, res, community.id)) return;
+
+  const membershipId = db.addCommunityMember(community.id, req.user.userId, { state: 'active' });
+  const memberRole = db.getCommunityRole(community.id, 'member');
+  if (memberRole) db.grantCommunityRole(membershipId, memberRole.id);
+
+  db.logCommunityAudit(community.id, {
+    actorId: req.user.userId, action: 'member.join_open',
+    targetType: 'user', targetId: req.user.userId,
+    metadata: { visibility: community.visibility },
+  });
+  res.json({ community });
+});
+
 // Redeem. Rate limited hard: this endpoint takes a secret and says whether it
 // was right, which is the shape of something worth guessing at.
 app.post('/api/communities/join', authenticateToken, loginLimiter, (req, res) => {

@@ -100,7 +100,7 @@ test('Communities across two federated nodes', async (t) => {
           USE_SQLITE: 'true', JWT_SECRET: `test-secret-federated-communities-${selfPort}`,
           SEED_DEMO_DATA: 'false', FEDERATION_ENABLED: 'true',
           FEDERATION_NODE_NAME: selfName, APP_BASE_URL: `http://${selfName}`,
-          RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000',
+          RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000', RATE_LIMIT_REGISTER_MAX: '10000',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

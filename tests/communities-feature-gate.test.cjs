@@ -45,7 +45,7 @@ test('Communities is off unless an operator switches it on', async (t) => {
       env: {
         PATH: process.env.PATH, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: '0',
         USE_SQLITE: 'true', JWT_SECRET: 'test-secret-for-community-gate-000000',
-        SEED_DEMO_DATA: 'false', RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000',
+        SEED_DEMO_DATA: 'false', RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000', RATE_LIMIT_REGISTER_MAX: '10000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

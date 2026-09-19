@@ -28,6 +28,8 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   const [newVisibility, setNewVisibility] = useState('private');
   const [joinToken, setJoinToken] = useState('');
   const [creating, setCreating] = useState(false);
+  const [browse, setBrowse] = useState(null);      // null = not looked yet
+  const [search, setSearch] = useState('');
 
   const loadMine = useCallback(async () => {
     try {
@@ -80,6 +82,36 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
       onChanged && onChanged();
     } catch (err) {
       showToast(err?.error || 'That invite is not valid', 'error');
+    }
+  };
+
+  /**
+   * Public communities on this node.
+   *
+   * The rebuild of this panel dropped browsing entirely, which left someone who
+   * belonged to nothing — the exact person most in need of it — with only
+   * "create one" and "paste a code". Unlisted communities are deliberately
+   * absent from this list: not being listed is the whole of what unlisted means.
+   */
+  const loadBrowse = useCallback(async (q = '') => {
+    try {
+      const data = await fetchAPI(`/communities${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+      setBrowse(data.communities || []);
+    } catch {
+      showToast('Could not search communities', 'error');
+      setBrowse([]);
+    }
+  }, [fetchAPI, showToast]);
+
+  const joinOpen = async (community) => {
+    try {
+      await fetchAPI(`/communities/${community.id}/join`, { method: 'POST' });
+      showToast(`Joined ${community.name}`, 'success');
+      await loadMine();
+      openCommunity(community.id);
+      onChanged && onChanged();
+    } catch (err) {
+      showToast(err?.error || 'Could not join that community', 'error');
     }
   };
 
@@ -158,6 +190,48 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
                        placeholder="Paste an invite code" style={{ ...input, marginBottom: 0, flex: 1 }} />
                 <button onClick={join} style={btn(false)}>Join</button>
               </div>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--border-primary)', paddingTop: '0.6rem', marginBottom: '0.6rem' }}>
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start' }}>
+                <input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') loadBrowse(search); }}
+                  placeholder="Search public communities"
+                  style={{ ...input, marginBottom: 0, flex: 1 }}
+                />
+                <button onClick={() => loadBrowse(search)} style={btn(false)}>Browse</button>
+              </div>
+
+              {browse !== null && browse.length === 0 && (
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: '0.4rem' }}>
+                  No public communities found on this server.
+                </div>
+              )}
+              {browse !== null && browse.map(c => {
+                const already = communities.some(m => m.id === c.id);
+                return (
+                  <div key={c.id} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    gap: '0.5rem', padding: '0.35rem 0', borderBottom: '1px solid var(--border-subtle)',
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '0.82rem' }}>{c.name}</div>
+                      {c.description && (
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>{c.description}</div>
+                      )}
+                    </div>
+                    {already ? (
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', flexShrink: 0 }}>joined</span>
+                    ) : (
+                      <button onClick={() => joinOpen(c)} style={{ ...btn(false), marginBottom: 0, flexShrink: 0 }}>
+                        Join
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {detail && (

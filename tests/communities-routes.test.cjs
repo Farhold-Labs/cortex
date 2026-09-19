@@ -58,7 +58,7 @@ test('Communities API', async (t) => {
         PATH: process.env.PATH, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: '0',
         USE_SQLITE: 'true', JWT_SECRET: 'test-secret-for-communities-api-0000000',
         SEED_DEMO_DATA: 'false',
-        RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000',
+        RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000', RATE_LIMIT_REGISTER_MAX: '10000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -289,6 +289,64 @@ test('Communities API', async (t) => {
       assert.equal(wrong.status, 404);
       assert.deepEqual(used.body, wrong.body,
         'distinct answers tell a guesser how close they are');
+    });
+
+    await t.test('a public community can be joined without an invite', async () => {
+      // "Public — anyone can find it" has to mean they can also join it.
+      // Before this existed, discovery listed communities that no one could
+      // then get into without someone minting them a code.
+      const pub = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'Open House', slug: 'open-house', visibility: 'public' },
+      })).body.community;
+
+      const joiner = await makeUser('opencomer');
+      const res = await api('POST', `/api/communities/${pub.id}/join`, { token: joiner.token });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+
+      const mine = await api('GET', '/api/communities/mine', { token: joiner.token });
+      assert.ok(mine.body.communities.some(c => c.id === pub.id));
+
+      // And they arrive as an ordinary member, not as nothing and not as staff.
+      const detail = await api('GET', `/api/communities/${pub.id}`, { token: joiner.token });
+      assert.ok(detail.body.capabilities.includes('channel.create_wave'));
+      assert.ok(!detail.body.capabilities.includes('member.ban'));
+
+      // Joining twice is not an error — a second click on a slow connection
+      // should not look like a failure.
+      assert.equal((await api('POST', `/api/communities/${pub.id}/join`, { token: joiner.token })).status, 200);
+    });
+
+    await t.test('an unlisted community is joinable by link, a private one is not', async () => {
+      const unlisted = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'By Link', slug: 'by-link', visibility: 'unlisted' },
+      })).body.community;
+      const priv = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'Closed', slug: 'closed-doors', visibility: 'private' },
+      })).body.community;
+
+      const walker = await makeUser('linkwalker');
+
+      // Unlisted: not listed, but joinable by someone who has the link — not
+      // being listed is the whole of what unlisted means.
+      const listed = (await api('GET', '/api/communities', { token: walker.token })).body.communities;
+      assert.ok(!listed.some(c => c.id === unlisted.id), 'unlisted must not appear in discovery');
+      assert.equal((await api('POST', `/api/communities/${unlisted.id}/join`, { token: walker.token })).status, 200);
+
+      // Private: 404 rather than 403, because 403 confirms it exists.
+      const denied = await api('POST', `/api/communities/${priv.id}/join`, { token: walker.token });
+      assert.equal(denied.status, 404);
+    });
+
+    await t.test('a banned person cannot join an open community either', async () => {
+      const pub = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'Open Two', slug: 'open-two', visibility: 'public' },
+      })).body.community;
+      const pest = await makeUser('pest');
+      await api('POST', `/api/communities/${pub.id}/bans`, {
+        token: owner.token, body: { userId: pest.id },
+      });
+      const res = await api('POST', `/api/communities/${pub.id}/join`, { token: pest.token });
+      assert.equal(res.status, 403, 'an open door is not a way around a ban');
     });
 
     await t.test('a banned person cannot redeem their way back in', async () => {
