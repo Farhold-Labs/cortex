@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false }) => {
+const CollapsibleSection = ({ title, action, indent = 0, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
 
   const isOpen = onToggle ? controlledIsOpen : internalIsOpen;
@@ -17,6 +17,7 @@ const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: contr
             justifyContent: 'space-between',
             alignItems: 'center',
             padding: '6px 12px',
+            paddingLeft: `${12 + indent * 12}px`,
             cursor: 'pointer',
             userSelect: 'none',
             borderTop: '1px solid var(--bg-hover)',
@@ -49,6 +50,17 @@ const CollapsibleSection = ({ title, children, defaultOpen = true, isOpen: contr
                 borderRadius: '9px',
                 lineHeight: 1,
               }}>{unreadCount > 99 ? '99+' : unreadCount}</span>
+            )}
+            {action && (
+              // stopPropagation so managing a group does not also collapse it.
+              <button
+                title={action.title}
+                onClick={(e) => { e.stopPropagation(); action.onClick(); }}
+                style={{
+                  background: 'transparent', border: 'none', color: 'var(--text-dim)',
+                  cursor: 'pointer', fontSize: '0.8rem', padding: '0 4px', lineHeight: 1,
+                }}
+              >{action.label}</button>
             )}
             <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace' }}>
               {isOpen ? '▾' : '▸'}

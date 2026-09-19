@@ -361,8 +361,21 @@ Phase numbering follows the brief. Each gate is human review.
 | **3** | Local Communities end to end: create, invite, join, leave, roles, channels, messages, moderation | Suite; **explicitly not** a licence to shape the API around local-only — **✅ DELIVERED v2.96.0**: 29 routes, 23 end-to-end tests, suite 171 → 194. Every handler builds an actor and calls the evaluator; none computes a permission inline |
 | **4** | Remote membership via cross-port: invite an identity from an allied node, join, hold roles, post in channels. **No state replication** (see §2) — the work is authorization and lifecycle for stub users, not consensus. Two-node harness suffices; a third adds little once there is a single authority. | Integration tests across two nodes, plus the relevant chaos cases from brief §30 — **✅ DELIVERED v2.97.0**: 11 tests against two real paired servers running the actual cross-port handshake; suite 194 → 208 |
 | **5** | Abuse and limits: rate limits, payload caps, replay/dedupe, audit log, malformed-event rejection, TOCTOU (brief §31) | Security test suite — **✅ DELIVERED v2.98.0**: `lib/communities/limits.js`, node-admin controls, 15 tests, suite 208 → 223. Replay/dedupe for Community *events* stays deferred while nothing federates them (F-2) |
-| **6** | UI | Backend stable first |
+| **6** | UI | Backend stable first — **✅ DELIVERED v2.99.0**: rail, channels, settings, invites; gated behind an **opt-in** instance feature. 6 gate tests, suite 223 → 229. **Not verified in a browser** — see below |
 | **7** | Hardening only: fuzz, load, federation failure, migration, backward compatibility | Then Codex |
+
+### A caveat on Phase 6
+
+The UI was built and the bundle builds clean, and the API behind it is covered
+end to end — but **no part of it has been driven in a real browser**. Headless
+Chrome in the build environment cannot reach the network, including
+`127.0.0.1`, which was confirmed rather than assumed: CDP connects, and
+`Page.navigate` then times out on a URL `curl` fetches instantly.
+
+So what is verified is that it compiles, that every route behind it behaves, and
+that the feature gate holds. What is **not** verified is that it renders, that
+the rail is usable on a phone, or that any button does what it appears to. That
+needs a person clicking it. The feature is switched on for the dev node only.
 
 ### Definition of done
 
