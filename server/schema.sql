@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS users (
     -- Birthday & calendar (v2.40.0)
     birthday TEXT,                               -- MM-DD format (no year for privacy)
     birthday_visibility TEXT DEFAULT 'contacts'  -- everyone, contacts, hidden
-, is_cross_port INTEGER DEFAULT 0, home_node TEXT, home_user_id TEXT);
+, is_cross_port INTEGER DEFAULT 0, home_node TEXT, home_user_id TEXT, cross_port_verified_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_users_handle ON users(handle);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_hash ON users(email_hash);

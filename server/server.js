@@ -5276,7 +5276,90 @@ function requireStepUp(req, res, next) {
 // when the access token has already expired. The refresh token is the
 // credential here, and it is checked against the database, never trusted on
 // its face.
-app.post('/api/auth/token/refresh', refreshLimiter, (req, res) => {
+
+// ===== Cross-port session renewal (v2.100.0) =====
+//
+// Cross-port sessions used to be 24 hours and non-renewable, so a remote member
+// re-ran the full approve-at-home redirect every day. That was a reasonable
+// conservatism when cross-port meant an occasional visit and the wrong shape
+// once it is how somebody attends every week.
+//
+// They are now ordinary rotating sessions, with one addition: a renewal must
+// never outlive the member's standing at home. So on refresh we ask the home
+// node, and the answer decides.
+
+/** How stale a verification may be before a refresh triggers a fresh one. */
+const CROSS_PORT_REVALIDATE_AFTER_MS = 60 * 60 * 1000;          // 1 hour
+
+/**
+ * How long an UNREACHABLE home node is given the benefit of the doubt.
+ *
+ * Not zero, and not forever. Zero would mean a peer's reboot logs out everyone
+ * who came from it — the Phase 7 rule that being unreachable is not the same as
+ * being unwelcome. Forever would mean a node that goes away permanently leaves
+ * its people with standing nobody can withdraw.
+ */
+const CROSS_PORT_OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;    // 7 days
+
+/**
+ * Ask a cross-port user's home node whether it still vouches for them.
+ *
+ * Returns one of:
+ *   { state: 'ok' }            confirmed just now, or confirmed recently enough
+ *   { state: 'revoked' }       the home node says no — end the session
+ *   { state: 'stale' }         unreachable, and beyond the grace window
+ *
+ * A LOCAL user always returns 'ok'; they have no home but this one.
+ */
+async function verifyCrossPortStanding(user) {
+  if (!user || !user.is_cross_port) return { state: 'ok' };
+  if (!user.home_node || !user.home_user_id) return { state: 'revoked', reason: 'no home node' };
+
+  const node = db.getFederationNodeByName(user.home_node);
+  // An operator suspending or unpairing a node is a deliberate act, and unlike
+  // unreachability it takes effect immediately.
+  if (!node || node.status !== 'active') return { state: 'revoked', reason: 'node not federated' };
+
+  const lastVerified = db.getCrossPortVerifiedAt(user.id);
+  const age = lastVerified ? Date.now() - new Date(lastVerified).getTime() : Infinity;
+  if (Number.isFinite(age) && age < CROSS_PORT_REVALIDATE_AFTER_MS) return { state: 'ok', cached: true };
+
+  try {
+    const identity = db.getServerIdentity();
+    if (!identity) return { state: 'stale', reason: 'no server identity' };
+
+    const url = `${node.baseUrl.replace(/\/$/, '')}/api/federation/cross-port/verify`;
+    const body = JSON.stringify({ userId: user.home_user_id, guestNode: FEDERATION_NODE_NAME });
+    const headers = createHttpSignatureFromString('POST', url, body, identity.privateKey, FEDERATION_NODE_NAME);
+
+    // Bounded: a slow peer must not hold a refresh open.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let data;
+    try {
+      const resp = await fetch(url, { method: 'POST', headers, body, signal: controller.signal });
+      data = resp.ok ? await resp.json() : null;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (data && data.valid === true) {
+      db.markCrossPortVerified(user.id);
+      return { state: 'ok' };
+    }
+    // A clear "no" from the home node is authoritative.
+    if (data && data.valid === false) return { state: 'revoked', reason: 'home node declined' };
+  } catch (err) {
+    console.warn(`[cross-port] Could not reach ${user.home_node} to verify ${user.handle}: ${err.message}`);
+  }
+
+  // Unreachable, or answered something we cannot read. Fall back to how long it
+  // has been since they last said yes.
+  if (Number.isFinite(age) && age < CROSS_PORT_OFFLINE_GRACE_MS) return { state: 'ok', offline: true };
+  return { state: 'stale', reason: 'home node unreachable beyond grace' };
+}
+
+app.post('/api/auth/token/refresh', refreshLimiter, async (req, res) => {
   const presented = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : null;
   if (!presented) return res.status(400).json({ error: 'Refresh token required' });
 
@@ -5346,6 +5429,27 @@ app.post('/api/auth/token/refresh', refreshLimiter, (req, res) => {
         error: `Account ${status.accountStatus}`,
         code: status.accountStatus === 'disabled' ? 'ACCOUNT_DISABLED' : 'ACCOUNT_BANNED',
         reason: status.moderationReason || 'No reason provided',
+      });
+    }
+  }
+
+  // A cross-port member's session is borrowed from their home node, so renewing
+  // it means asking whether that node still vouches for them. This is the whole
+  // reason these sessions can now be renewed at all.
+  if (user.is_cross_port) {
+    const standing = await verifyCrossPortStanding(user);
+    if (standing.state !== 'ok') {
+      db.revokeRefreshFamily(record.familyId, `cross-port-${standing.state}`);
+      if (db.revokeAllUserSessions) db.revokeAllUserSessions(user.id);
+      if (db.logActivity) {
+        db.logActivity(user.id, 'cross_port_session_revoked', 'user', user.id,
+          { ...getRequestMeta(req), reason: standing.reason || standing.state });
+      }
+      return res.status(401).json({
+        error: standing.state === 'revoked'
+          ? 'Your home server no longer authorises this session. Please sign in again.'
+          : 'Your home server could not be reached. Please sign in again.',
+        code: 'SESSION_REVOKED',
       });
     }
   }
@@ -14323,6 +14427,54 @@ app.post('/api/federation/cross-port/exchange', createFederationAuthMiddleware([
   }
 });
 
+
+/**
+ * POST /api/federation/cross-port/verify — HOME server (A).
+ *
+ * A guest node asking, of an identity it was given earlier, "do you still vouch
+ * for this person?" Signed node-to-node, like the code exchange.
+ *
+ * This is what makes a renewable cross-port session safe. Without it, extending
+ * a remote session means trusting a judgement made once, possibly months ago —
+ * the reason those sessions were 24 hours and non-renewable in the first place.
+ *
+ * Deliberately answers about STANDING only: exists, not disabled, not banned,
+ * and not itself a cross-port stub. It returns no more of the profile than the
+ * guest already holds, because a verification endpoint should not become a way
+ * to poll another node's user directory.
+ */
+app.post('/api/federation/cross-port/verify', createFederationAuthMiddleware(['active']), (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
+
+    const homeUserId = sanitizeInput(req.body?.userId);
+    if (!homeUserId) return res.status(400).json({ error: 'userId required' });
+
+    const user = db.findUserById(homeUserId);
+    // "Gone" and "never existed" get the same answer: valid:false. Telling a
+    // peer which is which would let it probe for deleted accounts.
+    if (!user || user.is_cross_port) return res.json({ valid: false });
+
+    if (db.getUserAccountStatus) {
+      const status = db.getUserAccountStatus(user.id);
+      if (status && (status.accountStatus === 'disabled' || status.accountStatus === 'banned')) {
+        return res.json({ valid: false });
+      }
+    }
+
+    res.json({
+      valid: true,
+      handle: user.handle,
+      displayName: user.displayName || user.display_name || null,
+      avatar: user.avatar || null,
+      avatarUrl: user.avatarUrl || user.avatar_url || null,
+    });
+  } catch (err) {
+    console.error('Cross-port verify error:', err);
+    res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
 // POST /api/cross-port/session — Guest Server (B): create a local session for the cross-port user
 // Called by the client after receiving the auth code in the callback URL
 app.post('/api/cross-port/session', async (req, res) => {
@@ -14376,14 +14528,19 @@ app.post('/api/cross-port/session', async (req, res) => {
 
     db.updateCrossPortRequestStatus(request.id, 'completed');
 
-    // Issue a 24-hour session (non-renewable)
-    const token = jwt.sign(
-      { userId: stubUser.id, handle: stubUser.handle, isCrossPort: true, homeNode: exchangeData.homeNode || homeNode, jti: crypto.randomUUID() },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    createSession(stubUser.id, token, req);
+    // Ordinary rotating credentials (v2.100.0), not the 24-hour dead end this
+    // used to mint. Hand-rolling the token here also bypassed
+    // issueAuthCredentials — the same class of mistake as the v2.81.2 bug,
+    // where most users silently kept legacy long-lived JWTs.
+    //
+    // Safe to renew because the refresh path re-asks the home node whether it
+    // still vouches; see verifyCrossPortStanding.
+    db.markCrossPortVerified(stubUser.id);
+    const creds = issueAuthCredentials(stubUser, req, {
+      sessionDuration: getSessionDuration(),
+      supportsRefresh: true,
+    });
+    const token = creds.token;
     db.logActivity(stubUser.id, 'cross_port_login', 'user', stubUser.id, { homeNode });
 
     // Communities Phase 4: an invitation addressed to this person before they
@@ -14411,6 +14568,9 @@ app.post('/api/cross-port/session', async (req, res) => {
 
     res.json({
       token,
+      refreshToken: creds.refreshToken,
+      sessionExpiresAt: creds.sessionExpiresAt,
+      absoluteExpiresAt: creds.absoluteExpiresAt,
       user: {
         id: stubUser.id,
         handle: stubUser.handle,

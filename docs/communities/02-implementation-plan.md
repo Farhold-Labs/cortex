@@ -421,7 +421,7 @@ UI must not claim more than a given member's session can provide.
 
 Recorded 2026-09-18 so they are not rediscovered at deployment.
 
-### P-1 — cross-port sessions are 24h and non-renewable **[ACCEPTED LIMITATION 2026-09-18]**
+### P-1 — cross-port sessions are 24h and non-renewable **[FIXED in v2.100.0]**
 
 Jared, on reviewing this plan: *"I would want to fix the 24-hour non-renewable
 sessions issue before fully deploying to production."* **Revised the same day**,
@@ -451,7 +451,15 @@ done independently of Communities:
 - and consider whether the operator should be able to set it, since
   `instance_config.security` already carries the local policy.
 
-### Why this is a limitation and not a gap
+**Resolved in v2.100.0.** Cross-port sessions are now ordinary rotating
+sessions, made safe by asking the home node. `POST
+/api/federation/cross-port/verify` answers whether a node still vouches for an
+identity; the refresh path consults it, caches the answer for an hour, and
+revokes the token family on a clear "no". An unreachable peer keeps its people
+working for a seven-day grace window — being down is not being unwelcome — while
+an operator suspending or unpairing takes effect immediately.
+
+### Why it was a limitation and not a gap
 
 The distinction matters, and it is the reason the gate was lifted.
 

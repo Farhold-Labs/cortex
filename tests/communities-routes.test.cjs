@@ -417,6 +417,60 @@ test('Communities API', async (t) => {
       assert.equal(dupe.status, 409);
     });
 
+    await t.test('a channel can be renamed, and only by someone who may manage it', async () => {
+      const denied = await api('PATCH', `/api/communities/${community.id}/channels/${channel.id}`, {
+        token: member.token, body: { name: 'Hijacked' },
+      });
+      assert.equal(denied.status, 403, 'an ordinary member may not rename a channel');
+
+      const res = await api('PATCH', `/api/communities/${community.id}/channels/${channel.id}`, {
+        token: owner.token, body: { name: 'Main Stage Renamed' },
+      });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(res.body.channel.name, 'Main Stage Renamed');
+      assert.equal(res.body.channel.slug, 'main-stage', 'the address does not move when the label does');
+
+      await api('PATCH', `/api/communities/${community.id}/channels/${channel.id}`, {
+        token: owner.token, body: { name: 'Main Stage' },
+      });
+    });
+
+    await t.test('a rename is bounded and validated like any other name', async () => {
+      const res = await api('PATCH', `/api/communities/${community.id}/channels/${channel.id}`, {
+        token: owner.token, body: { name: 'x'.repeat(500) },
+      });
+      assert.equal(res.status, 400);
+      const unchanged = await api('GET', `/api/communities/${community.id}/channels`, { token: owner.token });
+      assert.ok(unchanged.body.channels.some(c => c.name === 'Main Stage'),
+        'a refused rename leaves the old name in place');
+    });
+
+    await t.test('deleting a channel needs the capability, and spares its waves', async () => {
+      const doomed = (await api('POST', `/api/communities/${community.id}/channels`, {
+        token: owner.token, body: { name: 'Doomed', slug: 'doomed-channel' },
+      })).body.channel;
+
+      const wave = await api('POST', '/api/waves', {
+        token: member.token, body: { title: 'Outlives its channel', privacy: 'private', channelId: doomed.id },
+      });
+      assert.equal(wave.status, 201);
+      const waveId = (wave.body.wave || wave.body).id;
+
+      assert.equal((await api('DELETE', `/api/communities/${community.id}/channels/${doomed.id}`,
+        { token: member.token })).status, 403, 'an ordinary member may not delete a channel');
+
+      assert.equal((await api('DELETE', `/api/communities/${community.id}/channels/${doomed.id}`,
+        { token: owner.token })).status, 200);
+
+      const after = await api('GET', `/api/waves/${waveId}`, { token: member.token });
+      assert.equal(after.status, 200, 'the conversation survives');
+      const w = after.body.wave || after.body;
+      assert.equal(w.channelId ?? w.channel_id ?? null, null, 'and goes back to being uncontained');
+
+      const channels = await api('GET', `/api/communities/${community.id}/channels`, { token: owner.token });
+      assert.ok(!channels.body.channels.some(c => c.id === doomed.id), 'the channel is gone');
+    });
+
     await t.test('A-4: a channel from another Community is refused', async () => {
       const other = await api('POST', '/api/communities', {
         token: outsider.token, body: { name: 'Theirs', slug: 'theirs' },
