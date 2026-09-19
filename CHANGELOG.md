@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.99.2] - 2026-09-18
+
+### Added
+
+- **Communities, Phase 7 — hardening.** No new behaviour; this phase attacks what the previous six built. 10 tests, suite 237 → 247.
+  - **A database that predates Communities upgrades cleanly**, verified twice over. In the suite by stripping the Communities schema from a populated database and booting again — asserting every table returns, both wave columns return, the later `ALTER` for `community_invites.role_id` runs as well as the `CREATE TABLE`s, and not one row is lost. And by hand against a **real dev backup taken before v2.94.0**: 7 users, 25 waves, 599 pings, all twelve tables created, every count identical afterwards. "It worked on a fresh install" proves nothing about an upgrade, and this codebase has been bitten before by a guarded `CREATE TABLE` that never gains its later columns.
+  - **Migrations are idempotent** — they run at every boot, so a third boot must neither duplicate nor undo anything.
+  - **Type confusion is refused, not coerced.** A name that is an object must not become `[object Object]`, and a permissions list that arrives as a string must not be read a character at a time into a role holding capabilities nobody chose.
+  - **A nonsense `expectedStateVersion` refuses rather than being skipped**, the hazard being a garbage value that compares equal to nothing and quietly bypasses the check it was meant to fail.
+  - **Hostile strings are stored as data.** SQL fragments, `<script>`, `onerror=` and traversal attempts are refused or stored inert, and the table the first one tried to drop is still there afterwards.
+  - **A malformed body is a 4xx and the server keeps serving** — six shapes of broken JSON, then a successful request to prove it survived.
+  - **An id from another table is not a way in.** A wave id in a community-shaped URL is refused, because opaque ids are not a control.
+  - **Federation failure degrades the right way.** A home node going *down* does **not** revoke its remote members: standing is about the pairing, not reachability, so a reboot or a network blip must not quietly eject everyone who came from that node — only an operator suspending or unpairing it should, and that is a deliberate act. A new cross-port login against a dead node fails promptly rather than hanging.
+  - **Listing many channels stays one request.** The channel listing counts waves per channel, which done naively is a query per channel: fine at three, not at two hundred.
+
 ## [2.99.1] - 2026-09-18
 
 ### Added
