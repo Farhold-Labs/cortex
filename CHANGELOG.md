@@ -5,6 +5,24 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.100.0] - 2026-09-18
+
+### Security
+
+- **Cross-port sessions renew, and a renewal cannot outlive the member's standing at home.** They were 24 hours and non-renewable, so somebody attending a community from another server re-ran the full approve-at-home redirect every day. That was reasonable conservatism when cross-port meant an occasional visit and the wrong shape once it is how a person attends every week.
+  - The naive fix would have been a security regression: `POST /api/cross-port/session` hand-rolled its own 24-hour token (bypassing `issueAuthCredentials`, the same class of mistake as the v2.81.2 bug), and simply giving it a refresh token would have granted a **90-day sliding session** to someone their home node could ban the next day.
+  - So the home node is **asked**. A new signed endpoint, `POST /api/federation/cross-port/verify`, answers whether it still vouches for an identity, and the refresh path consults it. A clear "no" revokes the whole token family immediately.
+  - **Unreachable is not the same as unwelcome.** A peer that is merely down keeps its people working for a grace period of seven days, because otherwise a reboot would log out everyone who came from that node. An operator *suspending or unpairing* a node takes effect at once, because that is a deliberate act. Beyond the grace window, an unreachable node's members are asked to sign in again.
+  - Verification is cached for an hour, so a refresh does not become a round trip to another server every time.
+
+### Added
+
+- **Channels can be renamed and deleted from the community panel.** The routes have existed since Phase 3 and nothing called them. Renaming leaves the address alone — the label moves, the slug does not — and deleting asks first, saying plainly that **the waves inside are not deleted**: they go back to being ordinary waves.
+
+### Fixed
+
+- **`rowToUser` never exposed a user's cross-port identity.** The columns have existed since v2.56.0, and the mapper carried none of them — so anything reading a user through the normal path could not tell a remote identity from a local one. The new session gate read `user.is_cross_port` as `undefined` and silently never fired; a two-node test caught it. This is the **third** time in this project that a mapper omission has made broken code look like working code, after the wave mappers in v2.94.0 and the capability list in v2.97.0.
+
 ## [2.99.2] - 2026-09-18
 
 ### Added

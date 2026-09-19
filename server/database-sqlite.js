@@ -3280,6 +3280,20 @@ export class DatabaseSQLite {
       console.log('✅ community_remote_invitations created');
     }
 
+    // v2.100.0 — when a cross-port identity was last confirmed by its home node.
+    //
+    // A remote person's standing here is borrowed, and until now it was borrowed
+    // once and never checked again: their session simply expired after 24 hours
+    // and they re-ran the whole approve-at-home redirect. Renewing instead means
+    // asking the lender, periodically, whether they still vouch. This column is
+    // when they last said yes.
+    const userColsForCrossPort = this.db.prepare(`PRAGMA table_info(users)`).all();
+    if (userColsForCrossPort.length && !userColsForCrossPort.some(c => c.name === 'cross_port_verified_at')) {
+      console.log('📝 Adding users.cross_port_verified_at (v2.100.0)...');
+      this.db.exec(`ALTER TABLE users ADD COLUMN cross_port_verified_at TEXT;`);
+      console.log('✅ users.cross_port_verified_at added');
+    }
+
     const waveColsForCommunity = this.db.prepare(`PRAGMA table_info(waves)`).all();
     if (waveColsForCommunity.length && !waveColsForCommunity.some(c => c.name === 'community_id')) {
       console.log('📝 Adding wave container columns (v2.94.0)...');
@@ -3464,6 +3478,22 @@ export class DatabaseSQLite {
       handleHistory: this.getHandleHistory(row.id),
       birthday: row.birthday || null,
       birthdayVisibility: row.birthday_visibility || 'contacts',
+      // Cross-port identity (exposed from v2.100.0).
+      //
+      // These columns existed since v2.56.0 and this mapper never carried them,
+      // so anything reading a user the normal way could not tell a remote
+      // identity from a local one. The session-renewal gate read
+      // `user.is_cross_port` as undefined and silently never fired — the third
+      // time in this codebase that a mapper omission has made working code look
+      // like working code. Both spellings are provided because existing call
+      // sites use the snake_case column name directly.
+      is_cross_port: row.is_cross_port === 1,
+      isCrossPort: row.is_cross_port === 1,
+      home_node: row.home_node || null,
+      homeNode: row.home_node || null,
+      home_user_id: row.home_user_id || null,
+      homeUserId: row.home_user_id || null,
+      crossPortVerifiedAt: row.cross_port_verified_at || null,
     };
   }
 
@@ -13885,6 +13915,18 @@ export class DatabaseSQLite {
     return !refused;
   }
 
+
+
+  /** Record that a cross-port identity was confirmed by its home node just now. */
+  markCrossPortVerified(userId, at = null) {
+    this.db.prepare('UPDATE users SET cross_port_verified_at = ? WHERE id = ?')
+      .run(at || new Date().toISOString(), userId);
+  }
+
+  getCrossPortVerifiedAt(userId) {
+    const row = this.db.prepare('SELECT cross_port_verified_at FROM users WHERE id = ?').get(userId);
+    return row ? row.cross_port_verified_at : null;
+  }
 
   // ----- Remote membership (v2.97.0, Phase 4) -----
 
