@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, action, indent = 0, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false }) => {
+const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const isOpen = onToggle ? controlledIsOpen : internalIsOpen;
   const handleToggle = onToggle || (() => setInternalIsOpen(!internalIsOpen));
@@ -51,16 +52,55 @@ const CollapsibleSection = ({ title, action, indent = 0, children, defaultOpen =
                 lineHeight: 1,
               }}>{unreadCount > 99 ? '99+' : unreadCount}</span>
             )}
-            {action && (
-              // stopPropagation so managing a group does not also collapse it.
-              <button
-                title={action.title}
-                onClick={(e) => { e.stopPropagation(); action.onClick(); }}
-                style={{
-                  background: 'transparent', border: 'none', color: 'var(--text-dim)',
-                  cursor: 'pointer', fontSize: '0.8rem', padding: '0 4px', lineHeight: 1,
-                }}
-              >{action.label}</button>
+            {menu && menu.length > 0 && (
+              // The same three-dot affordance every wave row has, so "there are
+              // actions here" looks identical everywhere rather than being a
+              // gear in one place and dots in another.
+              //
+              // stopPropagation throughout: acting on a group must not also
+              // collapse the group.
+              <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+                <button
+                  title={menuTitle || 'Options'}
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o); }}
+                  style={{
+                    background: menuOpen ? 'var(--bg-hover)' : 'transparent', border: 'none',
+                    color: menuOpen ? 'var(--accent-amber)' : 'var(--text-dim)',
+                    cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.9rem',
+                    padding: '0 4px', lineHeight: 1,
+                  }}
+                >⋮</button>
+                {menuOpen && (
+                  <>
+                    <div
+                      style={{ position: 'fixed', inset: 0, zIndex: 99 }}
+                      onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
+                    />
+                    <div style={{
+                      position: 'absolute', top: '100%', right: 0, marginTop: '4px',
+                      background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
+                      zIndex: 100, minWidth: '180px',
+                    }}>
+                      {menu.map((item, i) => (
+                        <button
+                          key={item.label}
+                          onClick={(e) => { e.stopPropagation(); setMenuOpen(false); item.onClick(); }}
+                          style={{
+                            display: 'block', width: '100%', padding: '9px 12px',
+                            background: 'transparent', border: 'none',
+                            borderBottom: i < menu.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                            color: item.danger ? 'var(--accent-orange)' : 'var(--text-primary)',
+                            cursor: 'pointer', textAlign: 'left',
+                            fontFamily: 'monospace', fontSize: '0.75rem', whiteSpace: 'nowrap',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                        >{item.label}</button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             )}
             <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace' }}>
               {isOpen ? '▾' : '▸'}

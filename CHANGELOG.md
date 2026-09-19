@@ -17,10 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Three-dot menus on communities, channels and categories.** The gear on a community header is gone; every group now carries the same `⋮` affordance the wave rows have, so "there are actions here" looks identical everywhere. A community offers **New Channel**, **Invite People** and **Manage Community**; a channel offers **New Wave Here**, **Rename Channel** and **Manage Community**; a category offers **New Wave Here** and **Manage Categories**. Menu items that name a section open the community panel scrolled to it, so "Invite People" lands on the invites rather than the top of a long panel.
+- **Starting a wave from a group header files it there.** From a channel the wave is created and filed in one request, so a failure cannot leave an orphan; from a category the label is applied immediately afterwards, since categories have no create-time route. The new-wave dialogue names where it is about to put it.
 - **Channels can be renamed and deleted from the community panel.** The routes have existed since Phase 3 and nothing called them. Renaming leaves the address alone — the label moves, the slug does not — and deleting asks first, saying plainly that **the waves inside are not deleted**: they go back to being ordinary waves.
 
 ### Fixed
 
+- **Community channels looked empty to anyone on a slow connection.** The client requests `minimal=true` in low-bandwidth mode, and that query never selected `community_id` or `channel_id` — so the shared mapper produced the keys with null values, and every channel reported nothing in it. Found only because headless Chrome reports a slow connection and so took the low-bandwidth path by default; no other test is ever slow. This is the fourth time a field has gone missing between the database and the screen in this project, and the first where the mapper was innocent and the query was at fault.
 - **`rowToUser` never exposed a user's cross-port identity.** The columns have existed since v2.56.0, and the mapper carried none of them — so anything reading a user through the normal path could not tell a remote identity from a local one. The new session gate read `user.is_cross_port` as `undefined` and silently never fired; a two-node test caught it. This is the **third** time in this project that a mapper omission has made broken code look like working code, after the wave mappers in v2.94.0 and the capability list in v2.97.0.
 
 ## [2.99.2] - 2026-09-18
