@@ -35,6 +35,7 @@ import CalendarView from './CalendarView.jsx';
 import CalendarReminderAlert from '../components/calendar/CalendarReminderAlert.jsx';
 import ProfileSettings from '../components/profile/ProfileSettings.jsx';
 import VideoFeedView from '../components/feed/VideoFeedView.jsx';
+import CommunityPanel from '../components/communities/CommunityPanel.jsx';
 import { useVoiceCall } from '../hooks/useVoiceCall.js';
 import { initializeCustomTheme, applyCustomTheme, removeCustomTheme, getCurrentCustomTheme } from '../hooks/useTheme.js';
 import DockedCallWindow from '../components/calls/DockedCallWindow.jsx';
@@ -472,6 +473,58 @@ function MainApp({ sharePingId }) {
       loadWavesInProgressRef.current = false;
     }
   }, [fetchAPI, showArchived, isSlowConnection]);
+
+  // Community channels this person belongs to (v2.99.0). Flattened across their
+  // communities, because the wave list shows them as sibling groups rather than
+  // nested under a community — nesting is what made the first version of this
+  // feel like a separate application.
+  const [communityChannels, setCommunityChannels] = useState([]);
+  const [communityPanelFor, setCommunityPanelFor] = useState(null); // null | { communityId }
+
+  const loadCommunityChannels = useCallback(async () => {
+    if (!instanceFeatures.communities) { setCommunityChannels([]); return; }
+    try {
+      const mine = await fetchAPI('/communities/mine');
+      const lists = await Promise.all((mine.communities || []).map(async c => {
+        try {
+          const res = await fetchAPI(`/communities/${c.id}/channels`);
+          return (res.channels || []).map(ch => ({
+            id: ch.id, name: ch.name, communityId: c.id, communityName: c.name,
+          }));
+        } catch { return []; }
+      }));
+      setCommunityChannels(lists.flat());
+    } catch {
+      // A node with the feature off, or a transient failure, simply shows no
+      // channel groups. It must never break the wave list.
+      setCommunityChannels([]);
+    }
+  }, [fetchAPI, instanceFeatures.communities]);
+
+  useEffect(() => { loadCommunityChannels(); }, [loadCommunityChannels]);
+
+  /**
+   * File a wave into a channel, or out of one with `channel = null`.
+   *
+   * Changes only where the wave is LISTED. Nothing about who can read it moves,
+   * which is why this can live on the ordinary row menu next to "move to
+   * category" rather than behind a ceremony of its own.
+   */
+  const handleWaveFile = useCallback(async (wave, channel) => {
+    const target = channel || communityChannels.find(c => c.id === wave.channelId);
+    if (!target) return;
+    try {
+      await fetchAPI(
+        `/communities/${target.communityId}/channels/${target.id}/waves/${wave.id}`,
+        { method: channel ? 'PUT' : 'DELETE' });
+      showToastMsg(channel
+        ? `Moved to #${channel.name}`
+        : `Removed from #${target.name}`, 'success');
+      loadWaves();
+    } catch (err) {
+      showToastMsg(err?.error || `Could not move that ${T.wave}`, 'error');
+    }
+  }, [fetchAPI, communityChannels, showToastMsg, loadWaves]);
 
   // Load wave categories (v2.2.0)
   const loadCategories = useCallback(async () => {
@@ -1399,9 +1452,12 @@ function MainApp({ sharePingId }) {
   // v2.65.0: the 'settings' view is the former 'profile' view — it was always mostly
   // settings, with profile editing as its first section. Feed is hidden when the admin
   // has switched the instance feature off.
+  // Communities is deliberately NOT a nav item. A community channel is the
+  // shared version of a wave category, so it appears as a group in the wave
+  // list; managing one is a panel. An earlier build made it a tab, and reading
+  // a conversation then spanned two destinations — you picked a wave in a
+  // channel and were thrown into a different view to read it.
   const navItems = ['waves', 'feed', 'people', 'calendar', 'settings'].filter(
-    // Wait for the flags before showing FEED, otherwise it appears for a moment
-    // on an instance that has the video feed switched off and then vanishes.
     view => view !== 'feed' || (instanceFeaturesLoaded && instanceFeatures.videoFeed !== false)
   );
   const navLabels = { waves: `${T.WAVES}`, feed: 'FEED', people: 'PEOPLE', calendar: 'CALENDAR', settings: 'SETTINGS' };
@@ -1677,6 +1733,7 @@ function MainApp({ sharePingId }) {
                   onRefresh={loadWaves}
                   waves={waves}
                   categories={waveCategories}
+                  channels={communityChannels}
                   selectedWave={selectedWave}
                   onSelectWave={(wave, opts) => selectWave(wave, opts)}
                   onNewWave={() => setShowNewWave(true)}
@@ -1690,6 +1747,10 @@ function MainApp({ sharePingId }) {
                   onWavePin={handleWavePin}
                   onWaveMute={handleWaveMute}
                   onManageCategories={() => setCategoryManagementOpen(true)}
+                  onWaveFile={handleWaveFile}
+                  communitiesEnabled={instanceFeatures.communities === true}
+                  onManageCommunities={() => setCommunityPanelFor({ communityId: null })}
+                  onManageCommunity={(channel) => setCommunityPanelFor({ communityId: channel.communityId })}
                   ghostMode={ghostMode}
                   onToggleGhostProtocol={handleToggleGhostProtocol}
                   density={user?.preferences?.waveDensity}
@@ -2046,6 +2107,16 @@ function MainApp({ sharePingId }) {
           showToast={showToastMsg}
           onSelectMessage={handleSearchResultClick}
           isMobile={isMobile}
+        />
+      )}
+
+      {communityPanelFor && (
+        <CommunityPanel
+          fetchAPI={fetchAPI}
+          showToast={showToastMsg}
+          initialCommunityId={communityPanelFor.communityId}
+          onClose={() => setCommunityPanelFor(null)}
+          onChanged={() => { loadCommunityChannels(); loadWaves(); }}
         />
       )}
 

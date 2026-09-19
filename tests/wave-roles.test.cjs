@@ -69,7 +69,7 @@ test('wave roles gate announcement posting without instance-wide moderator', asy
       env: {
         PATH: process.env.PATH, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: '0',
         USE_SQLITE: 'true', JWT_SECRET: jwtSecret, FEDERATION_ENABLED: 'false',
-        SEED_DEMO_DATA: 'false', RATE_LIMIT_API_MAX: '10000', RATE_LIMIT_LOGIN_MAX: '100',
+        SEED_DEMO_DATA: 'false', RATE_LIMIT_API_MAX: '10000', RATE_LIMIT_LOGIN_MAX: '100', RATE_LIMIT_REGISTER_MAX: '10000',
         // Exercise the encrypted path, not the plaintext fallback.
         WAVE_PARTICIPATION_KEY: 'a'.repeat(64),
       },

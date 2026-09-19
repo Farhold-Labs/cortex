@@ -11,8 +11,8 @@ android {
         applicationId "com.farhold.cortex"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 29800
-        versionName "2.98.0"
+        versionCode 29900
+        versionName "2.99.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

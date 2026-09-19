@@ -84,6 +84,9 @@ test('Communities across two federated nodes', async (t) => {
                      VALUES (?, ?, ?, ?, 'active', ?)`)
         .run(`peer-${peerPort}`, peerName, `http://${peerName}`, keys[peerName].publicKey,
              new Date().toISOString());
+      // Communities is opt-in from v2.99.0; switch it on before boot so these
+      // tests exercise remote membership rather than the feature gate.
+      db.updateInstanceConfig({ features: { communities: true } });
       db.db.close();
 
       fs.appendFileSync(path.join(dir, 'server.js'),
@@ -97,7 +100,7 @@ test('Communities across two federated nodes', async (t) => {
           USE_SQLITE: 'true', JWT_SECRET: `test-secret-federated-communities-${selfPort}`,
           SEED_DEMO_DATA: 'false', FEDERATION_ENABLED: 'true',
           FEDERATION_NODE_NAME: selfName, APP_BASE_URL: `http://${selfName}`,
-          RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000',
+          RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000', RATE_LIMIT_REGISTER_MAX: '10000',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
