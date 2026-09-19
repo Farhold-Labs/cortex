@@ -5,6 +5,38 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.99.0] - 2026-09-18
+
+### Added
+
+- **Communities, Phase 6 — the Communities UI.** A rail listing the Communities you belong to, the channels inside one, and the waves filed in a channel. Creating a Community, joining with an invite code, browsing public ones, creating channels, minting invite codes, inviting someone from another server by address, and seeing the member list with remote members marked by their home node.
+  - **Opening a wave hands off to the ordinary wave view** rather than rendering a second, subtly different copy of it. A wave inside a channel is an ordinary wave.
+  - **The channel's wave list shows only what the caller can already see.** Community membership does not grant access to the waves filed in a Community, so a fuller count would be a slow leak of a private wave's existence. The screen says as much, in place: *filing a wave here does not change who can read it.*
+  - Controls render from the **capability list the server returned**, not from a role name — so a Community with custom roles gets a UI that matches what its people can actually do. Hiding a control remains a courtesy; the server refuses regardless.
+  - An invite code is displayed once, with a note saying so, because only its hash is stored and there is no way to show it again.
+  - **Starting a wave in a channel, and filing an existing one into it.** `POST /api/waves` accepts a `channelId` and creates-and-files in a **single request** — create-then-file is two, and a failure between them leaves an orphan wave nobody asked for and nobody can find. The two authorizations stay separate and both must pass. From the channel view you can also file one of your unfiled waves, or take one back out again.
+  - Filing still changes only where a wave is **listed**: privacy is whatever was asked for, never inherited from the channel.
+
+### Fixed
+
+- **A public community could be found but not joined.** The only join route took an invite code, so "Public — anyone can find it" was a promise the server could not keep: discovery listed communities that nobody could then get into without someone minting them a token. `POST /api/communities/:id/join` now admits anyone to a **public** community and to an **unlisted** one — not being listed is the whole of what unlisted means, and a person holding the link was given it deliberately. Private stays invite-only and answers **404 rather than 403**, because 403 would confirm a community somebody was not meant to know about exists. A ban still refuses, an open door is not a way around one, and joining twice succeeds quietly rather than erroring on a second click.
+- **The create form no longer remembers the last visibility you chose.** It kept the previous selection, so someone who made a public community and then made another got a second public one without the word ever being shown to them again. A privacy control should not have memory; it resets to private.
+- **Browsing public communities came back.** The rebuilt panel dropped it, which left the person most in need of it — someone who belongs to nothing — with only "create one" and "paste a code".
+
+### Changed
+
+- **The sidebar nests: community → channels → waves, each level collapsible.** The community name was first rendered as a subtitle squeezed beside the channel name, and in a narrow sidebar the two truncated into each other and neither could be read. Nesting says the same thing legibly, and gives somewhere to fold away a whole community you are not using today. Collapse state is per viewer in `localStorage` — personal categories persist theirs on the category row, but which groups someone folds away is local to the browser they are sitting at, and failing to read it back should cost nothing.
+- **Communities is not a tab.** The first cut made it a top-level destination that also listed the waves in each channel — so reading one conversation spanned two views: you picked a wave inside a channel and were thrown into a different tab to read it. Cortex had already solved this problem once, with wave categories, and a community channel is simply the *shared* version of a category. So channels now appear as groups in the wave list beside your own categories, `⋮ → move` offers channels alongside categories, and a wave in a channel opens where every other wave opens. Managing a community is a panel, reached from the ⚙ on a channel group or from the wave-list options menu.
+  - The grouped list is now used whenever there are categories **or** channels. It was categories alone, which would have hidden every channel from anyone who had never made a category.
+
+### Changed
+
+- **Communities is an opt-in instance feature, and defaults OFF.** It joins `publicServerEvents` rather than the switched-on-unless-disabled group: it is a whole new social surface, and a node that upgrades must not wake up hosting one. Admins enable it under ADMIN → INSTANCE CONFIG. The gate is registered on the route prefix rather than per handler, so a route cannot be added that forgets it, and it refuses everyone including a node admin — a feature that is off is off, and an admin who wants it on has a switch.
+
+### Notes
+
+- **This UI was driven in a real browser**, unlike the first attempt, and doing so immediately found two things a build cannot: a menu entry wired to `onClick` where the renderer calls `item.action?.()`, which made the Communities entry **silently inert**; and `channels` never being passed from `WaveList` to the grouped list, so every channel loaded correctly and none of them rendered. Verified by driving it: the groups appear, a wave moves between UNCATEGORIZED and a channel from the row menu (badge 0 → 1, toast confirms), and opening a wave inside a channel keeps the channel list on screen rather than navigating anywhere.
+
 ## [2.98.0] - 2026-09-18
 
 ### Added

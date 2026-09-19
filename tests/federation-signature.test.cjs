@@ -102,7 +102,7 @@ test('federation signatures must cover the date and the body', async (t) => {
         PATH: process.env.PATH, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: '0',
         USE_SQLITE: 'true', JWT_SECRET: 'test-secret-for-federation-signature-000',
         FEDERATION_ENABLED: 'true', SEED_DEMO_DATA: 'false',
-        RATE_LIMIT_API_MAX: '10000', RATE_LIMIT_LOGIN_MAX: '100',
+        RATE_LIMIT_API_MAX: '10000', RATE_LIMIT_LOGIN_MAX: '100', RATE_LIMIT_REGISTER_MAX: '10000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

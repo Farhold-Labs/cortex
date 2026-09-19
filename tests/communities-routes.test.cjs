@@ -36,6 +36,18 @@ test('Communities API', async (t) => {
     fs.cpSync(path.join(root, 'server/lib'), path.join(serverDir, 'lib'), { recursive: true });
     fs.symlinkSync(path.join(root, 'server/node_modules'), path.join(serverDir, 'node_modules'), 'dir');
     fs.mkdirSync(path.join(serverDir, 'data'));
+// Communities is an OPT-IN instance feature from v2.99.0, so a fresh database
+// has it switched off and every route below would answer 403. The feature is
+// enabled here BEFORE the server boots — the same shape as the federation test
+// seeding its pairing — so that these tests exercise the feature rather than
+// the gate. The gate has its own test.
+    {
+      const { DatabaseSQLite } = await import('../server/database-sqlite.js');
+      const seedDb = new DatabaseSQLite({ dbPath: path.join(serverDir, 'data/farhold.db') });
+      seedDb.updateInstanceConfig({ features: { communities: true } });
+      seedDb.db.close();
+    }
+
     fs.appendFileSync(path.join(serverDir, 'server.js'),
       "\nserver.on('listening', () => console.log('API_TEST_PORT=' + server.address().port));\n");
 
@@ -46,7 +58,7 @@ test('Communities API', async (t) => {
         PATH: process.env.PATH, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: '0',
         USE_SQLITE: 'true', JWT_SECRET: 'test-secret-for-communities-api-0000000',
         SEED_DEMO_DATA: 'false',
-        RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000',
+        RATE_LIMIT_API_MAX: '100000', RATE_LIMIT_LOGIN_MAX: '10000', RATE_LIMIT_REGISTER_MAX: '10000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -279,6 +291,64 @@ test('Communities API', async (t) => {
         'distinct answers tell a guesser how close they are');
     });
 
+    await t.test('a public community can be joined without an invite', async () => {
+      // "Public — anyone can find it" has to mean they can also join it.
+      // Before this existed, discovery listed communities that no one could
+      // then get into without someone minting them a code.
+      const pub = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'Open House', slug: 'open-house', visibility: 'public' },
+      })).body.community;
+
+      const joiner = await makeUser('opencomer');
+      const res = await api('POST', `/api/communities/${pub.id}/join`, { token: joiner.token });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+
+      const mine = await api('GET', '/api/communities/mine', { token: joiner.token });
+      assert.ok(mine.body.communities.some(c => c.id === pub.id));
+
+      // And they arrive as an ordinary member, not as nothing and not as staff.
+      const detail = await api('GET', `/api/communities/${pub.id}`, { token: joiner.token });
+      assert.ok(detail.body.capabilities.includes('channel.create_wave'));
+      assert.ok(!detail.body.capabilities.includes('member.ban'));
+
+      // Joining twice is not an error — a second click on a slow connection
+      // should not look like a failure.
+      assert.equal((await api('POST', `/api/communities/${pub.id}/join`, { token: joiner.token })).status, 200);
+    });
+
+    await t.test('an unlisted community is joinable by link, a private one is not', async () => {
+      const unlisted = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'By Link', slug: 'by-link', visibility: 'unlisted' },
+      })).body.community;
+      const priv = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'Closed', slug: 'closed-doors', visibility: 'private' },
+      })).body.community;
+
+      const walker = await makeUser('linkwalker');
+
+      // Unlisted: not listed, but joinable by someone who has the link — not
+      // being listed is the whole of what unlisted means.
+      const listed = (await api('GET', '/api/communities', { token: walker.token })).body.communities;
+      assert.ok(!listed.some(c => c.id === unlisted.id), 'unlisted must not appear in discovery');
+      assert.equal((await api('POST', `/api/communities/${unlisted.id}/join`, { token: walker.token })).status, 200);
+
+      // Private: 404 rather than 403, because 403 confirms it exists.
+      const denied = await api('POST', `/api/communities/${priv.id}/join`, { token: walker.token });
+      assert.equal(denied.status, 404);
+    });
+
+    await t.test('a banned person cannot join an open community either', async () => {
+      const pub = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'Open Two', slug: 'open-two', visibility: 'public' },
+      })).body.community;
+      const pest = await makeUser('pest');
+      await api('POST', `/api/communities/${pub.id}/bans`, {
+        token: owner.token, body: { userId: pest.id },
+      });
+      const res = await api('POST', `/api/communities/${pub.id}/join`, { token: pest.token });
+      assert.equal(res.status, 403, 'an open door is not a way around a ban');
+    });
+
     await t.test('a banned person cannot redeem their way back in', async () => {
       const banned = await makeUser('bannedperson');
       await api('POST', `/api/communities/${community.id}/bans`, {
@@ -383,6 +453,45 @@ test('Communities API', async (t) => {
       const asOwner = await api('GET', `/api/waves/${waveId}`, { token: owner.token });
       assert.ok([403, 404].includes(asOwner.status),
         `the Community owner must not be able to read a private wave filed in their channel (got ${asOwner.status})`);
+    });
+
+    await t.test('a wave can be started directly in a channel, in one request', async () => {
+      // Create-then-file is two requests, and a failure between them leaves an
+      // orphan wave the person never asked for and cannot find. This is one.
+      const res = await api('POST', '/api/waves', {
+        token: member.token,
+        body: { title: 'Born in a channel', privacy: 'private', channelId: channel.id },
+      });
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+      const created = res.body.wave || res.body;
+      assert.equal(created.channelId ?? created.channel_id, channel.id);
+
+      const listed = await api('GET', `/api/waves/${created.id}`, { token: member.token });
+      const w = listed.body.wave || listed.body;
+      assert.equal(w.channelId ?? w.channel_id, channel.id, 'and it is really filed there');
+      assert.equal(w.privacy, 'private', 'privacy is whatever was asked for, not inherited from the channel');
+    });
+
+    await t.test('someone outside the Community cannot start a wave in its channel', async () => {
+      const res = await api('POST', '/api/waves', {
+        token: outsider.token,
+        body: { title: 'Trespass', privacy: 'private', channelId: channel.id },
+      });
+      assert.equal(res.status, 403);
+
+      // And the wave must not have been created anyway — an authorization
+      // failure that still leaves a row behind is not a refusal.
+      const mine = await api('GET', '/api/waves', { token: outsider.token });
+      const list = Array.isArray(mine.body) ? mine.body : (mine.body.waves || []);
+      assert.ok(!list.some(w => w.title === 'Trespass'), 'no orphan wave was left behind');
+    });
+
+    await t.test('a channel id that belongs to no Community is refused', async () => {
+      const nodeChannel = await api('POST', '/api/waves', {
+        token: member.token,
+        body: { title: 'Nowhere', privacy: 'private', channelId: 'channel-does-not-exist' },
+      });
+      assert.equal(nodeChannel.status, 404);
     });
 
     await t.test('deleting a channel leaves its waves alone', async () => {

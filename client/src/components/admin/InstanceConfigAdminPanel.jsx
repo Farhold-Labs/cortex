@@ -35,6 +35,11 @@ const FEATURES = [
   // open internet is a disclosure, so it has to be switched on deliberately.
   { key: 'publicServerEvents', label: 'PUBLIC SERVER EVENTS', defaultOff: true,
     hint: 'Lists server-wide calendar events on the public /events page. Off by default.' },
+  // Also defaults OFF. Communities is a whole new social surface — a node that
+  // upgrades must not wake up hosting one, so an operator turns it on when they
+  // mean to rather than discovering it has arrived.
+  { key: 'communities', label: 'COMMUNITIES', defaultOff: true,
+    hint: 'Groups of channels that hold waves, with their own membership and roles. Off by default. Anyone can create one once enabled.' },
 ];
 
 // Notification defaults. `always | app_closed | never` for the per-type ones, matching

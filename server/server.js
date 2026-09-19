@@ -7380,7 +7380,10 @@ const INSTANCE_FEATURES = ['videoFeed', 'crawlBar', 'calendar', 'publicPortal', 
 // unless switched off — right for things already visible to members. Publishing
 // server-wide events to the open internet is a disclosure, so it has to be
 // switched on deliberately and must never appear by upgrading.
-const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents'];
+// `communities` joins this list rather than the one above: it is a whole new
+// social surface, and a node that upgrades must not wake up hosting one. An
+// operator turns it on when they mean to.
+const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents', 'communities'];
 const ALL_INSTANCE_FEATURES = [...INSTANCE_FEATURES, ...INSTANCE_OPT_IN_FEATURES];
 
 // Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
@@ -19847,6 +19850,29 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   const privacy = ['private', 'group', 'crossServer', 'public'].includes(req.body.privacy)
     ? req.body.privacy : 'private';
 
+  // Starting a wave directly inside a Community channel (v2.99.0).
+  //
+  // Validated BEFORE the wave is created and filed as part of the same request,
+  // rather than create-then-file: a failure between those two steps leaves an
+  // orphan wave nobody asked for and nobody can find. The two authorizations
+  // remain separate and both must pass — the capability to start a wave in that
+  // channel, and the channel belonging to the Community it claims to.
+  let targetChannel = null;
+  if (req.body.channelId) {
+    targetChannel = db.getChannelById(req.body.channelId);
+    if (!targetChannel) return res.status(404).json({ error: 'Channel not found' });
+    if (!targetChannel.community_id) {
+      return res.status(400).json({ error: 'That channel is not part of a community' });
+    }
+    const decision = communityAuthz.authorize(
+      db, { kind: 'user', userId: req.user.userId }, targetChannel.community_id,
+      CommunityCaps.CREATE_WAVE, { resource: { type: 'channel', id: targetChannel.id } }
+    );
+    if (!decision.allowed) {
+      return res.status(403).json({ error: 'You cannot start a conversation in that channel' });
+    }
+  }
+
   // Validate group access for group waves
   if (privacy === 'group') {
     const groupId = sanitizeInput(req.body.groupId);
@@ -19897,6 +19923,19 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     participants: localParticipantIds,
     encrypted,
   });
+
+  // File it into the channel it was started in. This sets where the wave is
+  // LISTED and nothing else — participants, privacy and keys are exactly as
+  // createWave left them.
+  if (targetChannel) {
+    db.setWaveChannel(wave.id, targetChannel.id);
+    db.logCommunityAudit(targetChannel.community_id, {
+      actorId: req.user.userId, action: 'wave.create_in_channel',
+      targetType: 'wave', targetId: wave.id,
+    });
+    wave.communityId = targetChannel.community_id;
+    wave.channelId = targetChannel.id;
+  }
 
   // Sync participation cache after wave creation (v2.21.0)
   participation.syncWaveFromDb(wave.id);
@@ -22700,6 +22739,17 @@ app.get('/api/search', authenticateToken, (req, res) => {
 // and nothing else. No handler here adds a participant, alters privacy, or
 // touches an encryption key as a side effect of moving a wave.
 
+// The feature gate. Registered before the routes so there is no way to add one
+// that forgets it — hiding the UI is a courtesy, never the control.
+app.use('/api/communities', (req, res, next) => {
+  if (!requireFeature('communities', res)) return;
+  next();
+});
+app.use('/api/admin/communities', (req, res, next) => {
+  if (!requireFeature('communities', res)) return;
+  next();
+});
+
 /** Build the actor the evaluator expects. Local today, remote-shaped already. */
 function communityActor(req) {
   return { kind: 'user', userId: req.user.userId };
@@ -23382,6 +23432,46 @@ app.delete('/api/communities/:id/invites/:inviteId', authenticateToken, (req, re
   if (!invite || invite.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
   db.revokeCommunityInvite(req.params.inviteId);
   res.json({ success: true });
+});
+
+
+/**
+ * Join a community directly, without an invite (v2.99.0).
+ *
+ * Public means findable AND joinable — otherwise "anyone can find it" is a
+ * promise the server does not keep, which is exactly the state this endpoint
+ * was added to fix. Unlisted is joinable too: not being listed is the whole of
+ * what unlisted means, and someone who has the link was given it on purpose.
+ * Private is invite-only and answers 404 rather than 403, because 403 would
+ * confirm that a community somebody was not meant to know about exists.
+ */
+app.post('/api/communities/:id/join', authenticateToken, apiLimiter, (req, res) => {
+  const community = db.getCommunityById(req.params.id);
+  if (!community || community.status !== 'active') return res.status(404).json({ error: 'Not found' });
+  if (community.visibility === 'private') return res.status(404).json({ error: 'Not found' });
+
+  if (db.getCommunityBan(community.id, req.user.userId)) {
+    return res.status(403).json({ error: 'You cannot join this community' });
+  }
+
+  // Already in: succeed quietly. A second click on a slow connection should
+  // not read as an error.
+  const existing = db.getCommunityMembership(community.id, req.user.userId);
+  if (existing && existing.state === 'active') return res.json({ community });
+
+  if (!requireRoomFor(res, db, 'member', community.id)) return;
+  if (!chargeCommunityMutation(req, res, community.id)) return;
+
+  const membershipId = db.addCommunityMember(community.id, req.user.userId, { state: 'active' });
+  const memberRole = db.getCommunityRole(community.id, 'member');
+  if (memberRole) db.grantCommunityRole(membershipId, memberRole.id);
+
+  db.logCommunityAudit(community.id, {
+    actorId: req.user.userId, action: 'member.join_open',
+    targetType: 'user', targetId: req.user.userId,
+    metadata: { visibility: community.visibility },
+  });
+  res.json({ community });
 });
 
 // Redeem. Rate limited hard: this endpoint takes a secret and says whether it
