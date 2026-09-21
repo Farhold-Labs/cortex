@@ -614,7 +614,7 @@ const WaveCategoryList = ({ show = 'all', waves, categories, channels = [], sele
  * makes that readable at a glance; a menu whose first item is "New…" trains
  * people to open it for everything.
  */
-const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, menuTitle, isMobile }) => {
+const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, menuTitle, isMobile, collapsed, onToggleCollapse }) => {
   const [open, setOpen] = React.useState(false);
   const iconButton = (active) => ({
     padding: isMobile ? '8px 10px' : '4px 7px',
@@ -631,8 +631,24 @@ const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, men
       borderBottom: '1px solid var(--border-subtle)',
       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px',
     }}>
-      <GlowText color={titleColor || 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{title}</GlowText>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+      {/* The title is the toggle, matching every other collapsible group in
+          this list. The buttons beside it stop propagation, so acting on a
+          section never also folds it. */}
+      <div
+        onClick={onToggleCollapse}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0,
+          cursor: onToggleCollapse ? 'pointer' : 'default', userSelect: 'none', flex: 1,
+        }}
+      >
+        <GlowText color={titleColor || 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{title}</GlowText>
+        {onToggleCollapse && (
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontFamily: 'monospace' }}>
+            {collapsed ? '▸' : '▾'}
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} onClick={(e) => e.stopPropagation()}>
         {onCreate && (
           <button onClick={onCreate} title={createTitle} style={iconButton(false)}>+</button>
         )}
@@ -686,6 +702,26 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
   // v2.84.1 — the uncategorised list needs its own row-menu state; the
   // categorised list keeps its copy inside WaveCategoryList.
   const [rowMenuOpen, setRowMenuOpen] = React.useState(null);
+
+  /**
+   * Whether the two top-level sections are folded away, per viewer.
+   *
+   * Same reasoning as the community and channel groups: which sections
+   * somebody folds is local to the browser they are sitting at, and a failure
+   * to read it back should cost nothing — so every access is wrapped, and an
+   * unreadable store simply means everything is open.
+   */
+  const [sectionCollapsed, setSectionCollapsed] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem('farhold_list_sections') || '{}'); }
+    catch { return {}; }
+  });
+  const toggleSection = (key) => {
+    setSectionCollapsed(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem('farhold_list_sections', JSON.stringify(next)); } catch { /* private mode */ }
+      return next;
+    });
+  };
   return (
   <div style={{
     width: '100%',
@@ -701,6 +737,8 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
       <ListSectionHeader
         title="COMMUNITIES"
         isMobile={isMobile}
+        collapsed={!!sectionCollapsed.communities}
+        onToggleCollapse={() => toggleSection('communities')}
         onCreate={onManageCommunities ? () => onManageCommunities('create') : undefined}
         createTitle="New community"
         menuTitle="Community options"
@@ -712,7 +750,7 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
       />
     )}
 
-    {communitiesEnabled && (
+    {communitiesEnabled && !sectionCollapsed.communities && (
       channels.length > 0 ? (
         <WaveCategoryList
           show="communities"
@@ -744,6 +782,8 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
       title={ghostMode ? GHOST_PROTOCOL.modeActive : `${T.WAVES}`}
       titleColor={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'}
       isMobile={isMobile}
+      collapsed={!!sectionCollapsed.waves}
+      onToggleCollapse={() => toggleSection('waves')}
       onCreate={onNewWave}
       createTitle={`New ${T.wave}`}
       menuTitle={`${T.Wave} options`}
@@ -758,7 +798,7 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
       ].filter(item => item.onClick)}
     />
 
-    {(categories.length > 0 || channels.length > 0) ? (
+    {sectionCollapsed.waves ? null : (categories.length > 0 || channels.length > 0) ? (
       <WaveCategoryList
         show="waves"
         scrollRef={listScrollRef}
