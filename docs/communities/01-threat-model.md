@@ -356,3 +356,83 @@ The general lesson, which is why this is recorded here rather than only in the
 changelog: **a rule that says "always go through X" needs X to answer every
 shape of the question.** Leaving a gap makes the bypass the path of least
 resistance.
+
+---
+
+## 11. Independent audit findings — 2026-09-21
+
+An external audit of v2.103.0 raised 1 Critical, 9 High, 5 Medium, 4 Low and 5
+Informational findings. Four were fixed in v2.103.1; the rest are recorded here
+so their status is not guessed at later.
+
+### CORTEX-COMM-001 — a peer could claim another peer's identities **[FIXED v2.103.1]**
+
+The cross-port session handler selected the peer from the request's
+`homeServerUrl` but took the principal's namespace from `exchangeData.homeNode`
+— the answering peer's own claim. Since `upsertCrossPortUser` matches on
+`(home_node, home_user_id)`, any active peer could answer the exchange with a
+user id in another peer's namespace and receive a session on that person's
+existing stub, inheriting every Community role attached to it.
+
+The home-node standing check added in v2.100.0 did not help. It reads the same
+`home_node` the attacker supplied, so the control meant to protect remote
+membership was satisfied by the attacker's own assertion.
+
+**Fixed** by binding the namespace to the peer that was authenticated: a
+response naming a different home node is refused outright rather than
+reconciled, and pending remote invitations bind only within that namespace.
+Regression test drives B's real session endpoint against a stand-in peer that
+claims another node's identity; it was confirmed to fail with the fix disabled.
+
+**Not addressed:** a hostile home node impersonating *its own* users. Namespace
+binding cannot reach that, and person-controlled identity signatures remain a
+separate architectural decision.
+
+### CORTEX-COMM-003 — legacy renewal bypassed revocation **[FIXED v2.103.1]**
+
+`/api/auth/token/refresh` was gated on home-node standing in v2.100.0.
+`/api/auth/renew` mints a session too and was not, so a person banned at home
+could renew there indefinitely while their peer stayed paired. A revocation
+control with a second door beside it is not a revocation control. Both routes
+now revalidate. Grace-period re-auth is password-gated and cross-port stubs hold
+no password, so it is not a third door.
+
+### CORTEX-COMM-004 — role priority could be raised above the owner **[FIXED v2.103.1]**
+
+`canEditRole()` judged the role's *current* priority and its proposed
+permissions, and never saw the proposed priority. An admin could take a harmless
+role they already held, lift it above the owner, and use their existing admin
+powers to remove them. The evaluator now judges the role it is about to become,
+and refuses a non-integer priority rather than coercing it.
+
+The existing test was named "role priority inversion is blocked on edit" and only
+ever edited an already-higher role — never the direction the attack uses.
+
+### CORTEX-COMM-005 — removal did not revoke **[FIXED v2.103.1]**
+
+Role grants survived every exit, so a removed admin could rejoin a public
+Community through the ordinary join route and be an admin again. Removal the
+removed person can undo is not removal.
+
+`removed` and `banned` now revoke the grants and record what was taken in the
+audit log; `left` keeps them, because leaving is the member's own decision.
+Separating those two was the fix — they were one code path and one behaviour,
+which is how the unsafe half went unnoticed. A last-owner guard was also added to
+removal and ban, so rank is no longer the only thing protecting the owner.
+
+### Accepted, deferred, or outside Communities
+
+| Finding | Status |
+| --- | --- |
+| 002 — approval codes can be redirected | **Open.** Cross-port authorization-code flow needs registered callbacks and browser/audience binding. Not a Communities-only change. |
+| 006, 007 — unjoined peers inject into origin waves; remote mutations unscoped | **Open, inherited.** Wave federation, affecting every wave on a node. |
+| 008 — WebSocket auth bypasses session revocation | **Open, inherited.** Node-wide. |
+| 009, 010 — attachments unauthorised; active uploads execute in-origin | **Open, inherited.** Node-wide upload policy. |
+| 011–019 | **Open.** Restricted channels, invite role drift, resource ceilings, metadata leaks, account deletion, audit atomicity, validation, feature-off paths, channel containment. |
+| 020 — no Community event federation | **By design.** Single-host Communities with cross-port members; §2 decided this. |
+| 021 — ownership transfer incomplete | **Open**, and a product decision as much as a gap. |
+| 022 — removal does not revoke wave access | **Deliberate.** Wave privacy is the content authority; a Community never conferred it. |
+| 023, 024 — dependency reachability, dormant resolution | **Informational.** |
+
+The audit's own ordering is the right one: 001–004, then the inherited
+node-wide findings, then removal/invitation semantics and the rest.

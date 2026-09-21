@@ -5,6 +5,22 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.103.1] - 2026-09-21
+
+### Security
+
+An independent audit of v2.103.0 raised 1 Critical, 9 High, 5 Medium, 4 Low and 5 Informational findings. This release fixes the Critical and the three High findings that are Communities' own. The remainder — including five High findings inherited from wave federation, WebSocket authentication and uploads, which affect every wave on a node rather than only Communities — are recorded in `docs/communities/01-threat-model.md` §11 with their status, rather than left to be guessed at.
+
+- **A peer could claim another peer's identities (CORTEX-COMM-001, Critical).** The cross-port session handler chose the peer from the request but took the principal's *namespace* from the answering peer's own claim. Because a cross-port identity is keyed on `(home_node, home_user_id)`, any active peer could answer the code exchange with a user id in another peer's namespace and be handed a session on that person's existing account — inheriting every Community role attached to it. The home-node standing check added in v2.100.0 offered no protection, because it reads the same field the attacker supplied: the control meant to protect remote membership was satisfied by the attacker's own assertion. A peer now speaks for its own users and nobody else's; a response naming a different home node is refused outright rather than reconciled, and pending remote invitations bind only within the authenticated namespace.
+- **Every renewal path now asks the home node (CORTEX-COMM-003, High).** `/api/auth/token/refresh` was gated on home-node standing; `/api/auth/renew` mints a session too and was not. A person banned or deleted at home could simply renew there instead and keep their Community authority for as long as their peer stayed paired. A revocation control with a second door beside it is not a revocation control.
+- **Role priority could be raised above the owner (CORTEX-COMM-004, High).** The guard judged a role's *current* priority and its proposed permissions, and never saw the proposed priority — so an admin could take a harmless role they already held, lift it over the owner, and use their existing admin powers to remove them. The escalation needed no capability nobody had granted; it needed a number the guard never looked at. The evaluator now judges the role it is about to become, and refuses a non-integer priority rather than coercing one.
+- **Removal now revokes (CORTEX-COMM-005, High).** Role grants survived every exit, so a removed admin could rejoin a public Community through the ordinary join route and be an admin again. Removal that the removed person can undo is not removal. `removed` and `banned` revoke the grants and record what was taken in the audit log; `left` keeps them, because leaving is the member's own decision and returning to the rank you set down is reasonable. They were one code path and one behaviour before, which is how the unsafe half went unnoticed. A last-owner guard was added to removal and ban, so rank is no longer the only thing standing between an owner and being removed from their own Community.
+
+### Changed
+
+- Two tests that asserted the *old* removal behaviour have been rewritten. One of them, added in v2.94.0, explicitly blessed rejoining as a way to restore roles.
+- An audit-log test that counted entries now asserts what the log contains instead. Counting broke the moment revocation began writing its own entries — the kind of brittleness that makes a real regression look like a suite needing its number nudged.
+
 ## [2.103.0] - 2026-09-21
 
 ### Added

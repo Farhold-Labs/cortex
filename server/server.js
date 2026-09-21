@@ -5568,6 +5568,33 @@ app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) =>
     }
     const originalDurationSecs = decoded.exp - decoded.iat;
 
+    // CORTEX-COMM-003 — every renewal path asks the home node, not just the
+    // rotating one.
+    //
+    // v2.100.0 gated /api/auth/token/refresh on home-node standing and stopped
+    // there. This route also mints a fresh session, so a person banned or
+    // deleted at home could simply renew here instead and keep their Community
+    // authority for as long as their peer stayed paired. A revocation control
+    // with a second door beside it is not a revocation control.
+    const renewing = db.findUserById(req.user.userId);
+    if (renewing?.is_cross_port) {
+      const standing = await verifyCrossPortStanding(renewing);
+      if (standing.state !== 'ok') {
+        revokeSessionByToken(req.token);
+        if (db.revokeAllUserSessions) db.revokeAllUserSessions(renewing.id);
+        if (db.logActivity) {
+          db.logActivity(renewing.id, 'cross_port_session_revoked', 'user', renewing.id,
+            { ...getRequestMeta(req), reason: standing.reason || standing.state, via: 'renew' });
+        }
+        return res.status(401).json({
+          error: standing.state === 'revoked'
+            ? 'Your home server no longer authorises this session. Please sign in again.'
+            : 'Your home server could not be reached. Please sign in again.',
+          code: 'SESSION_REVOKED',
+        });
+      }
+    }
+
     // Issue new token BEFORE revoking old one. If the response is lost in transit,
     // the client still holds a valid old token and can retry or enter grace period
     // rather than being hard-logged-out with a revoked token.
@@ -14514,10 +14541,32 @@ app.post('/api/cross-port/session', async (req, res) => {
       return res.status(400).json({ error: exchangeData.error || 'Exchange failed on home server' });
     }
 
+    // CORTEX-COMM-001 — the namespace belongs to the peer we authenticated,
+    // never to whatever that peer says.
+    //
+    // This used to read `exchangeData.homeNode || homeNode`, so an active peer
+    // M could answer the code exchange claiming a user id in honest peer H's
+    // namespace. `upsertCrossPortUser` matches on (home_node, home_user_id), so
+    // B would hand M a session on H's user's existing stub row — and therefore
+    // on every Community role attached to it. Worse, the home-node standing
+    // check added in v2.100.0 reads that same `home_node`, so the control meant
+    // to protect remote membership was satisfied by the attacker's own claim.
+    //
+    // A peer speaks for its own users and nobody else's. If the response
+    // disagrees with the peer we selected and signed to, that is not a
+    // discrepancy to reconcile — it is a peer claiming someone else's people.
+    if (exchangeData.homeNode && exchangeData.homeNode !== homeNode) {
+      console.error(
+        `[cross-port] ${homeNode} returned an identity in ${exchangeData.homeNode}'s namespace — refusing`
+      );
+      db.updateCrossPortRequestStatus(request.id, 'rejected');
+      return res.status(403).json({ error: 'Home server returned an identity it does not own' });
+    }
+
     // Create or update local stub user
     const stubUser = db.upsertCrossPortUser({
       homeUserId: exchangeData.userId,
-      homeNode: exchangeData.homeNode || homeNode,
+      homeNode,
       handle: exchangeData.handle,
       displayName: exchangeData.displayName,
       avatar: exchangeData.avatar,
@@ -14552,13 +14601,16 @@ app.post('/api/cross-port/session', async (req, res) => {
       const bound = db.bindRemoteInvitations({
         userId: stubUser.id,
         remoteHandle: exchangeData.handle,
-        nodeName: exchangeData.homeNode || homeNode,
+        // Same rule as above: an invitation addressed into H's namespace may
+        // only be bound by H. Taking this from the response would let M redeem
+        // an invitation written for somebody on another server.
+        nodeName: homeNode,
       });
       for (const communityId of bound) {
         db.logCommunityAudit(communityId, {
           actorId: stubUser.id, action: 'member.join_remote',
           targetType: 'user', targetId: stubUser.id,
-          metadata: { homeNode: exchangeData.homeNode || homeNode },
+          metadata: { homeNode },
         });
       }
     } catch (err) {
@@ -14578,7 +14630,7 @@ app.post('/api/cross-port/session', async (req, res) => {
         avatar: stubUser.avatar,
         avatarUrl: stubUser.avatarUrl || stubUser.avatar_url,
         isCrossPort: true,
-        homeNode: exchangeData.homeNode || homeNode,
+        homeNode,
       },
     });
   } catch (err) {
@@ -23177,6 +23229,13 @@ app.delete('/api/communities/:id/members/:userId', authenticateToken, (req, res)
   const rank = communityAuthz.canActOnMember(db, req.user.userId, req.params.userId, req.params.id);
   if (!rank.allowed) return res.status(403).json({ error: 'Forbidden' });
 
+  // Defence in depth alongside the rank check: removing the last owner would
+  // leave a Community nobody can administer, and rank alone stops being enough
+  // the moment a priority bug lets somebody outrank them.
+  if (communityAuthz.wouldLeaveNoOwner(db, req.params.id, req.params.userId)) {
+    return res.status(409).json({ error: 'A community must keep at least one owner' });
+  }
+
   db.setCommunityMemberState(req.params.id, req.params.userId, 'removed');
   db.logCommunityAudit(req.params.id, {
     actorId: req.user.userId, action: 'member.remove', targetType: 'user', targetId: req.params.userId,
@@ -23209,6 +23268,9 @@ app.post('/api/communities/:id/bans', authenticateToken, apiLimiter, (req, res) 
   const targetId = String(req.body.userId || '');
   const rank = communityAuthz.canActOnMember(db, req.user.userId, targetId, req.params.id);
   if (!rank.allowed) return res.status(403).json({ error: 'Forbidden' });
+  if (communityAuthz.wouldLeaveNoOwner(db, req.params.id, targetId)) {
+    return res.status(409).json({ error: 'A community must keep at least one owner' });
+  }
 
   const banReason = boundedOptional(req.body.reason, communityLimits.LENGTHS.banReason);
   if (!banReason.ok) return res.status(400).json({ error: 'Reason is too long' });
@@ -23270,7 +23332,12 @@ app.patch('/api/communities/:id/roles/:roleId', authenticateToken, apiLimiter, (
 
   const role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.params.roleId);
   const next = Array.isArray(req.body.permissions) ? req.body.permissions : null;
-  const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role, next);
+  // The proposed priority goes to the evaluator too, or it judges a role that
+  // is about to stop existing (CORTEX-COMM-004).
+  const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role, {
+    permissions: next,
+    priority: Number.isInteger(req.body.priority) ? req.body.priority : undefined,
+  });
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
 
   const updated = db.updateCommunityRole(req.params.roleId, {
@@ -23289,7 +23356,7 @@ app.delete('/api/communities/:id/roles/:roleId', authenticateToken, (req, res) =
     { resource: { type: 'role', id: req.params.roleId } })) return;
 
   const role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.params.roleId);
-  const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role);
+  const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role, {});
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
 
   if (!db.deleteCommunityRole(req.params.roleId)) {
