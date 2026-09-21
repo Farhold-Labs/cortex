@@ -1786,7 +1786,7 @@ function MainApp({ sharePingId }) {
                   onManageCategories={() => setCategoryManagementOpen(true)}
                   onWaveFile={handleWaveFile}
                   communitiesEnabled={instanceFeatures.communities === true}
-                  onManageCommunities={() => setCommunityPanelFor({ communityId: null })}
+                  onManageCommunities={(focus) => setCommunityPanelFor({ communityId: null, focus })}
                   onManageCommunity={(channel, focus) =>
                     setCommunityPanelFor({ communityId: channel.communityId, focus })}
                   onNewWaveIn={handleNewWaveIn}
@@ -2156,6 +2156,7 @@ function MainApp({ sharePingId }) {
           fetchAPI={fetchAPI}
           showToast={showToastMsg}
           initialCommunityId={communityPanelFor.communityId}
+          focus={communityPanelFor.focus}
           onClose={() => setCommunityPanelFor(null)}
           onChanged={() => { loadCommunityChannels(); loadWaves(); }}
         />
