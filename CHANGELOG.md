@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.102.1] - 2026-09-21
+
+### Fixed
+
+- **The community panels were see-through, and it was not a design choice.** They used `--bg-secondary`, a variable declared in exactly **one** of the sixteen themes — so on every other theme it was unset and the panel had no background at all. Only the backdrop's dimming separated the text in front from the text behind, which is why it read as a deliberate transparency effect rather than a missing colour. They now use `--bg-elevated`, defined in all sixteen, and match the other modals: the same dim, the same solid surface, the same amber edge.
+
+### Changed
+
+- **Clicking away still closes a community panel, but no longer by accident.** Two changes, both aimed at the misclick rather than the gesture:
+  - The press must **start** on the backdrop as well as end there. Without that, selecting text inside the panel and releasing outside it counted as a backdrop click and threw the panel away mid-sentence.
+  - **Work in progress is never discarded by a stray click.** With a half-typed community name, invite code or search in the box, a backdrop click flashes the panel's edge instead of closing it — the moment a misclick costs something is exactly the moment it must not.
+  - **Escape closes**, ignoring unsaved input on purpose: pressing Escape is a choice, where clicking the backdrop is often an accident.
+
 ## [2.102.0] - 2026-09-21
 
 ### Changed

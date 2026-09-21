@@ -30,6 +30,20 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   const [creating, setCreating] = useState(false);
   const [browse, setBrowse] = useState(null);      // null = not looked yet
   const joinInputRef = React.useRef(null);
+  const downOnOverlay = React.useRef(false);
+  const [bumped, setBumped] = useState(false);
+
+  /** Is there typed-but-unsubmitted text that a stray click would throw away? */
+  const hasUnsavedInput = () => Boolean(newName.trim() || joinToken.trim() || search.trim());
+
+  // Escape closes, which is the deliberate way out and what every other modal
+  // here offers. It ignores unsaved input on purpose: pressing Escape is a
+  // choice, where clicking the backdrop is often an accident.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   const [search, setSearch] = useState('');
 
   const loadMine = useCallback(async () => {
@@ -142,14 +156,22 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
     }
   };
 
+  // Matches the other modals: the same dim, the same solid surface.
+  //
+  // This panel used `--bg-secondary`, which is declared in exactly ONE of the
+  // sixteen themes — so on every other theme the variable was unset and the
+  // panel had no background at all. Only the overlay's dimming stood between
+  // the text behind it and the text in front, which is why it read as a
+  // deliberate transparency effect rather than as a missing colour.
   const overlay = {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem',
   };
   const sheet = {
-    background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)',
+    background: 'var(--bg-elevated)', border: '1px solid var(--accent-amber)40',
     borderRadius: 4, padding: '1rem', width: 'min(680px, 100%)',
     maxHeight: '85vh', overflowY: 'auto',
+    boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
   };
   const btn = (active) => ({
     padding: '0.45rem 0.6rem', marginRight: '0.35rem', marginBottom: '0.35rem',
@@ -161,8 +183,22 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   const input = { width: '100%', padding: '0.45rem', fontFamily: 'inherit', marginBottom: '0.4rem' };
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={sheet} onClick={e => e.stopPropagation()}>
+    <div
+      style={overlay}
+      onMouseDown={(e) => { downOnOverlay.current = e.target === e.currentTarget; }}
+      onClick={(e) => {
+        // Click-away still closes, but only when the press STARTED on the
+        // backdrop too. Without that, selecting text inside the panel and
+        // releasing outside it counts as a click on the backdrop and throws
+        // the panel away mid-sentence.
+        if (e.target !== e.currentTarget || !downOnOverlay.current) return;
+        // And never discard work in progress on a stray click — the moment a
+        // misclick costs something is exactly the moment it must not.
+        if (hasUnsavedInput()) { setBumped(true); setTimeout(() => setBumped(false), 600); return; }
+        onClose();
+      }}
+    >
+      <div style={{ ...sheet, ...(bumped ? { borderColor: 'var(--accent-amber)' } : {}) }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', letterSpacing: '0.1em' }}>
             COMMUNITIES
