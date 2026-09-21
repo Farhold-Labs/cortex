@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One dismissal behaviour, shared by the modals that adopt it.** `useModalDismiss` now holds it in one place rather than each modal having its own opinion, and the three ways out are deliberately not equivalent: **Escape and the Close button always work; the backdrop only when there is nothing to lose.** The backdrop is the one people hit by accident, so it is the one with conditions.
+- **The new-wave dialogue joins it.** Its `✕` becomes a labelled **Close** button, matching the community panel, and clicking away now closes it — but not while a title is typed, people are picked or a federated address is half-entered.
+- **An open create form counts as work in progress**, even with nothing typed in it yet. Opening it is already an intention, and losing the form because the pointer landed an inch wide is the annoyance being fixed — not merely losing the characters.
+- A refused backdrop click flashes the panel's edge. A dismissal that silently does nothing reads as a broken modal.
 - **Clicking away still closes a community panel, but no longer by accident.** Two changes, both aimed at the misclick rather than the gesture:
   - The press must **start** on the backdrop as well as end there. Without that, selecting text inside the panel and releasing outside it counted as a backdrop click and threw the panel away mid-sentence.
   - **Work in progress is never discarded by a stray click.** With a half-typed community name, invite code or search in the box, a backdrop click flashes the panel's edge instead of closing it — the moment a misclick costs something is exactly the moment it must not.

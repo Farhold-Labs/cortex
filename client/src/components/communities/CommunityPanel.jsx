@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { T } from '../../config/terminology.js';
 import CommunitySettingsPanel from './CommunitySettingsPanel.jsx';
+import { useModalDismiss } from '../../hooks/useModalDismiss.js';
 
 /**
  * Managing communities (v2.99.0, Phase 6 — rebuilt).
@@ -30,20 +31,18 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   const [creating, setCreating] = useState(false);
   const [browse, setBrowse] = useState(null);      // null = not looked yet
   const joinInputRef = React.useRef(null);
-  const downOnOverlay = React.useRef(false);
-  const [bumped, setBumped] = useState(false);
 
-  /** Is there typed-but-unsubmitted text that a stray click would throw away? */
-  const hasUnsavedInput = () => Boolean(newName.trim() || joinToken.trim() || search.trim());
+  /**
+   * What a stray backdrop click would cost.
+   *
+   * An OPEN CREATE FORM counts, even with nothing typed in it yet. Opening it
+   * is already an intention, and losing the form because the pointer landed an
+   * inch wide is the annoyance being fixed — not merely losing the characters.
+   */
+  const hasUnsavedInput = () =>
+    Boolean(creating || newName.trim() || joinToken.trim() || search.trim());
 
-  // Escape closes, which is the deliberate way out and what every other modal
-  // here offers. It ignores unsaved input on purpose: pressing Escape is a
-  // choice, where clicking the backdrop is often an accident.
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const { backdropProps, bumped } = useModalDismiss({ onClose, hasUnsavedInput });
   const [search, setSearch] = useState('');
 
   const loadMine = useCallback(async () => {
@@ -183,21 +182,7 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   const input = { width: '100%', padding: '0.45rem', fontFamily: 'inherit', marginBottom: '0.4rem' };
 
   return (
-    <div
-      style={overlay}
-      onMouseDown={(e) => { downOnOverlay.current = e.target === e.currentTarget; }}
-      onClick={(e) => {
-        // Click-away still closes, but only when the press STARTED on the
-        // backdrop too. Without that, selecting text inside the panel and
-        // releasing outside it counts as a click on the backdrop and throws
-        // the panel away mid-sentence.
-        if (e.target !== e.currentTarget || !downOnOverlay.current) return;
-        // And never discard work in progress on a stray click — the moment a
-        // misclick costs something is exactly the moment it must not.
-        if (hasUnsavedInput()) { setBumped(true); setTimeout(() => setBumped(false), 600); return; }
-        onClose();
-      }}
-    >
+    <div style={overlay} {...backdropProps}>
       <div style={{ ...sheet, ...(bumped ? { borderColor: 'var(--accent-amber)' } : {}) }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', letterSpacing: '0.1em' }}>

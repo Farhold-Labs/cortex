@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useModalDismiss } from '../../hooks/useModalDismiss.js';
 import { PRIVACY_LEVELS } from '../../config/constants.js';
 import { FEDERATION } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
@@ -11,6 +12,17 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [federatedInput, setFederatedInput] = useState('');
   const [federatedParticipants, setFederatedParticipants] = useState([]); // Array of "@handle@server" strings
+
+  /**
+   * The same dismissal every other modal uses: Escape and the Close button
+   * always work, the backdrop only when there is nothing to lose. A wave with
+   * a title typed or people picked is not thrown away by a stray click.
+   */
+  const hasUnsavedInput = () => Boolean(
+    title.trim() || selectedParticipants.length || selectedGroup ||
+    federatedInput.trim() || federatedParticipants.length
+  );
+  const { backdropProps, bumped } = useModalDismiss({ onClose, hasUnsavedInput });
 
   if (!isOpen) return null;
 
@@ -49,20 +61,33 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
   const canCreate = title.trim() && (privacy !== 'group' || selectedGroup);
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '20px',
-    }}>
+    <div
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '20px',
+      }}
+      {...backdropProps}
+    >
       <div style={{
         width: '100%', maxWidth: '450px', maxHeight: '80vh', overflowY: 'auto',
         background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
-        border: '2px solid var(--accent-amber)40', padding: '24px',
+        // A refused backdrop click flashes the edge. A dismissal that silently
+        // does nothing reads as a broken modal.
+        border: bumped ? '2px solid var(--accent-amber)' : '2px solid var(--accent-amber)40',
+        padding: '24px',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
           <GlowText color="var(--accent-amber)" size="1.1rem">
             New {T.Wave}{containerLabel ? ` in ${containerLabel}` : ''}
           </GlowText>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>✕</button>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent', border: '1px solid var(--border-primary)',
+              color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'inherit',
+              fontSize: '0.8rem', padding: '0.45rem 0.6rem',
+            }}
+          >Close</button>
         </div>
 
         <div style={{ marginBottom: '16px' }}>
