@@ -23,6 +23,7 @@ const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
 const crypto = require('node:crypto');
+const http = require('node:http');
 const { spawn } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
@@ -151,6 +152,30 @@ test('Communities across two federated nodes', async (t) => {
       token: bob.token, body: { name: 'Allied Productions', slug: 'allied', visibility: 'private' },
     })).body.community;
     assert.ok(community, 'community created on B');
+
+    /** Run the real cross-port handshake and return Alice's credentials on B. */
+    const signInCrossPort = async () => {
+      const initiate = await call(B, 'POST', '/api/cross-port/initiate', { body: { homeServerUrl: A.url } });
+      const redirect = new URL(initiate.body.redirectUrl);
+      const approve = await call(A, 'POST', '/api/cross-port/approve', {
+        token: alice.token,
+        body: {
+          guestNode: nodeB,
+          callbackUrl: redirect.searchParams.get('callback'),
+          nonce: redirect.searchParams.get('nonce'),
+          requestId: redirect.searchParams.get('request_id'),
+        },
+      });
+      const session = await call(B, 'POST', '/api/cross-port/session', {
+        body: {
+          code: new URL(approve.body.callbackUrl).searchParams.get('code'),
+          state: redirect.searchParams.get('nonce'),
+          homeServerUrl: A.url,
+        },
+      });
+      assert.equal(session.status, 200, `re-login failed: ${JSON.stringify(session.body)}`);
+      return { token: session.body.token, id: session.body.user.id, refreshToken: session.body.refreshToken };
+    };
 
     await t.test('an invitation may only be addressed into a federated peer', async () => {
       const stranger = await call(B, 'POST', `/api/communities/${community.id}/members/remote`, {
@@ -367,6 +392,122 @@ test('Communities across two federated nodes', async (t) => {
       });
       assert.equal(session.status, 200, JSON.stringify(session.body));
       aliceOnB = { token: session.body.token, id: session.body.user.id, refreshToken: session.body.refreshToken };
+    });
+
+    await t.test('CORTEX-COMM-003: the legacy renewal route also asks the home node', async () => {
+      // v2.100.0 gated /api/auth/token/refresh and stopped there. This route
+      // mints a session too, so a person banned at home could simply renew here
+      // instead and keep their Community authority for as long as their peer
+      // stayed paired. A revocation control with a second door beside it is not
+      // a revocation control.
+      const dbA = new DatabaseSQLite({ dbPath: path.join(A.dir, 'data/farhold.db') });
+      dbA.db.prepare("UPDATE users SET account_status = 'disabled' WHERE handle = 'alice'").run();
+      dbA.db.close();
+
+      const dbB = new DatabaseSQLite({ dbPath: path.join(B.dir, 'data/farhold.db') });
+      dbB.db.prepare('UPDATE users SET cross_port_verified_at = ? WHERE id = ?')
+        .run(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), aliceOnB.id);
+      dbB.db.close();
+
+      const renewed = await call(B, 'POST', '/api/auth/renew', { token: aliceOnB.token, body: {} });
+      assert.equal(renewed.status, 401, 'renewing after a home ban must fail');
+      assert.equal(renewed.body.code, 'SESSION_REVOKED');
+      assert.match(renewed.body.error, /no longer authorises/,
+        `expected a decline, got: ${renewed.body.error}`);
+
+      // And the session it was renewing is gone, not merely un-renewed.
+      const after = await call(B, 'GET', '/api/communities/mine', { token: aliceOnB.token });
+      assert.equal(after.status, 401, 'the old token is revoked too');
+
+      const dbA2 = new DatabaseSQLite({ dbPath: path.join(A.dir, 'data/farhold.db') });
+      dbA2.db.prepare("UPDATE users SET account_status = 'active' WHERE handle = 'alice'").run();
+      dbA2.db.close();
+
+      // This test does its job by ending Alice's session, so the tests after it
+      // need her signed in again.
+      aliceOnB = await signInCrossPort();
+    });
+
+    await t.test('CORTEX-COMM-001: a peer cannot claim another peer\'s identities', async () => {
+      // The audit's critical finding. A malicious peer M, merely paired with B,
+      // answers the code exchange with a user id in honest peer A's namespace.
+      // Because the stub row is keyed on (home_node, home_user_id), B used to
+      // hand M a session on ALICE's existing row — and every Community role
+      // attached to it. The home-node standing check did not help: it reads the
+      // same home_node the attacker supplied.
+      //
+      // Rather than stand up a third server, this drives B's own session
+      // endpoint against a stand-in peer that answers the exchange with A's
+      // namespace. What is under test is B's handling of that answer.
+      const evil = crypto.generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+
+      const aliceOnA = await (async () => {
+        const dbA = new DatabaseSQLite({ dbPath: path.join(A.dir, 'data/farhold.db') });
+        const row = dbA.db.prepare('SELECT id FROM users WHERE handle = ?').get('alice');
+        dbA.db.close();
+        return row.id;
+      })();
+
+      // A peer that answers the exchange claiming A's namespace.
+      const rogue = http.createServer((req, res) => {
+        let body = '';
+        req.on('data', c => { body += c; });
+        req.on('end', () => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            userId: aliceOnA,        // Alice's id, on A
+            homeNode: nodeA,         // and she is claimed to be A's user
+            handle: 'alice',
+            displayName: 'Alice',
+            avatar: 'A',
+          }));
+        });
+      });
+      await new Promise(r => rogue.listen(0, '127.0.0.1', r));
+      const roguePort = rogue.address().port;
+      const rogueName = `127.0.0.1:${roguePort}`;
+
+      try {
+        // M is an ordinary active peer of B. That is the only prerequisite.
+        const dbB = new DatabaseSQLite({ dbPath: path.join(B.dir, 'data/farhold.db') });
+        dbB.db.prepare(`INSERT INTO federation_nodes (id, node_name, base_url, public_key, status, created_at)
+                        VALUES (?, ?, ?, ?, 'active', ?)`)
+          .run('fed-rogue', rogueName, `http://${rogueName}`, evil.publicKey, new Date().toISOString());
+        const aliceStub = dbB.db.prepare(
+          'SELECT id FROM users WHERE is_cross_port = 1 AND home_node = ?').get(nodeA);
+        dbB.db.close();
+        assert.ok(aliceStub, 'precondition: Alice already has a stub on B');
+
+        const initiate = await call(B, 'POST', '/api/cross-port/initiate', {
+          body: { homeServerUrl: `http://${rogueName}` },
+        });
+        assert.equal(initiate.status, 200, JSON.stringify(initiate.body));
+        const nonce = new URL(initiate.body.redirectUrl).searchParams.get('nonce');
+
+        const stolen = await call(B, 'POST', '/api/cross-port/session', {
+          body: { code: 'anything', state: nonce, homeServerUrl: `http://${rogueName}` },
+        });
+
+        assert.notEqual(stolen.status, 200,
+          'a peer claiming another peer\'s namespace must never get a session');
+        assert.equal(stolen.status, 403);
+
+        // And nothing was created or rebound under the victim's identity.
+        const dbAfter = new DatabaseSQLite({ dbPath: path.join(B.dir, 'data/farhold.db') });
+        const stubs = dbAfter.db.prepare(
+          'SELECT id, home_node FROM users WHERE is_cross_port = 1').all();
+        dbAfter.db.close();
+        assert.equal(stubs.filter(u => u.home_node === nodeA).length, 1,
+          'Alice still has exactly one identity, and it belongs to her node');
+        assert.ok(!stubs.some(u => u.home_node === rogueName),
+          'and the rogue peer did not acquire one by the attempt');
+      } finally {
+        await new Promise(r => rogue.close(r));
+      }
     });
 
     await t.test('suspending her home node withdraws her Community access', async () => {

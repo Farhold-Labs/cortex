@@ -111,22 +111,54 @@ test('Communities Phase 1 domain model', async (t) => {
       assert.equal(db.getMemberPriority(community.id, users.admin.id), 200, 'highest role wins');
     });
 
-    await t.test('a removed member keeps their role rows but loses every power', () => {
-      // The rows survive so that rejoining restores standing. Reading them as
-      // live powers would make "removed" mean nothing at all.
+    await t.test('CORTEX-COMM-005: removal revokes the grants, not just the powers', () => {
+      // This test used to assert the opposite — that the role rows survived
+      // removal so a rejoin could restore them — and an audit showed why that
+      // was wrong: a removed admin could walk back in through an ordinary join
+      // and be an admin again, with nobody granting them anything.
+      //
+      // Removal that the removed person can undo is not removal.
       db.setCommunityMemberState(community.id, users.member.id, 'removed');
-      assert.ok(db.getMemberRoles(community.id, users.member.id).length > 0, 'grants survive');
-      assert.equal(db.getMemberCapabilities(community.id, users.member.id).size, 0, 'powers do not');
+      assert.equal(db.getMemberRoles(community.id, users.member.id).length, 0, 'the grants are gone');
+      assert.equal(db.getMemberCapabilities(community.id, users.member.id).size, 0);
       assert.equal(db.getMemberPriority(community.id, users.member.id), -1);
+
+      // What was taken is recorded where the member cannot restore it from.
+      assert.ok(
+        db.listCommunityAudit(community.id).some(e => e.action === 'role.revoked_on_exit'),
+        'and the audit records what was revoked');
     });
 
-    await t.test('rejoining reuses the membership row and restores roles', () => {
+    await t.test('rejoining after removal confers nothing on its own', () => {
       const before = db.getCommunityMembership(community.id, users.member.id);
       db.addCommunityMember(community.id, users.member.id, { state: 'active' });
       const after = db.getCommunityMembership(community.id, users.member.id);
-      assert.equal(after.id, before.id, 'a new row would orphan the role grants');
+      assert.equal(after.id, before.id, 'the row is still reused, so history survives');
       assert.ok(after.version > before.version);
+      assert.equal(db.getMemberCapabilities(community.id, users.member.id).size, 0,
+        'but coming back is not a grant');
+
+      // Whoever readmitted them decides what they get, which is the point.
+      db.grantCommunityRole(after.id, db.getCommunityRole(community.id, 'member').id);
       assert.ok(db.getMemberCapabilities(community.id, users.member.id).has(CAPABILITIES.CREATE_WAVE));
+    });
+
+    await t.test('leaving voluntarily keeps the rank you set down', () => {
+      // Removal and leaving were one code path and one behaviour, which is how
+      // the unsafe half went unnoticed. They are now distinct: leaving is the
+      // member's own decision, so coming back to what you had is reasonable.
+      const membershipId = db.getCommunityMembership(community.id, users.member.id).id;
+      db.grantCommunityRole(membershipId, db.getCommunityRole(community.id, 'moderator').id);
+      db.setCommunityMemberState(community.id, users.member.id, 'left');
+      assert.ok(db.getMemberRoles(community.id, users.member.id).length > 0, 'grants kept');
+      assert.equal(db.getMemberCapabilities(community.id, users.member.id).size, 0,
+        'though they confer nothing while away');
+
+      db.addCommunityMember(community.id, users.member.id, { state: 'active' });
+      assert.ok(db.getMemberCapabilities(community.id, users.member.id).has(CAPABILITIES.MODERATE_CONTENT));
+
+      // Leave the fixture as the later tests expect it.
+      db.revokeCommunityRole(membershipId, db.getCommunityRole(community.id, 'moderator').id);
     });
 
     await t.test('a built-in role cannot be deleted, a custom one can', () => {
@@ -313,8 +345,15 @@ test('Communities Phase 1 domain model', async (t) => {
         targetType: 'channel', targetId: channel.id, metadata: { name: 'Productions' },
       });
       const entries = db.listCommunityAudit(community.id);
-      assert.equal(entries.length, 1);
-      assert.equal(entries[0].action, 'channel.create');
+      // Assert what the log CONTAINS, not how much. Counting entries broke the
+      // moment revocation started writing its own, which is exactly the sort of
+      // brittleness that makes a real regression look like a passing suite
+      // needing its number bumped.
+      assert.ok(entries.some(e => e.action === 'channel.create'));
+      assert.ok(entries.every(e => e.community_id === community.id), 'scoped to this community');
+      assert.ok(
+        entries.every(e => !JSON.stringify(e.metadata || '').match(/password|token|secret/i)),
+        'and never carries a secret');
     });
   } finally {
     cleanup();

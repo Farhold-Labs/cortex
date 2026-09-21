@@ -13582,10 +13582,45 @@ export class DatabaseSQLite {
    */
   setCommunityMemberState(communityId, userId, state) {
     const now = new Date().toISOString();
-    this.db.prepare(`
-      UPDATE community_memberships SET state = ?, updated_at = ?, version = version + 1
-      WHERE community_id = ? AND user_id = ?
-    `).run(state, now, communityId, userId);
+    const membership = this.getCommunityMembership(communityId, userId);
+
+    // CORTEX-COMM-005 — being removed has to mean something after the fact.
+    //
+    // Role grants used to survive every exit, so a removed admin could walk
+    // back in through an ordinary join and be an admin again without anyone
+    // granting them anything. Removal that a person can undo by themselves is
+    // not removal.
+    //
+    // REMOVED and BANNED therefore revoke the grants; LEFT keeps them, because
+    // leaving is the member's own decision and coming back to the rank you set
+    // down is reasonable. The two were one code path and one behaviour before,
+    // which is how the unsafe half went unnoticed.
+    const revoking = (state === 'removed' || state === 'banned');
+    const heldRoles = revoking && membership
+      ? this.getMemberRoles(communityId, userId).map(r => r.name)
+      : [];
+
+    const tx = this.db.transaction(() => {
+      this.db.prepare(`
+        UPDATE community_memberships SET state = ?, updated_at = ?, version = version + 1
+        WHERE community_id = ? AND user_id = ?
+      `).run(state, now, communityId, userId);
+
+      if (revoking && membership) {
+        this.db.prepare('DELETE FROM community_membership_roles WHERE membership_id = ?')
+          .run(membership.id);
+        // The history is not lost, it moves somewhere a member cannot restore
+        // it from: the audit log records exactly what was taken away.
+        if (heldRoles.length) {
+          this.logCommunityAudit(communityId, {
+            actorId: null, action: 'role.revoked_on_exit',
+            targetType: 'user', targetId: userId,
+            metadata: { state, roles: heldRoles },
+          });
+        }
+      }
+    });
+    tx();
     return this.getCommunityMembership(communityId, userId);
   }
 
