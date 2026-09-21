@@ -29,6 +29,7 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   const [joinToken, setJoinToken] = useState('');
   const [creating, setCreating] = useState(false);
   const [browse, setBrowse] = useState(null);      // null = not looked yet
+  const joinInputRef = React.useRef(null);
   const [search, setSearch] = useState('');
 
   const loadMine = useCallback(async () => {
@@ -54,6 +55,25 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   }, [fetchAPI, showToast]);
 
   useEffect(() => { if (initialCommunityId) openCommunity(initialCommunityId); }, [initialCommunityId, openCommunity]);
+
+  /**
+   * Open on the thing the caller asked for.
+   *
+   * The header's + means "make one", and its menu items name what they do — so
+   * arriving on a generic panel and having to find the right control would make
+   * both of those half-promises.
+   */
+  useEffect(() => {
+    if (focus === 'create') setCreating(true);
+    if (focus === 'browse') loadBrowse();
+    if (focus === 'join') {
+      const timer = setTimeout(() => {
+        try { joinInputRef.current?.focus(); } catch { /* nothing to focus */ }
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
 
   const create = async () => {
     const name = newName.trim();
@@ -193,7 +213,8 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
               )}
 
               <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.4rem', alignItems: 'flex-start' }}>
-                <input value={joinToken} onChange={e => setJoinToken(e.target.value)}
+                <input ref={joinInputRef} value={joinToken} onChange={e => setJoinToken(e.target.value)}
+                       onKeyDown={e => { if (e.key === 'Enter') join(); }}
                        placeholder="Paste an invite code" style={{ ...input, marginBottom: 0, flex: 1 }} />
                 <button onClick={join} style={btn(false)}>Join</button>
               </div>

@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.102.0] - 2026-09-21
+
+### Changed
+
+- **The wave list is split into two labelled sections: COMMUNITIES, then WAVES.** A single `WAVES` header used to sit above everything, so the communities you belong to appeared under a heading that did not describe them — the list read as though communities were a kind of wave.
+  - Each header carries the same pair: **`+` creates, `⋮` manages.** Keeping creation out of the menu is what makes that readable at a glance; a menu whose first item is "New…" trains people to open it for everything, and then the menu is where creating lives after all.
+  - **COMMUNITIES**: `+` opens the panel with the create form already showing; `⋮` offers Manage Communities, Browse Public (which searches as it opens) and Join With A Code (which focuses the code field). Each menu item lands on the thing it names rather than on a generic panel with the control somewhere in it.
+  - **WAVES**: `+` opens the new-wave dialogue; `⋮` keeps Manage Categories, Ghost Protocol and Show Archived. The `⚙ Communities` entry is gone from here, because communities now have a header of their own.
+  - When Communities is switched off for the instance, the COMMUNITIES header is not rendered at all; when it is on but you belong to none, the section says so rather than sitting empty.
+
 ## [2.101.0] - 2026-09-18
 
 ### Added
