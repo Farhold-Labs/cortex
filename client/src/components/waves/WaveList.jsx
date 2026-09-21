@@ -196,7 +196,7 @@ const WaveRowMenu = ({ wave, categories = [], channels = [], isOpen, onToggle, o
   </div>
 );
 
-const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, onManageCategories, onNewWaveIn, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
+const WaveCategoryList = ({ show = 'all', waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, onManageCategories, onNewWaveIn, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
@@ -445,7 +445,7 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
   return (
     <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto' }}>
       {/* Pinned Section */}
-      {groupedWaves.pinned.length > 0 && (
+      {show !== 'communities' && groupedWaves.pinned.length > 0 && (
         <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
             title="PINNED"
@@ -468,7 +468,7 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
           channel name, and in a narrow sidebar the two ran into each other and
           neither could be read. Nesting says the same thing legibly, and gives
           somewhere to collapse a whole community you are not using today. */}
-      {communityGroups.map(group => {
+      {show !== 'waves' && communityGroups.map(group => {
         const groupWaves = group.channels.flatMap(ch => groupedWaves.byChannel[ch.id] || []);
         return (
           <div key={group.communityId} style={{ marginBottom: '1px' }}>
@@ -536,7 +536,7 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
       })}
 
       {/* Category Sections */}
-      {categories.map(category => {
+      {show !== 'communities' && categories.map(category => {
         const categoryWaves = groupedWaves.categorized[category.id] || [];
         const unreadCount = getGroupUnreadCount(categoryWaves);
 
@@ -577,7 +577,7 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
       })}
 
       {/* Uncategorized Section */}
-      {groupedWaves.uncategorized.length > 0 && (
+      {show !== 'communities' && groupedWaves.uncategorized.length > 0 && (
         <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
             title="UNCATEGORIZED"
@@ -596,11 +596,78 @@ const WaveCategoryList = ({ waves, categories, channels = [], selectedWave, onSe
       )}
 
       {/* Empty State */}
-      {waves.length === 0 && (
+      {show !== 'communities' && waves.length === 0 && (
         <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
           {EMPTY.noWavesCreate}
         </div>
       )}
+    </div>
+  );
+};
+
+
+/**
+ * A top-level section header for the list: COMMUNITIES, then WAVES.
+ *
+ * Both carry the same pair of affordances, and they mean different things on
+ * purpose — **+ creates, ⋮ manages**. Keeping creation out of the menu is what
+ * makes that readable at a glance; a menu whose first item is "New…" trains
+ * people to open it for everything.
+ */
+const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, menuTitle, isMobile }) => {
+  const [open, setOpen] = React.useState(false);
+  const iconButton = (active) => ({
+    padding: isMobile ? '8px 10px' : '4px 7px',
+    background: active ? 'var(--bg-hover)' : 'transparent',
+    border: `1px solid ${active ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
+    color: active ? 'var(--accent-amber)' : 'var(--text-dim)',
+    cursor: 'pointer', fontFamily: 'monospace',
+    fontSize: isMobile ? '1rem' : '0.9rem', lineHeight: 1,
+  });
+
+  return (
+    <div style={{
+      padding: isMobile ? '10px 12px' : '8px 12px',
+      borderBottom: '1px solid var(--border-subtle)',
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px',
+    }}>
+      <GlowText color={titleColor || 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{title}</GlowText>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        {onCreate && (
+          <button onClick={onCreate} title={createTitle} style={iconButton(false)}>+</button>
+        )}
+        {menu && menu.length > 0 && (
+          <div style={{ position: 'relative' }}>
+            <button onClick={() => setOpen(o => !o)} title={menuTitle} style={iconButton(open)}>⋮</button>
+            {open && (
+              <>
+                <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0, marginTop: '4px',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
+                  zIndex: 100, minWidth: '190px',
+                }}>
+                  {menu.map((item, i) => (
+                    <button
+                      key={item.label}
+                      onClick={() => { setOpen(false); item.onClick(); }}
+                      style={{
+                        display: 'block', width: '100%', padding: '9px 12px',
+                        background: 'transparent', border: 'none',
+                        borderBottom: i < menu.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                        color: item.color || 'var(--text-primary)', cursor: 'pointer', textAlign: 'left',
+                        fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.75rem', whiteSpace: 'nowrap',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >{item.label}</button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -616,7 +683,6 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
     { enabled: isMobile && !!onRefresh }
   );
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
-  const [showWaveMenu, setShowWaveMenu] = React.useState(false);
   // v2.84.1 — the uncategorised list needs its own row-menu state; the
   // categorised list keeps its copy inside WaveCategoryList.
   const [rowMenuOpen, setRowMenuOpen] = React.useState(null);
@@ -627,85 +693,74 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
     display: 'flex', flexDirection: 'column', height: '100%',
     borderBottom: isMobile ? '1px solid var(--border-subtle)' : 'none',
   }}>
-    {showWaveMenu && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99 }} onClick={() => setShowWaveMenu(false)} />}
-    <div style={{ padding: isMobile ? '10px 12px' : '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <GlowText color={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'} size={isMobile ? '1rem' : '0.9rem'}>{ghostMode ? GHOST_PROTOCOL.modeActive : `${T.WAVES}`}</GlowText>
-      <div style={{ position: 'relative' }}>
-        <button
-          onClick={() => setShowWaveMenu(!showWaveMenu)}
-          title={`${T.Wave} options`}
-          style={{
-            padding: isMobile ? '10px 12px' : '5px 8px',
-            background: showWaveMenu ? 'var(--bg-hover)' : 'transparent',
-            border: `1px solid ${showWaveMenu ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
-            color: ghostMode ? 'var(--accent-orange)' : (showWaveMenu ? 'var(--accent-amber)' : 'var(--text-dim)'),
-            cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '1.1rem' : '1rem', lineHeight: 1,
-          }}
-        >⋮</button>
-        {showWaveMenu && (
-          <div style={{
-            position: 'absolute', top: '100%', right: 0, marginTop: '4px',
-            background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', zIndex: 100, minWidth: '170px',
-          }}>
-            {[
-              { label: `+ New ${T.Wave}`, color: 'var(--accent-amber)', action: onNewWave },
-              // v2.84.2 — never gate this on already having a category. It was
-              // `categories.length > 0 &&`, so someone with none had no way to
-              // create their first: the only entry point to the category manager
-              // was hidden until they already had one. The manager itself has
-              // always handled the empty case — it opens on a create form.
-              // NB: the key is `action`, not `onClick` — the renderer below calls
-              // `item.action?.()`, so an `onClick` here is silently inert. It was,
-              // until a browser caught it.
-              ...(communitiesEnabled ? [{
-                label: '⚙ Communities',
-                color: 'var(--text-primary)',
-                action: onManageCommunities,
-              }] : []),
-              { label: categories.length > 0 ? '⚙ Manage Categories' : '⚙ Create Category',
-                color: 'var(--text-primary)', action: onManageCategories },
-              { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol', color: ghostMode ? 'var(--accent-orange)' : 'var(--text-primary)', action: onToggleGhostProtocol },
-              { label: showArchived ? '📬 Show Active' : '📦 Show Archived', color: showArchived ? 'var(--accent-teal)' : 'var(--text-primary)', action: onToggleArchived },
-            ].filter(Boolean).map((item, i, arr) => (
-              <button
-                key={item.label}
-                onClick={() => { setShowWaveMenu(false); item.action?.(); }}
-                style={{
-                  display: 'block', width: '100%', padding: '9px 12px',
-                  background: 'transparent', border: 'none',
-                  borderBottom: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                  color: item.color, cursor: 'pointer', textAlign: 'left',
-                  fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.75rem',
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-              >{item.label}</button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-    {isMobile && (pullDistance > 0 || refreshing) && (
-      <div
-        aria-hidden="true"
-        style={{
-          // Fixed height for the same reason as the wave's indicator: a height
-          // driven by pullDistance clips its own label mid-pull.
-          height: 26, flexShrink: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: 'var(--accent-green)', fontFamily: 'monospace', fontSize: '0.62rem',
-          letterSpacing: '0.1em', whiteSpace: 'nowrap',
-          opacity: refreshing ? 1 : Math.max(0.45, Math.min(pullDistance / 60, 1)),
-        }}
-      >
-        {refreshing ? '⟳ REFRESHING…' : (pullDistance >= 60 ? '↻ RELEASE TO REFRESH' : '↓ PULL TO REFRESH')}
-      </div>
+    {/* Two labelled sections, in the order they are read: the communities you
+        belong to, then your own waves. Previously one WAVES header sat above
+        both, so the communities appeared under a heading that did not describe
+        them. Each header carries + to create and ⋮ to manage. */}
+    {communitiesEnabled && (
+      <ListSectionHeader
+        title="COMMUNITIES"
+        isMobile={isMobile}
+        onCreate={onManageCommunities ? () => onManageCommunities('create') : undefined}
+        createTitle="New community"
+        menuTitle="Community options"
+        menu={onManageCommunities ? [
+          { label: '⚙ Manage Communities', onClick: () => onManageCommunities() },
+          { label: '🔍 Browse Public', onClick: () => onManageCommunities('browse') },
+          { label: '🔗 Join With A Code', onClick: () => onManageCommunities('join') },
+        ] : []}
+      />
     )}
-    {/* Grouped whenever there is anything to group BY. Previously this was
-        categories alone, which would have hidden every community channel from
-        the many people who have never made a category. */}
+
+    {communitiesEnabled && (
+      channels.length > 0 ? (
+        <WaveCategoryList
+          show="communities"
+          waves={waves}
+          categories={categories}
+          channels={channels}
+          selectedWave={selectedWave}
+          onSelectWave={onSelectWave}
+          onWaveMove={onWaveMove}
+          onWaveFile={onWaveFile}
+          onWavePin={onWavePin}
+          onWaveMute={onWaveMute}
+          onManageCommunity={onManageCommunity}
+          onManageCategories={onManageCategories}
+          onNewWaveIn={onNewWaveIn}
+          isMobile={isMobile}
+          waveNotifications={waveNotifications}
+          activeCalls={activeCalls}
+          density={density}
+        />
+      ) : (
+        <div style={{ padding: '10px 14px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+          You are not in any communities yet.
+        </div>
+      )
+    )}
+
+    <ListSectionHeader
+      title={ghostMode ? GHOST_PROTOCOL.modeActive : `${T.WAVES}`}
+      titleColor={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'}
+      isMobile={isMobile}
+      onCreate={onNewWave}
+      createTitle={`New ${T.wave}`}
+      menuTitle={`${T.Wave} options`}
+      menu={[
+        // Creation lives on the + beside this menu, so the menu is only for
+        // managing. "New…" as a menu item would undo that distinction.
+        { label: categories.length > 0 ? '⚙ Manage Categories' : '⚙ Create Category', onClick: onManageCategories },
+        { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol',
+          color: ghostMode ? 'var(--accent-orange)' : undefined, onClick: onToggleGhostProtocol },
+        { label: showArchived ? '📬 Show Active' : '📦 Show Archived',
+          color: showArchived ? 'var(--accent-teal)' : undefined, onClick: onToggleArchived },
+      ].filter(item => item.onClick)}
+    />
+
     {(categories.length > 0 || channels.length > 0) ? (
       <WaveCategoryList
+        show="waves"
         scrollRef={listScrollRef}
         waves={waves}
         categories={categories}
