@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { T } from '../../config/terminology.js';
 import CommunitySettingsPanel from './CommunitySettingsPanel.jsx';
+import { useModalDismiss } from '../../hooks/useModalDismiss.js';
 
 /**
  * Managing communities (v2.99.0, Phase 6 — rebuilt).
@@ -30,6 +31,18 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   const [creating, setCreating] = useState(false);
   const [browse, setBrowse] = useState(null);      // null = not looked yet
   const joinInputRef = React.useRef(null);
+
+  /**
+   * What a stray backdrop click would cost.
+   *
+   * An OPEN CREATE FORM counts, even with nothing typed in it yet. Opening it
+   * is already an intention, and losing the form because the pointer landed an
+   * inch wide is the annoyance being fixed — not merely losing the characters.
+   */
+  const hasUnsavedInput = () =>
+    Boolean(creating || newName.trim() || joinToken.trim() || search.trim());
+
+  const { backdropProps, bumped } = useModalDismiss({ onClose, hasUnsavedInput });
   const [search, setSearch] = useState('');
 
   const loadMine = useCallback(async () => {
@@ -142,14 +155,22 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
     }
   };
 
+  // Matches the other modals: the same dim, the same solid surface.
+  //
+  // This panel used `--bg-secondary`, which is declared in exactly ONE of the
+  // sixteen themes — so on every other theme the variable was unset and the
+  // panel had no background at all. Only the overlay's dimming stood between
+  // the text behind it and the text in front, which is why it read as a
+  // deliberate transparency effect rather than as a missing colour.
   const overlay = {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem',
   };
   const sheet = {
-    background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)',
+    background: 'var(--bg-elevated)', border: '1px solid var(--accent-amber)40',
     borderRadius: 4, padding: '1rem', width: 'min(680px, 100%)',
     maxHeight: '85vh', overflowY: 'auto',
+    boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
   };
   const btn = (active) => ({
     padding: '0.45rem 0.6rem', marginRight: '0.35rem', marginBottom: '0.35rem',
@@ -161,8 +182,8 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
   const input = { width: '100%', padding: '0.45rem', fontFamily: 'inherit', marginBottom: '0.4rem' };
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={sheet} onClick={e => e.stopPropagation()}>
+    <div style={overlay} {...backdropProps}>
+      <div style={{ ...sheet, ...(bumped ? { borderColor: 'var(--accent-amber)' } : {}) }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', letterSpacing: '0.1em' }}>
             COMMUNITIES

@@ -179,7 +179,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
     borderRadius: 3,
     padding: '0.6rem',
     marginTop: '0.6rem',
-    background: 'var(--bg-primary)',
+    background: 'var(--bg-surface)',
   };
   const label = { fontSize: '0.7rem', letterSpacing: '0.08em', color: 'var(--accent-amber)' };
   const input = { width: '100%', padding: '0.4rem', fontFamily: 'inherit', marginTop: '0.3rem' };
@@ -214,7 +214,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
                     Delete #{ch.name}? The {T.waves} in it are not deleted — they go back to
                     being ordinary {T.waves}.
                   </div>
-                  <button onClick={() => deleteChannel(ch)} style={{ ...action, marginTop: 0, color: 'var(--accent-orange)' }}>
+                  <button onClick={() => deleteChannel(ch)} style={{ ...action, marginTop: 0, color: 'var(--accent-orange, var(--accent-amber))' }}>
                     Yes, delete the channel
                   </button>
                   <button onClick={() => setConfirmDelete(null)} style={{ ...action, marginTop: 0 }}>Keep it</button>
@@ -266,7 +266,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
             <div style={{ marginTop: '0.4rem' }}>
               <code style={{
                 display: 'block', wordBreak: 'break-all', fontSize: '0.75rem',
-                background: 'var(--bg-secondary)', padding: '0.4rem', border: '1px solid var(--border-primary)',
+                background: 'var(--bg-base)', padding: '0.4rem', border: '1px solid var(--border-primary)',
               }}>{mintedToken}</code>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
                 Copy this now — it is shown once and cannot be retrieved later.
