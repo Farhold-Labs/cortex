@@ -241,6 +241,64 @@ test('Communities API', async (t) => {
       assert.equal(res.status, 403, 'admin does not hold community.delete, so cannot confer it');
     });
 
+    await t.test('CORTEX-COMM-004: an admin cannot raise a role above the owner', async () => {
+      // The audit's scenario, end to end: mint a harmless role, take it, then
+      // lift it over the owner and use existing admin powers to remove them.
+      const mine = await api('POST', `/api/communities/${community.id}/roles`, {
+        token: admin.token, body: { name: 'stepping-stone', priority: 10, permissions: [] },
+      });
+      assert.equal(mine.status, 201, JSON.stringify(mine.body));
+
+      const raised = await api('PATCH', `/api/communities/${community.id}/roles/${mine.body.role.id}`, {
+        token: admin.token, body: { priority: 1000 },
+      });
+      assert.equal(raised.status, 403, 'raising a role above the owner must be refused');
+
+      // And the write must not have happened anyway.
+      const roles = (await api('GET', `/api/communities/${community.id}/roles`, { token: admin.token })).body.roles;
+      assert.equal(roles.find(r => r.id === mine.body.role.id).priority, 10,
+        'a refused edit leaves the priority alone');
+
+      // So the owner is still out of reach.
+      assert.equal((await api('DELETE', `/api/communities/${community.id}/members/${owner.id}`,
+        { token: admin.token })).status, 403, 'and the owner cannot be removed');
+    });
+
+    await t.test('CORTEX-COMM-005: a removed admin does not rejoin as an admin', async () => {
+      const pub = (await api('POST', '/api/communities', {
+        token: owner.token, body: { name: 'Revolving', slug: 'revolving-door', visibility: 'public' },
+      })).body.community;
+
+      const ex = await makeUser('exadmin');
+      await api('POST', `/api/communities/${pub.id}/members`, { token: owner.token, body: { userId: ex.id } });
+      const adminRole = (await api('GET', `/api/communities/${pub.id}/roles`, { token: owner.token }))
+        .body.roles.find(r => r.name === 'admin');
+      await api('PUT', `/api/communities/${pub.id}/members/${ex.id}/roles/${adminRole.id}`, { token: owner.token });
+      assert.ok((await api('GET', `/api/communities/${pub.id}`, { token: ex.token }))
+        .body.capabilities.includes('community.manage'), 'precondition: they are an admin');
+
+      assert.equal((await api('DELETE', `/api/communities/${pub.id}/members/${ex.id}`,
+        { token: owner.token })).status, 200);
+
+      // The community is public, so they can walk straight back in.
+      assert.equal((await api('POST', `/api/communities/${pub.id}/join`, { token: ex.token })).status, 200);
+
+      const after = await api('GET', `/api/communities/${pub.id}`, { token: ex.token });
+      assert.ok(!after.body.capabilities.includes('community.manage'),
+        'but they come back as an ordinary member, not as staff');
+      assert.ok(!after.body.capabilities.includes('member.ban'));
+    });
+
+    await t.test('CORTEX-COMM-005: the last owner cannot be removed or banned', async () => {
+      // Rank alone stopped being enough the moment a priority bug could let
+      // somebody outrank the owner, so the invariant is checked directly.
+      assert.equal((await api('DELETE', `/api/communities/${community.id}/members/${owner.id}`,
+        { token: owner.token })).status, 403, 'not even by themselves');
+      assert.equal((await api('POST', `/api/communities/${community.id}/bans`, {
+        token: owner.token, body: { userId: owner.id },
+      })).status, 403);
+    });
+
     await t.test('a moderator cannot remove an admin', async () => {
       const res = await api('DELETE', `/api/communities/${community.id}/members/${admin.id}`, {
         token: mod.token,

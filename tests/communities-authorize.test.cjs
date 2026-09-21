@@ -96,8 +96,9 @@ test('Community authorization evaluator', async (t) => {
     });
 
     await t.test('a ban outranks a role that was never revoked', () => {
-      // The role grant survives a ban by design (rejoining restores standing),
-      // so the ban has to be checked in its own right or it means nothing.
+      // A ban now revokes the grants too (CORTEX-COMM-005), but the ban check
+      // must still stand on its own: it runs before membership and capability
+      // are even consulted, so it holds even if someone re-grants the role.
       const mid = join(users.banned, 'admin');
       assert.ok(authorize(db, local(users.banned.id), community.id, CAPABILITIES.MANAGE_COMMUNITY).allowed,
         'precondition: admin powers before the ban');
@@ -327,6 +328,36 @@ test('Community authorization evaluator', async (t) => {
         'a role above the actor is not editable by them');
     });
 
+    await t.test('CORTEX-COMM-004: a role cannot be RAISED above the actor', () => {
+      // The old test here only ever edited an already-higher role, so it never
+      // tried the direction the attack uses: take a low role you already hold
+      // and lift it above the owner. The guard never saw the proposed priority.
+      const lowly = db.createCommunityRole(community.id, {
+        name: 'stepping-stone', priority: 10, permissions: [CAPABILITIES.VIEW_MEMBERS],
+      });
+      const adminPriority = db.getMemberPriority(community.id, users.admin.id);
+
+      assert.equal(
+        canEditRole(db, users.admin.id, community.id, lowly, { priority: 1000 }).allowed,
+        false, 'above the owner');
+      assert.equal(
+        canEditRole(db, users.admin.id, community.id, lowly, { priority: adminPriority }).allowed,
+        false, 'equal to the actor is still an escape — it stops them being actionable');
+      assert.equal(
+        canEditRole(db, users.admin.id, community.id, lowly, { priority: adminPriority + 1 }).allowed,
+        false, 'one above the actor');
+      assert.ok(
+        canEditRole(db, users.admin.id, community.id, lowly, { priority: adminPriority - 1 }).allowed,
+        'and a genuine edit below them still works');
+
+      // Nonsense priorities are refused rather than coerced.
+      for (const priority of ['1000', 1.5, Infinity, NaN, {}]) {
+        assert.equal(
+          canEditRole(db, users.admin.id, community.id, lowly, { priority }).allowed,
+          false, `priority ${JSON.stringify(priority)} must be refused`);
+      }
+    });
+
     await t.test('A-3: managed roles are not editable, including by the owner', () => {
       for (const name of ['owner', 'admin', 'moderator', 'member']) {
         const role = db.getCommunityRole(community.id, name);
@@ -339,9 +370,9 @@ test('Community authorization evaluator', async (t) => {
       const custom = db.createCommunityRole(community.id, {
         name: 'stagehand', priority: 50, permissions: [CAPABILITIES.VIEW_MEMBERS],
       });
-      assert.ok(canEditRole(db, users.admin.id, community.id, custom, [CAPABILITIES.MANAGE_EVENTS]).allowed);
+      assert.ok(canEditRole(db, users.admin.id, community.id, custom, { permissions: [CAPABILITIES.MANAGE_EVENTS] }).allowed);
       assert.equal(
-        canEditRole(db, users.admin.id, community.id, custom, [CAPABILITIES.DELETE_COMMUNITY]).reason,
+        canEditRole(db, users.admin.id, community.id, custom, { permissions: [CAPABILITIES.DELETE_COMMUNITY] }).reason,
         REASON.CANNOT_GRANT_UNHELD);
     });
 

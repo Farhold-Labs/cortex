@@ -317,7 +317,7 @@ export function canGrantRole(db, actorUserId, communityId, role) {
  * especially, since an owner who revokes their own management capability has no
  * route back that does not involve a node admin.
  */
-export function canEditRole(db, actorUserId, communityId, role, nextPermissions = null) {
+export function canEditRole(db, actorUserId, communityId, role, changes = {}) {
   if (!role) return deny(REASON.WRONG_COMMUNITY, 'unknown role');
   if (role.community_id !== communityId) return deny(REASON.WRONG_COMMUNITY);
   if (role.managed) return deny(REASON.MISSING_CAPABILITY, 'role is managed');
@@ -328,8 +328,23 @@ export function canEditRole(db, actorUserId, communityId, role, nextPermissions 
   const actorPriority = db.getMemberPriority(communityId, actorUserId);
   if (Number(role.priority) >= actorPriority) return deny(REASON.OUTRANKED, 'role priority');
 
-  if (nextPermissions) {
-    const unheld = parsePermissions(nextPermissions).filter(cap => !held.has(cap));
+  // CORTEX-COMM-004 — judge the role it is about to BECOME, not only the one
+  // it is now.
+  //
+  // This checked the role's current priority and its proposed permissions, and
+  // never saw the proposed priority at all. So an admin could take a harmless
+  // role they already held, raise it to 1000, and outrank the owner — their
+  // existing admin capabilities then supplying the remove and ban powers to
+  // act on them. The escalation needed no capability nobody had granted; it
+  // needed only a number the guard never looked at.
+  if (changes.priority !== undefined && changes.priority !== null) {
+    const nextPriority = Number(changes.priority);
+    if (!Number.isInteger(nextPriority)) return deny(REASON.OUTRANKED, 'priority must be a whole number');
+    if (nextPriority >= actorPriority) return deny(REASON.OUTRANKED, 'proposed role priority');
+  }
+
+  if (changes.permissions) {
+    const unheld = parsePermissions(changes.permissions).filter(cap => !held.has(cap));
     if (unheld.length) return deny(REASON.CANNOT_GRANT_UNHELD, unheld.join(','));
   }
   return allow();
