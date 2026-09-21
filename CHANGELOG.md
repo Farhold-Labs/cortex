@@ -5,6 +5,14 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.103.0] - 2026-09-21
+
+### Added
+
+- **COMMUNITIES and WAVES fold away too.** Both top-level sections are now collapsible, which makes every grouping in the list behave the same way — community, channel, category and now the two headings above them. Click the title to fold, and the chevron shows which way it is.
+  - Collapse state is remembered per viewer, like the groups inside it. Which sections somebody folds is local to the browser they are sitting at, so an unreadable store simply means everything is open rather than an error.
+  - The `+` and `⋮` beside a heading stop propagation: acting on a section never also folds it.
+
 ## [2.102.1] - 2026-09-21
 
 ### Fixed
