@@ -424,10 +424,11 @@ removal and ban, so rank is no longer the only thing protecting the owner.
 
 | Finding | Status |
 | --- | --- |
-| 002 — approval codes can be redirected | **Open.** Cross-port authorization-code flow needs registered callbacks and browser/audience binding. Not a Communities-only change. |
+| 002 — approval codes can be redirected | **Redirect FIXED v2.103.2** — the callback is now derived from the peer's registered base URL and a supplied one is ignored. The deeper hardening the audit asks for (binding the code to the initiating browser, audience and nonce) is a redesign of this flow and remains open. |
 | 006, 007 — unjoined peers inject into origin waves; remote mutations unscoped | **Open, inherited.** Wave federation, affecting every wave on a node. |
-| 008 — WebSocket auth bypasses session revocation | **Open, inherited.** Node-wide. |
-| 009, 010 — attachments unauthorised; active uploads execute in-origin | **Open, inherited.** Node-wide upload policy. |
+| 008 — WebSocket auth bypasses session revocation | **FIXED v2.103.2.** The socket now calls the same `validateSession` the HTTP API does, so logout, password change, reuse detection and cross-port standing all reach the realtime layer. |
+| 010 — active uploads execute in-origin | **FIXED v2.103.2.** `nosniff`, a `default-src 'none'; sandbox` CSP, and anything outside the media allowlist served as `application/octet-stream` with `Content-Disposition: attachment`. Real images and video are unaffected. |
+| 009 — attachments served without authorization | **Open, inherited, and a design job.** The filesystem path carries no ownership, URLs are embedded in existing messages, the service worker caches them and native clients fetch them directly. Needs a decision between an ownership mapping and signed URLs before any code. |
 | 011–019 | **Open.** Restricted channels, invite role drift, resource ceilings, metadata leaks, account deletion, audit atomicity, validation, feature-off paths, channel containment. |
 | 020 — no Community event federation | **By design.** Single-host Communities with cross-port members; §2 decided this. |
 | 021 — ownership transfer incomplete | **Open**, and a product decision as much as a gap. |

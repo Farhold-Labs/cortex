@@ -4874,12 +4874,58 @@ app.use(express.json({ limit: '512kb' })); // Increased from 100kb to support fe
 app.use('/api/', apiLimiter);
 app.set('trust proxy', 1);
 
-// Serve uploaded files (avatars, etc.) with cross-origin headers for dev mode
+// Serve uploaded files (avatars, etc.) with cross-origin headers for dev mode.
+//
+// CORTEX-COMM-010 — an uploaded file must never become code running in this
+// application's origin.
+//
+// The upload filters accept images and audio/video only, but they judge the
+// mimetype the CLIENT declares, not the bytes. A file announced as image/png
+// and stored with an executable extension used to be served straight back by
+// express.static with a content type inferred from that extension — stored XSS
+// in the origin that holds everyone's session. That defeats every other
+// control in this file, which is why it is fixed ahead of findings with
+// scarier names.
+//
+// Three layers, none of which interfere with a legitimate image or video:
+//   * nosniff, so a browser cannot decide a file is HTML on its own;
+//   * a sandbox CSP, so even a page served from here executes nothing;
+//   * anything outside the media allowlist is sent as an opaque download
+//     rather than rendered.
+const RENDERABLE_UPLOAD_TYPES = new Set([
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif',
+  '.mp4', '.webm', '.ogg', '.ogv', '.mov', '.m4v',
+  '.mp3', '.m4a', '.wav', '.oga', '.opus',
+]);
+
 app.use('/uploads', (req, res, next) => {
   // Allow cross-origin access for images (needed when client runs on different port)
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // `sandbox` with no allow-* tokens: no scripts, no forms, no same-origin.
+  // An HTML or SVG file that reached this directory renders inert.
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+
+  const ext = path.extname((req.path || '').toLowerCase());
+  if (!RENDERABLE_UPLOAD_TYPES.has(ext)) {
+    // Not something we serve for display, so do not invite the browser to
+    // interpret it at all.
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment');
+  }
   next();
-}, express.static(UPLOADS_DIR));
+}, express.static(UPLOADS_DIR, {
+  // express.static would otherwise re-derive a content type from the
+  // extension and overwrite the octet-stream set above.
+  setHeaders: (res, filePath) => {
+    const ext = path.extname(filePath).toLowerCase();
+    if (!RENDERABLE_UPLOAD_TYPES.has(ext)) {
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'attachment');
+    }
+  },
+}));
 
 // ============ Auth Middleware ============
 function authenticateToken(req, res, next) {
@@ -14373,7 +14419,10 @@ app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
     if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
 
     const { guestNode, callbackUrl, nonce, requestId } = req.body;
-    if (!guestNode || !callbackUrl || !nonce || !requestId) {
+    // `callbackUrl` is no longer required: it is derived from the peer record
+    // below and ignored if supplied (CORTEX-COMM-002). Demanding a field we
+    // deliberately disregard would only mislead whoever writes the next client.
+    if (!guestNode || !nonce || !requestId) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
@@ -14391,7 +14440,50 @@ app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
     const code = crypto.randomBytes(32).toString('hex');
     db.createCrossPortCode({ code, userId: user.id, guestNode: sanitizeInput(guestNode), requestId, nonce });
 
-    const safeCallback = new URL(sanitizeInput(callbackUrl));
+    // CORTEX-COMM-002 — the code goes where the PEER lives, not where the
+    // request asks it to go.
+    //
+    // `callbackUrl` arrived from the browser and was used as given. An
+    // attacker could therefore send someone an approval link naming a genuinely
+    // trusted guest node — so the page said the reassuring thing — while
+    // pointing the callback at themselves, and collect the authorization code
+    // the victim had just approved. Checking that the NODE is trusted says
+    // nothing about where the code is being sent.
+    //
+    // The callback is now derived from the peer's registered base URL, and a
+    // supplied one is accepted only if it is the same origin. Note this closes
+    // the redirect; it is not the full authorization-code hardening the audit
+    // asks for — binding the code to the initiating browser, the audience and a
+    // nonce is a redesign of this flow and is tracked separately.
+    let safeCallback;
+    try {
+      // Derived, not accepted. The callback path is a constant of this
+      // protocol — the guest's own initiate handler builds
+      // `<its base url>/cross-port/callback` — so there is nothing the request
+      // needs to tell us, and anything it did tell us would be the attacker's
+      // input in the one field that decides where the code lands.
+      //
+      // Comparing a supplied URL against the peer record was the first
+      // attempt, and it broke real logins: a node's registered base URL and
+      // the base URL it builds its own links from are not guaranteed to be
+      // byte-identical. Deriving avoids that entirely and is the stronger of
+      // the two anyway.
+      safeCallback = new URL('/cross-port/callback', new URL(node.baseUrl).origin);
+    } catch {
+      return res.status(500).json({ error: 'That server has no usable callback address' });
+    }
+    if (callbackUrl) {
+      try {
+        const asked = new URL(sanitizeInput(callbackUrl));
+        if (asked.origin !== safeCallback.origin) {
+          // Not fatal — we are ignoring it regardless — but it is exactly the
+          // shape of the attack, so it should be visible in the log.
+          console.warn(
+            `[cross-port] approval for ${guestNode} asked to call back to ${asked.origin}; using ${safeCallback.origin}`
+          );
+        }
+      } catch { /* unparseable, and unused either way */ }
+    }
     safeCallback.searchParams.set('code', code);
     safeCallback.searchParams.set('state', nonce);
 
@@ -24037,6 +24129,27 @@ wss.on('connection', (ws, req) => {
       if (message.type === 'auth') {
         try {
           const decoded = jwt.verify(message.token, JWT_SECRET);
+
+          // CORTEX-COMM-008 — the socket asks the same questions the HTTP API
+          // does.
+          //
+          // This verified the signature and the account's moderation status
+          // and stopped there. A token revoked by logout, by password change,
+          // by refresh-token reuse detection, or by the cross-port standing
+          // checks added in v2.100.0 and v2.103.1 still opened a socket and
+          // kept receiving until the JWT expired on its own — up to an hour,
+          // and far longer for the legacy long-lived tokens still in
+          // circulation. Revocation that the realtime layer ignores is not
+          // revocation; it just takes the slow door.
+          const validation = validateSession(message.token);
+          if (!validation.valid) {
+            ws.send(JSON.stringify({
+              type: 'auth_error', error: validation.reason || 'Session ended', code: 'SESSION_REVOKED',
+            }));
+            ws.close(1008, 'Session revoked');
+            return;
+          }
+
           userId = decoded.userId;
           const user = db.findUserById(userId);
 
