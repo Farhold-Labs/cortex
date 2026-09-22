@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.103.2] - 2026-09-21
+
+### Security
+
+Three more audit findings, chosen for impact against effort rather than by severity label alone. All three regression tests were confirmed to **fail with their fix disabled**, so each catches its bug rather than passing for reasons of its own.
+
+- **An uploaded file can no longer run in this origin (CORTEX-COMM-010, High).** Upload filters judge the mimetype the *client declares*, not the bytes, and `express.static` then served the file back with a type inferred from its extension. A file announced as an image but holding markup was stored XSS in the origin that holds everyone's session — which defeats every other control in the application, including the ones added the same day. That is why it went first despite findings with scarier names. Three layers now: `X-Content-Type-Options: nosniff`, a `default-src 'none'; sandbox` CSP so even a page served from there executes nothing, and anything outside the media allowlist sent as `application/octet-stream` with `Content-Disposition: attachment`. Genuine images and video are untouched, which the test asserts explicitly — a fix here that broke every avatar would be its own outage.
+- **A revoked session can no longer open a socket (CORTEX-COMM-008, High).** The WebSocket `auth` handler verified the token's signature and the account's moderation status and stopped there. A token revoked by logout, password change, refresh-token reuse detection, or the cross-port standing checks added in v2.100.0 and v2.103.1 still opened a socket and kept receiving until the JWT expired on its own — up to an hour, and far longer for the legacy long-lived tokens still in circulation. Revocation the realtime layer ignores is not revocation; it just takes the slow door. The socket now calls the same `validateSession` the HTTP API does.
+- **Approval codes go to the peer, not to a supplied URL (CORTEX-COMM-002, High — the redirect half).** `callbackUrl` arrived from the browser and was used as given, so an attacker could send someone an approval link naming a genuinely trusted node — making the page say the reassuring thing — while pointing the callback at themselves and collecting the code the victim had just approved. Checking that the *node* is trusted says nothing about where the code is being sent. The callback is now **derived** from the peer's registered base URL; a supplied one is ignored and logged. The field is no longer required, because demanding a value that is deliberately disregarded would only mislead whoever writes the next client.
+
+**Not the whole of 002.** Binding the code to the initiating browser, the audience and a nonce is a redesign of the cross-port flow and stays open, tracked in `docs/communities/01-threat-model.md` §11.
+
+### Notes
+
+- A first attempt at 002 compared the supplied callback against the peer record and rejected mismatches. It broke every legitimate login in the two-node test: a node's registered base URL and the base URL it builds its own links from are not guaranteed to be byte-identical. Deriving the value avoids the comparison entirely and is the stronger fix anyway.
+- **009 remains open deliberately.** Attachment authorization needs a decision between an ownership mapping and signed URLs before any code: the filesystem path carries no ownership, the URLs are already embedded in existing messages, the service worker caches them, and native clients fetch them directly. Rushing it would break image loading everywhere.
+
 ## [2.103.1] - 2026-09-21
 
 ### Security
