@@ -269,6 +269,47 @@ test('Communities refuses malformed input rather than misbehaving', async (t) =>
       }
     });
 
+    await t.test('CORTEX-COMM-010: an uploaded file cannot run in this origin', async () => {
+      // Upload filters judge the mimetype the CLIENT declares, not the bytes,
+      // so a file announced as an image can hold markup. Served back with a
+      // type inferred from its extension, that is stored XSS in the origin
+      // holding everyone's session — which would defeat every other control in
+      // the application, including the ones just added.
+      const uploads = path.join(serverDir, 'uploads');
+      fs.mkdirSync(uploads, { recursive: true });
+      fs.writeFileSync(path.join(uploads, 'evil.html'), '<script>parent.steal()</script>');
+      fs.writeFileSync(path.join(uploads, 'evil.svg'),
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>steal()</script></svg>');
+      fs.writeFileSync(path.join(uploads, 'ok.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+      const head = async (name) => {
+        const res = await fetch(`${base}/uploads/${name}`);
+        return {
+          status: res.status,
+          type: res.headers.get('content-type') || '',
+          disposition: res.headers.get('content-disposition') || '',
+          nosniff: res.headers.get('x-content-type-options') || '',
+          csp: res.headers.get('content-security-policy') || '',
+        };
+      };
+
+      for (const name of ['evil.html', 'evil.svg']) {
+        const r = await head(name);
+        assert.equal(r.status, 200, `${name} is still served`);
+        assert.match(r.type, /octet-stream/, `${name} must not be served as something a browser renders`);
+        assert.match(r.disposition, /attachment/, `${name} must download rather than display`);
+        assert.equal(r.nosniff, 'nosniff', 'and the browser must not second-guess the type');
+        assert.match(r.csp, /sandbox/, 'and even then it executes nothing');
+      }
+
+      // A genuine image is untouched, or the fix has broken every avatar.
+      const png = await head('ok.png');
+      assert.equal(png.status, 200);
+      assert.match(png.type, /image\/png/, 'real images still render');
+      assert.ok(!png.disposition.includes('attachment'), 'and are not forced to download');
+      assert.equal(png.nosniff, 'nosniff', 'while still refusing to be sniffed');
+    });
+
     await t.test('listing many channels stays one request, not one per channel', async () => {
       // The listing counts waves per channel. Done naively that is a query per
       // channel, which is fine at three and not at two hundred.
