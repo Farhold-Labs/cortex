@@ -428,6 +428,78 @@ test('Communities across two federated nodes', async (t) => {
       aliceOnB = await signInCrossPort();
     });
 
+    await t.test('CORTEX-COMM-002: the approval code goes to the peer, not to a supplied URL', async () => {
+      // An attacker sends someone an approval link naming a genuinely trusted
+      // guest node — so the page says the reassuring thing — while pointing the
+      // callback at themselves. Checking the NODE is trusted says nothing about
+      // where the code is being sent.
+      const initiate = await call(B, 'POST', '/api/cross-port/initiate', { body: { homeServerUrl: A.url } });
+      const redirect = new URL(initiate.body.redirectUrl);
+
+      const hijacked = await call(A, 'POST', '/api/cross-port/approve', {
+        token: alice.token,
+        body: {
+          guestNode: nodeB,
+          callbackUrl: 'http://127.0.0.1:9/stolen',   // a trusted node named, an untrusted destination
+          nonce: redirect.searchParams.get('nonce'),
+          requestId: redirect.searchParams.get('request_id'),
+        },
+      });
+      assert.equal(hijacked.status, 200, 'the request still succeeds');
+      assert.equal(new URL(hijacked.body.callbackUrl).origin, `http://${nodeB}`,
+        'but the code goes to the registered peer, not to the supplied URL');
+      assert.ok(!hijacked.body.callbackUrl.includes('stolen'),
+        'the attacker destination is not honoured');
+
+      // Omitting it entirely is fine — the peer record knows where to send it.
+      const derived = await call(A, 'POST', '/api/cross-port/approve', {
+        token: alice.token,
+        body: {
+          guestNode: nodeB,
+          nonce: redirect.searchParams.get('nonce'),
+          requestId: redirect.searchParams.get('request_id'),
+        },
+      });
+      assert.equal(derived.status, 200, JSON.stringify(derived.body));
+      assert.equal(new URL(derived.body.callbackUrl).origin, `http://${nodeB}`,
+        'and it points at the registered peer');
+      assert.ok(new URL(derived.body.callbackUrl).searchParams.get('code'));
+    });
+
+    await t.test('CORTEX-COMM-008: a revoked session cannot open a socket', async () => {
+      // Revocation the realtime layer ignores is not revocation; it just takes
+      // the slow door. The socket used to check the signature and the account
+      // status and stop there.
+      const WebSocket = require(path.join(root, 'server/node_modules/ws'));
+      const fresh = await signInCrossPort();
+
+      const openSocket = (token) => new Promise((resolve) => {
+        const ws = new WebSocket(B.url.replace('http://', 'ws://'));
+        let settled = false;
+        const done = (v) => { if (!settled) { settled = true; try { ws.close(); } catch {} resolve(v); } };
+        ws.on('open', () => ws.send(JSON.stringify({ type: 'auth', token })));
+        ws.on('message', (raw) => {
+          let m; try { m = JSON.parse(raw); } catch { return; }
+          if (m.type === 'auth_success') done({ authed: true });
+          if (m.type === 'auth_error') done({ authed: false, code: m.code });
+        });
+        ws.on('error', () => done({ authed: false, code: 'SOCKET_ERROR' }));
+        setTimeout(() => done({ authed: false, code: 'TIMEOUT' }), 6000);
+      });
+
+      const before = await openSocket(fresh.token);
+      assert.equal(before.authed, true, 'precondition: a live session authenticates');
+
+      // End the session the ordinary way.
+      const out = await call(B, 'POST', '/api/auth/logout', { token: fresh.token });
+      assert.ok([200, 204].includes(out.status), `logout failed: ${out.status}`);
+
+      const after = await openSocket(fresh.token);
+      assert.equal(after.authed, false, 'a revoked token must not open a socket');
+
+      aliceOnB = await signInCrossPort();
+    });
+
     await t.test('CORTEX-COMM-001: a peer cannot claim another peer\'s identities', async () => {
       // The audit's critical finding. A malicious peer M, merely paired with B,
       // answers the code exchange with a user id in honest peer A's namespace.
