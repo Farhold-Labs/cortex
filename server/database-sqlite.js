@@ -8948,11 +8948,19 @@ export class DatabaseSQLite {
       // constraint on remote_users.id. Fall back to updating the existing row by
       // id so a single author never aborts a whole wave-broadcast sync.
       if (/remote_users\.id/.test(String(err && err.message))) {
-        this.db.prepare(`
+        // Scoped to the node that already owns the row (CORTEX-COMM-007). The
+        // fallback exists for a handle change at the origin; without the
+        // node_name predicate it also let one peer rewrite another peer's
+        // cached user by naming their id.
+        const changed = this.db.prepare(`
           UPDATE remote_users
-          SET node_name = ?, handle = ?, display_name = ?, avatar = ?, avatar_url = ?, bio = ?, updated_at = ?
-          WHERE id = ?
-        `).run(nodeName, handle, displayName || null, avatar || null, avatarUrl || null, bio || null, now, id);
+          SET handle = ?, display_name = ?, avatar = ?, avatar_url = ?, bio = ?, updated_at = ?
+          WHERE id = ? AND node_name = ?
+        `).run(handle, displayName || null, avatar || null, avatarUrl || null, bio || null, now, id, nodeName);
+        if (changed.changes === 0) {
+          console.warn(`[federation] ${nodeName} tried to rewrite cached user ${id}, which belongs to another node`);
+          return this.getRemoteUser(id);
+        }
       } else {
         throw err;
       }
@@ -9153,10 +9161,23 @@ export class DatabaseSQLite {
     });
   }
 
+  /**
+   * Cache a ping received over federation (CORTEX-COMM-007).
+   *
+   * Remote pings are keyed by the id their origin gave them, which means a
+   * second node can name an id that is already cached here. Before v2.104.1
+   * the upsert simply overwrote the content, so a peer could rewrite a message
+   * in a wave it had nothing to do with by guessing — or more likely, by having
+   * legitimately seen — its id. Ids travel in messages and logs; they were
+   * never a secret and were never meant to carry authority.
+   *
+   * The conflict clause now refuses to change a row whose provenance differs.
+   * A caller that needs to know whether its write landed gets `applied` back.
+   */
   cacheRemotePing({ id, waveId, originWaveId, originNode, authorId, authorNode, parentId, content, createdAt, editedAt, reactions }) {
     const now = new Date().toISOString();
 
-    this.db.prepare(`
+    const result = this.db.prepare(`
       INSERT INTO remote_pings (id, wave_id, origin_wave_id, origin_node, author_id, author_node, parent_id, content, created_at, edited_at, reactions, cached_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
@@ -9164,9 +9185,16 @@ export class DatabaseSQLite {
         edited_at = excluded.edited_at,
         reactions = excluded.reactions,
         updated_at = excluded.updated_at
+      WHERE remote_pings.wave_id = excluded.wave_id
+        AND remote_pings.origin_node = excluded.origin_node
     `).run(id, waveId, originWaveId, originNode, authorId, authorNode, parentId || null, content, createdAt, editedAt || null, JSON.stringify(reactions || {}), now, now);
 
-    return this.getRemotePing(id);
+    const cached = this.getRemotePing(id);
+    const applied = result.changes > 0;
+    if (!applied && cached) {
+      console.warn(`[federation] refused to overwrite ping ${id}: cached as ${cached.waveId}/${cached.originNode}, offered as ${waveId}/${originNode}`);
+    }
+    return Object.assign(cached || {}, { applied });
   }
 
   // Backward compatibility aliases
@@ -9174,14 +9202,22 @@ export class DatabaseSQLite {
   getRemoteDropletsForWave(waveId) { return this.getRemotePingsForWave(waveId); }
   cacheRemoteDroplet(data) { return this.cacheRemotePing(data); }
 
-  markRemotePingDeleted(id) {
+  /**
+   * Tombstone a federated ping (CORTEX-COMM-007).
+   *
+   * `waveId` is required by every caller that has one: deleting by id alone let
+   * a peer tombstone any cached message anywhere on this node, which is the
+   * cheapest destructive act federation offered. The wave is the scope the
+   * sender was actually authorized against, so the delete has to name it.
+   */
+  markRemotePingDeleted(id, waveId = null) {
     const now = new Date().toISOString();
-    const result = this.db.prepare(`
-      UPDATE remote_pings SET deleted = 1, updated_at = ? WHERE id = ?
-    `).run(now, id);
+    const result = waveId
+      ? this.db.prepare('UPDATE remote_pings SET deleted = 1, updated_at = ? WHERE id = ? AND wave_id = ?').run(now, id, waveId)
+      : this.db.prepare('UPDATE remote_pings SET deleted = 1, updated_at = ? WHERE id = ?').run(now, id);
     return result.changes > 0;
   }
-  markRemoteDropletDeleted(id) { return this.markRemotePingDeleted(id); }
+  markRemoteDropletDeleted(id, waveId = null) { return this.markRemotePingDeleted(id, waveId); }
 
   // ============ Federation - Message Queue Methods ============
 
