@@ -13781,6 +13781,46 @@ export class DatabaseSQLite {
     this.db.prepare('DELETE FROM channels WHERE id = ?').run(id);
   }
 
+
+  // ----- Channel permissions (v2.103.3, CORTEX-COMM-011) -----
+  //
+  // These rows existed from Phase 1 and nothing read them. They now decide
+  // access to a restricted channel, so they need accessors and, above all, a
+  // way for a Community to grant them — a restriction with no way to lift it
+  // is just a locked door with the key thrown away.
+
+  getChannelPermission(channelId, roleId) {
+    return this.db.prepare(
+      'SELECT * FROM channel_permissions WHERE channel_id = ? AND role_id = ?'
+    ).get(channelId, roleId) || null;
+  }
+
+  listChannelPermissions(channelId) {
+    return this.db.prepare(`
+      SELECT cp.*, r.name AS role_name, r.priority
+      FROM channel_permissions cp
+      JOIN community_roles r ON r.id = cp.role_id
+      WHERE cp.channel_id = ?
+      ORDER BY r.priority DESC
+    `).all(channelId);
+  }
+
+  setChannelPermission(channelId, roleId, { allow = [], deny = [] } = {}) {
+    this.db.prepare(`
+      INSERT INTO channel_permissions (channel_id, role_id, allow, deny)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(channel_id, role_id) DO UPDATE SET allow = excluded.allow, deny = excluded.deny
+    `).run(channelId, roleId,
+           JSON.stringify(allow.filter(isCapability)),
+           JSON.stringify(deny.filter(isCapability)));
+    return this.getChannelPermission(channelId, roleId);
+  }
+
+  clearChannelPermission(channelId, roleId) {
+    this.db.prepare('DELETE FROM channel_permissions WHERE channel_id = ? AND role_id = ?')
+      .run(channelId, roleId);
+  }
+
   // ----- Attaching waves to channels -----
 
   /**

@@ -5,6 +5,22 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.103.3] - 2026-09-23
+
+### Security
+
+- **Restricted channels now restrict (CORTEX-COMM-011).** `visibility: 'restricted'` and the `channel_permissions` table both shipped in Phase 1 and nothing ever read them, so a restricted channel restricted nothing: an ordinary member could list its name and description and create or file waves in it on their Community-wide capabilities alone. A schema that describes a control which does not exist is worse than not offering one.
+  - A per-channel evaluator now decides. A restricted channel is **absent from the listing** for anyone not admitted — leaking the name and description of a staff channel is most of what such a channel exists to prevent — and refuses wave creation and filing.
+  - **Admission, not enumeration.** Letting a role in means its members' ordinary Community capabilities govern what they do inside; otherwise every restricted channel would need each capability listed separately before it was usable at all, and the common case would be the awkward one. `deny` remains for taking a single thing away without shutting the door.
+  - **Staff who manage channels keep access deliberately.** A restricted channel its own Community's administrators cannot see is a place to hide things from the people answerable for them.
+  - New routes let a Community open a restricted channel to a role, list those grants, and revoke them. A restriction with no way to lift it is a locked door with the key thrown away — the table had no reachable way to write it. Nobody may grant into a channel a capability they do not hold themselves, the same rule that governs roles.
+  - **This decides the channel, never the waves inside it.** A member who may now see a channel gets nothing from it they could not already read; wave privacy and participants remain the content authority.
+
+### Notes
+
+- The restricted-channel UI is not built yet, and the client still creates channels without a visibility field — so nothing in the interface currently offers a control the server does not enforce. The API is the surface that was lying, and it is the surface that was fixed.
+- My own test and my own implementation disagreed about what "restricted" should mean — the test expected enumeration, the code did admission. The code was right; the test was rewritten and the intended semantics are now stated where the decision lives rather than left implicit.
+
 ## [2.103.2] - 2026-09-21
 
 ### Security

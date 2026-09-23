@@ -529,6 +529,105 @@ test('Communities API', async (t) => {
       assert.ok(!channels.body.channels.some(c => c.id === doomed.id), 'the channel is gone');
     });
 
+    await t.test('CORTEX-COMM-011: a restricted channel actually restricts', async () => {
+      // `visibility: restricted` and the channel_permissions table both shipped
+      // in Phase 1 and nothing ever read them, so a restricted channel
+      // restricted nothing: an ordinary member could list it and create or file
+      // waves in it on their Community-wide capabilities alone. A schema that
+      // describes a control which does not exist is worse than not offering one.
+      const staffOnly = (await api('POST', `/api/communities/${community.id}/channels`, {
+        token: owner.token,
+        body: { name: 'Staff Room', slug: 'staff-room', visibility: 'restricted',
+                description: 'not for everyone' },
+      })).body.channel;
+      assert.ok(staffOnly, 'channel created');
+
+      // An ordinary member sees nothing of it — the name and description are
+      // most of what a restricted channel exists to keep back.
+      const listed = await api('GET', `/api/communities/${community.id}/channels`, { token: member.token });
+      assert.ok(!listed.body.channels.some(c => c.id === staffOnly.id), 'not listed');
+      assert.ok(!JSON.stringify(listed.body).includes('not for everyone'), 'nor is its description');
+
+      // Nor can they use it, even holding the Community-wide capabilities.
+      const started = await api('POST', '/api/waves', {
+        token: member.token,
+        body: { title: 'Wandered in', privacy: 'private', channelId: staffOnly.id },
+      });
+      assert.equal(started.status, 403, 'cannot start a wave there');
+
+      const own = await api('POST', '/api/waves', {
+        token: member.token, body: { title: 'Mine', privacy: 'private' },
+      });
+      const ownId = (own.body.wave || own.body).id;
+      const filed = await api('PUT',
+        `/api/communities/${community.id}/channels/${staffOnly.id}/waves/${ownId}`,
+        { token: member.token });
+      assert.equal(filed.status, 403, 'cannot file into it either');
+
+      // Staff who manage channels keep access: a restricted channel its own
+      // administrators cannot see is a place to hide things from the people
+      // answerable for them.
+      const asOwner = await api('GET', `/api/communities/${community.id}/channels`, { token: owner.token });
+      assert.ok(asOwner.body.channels.some(c => c.id === staffOnly.id), 'the owner still sees it');
+    });
+
+    await t.test('CORTEX-COMM-011: a role can be let into a restricted channel', async () => {
+      // A restriction with no way to lift it is a locked door with the key
+      // thrown away, so the permission rows are now reachable.
+      const staffOnly = (await api('GET', `/api/communities/${community.id}/channels`, { token: owner.token }))
+        .body.channels.find(c => c.slug === 'staff-room');
+      const memberRole = (await api('GET', `/api/communities/${community.id}/roles`, { token: owner.token }))
+        .body.roles.find(r => r.name === 'member');
+
+      const granted = await api('PUT',
+        `/api/communities/${community.id}/channels/${staffOnly.id}/roles/${memberRole.id}`,
+        { token: owner.token, body: { allow: ['channel.view'] } });
+      assert.equal(granted.status, 200, JSON.stringify(granted.body));
+
+      const listed = await api('GET', `/api/communities/${community.id}/channels`, { token: member.token });
+      assert.ok(listed.body.channels.some(c => c.id === staffOnly.id), 'now they can see it');
+
+      // Admission, not enumeration. Being let in means your Community role
+      // governs what you do inside — otherwise every restricted channel would
+      // need each capability listed before it was usable at all.
+      const started = await api('POST', '/api/waves', {
+        token: member.token, body: { title: 'Allowed in', privacy: 'private', channelId: staffOnly.id },
+      });
+      assert.equal(started.status, 201, 'admitted members behave normally inside');
+
+      // Granularity is still there when it is wanted: deny takes one thing away
+      // without shutting the door.
+      assert.equal((await api('PUT',
+        `/api/communities/${community.id}/channels/${staffOnly.id}/roles/${memberRole.id}`,
+        { token: owner.token, body: { allow: ['channel.view'], deny: ['channel.create_wave'] } })).status, 200);
+
+      const denied = await api('POST', '/api/waves', {
+        token: member.token, body: { title: 'Read only now', privacy: 'private', channelId: staffOnly.id },
+      });
+      assert.equal(denied.status, 403, 'denied capability is refused');
+      const stillListed = await api('GET', `/api/communities/${community.id}/channels`, { token: member.token });
+      assert.ok(stillListed.body.channels.some(c => c.id === staffOnly.id), 'while they can still see it');
+
+      // Revoking puts it back out of sight.
+      assert.equal((await api('DELETE',
+        `/api/communities/${community.id}/channels/${staffOnly.id}/roles/${memberRole.id}`,
+        { token: owner.token })).status, 200);
+      const again = await api('GET', `/api/communities/${community.id}/channels`, { token: member.token });
+      assert.ok(!again.body.channels.some(c => c.id === staffOnly.id), 'and it is hidden again');
+    });
+
+    await t.test('CORTEX-COMM-011: nobody can grant into a channel what they lack', async () => {
+      const staffOnly = (await api('GET', `/api/communities/${community.id}/channels`, { token: owner.token }))
+        .body.channels.find(c => c.slug === 'staff-room');
+      const memberRole = (await api('GET', `/api/communities/${community.id}/roles`, { token: owner.token }))
+        .body.roles.find(r => r.name === 'member');
+
+      const res = await api('PUT',
+        `/api/communities/${community.id}/channels/${staffOnly.id}/roles/${memberRole.id}`,
+        { token: admin.token, body: { allow: ['community.delete'] } });
+      assert.equal(res.status, 403, 'an admin does not hold community.delete, so cannot confer it here either');
+    });
+
     await t.test('A-4: a channel from another Community is refused', async () => {
       const other = await api('POST', '/api/communities', {
         token: outsider.token, body: { name: 'Theirs', slug: 'theirs' },
