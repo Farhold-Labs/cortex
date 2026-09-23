@@ -26,6 +26,7 @@ import WaveContextBar from './WaveContextBar.jsx';
 import EventDetailModal from '../calendar/EventDetailModal.jsx';
 import EventCreateModal from '../calendar/EventCreateModal.jsx';
 import { storage } from '../../utils/storage.js';
+import { registerAttachments } from '../../utils/attachments.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
@@ -1072,6 +1073,10 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         method: 'POST',
         body: messageBody,
       });
+      // The plaintext is the only place an attachment's home wave is visible
+      // when the ping is encrypted — the server never sees it. Fire and forget:
+      // a file that stays public is the old behaviour, not a failed send.
+      registerAttachments(content, wave.id);
       setNewMessage('');
       setReplyingTo(null);
       showToast(SUCCESS.messageSent, 'success');
@@ -1120,6 +1125,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     try {
       const formData = new FormData();
       formData.append('image', file);
+      // v2.104.0 — name the conversation so the server can bind the file to
+      // it. An attachment nobody can attribute to a wave is an attachment
+      // nobody can protect.
+      if (wave?.id) formData.append('waveId', wave.id);
+
 
       const token = storage.getToken();
       const response = await fetch(`${API_URL}/uploads`, {
@@ -1175,6 +1185,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     try {
       const formData = new FormData();
       formData.append('file', file);
+      // v2.104.0 — name the conversation so the server can bind the file to
+      // it. An attachment nobody can attribute to a wave is an attachment
+      // nobody can protect.
+      if (wave?.id) formData.append('waveId', wave.id);
+
 
       const token = storage.getToken();
       const response = await fetch(`${API_URL}/uploads/file`, {
@@ -1233,6 +1248,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
       const formData = new FormData();
       formData.append('media', file);
+      // v2.104.0 — name the conversation so the server can bind the file to
+      // it. An attachment nobody can attribute to a wave is an attachment
+      // nobody can protect.
+      if (wave?.id) formData.append('waveId', wave.id);
+
       formData.append('duration', Math.round(duration * 1000).toString()); // Convert to ms
 
       const token = storage.getToken();

@@ -4,6 +4,7 @@ import { SUCCESS, formatError, CONFIRM_DIALOG } from '../../../messages.js';
 import { PRIVACY_LEVELS, API_URL, THREAD_DEPTH_LIMIT } from '../../config/constants.js';
 import { Avatar } from '../ui/SimpleComponents.jsx';
 import { storage } from '../../utils/storage.js';
+import { registerAttachments } from '../../utils/attachments.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
@@ -219,6 +220,9 @@ const ThreadPanel = ({
         method: 'POST',
         body: { wave_id: wave.id, parent_id: parentId, content, isThreadReply: true }
       });
+      // See WaveView: the client is the only party that can attribute an
+      // attachment in an encrypted wave to its conversation.
+      registerAttachments(content, wave.id);
       setReplyingTo(null);
       showToast(SUCCESS.pingSent, 'success');
       wasAtBottomRef.current = true; // Always scroll to bottom after own send
@@ -276,6 +280,11 @@ const ThreadPanel = ({
     try {
       const formData = new FormData();
       formData.append('file', file);
+      // v2.104.0 — name the conversation so the server can bind the file to
+      // it. An attachment nobody can attribute to a wave is an attachment
+      // nobody can protect.
+      if (wave?.id) formData.append('waveId', wave.id);
+
       const token = storage.getToken();
       const response = await fetch(`${API_URL}/uploads/file`, {
         method: 'POST',
