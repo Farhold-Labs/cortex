@@ -45,6 +45,13 @@ export const CAPS = Object.freeze({
   // Listing bounds. These TRUNCATE rather than refuse.
   auditPageSize: 200,
   memberPageSize: 500,
+
+  // How many waves a channel listing will examine to report its count. A
+  // channel has no cap on the waves inside it, and the count has to be
+  // filtered by what each caller may actually read (CORTEX-COMM-014), so an
+  // unbounded channel would mean an unbounded per-request scan for every
+  // member who opens the sidebar. Past this the count is reported as a floor.
+  channelWaveScan: 500,
 });
 
 /**

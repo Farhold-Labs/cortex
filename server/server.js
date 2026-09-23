@@ -30,7 +30,7 @@ import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import * as waveRoles from './lib/wave-roles.js';
 import * as communityAuthz from './lib/communities/authorize.js';
-import { CAPABILITIES as CommunityCaps } from './lib/communities/capabilities.js';
+import { CAPABILITIES as CommunityCaps, CAPABILITY_VALUES as CommunityCapabilityValues } from './lib/communities/capabilities.js';
 import * as communityLimits from './lib/communities/limits.js';
 import { getCurrentHoliday } from './holidays.js';
 // firebase-admin 14 (v2.89.0) removed the namespaced API entirely: the default
@@ -14911,14 +14911,20 @@ app.post('/api/cross-port/session', async (req, res) => {
     // on collision, so matching the local handle would miss exactly the people
     // whose names clashed with a local account.
     try {
-      const bound = db.bindRemoteInvitations({
+      // Nothing binds while the feature is off (CORTEX-COMM-018). Their login
+      // still succeeds — this is a Community switch, not an auth one — but the
+      // Community does not gain a member behind the operator's back, and the
+      // invitation stays pending for when it is switched back on. Checked here
+      // rather than by the middleware because this is a cross-port login, not a
+      // request to /api/communities.
+      const bound = isFeatureEnabled('communities') ? db.bindRemoteInvitations({
         userId: stubUser.id,
         remoteHandle: exchangeData.handle,
         // Same rule as above: an invitation addressed into H's namespace may
         // only be bound by H. Taking this from the response would let M redeem
         // an invitation written for somebody on another server.
         nodeName: homeNode,
-      });
+      }) : [];
       for (const communityId of bound) {
         db.logCommunityAudit(communityId, {
           actorId: stubUser.id, action: 'member.join_remote',
@@ -20020,6 +20026,15 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     return res.status(403).json({ error: 'Access denied' });
   }
 
+  // CORTEX-COMM-014: reading a wave does not entitle you to the identity of
+  // the private Community whose channel holds it. The wave list mappers redact
+  // this for the same reason; `getWave` cannot, because most of its 90-odd
+  // callers are internal and need the real container.
+  if (wave.communityId && !db.visibleCommunityIds(req.user.userId).has(wave.communityId)) {
+    wave.communityId = null;
+    wave.channelId = null;
+  }
+
   const creator = db.findUserById(wave.createdBy);
   const participants = db.getWaveParticipants(wave.id);
 
@@ -20472,6 +20487,13 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   // channel, and the channel belonging to the Community it claims to.
   let targetChannel = null;
   if (req.body.channelId) {
+    // The feature gate applies wherever Community state is touched, not only on
+    // the /api/communities prefix (CORTEX-COMM-018). Turning Communities off is
+    // something an operator may do during an incident; it has to mean the
+    // Community stops changing, not that the direct routes stop while this one
+    // carries on filing waves into channels.
+    if (!requireFeature('communities', res)) return;
+
     targetChannel = db.getChannelById(req.body.channelId);
     if (!targetChannel) return res.status(404).json({ error: 'Channel not found' });
     if (!targetChannel.community_id) {
@@ -23384,8 +23406,16 @@ function requireCommunityCapability(req, res, communityId, capability, options =
   const decision = communityAuthz.authorize(db, communityActor(req), communityId, capability, options);
   if (!decision.allowed) {
     console.warn(`[communities] denied ${req.user.userId} ${capability} on ${communityId}: ${decision.reason}`);
-    res.status(decision.reason === communityAuthz.REASON.NO_COMMUNITY ? 404 : 403)
-       .json({ error: decision.reason === communityAuthz.REASON.NO_COMMUNITY ? 'Not found' : 'Forbidden' });
+
+    // CORTEX-COMM-014 — decide whether they may know it EXISTS before deciding
+    // what to tell them. Answering 403 for a private Community the caller is
+    // not in, and 404 for one that is not there, made every gated route an
+    // existence oracle: walk ids, read the status codes, map the private
+    // Communities on the node. The detail route was written this way from the
+    // start; the gates were not.
+    const visible = communityAuthz.canDiscoverCommunity(db, communityActor(req), communityId);
+    res.status(visible ? 403 : 404)
+       .json({ error: visible ? 'Forbidden' : 'Not found' });
     return null;
   }
   return decision;
@@ -23403,6 +23433,44 @@ const COMMUNITY_LIMITS = {
   channelName: communityLimits.LENGTHS.channelName,
   roleName: communityLimits.LENGTHS.roleName,
 };
+
+/**
+ * A point in time, normalised to UTC ISO text, or a refusal (CORTEX-COMM-017).
+ *
+ * `expiresAt` used to be stored as whatever arrived. That matters because the
+ * two readers disagree about how to interpret it: invite redemption compares
+ * `expires_at > ?` as TEXT, while bans parse it with `new Date`. ISO-8601 UTC
+ * sorts lexicographically in the same order as it sorts chronologically, so
+ * those two agree — for any other format they do not, and a non-canonical
+ * offset can leave an invitation redeemable past its own expiry.
+ *
+ * Returns `{ ok, value }`. An omitted value is `{ ok: true, value: null }`,
+ * because "no expiry" and "an expiry I could not read" must not be the same
+ * answer: one is a choice and the other is a mistake, and silently treating a
+ * mistake as "never expires" is the wrong way round.
+ */
+function normalizedExpiry(input) {
+  if (input === undefined || input === null || input === '') return { ok: true, value: null };
+  if (typeof input !== 'string' && typeof input !== 'number') return { ok: false, value: null };
+  const when = new Date(input);
+  if (Number.isNaN(when.getTime())) return { ok: false, value: null };
+  // A lifetime already spent is a refusal, not a lifetime.
+  if (when.getTime() <= Date.now()) return { ok: false, value: null };
+  return { ok: true, value: when.toISOString() };
+}
+
+/**
+ * A positive whole number within bounds, distinguishing absent from invalid
+ * (CORTEX-COMM-017). `maxUses` silently became "unlimited" for anything that
+ * was not a positive integer — including `0`, `"5"` and `-1` — so a typo in an
+ * admin's request produced the least restrictive invite available.
+ */
+function boundedInteger(input, { min = 1, max }) {
+  if (input === undefined || input === null || input === '') return { ok: true, value: null };
+  const n = typeof input === 'number' ? input : Number(input);
+  if (!Number.isInteger(n) || n < min || n > max) return { ok: false, value: null };
+  return { ok: true, value: n };
+}
 
 /**
  * D-2: a per-actor, per-Community budget for state-CHANGING actions.
@@ -23486,6 +23554,13 @@ app.post('/api/communities', authenticateToken, apiLimiter, (req, res) => {
 
   const slug = communitySlug(req.body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
   if (!slug) return res.status(400).json({ error: 'Slug must be 2-60 characters of a-z, 0-9 and hyphens' });
+  // ACCEPTED ORACLE (CORTEX-COMM-014). This confirms that *something* holds
+  // the address, including a private Community. That is unavoidable while
+  // addresses are globally unique and human-readable: a creation flow that
+  // cannot say "taken" is a creation flow nobody can complete. What it does
+  // not reveal is the name, membership or existence of any particular
+  // Community — only that the word is spoken for, which is the same thing
+  // every handle registry on the internet discloses.
   if (db.getCommunityBySlug(slug)) return res.status(409).json({ error: 'That address is taken' });
 
   const visibility = ['public', 'unlisted', 'private'].includes(req.body.visibility)
@@ -23534,9 +23609,17 @@ app.get('/api/communities/:id', authenticateToken, (req, res) => {
   // A public Community is readable by anyone on the node; anything else
   // requires membership. Returning 404 rather than 403 for a private one keeps
   // its existence unconfirmed (M-1).
+  //
+  // Through the shared predicate since v2.105.0 (CORTEX-COMM-014): this route
+  // asked about membership alone, so a remote member whose home node had been
+  // unpaired could still read a private Community's name, description and
+  // member state while every gated endpoint refused them. Standing is part of
+  // whether you may know the place exists, not just of what you may do in it.
   const membership = db.getCommunityMembership(community.id, req.user.userId);
   const isMember = membership && membership.state === 'active';
-  if (community.visibility !== 'public' && !isMember) return res.status(404).json({ error: 'Not found' });
+  if (!communityAuthz.canDiscoverCommunity(db, communityActor(req), community.id)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
 
   // Through the evaluator, not `db.getMemberCapabilities` — the database method
   // knows about roles and nothing about standing, so asking it directly would
@@ -23593,13 +23676,28 @@ app.delete('/api/communities/:id', authenticateToken, requireStepUp, (req, res) 
 
 app.get('/api/communities/:id/members', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_MEMBERS)) return;
-  const members = db.listCommunityMembers(req.params.id).map(m => ({
+
+  // Paged (CORTEX-COMM-013). A LISTING limit truncates rather than refuses —
+  // the same rule the audit log follows — and `total` tells the caller there is
+  // more, so a truncated page never passes for a complete one.
+  const pageSize = communityLimits.CAPS.memberPageSize;
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const rows = db.listCommunityMembers(req.params.id, { limit: pageSize, offset });
+  const rolesByUser = db.getMemberRolesBulk(req.params.id, rows.map(m => m.user_id));
+
+  const members = rows.map(m => ({
     userId: m.user_id, handle: m.handle, displayName: m.display_name,
     avatarUrl: m.avatar_url, state: m.state, joinedAt: m.joined_at,
     isCrossPort: m.is_cross_port === 1, homeNode: m.home_node,
-    roles: db.getMemberRoles(req.params.id, m.user_id).map(r => ({ id: r.id, name: r.name, priority: r.priority })),
+    roles: rolesByUser.get(m.user_id) || [],
   }));
-  res.json({ members });
+  res.json({
+    members,
+    total: db.countCommunityMembers(req.params.id),
+    offset,
+    limit: pageSize,
+    hasMore: rows.length === pageSize,
+  });
 });
 
 app.post('/api/communities/:id/members', authenticateToken, apiLimiter, (req, res) => {
@@ -23680,10 +23778,13 @@ app.post('/api/communities/:id/bans', authenticateToken, apiLimiter, (req, res) 
   const banReason = boundedOptional(req.body.reason, communityLimits.LENGTHS.banReason);
   if (!banReason.ok) return res.status(400).json({ error: 'Reason is too long' });
 
+  const banExpiry = normalizedExpiry(req.body.expiresAt);
+  if (!banExpiry.ok) return res.status(400).json({ error: 'That expiry is not a future date I can read' });
+
   db.banFromCommunity(req.params.id, targetId, {
     reason: banReason.value,
     bannedBy: req.user.userId,
-    expiresAt: req.body.expiresAt || null,
+    expiresAt: banExpiry.value,
   });
   db.logCommunityAudit(req.params.id, {
     actorId: req.user.userId, action: 'member.ban', targetType: 'user', targetId,
@@ -23736,18 +23837,40 @@ app.patch('/api/communities/:id/roles/:roleId', authenticateToken, apiLimiter, (
     { resource: { type: 'role', id: req.params.roleId } })) return;
 
   const role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.params.roleId);
-  const next = Array.isArray(req.body.permissions) ? req.body.permissions : null;
+
+  // Refuse malformed input rather than quietly doing nothing with it
+  // (CORTEX-COMM-017). A `permissions` value that was not an array became
+  // `null` and then `undefined`, so the request answered 200 having changed
+  // nothing — and an unrecognised capability string was stored and ignored.
+  // A name too long behaved the same way. Silence is the wrong answer to a
+  // request an administrator believes has taken effect.
+  if (req.body.permissions !== undefined) {
+    if (!Array.isArray(req.body.permissions) ||
+        !req.body.permissions.every(c => typeof c === 'string' && CommunityCapabilityValues.includes(c))) {
+      return res.status(400).json({ error: 'permissions must be a list of known capabilities' });
+    }
+  }
+  let nextName;
+  if (req.body.name !== undefined) {
+    nextName = boundedString(req.body.name, COMMUNITY_LIMITS.roleName);
+    if (!nextName) return res.status(400).json({ error: 'Invalid role name' });
+  }
+  if (req.body.priority !== undefined && !Number.isInteger(req.body.priority)) {
+    return res.status(400).json({ error: 'priority must be a whole number' });
+  }
+
+  const next = req.body.permissions !== undefined ? req.body.permissions : null;
   // The proposed priority goes to the evaluator too, or it judges a role that
   // is about to stop existing (CORTEX-COMM-004).
   const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role, {
     permissions: next,
-    priority: Number.isInteger(req.body.priority) ? req.body.priority : undefined,
+    priority: req.body.priority !== undefined ? req.body.priority : undefined,
   });
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
 
   const updated = db.updateCommunityRole(req.params.roleId, {
-    name: req.body.name !== undefined ? boundedString(req.body.name, COMMUNITY_LIMITS.roleName) : undefined,
-    priority: Number.isInteger(req.body.priority) ? req.body.priority : undefined,
+    name: nextName,
+    priority: req.body.priority !== undefined ? req.body.priority : undefined,
     permissions: next || undefined,
   });
   db.logCommunityAudit(req.params.id, {
@@ -23830,13 +23953,21 @@ app.get('/api/communities/:id/channels', authenticateToken, (req, res) => {
   const visible = db.listChannels(req.params.id).filter(c =>
     communityAuthz.canInChannel(db, communityActor(req), c, CommunityCaps.VIEW_CHANNEL));
 
-  const channels = visible.map(c => ({
-    ...c,
+  const scan = communityLimits.CAPS.channelWaveScan;
+  const channels = visible.map(c => {
     // The wave list per channel is deliberately NOT expanded here. Which waves
     // a given member may see is the waves' decision, not the channel's, so it
     // is fetched through the normal wave routes that already enforce it.
-    waveCount: db.listWavesInChannel(c.id).length,
-  }));
+    //
+    // The COUNT has to respect the same decision (CORTEX-COMM-014). It used to
+    // report every wave in the channel, so a member could watch private waves
+    // they had no part in appear and disappear. Bounded at a ceiling, because
+    // a channel has no cap on what it holds and this runs for every member who
+    // opens the sidebar (CORTEX-COMM-013).
+    const rows = db.listChannelWaveContainment(c.id, scan);
+    const waveCount = rows.filter(w => canAccessWaveFromCache(w.id, req.user.userId)).length;
+    return { ...c, waveCount, waveCountCapped: rows.length >= scan };
+  });
   res.json({ channels });
 });
 
@@ -23891,7 +24022,17 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
   if (['members', 'restricted'].includes(req.body.visibility)) fields.visibility = req.body.visibility;
   if (Number.isInteger(req.body.sortOrder)) fields.sort_order = req.body.sortOrder;
 
-  res.json({ channel: db.updateChannel(req.params.channelId, fields) });
+  const channel = db.updateChannel(req.params.channelId, fields);
+  // Recorded (CORTEX-COMM-016). Changing a channel's visibility is a security
+  // operation — it decides who may see a staff channel — and it was the one
+  // that left no trace at all. `changed` names the fields, not the values: an
+  // audit row is read by more people than the thing it describes.
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'channel.update',
+    targetType: 'channel', targetId: req.params.channelId,
+    metadata: { changed: Object.keys(fields) },
+  });
+  res.json({ channel });
 });
 
 app.delete('/api/communities/:id/channels/:channelId', authenticateToken, (req, res) => {
@@ -23998,6 +24139,16 @@ app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticat
 
   const wave = db.getWave(req.params.waveId);
   if (!wave) return res.status(404).json({ error: 'Wave not found' });
+
+  // The wave must actually be IN the channel named in the URL
+  // (CORTEX-COMM-019). The capability check proved the caller may move waves
+  // in channel A; it said nothing about the wave, so someone with filing
+  // rights in A could detach a wave sitting in B — and the audit record would
+  // be written against A, pointing the investigation at the wrong Community.
+  if (wave.channelId !== req.params.channelId) {
+    return res.status(404).json({ error: 'That wave is not in this channel' });
+  }
+
   if (!canManageWave(wave, req.user.userId)) {
     return res.status(403).json({ error: 'You cannot move that wave' });
   }
@@ -24077,6 +24228,12 @@ app.delete('/api/communities/:id/members/remote/:invitationId', authenticateToke
     .get(req.params.invitationId);
   if (!row || row.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
   db.revokeRemoteInvitation(req.params.invitationId);
+  // CORTEX-COMM-016: withdrawing a way in is as much a security operation as
+  // granting one, and left no record.
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'remote_invite.revoke',
+    targetType: 'remote_invitation', targetId: req.params.invitationId,
+  });
   res.json({ success: true });
 });
 
@@ -24104,12 +24261,14 @@ app.post('/api/communities/:id/invites', authenticateToken, apiLimiter, (req, re
   if (!requireRoomFor(res, db, 'invite', req.params.id)) return;
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const maxUses = Number.isInteger(req.body.maxUses) && req.body.maxUses > 0
-    ? Math.min(req.body.maxUses, 1000) : null;
+  const uses = boundedInteger(req.body.maxUses, { min: 1, max: 1000 });
+  if (!uses.ok) return res.status(400).json({ error: 'maxUses must be a whole number between 1 and 1000' });
+  const inviteExpiry = normalizedExpiry(req.body.expiresAt);
+  if (!inviteExpiry.ok) return res.status(400).json({ error: 'That expiry is not a future date I can read' });
 
   const { id, token } = db.createCommunityInvite({
     communityId: req.params.id, createdBy: req.user.userId,
-    roleId: role ? role.id : null, maxUses, expiresAt: req.body.expiresAt || null,
+    roleId: role ? role.id : null, maxUses: uses.value, expiresAt: inviteExpiry.value,
   });
   db.logCommunityAudit(req.params.id, {
     actorId: req.user.userId, action: 'invite.create', targetType: 'invite', targetId: id,
@@ -24128,6 +24287,10 @@ app.delete('/api/communities/:id/invites/:inviteId', authenticateToken, (req, re
   const invite = db.db.prepare('SELECT community_id FROM community_invites WHERE id = ?').get(req.params.inviteId);
   if (!invite || invite.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
   db.revokeCommunityInvite(req.params.inviteId);
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'invite.revoke',
+    targetType: 'invite', targetId: req.params.inviteId,
+  });
   res.json({ success: true });
 });
 
@@ -24188,6 +24351,14 @@ app.post('/api/communities/join', authenticateToken, loginLimiter, (req, res) =>
   if (db.getCommunityBan(invite.community_id, req.user.userId)) {
     return res.status(403).json({ error: 'You cannot join this community' });
   }
+
+  // The member cap applies however someone arrives (CORTEX-COMM-013). It was
+  // enforced on the two paths where staff add people and on open join, and
+  // omitted on the one path that scales — an invite with unlimited uses,
+  // handed around. A ceiling only some doors respect is not a ceiling.
+  const alreadyIn = db.getCommunityMembership(invite.community_id, req.user.userId);
+  if (!(alreadyIn && alreadyIn.state === 'active') &&
+      !requireRoomFor(res, db, 'member', invite.community_id)) return;
 
   // Atomic. The guard is in the UPDATE's WHERE clause, so concurrent redeemers
   // of a single-use invite cannot both win (threat model I-2).
@@ -24275,6 +24446,15 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
   requireStepUp(req, res, next);
 }, (req, res) => {
   if (!db.getCommunityById(req.params.id)) return res.status(404).json({ error: 'Not found' });
+
+  // Recorded in the Community's own log as well as the node activity log
+  // (CORTEX-COMM-016). A node admin closing somebody else's Community is the
+  // single most consequential action available here, and it was the one that
+  // only appeared in a general-purpose activity feed.
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'community.closed_by_node_admin',
+    metadata: { reason: req.body?.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
+  });
 
   // Soft delete, and the waves inside are detached rather than destroyed — a
   // node admin closing a Community must not take conversations with it.
@@ -24438,7 +24618,13 @@ app.all('/api/crews/:id/members/:userId', (req, res, next) => { req.url = `/api/
 
 // ============ WebSocket Setup ============
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+// maxPayload refuses an oversized frame at the protocol layer (CORTEX-COMM-013).
+// The handler below also checks the size, but by then the whole message has
+// been received and buffered — which is the part worth not doing. The handler
+// check stays as the belt to this braces, and reports a reason the client can
+// read.
+const MAX_WS_MESSAGE_BYTES = 20000;
+const wss = new WebSocketServer({ server, maxPayload: MAX_WS_MESSAGE_BYTES });
 const clients = new Map();
 const userViewingState = new Map(); // Track which wave each user is viewing { userId: { waveId, timestamp } }
 
@@ -24493,7 +24679,7 @@ wss.on('connection', (ws, req) => {
       // This is important for voice calls where audio chunks prove the connection is working
       ws.isAlive = true;
 
-      if (data.length > 20000) { ws.close(1009, 'Message too large'); return; }
+      if (data.length > MAX_WS_MESSAGE_BYTES) { ws.close(1009, 'Message too large'); return; }
       const message = JSON.parse(data.toString());
 
       // Rate limit all messages (except auth and ping which are essential)

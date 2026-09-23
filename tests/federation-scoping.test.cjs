@@ -205,15 +205,24 @@ test('a peer may only speak about waves it has joined, and only for its own user
     });
 
     await t.test('the origin relays a new message once, and a repeat not at all', async () => {
+      // Relay is fire-and-forget over HTTP, so wait for the effect rather than
+      // for a fixed interval — a loaded machine is slower than 400ms and a
+      // timing flake here would read as a security regression.
+      const settle = async (want, ms = 4000) => {
+        const deadline = Date.now() + ms;
+        while (relayed.length < want && Date.now() < deadline) await new Promise(r => setTimeout(r, 25));
+        await new Promise(r => setTimeout(r, 300));  // and a moment for any extra to arrive
+      };
+
       relayed.length = 0;
       const id = 'ping-relayed';
       await send('member.example', 'new_ping', ping(id));
-      await new Promise(r => setTimeout(r, 400));
+      await settle(1);
       assert.equal(relayed.length, 1, 'the wave\'s other node should have received it exactly once');
 
       // Same ping, fresh envelope id — the inbox dedup does not catch this.
       await send('member.example', 'new_ping', ping(id));
-      await new Promise(r => setTimeout(r, 400));
+      await settle(2);
       assert.equal(relayed.length, 1, 'a message we already hold is not new, and must not be amplified');
     });
 
