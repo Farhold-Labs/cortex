@@ -390,6 +390,82 @@ export function wouldLeaveNoOwner(db, communityId, departingUserId) {
   return owners.length <= 1 && owners.includes(departingUserId);
 }
 
+
+/**
+ * What an actor may do IN A PARTICULAR CHANNEL (v2.103.3).
+ *
+ * CORTEX-COMM-011 — `visibility: 'restricted'` and the `channel_permissions`
+ * table both shipped in Phase 1, and nothing ever read them. A restricted
+ * channel restricted nothing: an ordinary member could list it, and create or
+ * file waves in it, on their Community-wide capabilities alone. The schema
+ * described a control that did not exist, which is worse than not offering one.
+ *
+ * The rule now:
+ *
+ *   * start from what the member holds across the Community;
+ *   * apply any per-role overrides stored for this channel — `deny` removes,
+ *     `allow` adds;
+ *   * and for a RESTRICTED channel, hold nothing at all unless a role they
+ *     hold was explicitly allowed to view it, or they may manage channels.
+ *
+ * Restricted controls ADMISSION, not enumeration. Being let in means the
+ * member's ordinary Community role governs what they do inside — otherwise
+ * every restricted channel would need each capability listed separately before
+ * it was usable at all, and the common case (let this role into the staff room)
+ * would be the awkward one. `deny` remains for taking a single thing away
+ * without shutting the door.
+ *
+ * Staff who manage channels keep access on purpose: a restricted channel that
+ * its own Community's administrators cannot see is a place to hide things from
+ * the people answerable for them.
+ *
+ * NOTE — this decides the CHANNEL, never the waves inside it. A member who may
+ * see a channel still gets nothing from it they could not already read; wave
+ * privacy and participants remain the content authority, exactly as in §2b.
+ */
+export function channelCapabilities(db, actor, channel) {
+  if (!channel) return new Set();
+  // A node-level channel belongs to no Community, so there is no membership to
+  // consult; whether the node lists it is the caller's business.
+  if (!channel.community_id) return new Set();
+
+  const base = effectiveCapabilities(db, actor, channel.community_id);
+  if (!base.size) return new Set();
+
+  const userId = resolveActor(db, actor);
+  if (!userId) return new Set();
+
+  const effective = new Set(base);
+  let viewExplicitlyAllowed = false;
+
+  for (const role of db.getMemberRoles(channel.community_id, userId)) {
+    const row = db.getChannelPermission(channel.id, role.id);
+    if (!row) continue;
+    for (const cap of parsePermissions(row.deny)) effective.delete(cap);
+    for (const cap of parsePermissions(row.allow)) {
+      effective.add(cap);
+      if (cap === CAPABILITIES.VIEW_CHANNEL) viewExplicitlyAllowed = true;
+    }
+  }
+
+  if (channel.visibility === 'restricted'
+      && !viewExplicitlyAllowed
+      && !base.has(CAPABILITIES.MANAGE_CHANNELS)) {
+    return new Set();
+  }
+
+  // A deny on view takes everything with it — being unable to see a channel
+  // and still being able to post into it is not a coherent state.
+  if (!effective.has(CAPABILITIES.VIEW_CHANNEL)) return new Set();
+
+  return effective;
+}
+
+/** Convenience: may this actor do `capability` in this channel? */
+export function canInChannel(db, actor, channel, capability) {
+  return channelCapabilities(db, actor, channel).has(capability);
+}
+
 /**
  * Channel DISCOVERY only — whether a channel is listed for this actor.
  *
@@ -405,8 +481,16 @@ export function canDiscoverChannel(db, actor, channelId) {
   // Communities, and says so rather than inventing an answer.
   if (channel.community_id === null) return allow({ nodeLevel: true });
 
-  return authorize(db, actor, channel.community_id, CAPABILITIES.VIEW_CHANNEL,
+  const gate = authorize(db, actor, channel.community_id, CAPABILITIES.VIEW_CHANNEL,
     { resource: { type: 'channel', id: channelId } });
+  if (!gate.allowed) return gate;
+
+  // Community-wide view is necessary but no longer sufficient: a restricted
+  // channel asks again, per channel (CORTEX-COMM-011).
+  if (!canInChannel(db, actor, channel, CAPABILITIES.VIEW_CHANNEL)) {
+    return deny(REASON.MISSING_CAPABILITY, 'channel is restricted');
+  }
+  return gate;
 }
 
 /**
