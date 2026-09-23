@@ -5,6 +5,26 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.104.0] - 2026-09-23
+
+### Security
+
+- **Attachments are no longer public to anyone holding the URL (CORTEX-COMM-009, High).** Everything under `/uploads` was served to whoever asked. A file posted in a private wave had a permanent, unauthenticated, world-readable link: forward it, paste it, or lift it out of a browser cache and it kept working, for everyone, forever. This was inherited — it predates Communities — and it quietly undid wave privacy for every conversation with a picture in it.
+  - A new `attachments` table maps a stored path to the wave it belongs to, and the `/uploads` handler checks **wave access on every request** rather than trusting that a path is hard to guess.
+  - **Identity arrives in a short-lived cookie**, not a header. An `<img>` tag cannot send an `Authorization` header, and signed per-file URLs would have meant rewriting embedded `/uploads/` links in the three drifting copies of `detectAndEmbedMedia` — and re-signing them on every render. The cookie is HttpOnly, `SameSite=Strict`, scoped to `Path=/uploads`, and lasts 15 minutes. A forwarded URL is inert without it.
+  - **Refusals are 404, not 403.** Confirming that a file exists is most of what the holder of a leaked URL wanted to learn.
+  - **Encrypted waves are filed by the client.** The server cannot read those messages, so it cannot discover which wave an attachment belongs to; the client says, after decrypt. That is the awkward corner of this design and it is deliberate — the waves most deserving of protection are exactly the ones whose contents the server is not allowed to see.
+  - **Only the uploader may file an attachment.** The obvious alternative — let any participant register any path — is a denial-of-service primitive: claim a stranger's avatar into a wave they are not in and it 404s for them. Binding *restricts* a file, so the right to bind follows ownership, not readership.
+  - **Files belonging to no wave stay public.** Avatars, profile media and every upload made before this table existed. Those URLs have already travelled; withdrawing them would break images in existing conversations to close a gap that is already open.
+  - **Public waves stay anonymously readable.** The public portal renders published waves to visitors with no account, and those pages are full of `/uploads` images. Gating them would have broken every portal page to protect content that was deliberately published.
+  - One predicate decides access here, the same one that governs reading the wave itself. An earlier draft asked whether the viewer was a *participant*, which would have hidden a crew wave's own attachments from the crew — crew membership is not recorded as participation.
+  - Verified live on the dev node as well as in tests: anonymous request 401, participant 200, signed-in non-participant 404, existing avatars and public-wave files 200. The regression test was confirmed to **fail with the gate removed** — the unpatched server serves the private file to an anonymous request, which is precisely the bug.
+
+### Notes
+
+- Client-side attachment *encryption* remains separate, larger work. This release stops the server handing files to strangers; it does not stop the server from being able to read them.
+- Remaining audit findings: 006/007 (federation scoping), the 002 remainder (binding the cross-port code to browser and audience), and 012–019/021.
+
 ## [2.103.3] - 2026-09-23
 
 ### Security

@@ -4898,6 +4898,52 @@ const RENDERABLE_UPLOAD_TYPES = new Set([
   '.mp3', '.m4a', '.wav', '.oga', '.opus',
 ]);
 
+/**
+ * A short-lived credential for reading private attachments (v2.104.0).
+ *
+ * CORTEX-COMM-009 — a bound attachment has to be authorised on every read, and
+ * `<img>` and `<video>` cannot send an Authorization header. The options are a
+ * token in the URL or a cookie, and the cookie is the better of the two here:
+ *
+ *   * a signed URL is visible in the address bar and copyable, which is exactly
+ *     how these leak — somebody forwards a link;
+ *   * an HttpOnly cookie cannot be read by script or pasted into a message, so
+ *     a forwarded URL is inert without it;
+ *   * and it needs no rewriting of the `/uploads/` links already embedded in
+ *     thousands of existing messages.
+ *
+ * SameSite=Strict, so another site embedding the URL gets nothing. CSRF is not
+ * a concern in the usual direction: this only ever authorises reading your own
+ * accessible files, never a state change.
+ *
+ * Fifteen minutes: long enough to load a page and start a video, short enough
+ * that a stolen one is quickly worthless.
+ */
+const ATTACHMENT_COOKIE = 'cortex_att';
+const ATTACHMENT_TTL_MS = 15 * 60 * 1000;
+
+function readCookie(req, name) {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(v.join('='));
+  }
+  return null;
+}
+
+/** Who is asking for this file, according to their attachment cookie. */
+function attachmentViewer(req) {
+  const cookie = readCookie(req, ATTACHMENT_COOKIE);
+  if (!cookie) return null;
+  try {
+    const decoded = jwt.verify(cookie, JWT_SECRET);
+    return decoded?.purpose === 'attachment' && decoded.userId ? decoded.userId : null;
+  } catch {
+    return null;
+  }
+}
+
 app.use('/uploads', (req, res, next) => {
   // Allow cross-origin access for images (needed when client runs on different port)
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -4914,6 +4960,47 @@ app.use('/uploads', (req, res, next) => {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', 'attachment');
   }
+
+  // CORTEX-COMM-009 — a file bound to a wave is readable only by people who
+  // can read that wave, checked on every request rather than at upload.
+  //
+  // An UNBOUND path stays public. That covers avatars, profile media, and
+  // everything uploaded before this table existed: those URLs are already
+  // distributed, and withdrawing them would break images in existing
+  // conversations to close a gap on files that have already travelled.
+  try {
+    const relative = decodeURIComponent((req.path || '').replace(/^\/+/, ''));
+    const attachment = db.getAttachmentByPath ? db.getAttachmentByPath(relative) : null;
+
+    if (attachment && attachment.wave_id) {
+      const wave = db.getWave(attachment.wave_id);
+      if (!wave) return res.status(404).json({ error: 'Not found' });
+
+      // A public wave's files stay anonymously readable. The public portal
+      // renders published waves to visitors with no session at all, and those
+      // pages are full of /uploads images — demanding a cookie here would
+      // break every one of them to protect content that is already published.
+      if (wave.privacy !== 'public') {
+        const viewerId = attachmentViewer(req);
+        if (!viewerId) {
+          return res.status(401).json({ error: 'Attachment access required', code: 'ATTACHMENT_AUTH' });
+        }
+        // The same predicate that decides whether this person may read the
+        // conversation itself. Membership of a crew wave is not recorded as
+        // participation, so asking about participants alone would hide a
+        // crew's own attachments from the crew.
+        if (!canAccessWaveFromCache(attachment.wave_id, viewerId)) {
+          // 404 rather than 403: confirming a file exists is most of what the
+          // holder of a forwarded URL wants to learn.
+          return res.status(404).json({ error: 'Not found' });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[attachments] access check failed:', err.message);
+    return res.status(500).json({ error: 'Could not serve that file' });
+  }
+
   next();
 }, express.static(UPLOADS_DIR, {
   // express.static would otherwise re-derive a content type from the
@@ -4926,6 +5013,126 @@ app.use('/uploads', (req, res, next) => {
     }
   },
 }));
+
+
+
+/**
+ * Bind a freshly stored upload to the wave it was made for, if the client said
+ * which (v2.104.0).
+ *
+ * The wave is optional on purpose: avatars and profile media belong to no
+ * conversation and stay public. An upload that names a wave the uploader
+ * cannot post to is stored unbound rather than refused — the file is theirs and
+ * already written; what they do not get is somebody else's conversation
+ * vouching for it.
+ */
+function bindUploadToWave(storageKey, waveId, userId) {
+  try {
+    // Record ownership even with no wave named. An upload composed before its
+    // conversation exists — or in an encrypted wave, where the client files it
+    // after the fact — still needs a row saying who uploaded it, because that
+    // is what /api/attachments/bind checks later. No wave means no restriction
+    // yet, only a claim of authorship.
+    let target = waveId || null;
+    if (target && !canAccessWaveFromCache(target, userId)) {
+      console.warn(`[attachments] ${userId} uploaded against wave ${target} they are not in — left unbound`);
+      target = null;
+    }
+    db.bindAttachment({ path: storageKey, waveId: target, uploadedBy: userId });
+  } catch (err) {
+    // An upload that stored successfully must not fail because the binding
+    // did; it simply stays public, which is the pre-v2.104.0 behaviour.
+    console.error('[attachments] could not bind upload:', err.message);
+  }
+}
+
+// ============ Attachment access (v2.104.0, CORTEX-COMM-009) ============
+
+/**
+ * Mint the short-lived cookie that lets this browser read private attachments.
+ *
+ * Says nothing about WHICH files — the gate on /uploads checks wave access per
+ * request. This only establishes who is asking.
+ */
+app.post('/api/attachments/session', authenticateToken, (req, res) => {
+  const token = jwt.sign(
+    { userId: req.user.userId, purpose: 'attachment' },
+    JWT_SECRET,
+    { expiresIn: Math.floor(ATTACHMENT_TTL_MS / 1000) }
+  );
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.cookie
+    ? res.cookie(ATTACHMENT_COOKIE, token, {
+        httpOnly: true, sameSite: 'strict', secure, path: '/uploads', maxAge: ATTACHMENT_TTL_MS,
+      })
+    : res.setHeader('Set-Cookie',
+        `${ATTACHMENT_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/uploads; Max-Age=${Math.floor(ATTACHMENT_TTL_MS / 1000)}${secure ? '; Secure' : ''}`);
+  res.json({ expiresInSeconds: Math.floor(ATTACHMENT_TTL_MS / 1000) });
+});
+
+/**
+ * Bind an uploaded file to a wave.
+ *
+ * Used by the upload paths, and by the client after it decrypts a message in an
+ * encrypted wave — the server cannot read those, so it cannot discover the
+ * binding for itself. That is the awkward corner of this design and it is
+ * deliberate: the waves most deserving of protection are the ones whose
+ * metadata the server is not allowed to see, so the client has to say.
+ *
+ * Only someone who can already post to the wave may bind into it, and a path
+ * already bound elsewhere is refused rather than moved.
+ */
+app.post('/api/attachments/bind', authenticateToken, apiLimiter, (req, res) => {
+  const rawPath = typeof req.body?.path === 'string' ? req.body.path : '';
+  const waveId = typeof req.body?.waveId === 'string' ? req.body.waveId : '';
+  if (!rawPath || !waveId) return res.status(400).json({ error: 'path and waveId are required' });
+
+  const relative = attachmentRelativePath(rawPath);
+  if (!relative) return res.status(400).json({ error: 'Not an uploads path' });
+
+  const wave = db.getWave(waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+  if (!canAccessWaveFromCache(waveId, req.user.userId)) {
+    return res.status(403).json({ error: 'You are not in that conversation' });
+  }
+
+  // Only the person who uploaded the file may say where it belongs.
+  //
+  // The tempting alternative — let any participant register any path — turns
+  // this route into a denial-of-service primitive: bind a stranger's public
+  // avatar or profile video to a wave they are not in, and it 404s for
+  // everyone. Binding RESTRICTS a file, so the right to bind has to follow
+  // ownership, not readership. Files with no row at all are legacy uploads
+  // from before v2.104.0; they stay public rather than becoming claimable.
+  const existing = db.getAttachmentByPath(relative);
+  if (!existing) return res.status(404).json({ error: 'Unknown attachment' });
+  if (existing.uploaded_by !== req.user.userId) {
+    return res.status(403).json({ error: 'Only the uploader can file an attachment' });
+  }
+
+  const result = db.bindAttachment({ path: relative, waveId, uploadedBy: req.user.userId });
+  if (!result.ok) return res.status(409).json({ error: 'That file already belongs to another conversation' });
+  res.json({ attachment: result.attachment });
+});
+
+/**
+ * Normalise anything the client might send — an absolute URL, a leading slash,
+ * a bare relative path — into the form stored in `attachments.path`, or null if
+ * it is not an uploads path at all.
+ *
+ * Rejects traversal outright rather than resolving it: a `..` in an attachment
+ * path has no legitimate meaning.
+ */
+function attachmentRelativePath(input) {
+  let value = String(input || '').trim();
+  try {
+    if (/^https?:\/\//i.test(value)) value = new URL(value).pathname;
+  } catch { return null; }
+  value = decodeURIComponent(value).replace(/^\/+/, '');
+  if (value.startsWith('uploads/')) value = value.slice('uploads/'.length);
+  if (!value || value.includes('..') || value.startsWith('/')) return null;
+  return value;
+}
 
 // ============ Auth Middleware ============
 function authenticateToken(req, res, next) {
@@ -7158,6 +7365,7 @@ app.post('/api/uploads', authenticateToken, (req, res, next) => {
 
     // Upload to storage (local or S3)
     const imageUrl = await storage.upload(processedBuffer, storageKey, contentType);
+    bindUploadToWave(storageKey, req.body?.waveId, user.id);
     console.log(`📷 Image uploaded by ${user.handle}: ${imageUrl}`);
 
     res.json({ success: true, url: imageUrl });
@@ -7198,6 +7406,7 @@ app.post('/api/uploads/file', authenticateToken, (req, res, next) => {
 
     // Upload to storage (local or S3)
     const fileUrl = await storage.upload(req.file.buffer, storageKey, req.file.mimetype);
+    bindUploadToWave(storageKey, req.body?.waveId, user.id);
     console.log(`📎 File uploaded by ${user.handle}: ${safeName} (${req.file.size} bytes)`);
 
     res.json({
@@ -7332,6 +7541,9 @@ app.post('/api/uploads/media', authenticateToken, (req, res, next) => {
     const storageKey = `media/${filename}`;
 
     const mediaUrl = await storage.upload(req.file.buffer, storageKey, req.file.mimetype);
+    // Profile videos belong to no conversation and pass no waveId, so they
+    // stay public — which is what a profile video is for.
+    bindUploadToWave(storageKey, req.body?.waveId, req.user.userId);
 
     console.log(`🎬 Audio uploaded by ${user.handle}: ${mediaUrl} (${Math.round(req.file.size / 1024)}KB)`);
 
