@@ -5,6 +5,43 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.0] - 2026-09-23
+
+### Security
+
+The remaining eight findings from the Communities audit — four Medium, four Low. That closes every finding except the CORTEX-COMM-002 remainder, which is a redesign of the cross-port code exchange rather than a fix, and the informational items. The new suite was re-run with each fix disabled: **13 of 19 cases fail without them, and the 6 that pass are the controls**, so it discriminates rather than refusing everything.
+
+- **Deleting an account no longer strands its Communities (CORTEX-COMM-015, Medium).** `deleteUserAccount` runs with `PRAGMA foreign_keys = OFF` — the manual cleanup it performs would otherwise trip constraints in the order it happens to do things — and the Community tables were never added to that manual list. So every `ON DELETE CASCADE` and `SET NULL` the Community schema declares was a promise nobody kept: `PRAGMA foreign_key_check` reported violations in five tables, and a deleted owner left behind an active membership, an owner grant and a Community all pointing at a user row that no longer existed.
+  - Deletion now does explicitly what the disabled foreign keys would have done, and the test asserts **zero** `foreign_key_check` violations afterwards rather than trusting the reasoning.
+  - Plus the one thing a foreign key cannot express: a Community whose **last owner** deletes their account is **suspended**, reversibly, with an audit record. Auto-promoting the next member would hand real authority to somebody who never asked for it because a stranger closed their account, and in a system where every other grant is deliberate that is the wrong default. A Community that still has another owner carries on untouched.
+  - A ban **on** the deleted account is dropped and the drop is recorded. A ban naming an id that belongs to nobody cannot match a returning person — they arrive with a new account and a new id — so keeping the row bought a broken foreign key and no protection. Bans that person *issued* survive with the attribution cleared.
+
+- **A private Community no longer announces itself (CORTEX-COMM-014, Medium).** The detail route had been written to answer 404 rather than 403 so that a private Community's existence stayed unconfirmed. The capability-gated routes had not: they answered 403 for one you were not in and 404 for one that was not there. Walk ids, read the status codes, map the private Communities on the node.
+  - One discovery decision — public, or an active member — is now made *before* deciding what to tell someone, and it is the same decision the detail route already used. A member who simply lacks a capability still gets 403; telling everyone 404 would hide the oracle by making the API useless to its own members.
+  - **Waves no longer carry the id of a container their reader cannot see.** A wave filed into a private Community's channel exposed `communityId` to anyone invited into that single wave. Being in a wave is not being in the Community whose channel holds it.
+  - **A channel's `waveCount` counts only waves its reader may actually open.** It reported every wave in the channel, so a member could watch private conversations they had no part in appear and disappear.
+  - Declined, with reasons: the **slug collision 409** stays, because globally unique human-readable addresses and non-enumerability cannot both hold and a creation flow that cannot say "taken" is one nobody can complete — it is now documented as an accepted oracle. And **withdrawn home-node standing still leaves a Community visible** to the remote member who was in it five minutes ago; standing governs what you may do, not what you already know, and hiding it reads as "you were removed" rather than "your node's pairing was withdrawn".
+
+- **A remote invitation confers only what was checked when it was issued (CORTEX-COMM-012, Medium).** Creation refuses to issue an invitation for an administrative role. Binding granted whatever that role had since **become** — so giving a harmless role `member.roles` a week later quietly turned every outstanding invitation for it into an administrative one. Bearer-invite redemption had always repeated the check; the remote path never did. The invitee is still admitted, as an ordinary member, and the Community's audit log records what was withheld.
+  - Remote invitations also now **expire** (30 days by default). They bind an address, not a person, and a handle on someone else's node can be released and re-registered — an invitation that waits forever eventually points at whoever holds the name now. Existing rows stay open; retroactively expiring invitations people are waiting on would be its own outage.
+
+- **Admission ceilings apply at every door (CORTEX-COMM-013, Medium).** The 10,000-member cap was enforced where staff add people and on open join, and omitted on the two paths that scale: redeeming a shared invite, and remote invitation binding during a cross-port login. A ceiling only some doors respect is not a ceiling.
+  - **The member list is paged.** `memberPageSize` was defined from the start and never used, so a Community approaching its cap serialised every member on each open of the list — and called `getMemberRoles` once per person, 501 queries for a page of 500. One query now, and `total`/`hasMore` so a truncated page never passes for a complete one.
+  - **WebSocket frames are bounded by `maxPayload`** rather than only checked after the whole message has been received and buffered.
+
+- **A deleted channel leaves its waves in no container at all (CORTEX-COMM-019, Low).** The foreign key cleared `channel_id` and knew nothing about `community_id`, so waves kept claiming a Community with no channel to hold them — the code comment described a state the data never reached. Both columns are now cleared in one transaction. **Unfiling is also scoped to the channel it names**: filing rights in channel A let someone detach a wave sitting in channel B, and the audit record was written against A, pointing an investigation at the wrong Community.
+
+- **Turning Communities off now actually freezes them (CORTEX-COMM-018, Low).** The feature gate covered `/api/communities` and `/api/admin/communities`; `/api/waves` could still file a wave into a channel, and a cross-port login still bound pending invitations. Disabling a feature is something an operator does during an incident, so it has to mean the state stops changing rather than that the front doors close. Logins still succeed and invitations stay pending for when it is switched back on.
+
+- **Malformed input is refused rather than absorbed (CORTEX-COMM-017, Low).** `expiresAt` was stored as whatever arrived, which matters because the two readers disagree about how to read it — invites compare it as text, bans parse it as a date — so a non-canonical format could leave an invitation redeemable past its own expiry. It is now normalised to UTC ISO or refused, and an expiry already in the past is a refusal rather than a lifetime. `maxUses` silently became **unlimited** for anything that was not a positive integer, including `0` and `-1`, so a typo produced the least restrictive invite available. A malformed role permission list answered 200 having changed nothing, which is the wrong answer to a request an administrator believes has taken effect.
+
+- **Security operations leave a record (CORTEX-COMM-016, Low).** Channel setting changes — including the visibility change that decides who can see a staff channel — and both kinds of invitation revocation wrote no Community audit entry at all, and a node admin closing someone else's Community appeared only in a general activity feed.
+
+### Notes
+
+- **Audit-record atomicity is deliberately deferred.** The finding is right that a handler which mutates and then logs can commit the first without the second. Fixing it properly means wrapping ~29 handlers in transactions; that is a mechanical change worth doing as one focused piece of work, not smuggled into a release that is already touching this much authorization code. The missing records — the part with actual consequences — are added here.
+- Remaining: the CORTEX-COMM-002 remainder (binding the cross-port code to browser, audience and nonce), 021 (ownership transfer, part product decision), and the informational findings 020/022/023/024.
+
 ## [2.104.1] - 2026-09-23
 
 ### Security

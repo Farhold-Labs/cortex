@@ -1442,7 +1442,7 @@ CREATE TABLE IF NOT EXISTS community_remote_invitations (
           -- binding means an admin can still see who invited whom.
           bound_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
           bound_at      TEXT,
-          created_at    TEXT NOT NULL,
+          created_at    TEXT NOT NULL, expires_at TEXT,
           UNIQUE(community_id, handle, node_name)
         );
 CREATE INDEX IF NOT EXISTS idx_remote_invites_address
