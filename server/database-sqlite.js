@@ -3360,6 +3360,27 @@ export class DatabaseSQLite {
       console.log('✅ waves.community_id / waves.channel_id added');
     }
 
+    // v2.105.1 — clear residue from deletions that ran without foreign-key
+    // enforcement. Runs every boot and is silent when there is nothing to do,
+    // because "nothing to do" is the expected state from here on: the deletion
+    // path no longer produces this. It is a repair, not a scheduled job.
+    try {
+      const repaired = this.repairOrphanedUserReferences();
+      if (repaired.total) {
+        console.log(`📝 Clearing ${repaired.total} row(s) left by account deletions that predate foreign-key enforcement (v2.105.1)...`);
+        for (const [where, n] of Object.entries(repaired.deleted)) console.log(`   deleted ${n} from ${where}`);
+        for (const [where, n] of Object.entries(repaired.nulled)) console.log(`   cleared ${n} in ${where}`);
+        for (const [where, n] of Object.entries(repaired.reassigned)) console.log(`   reattributed ${n} in ${where}`);
+        for (const [where, n] of Object.entries(repaired.needsDecision)) {
+          console.warn(`   ⚠️  ${n} row(s) in ${where} reference a deleted user and cannot be cleared automatically — that foreign key would have refused the delete, so this needs a decision`);
+        }
+        console.log('✅ orphaned user references cleared');
+      }
+    } catch (err) {
+      // A repair that cannot run is not a reason to refuse to start.
+      console.error('Could not clear orphaned user references:', err.message);
+    }
+
   }
 
   prepareStatements() {
@@ -10626,8 +10647,15 @@ export class DatabaseSQLite {
       // 19. Delete user avatar file (if exists)
       // Note: This should be handled separately by the server if avatarUrl exists
 
-      // 20. Clean up ALL remaining FK references without ON DELETE CASCADE
-      //     Each in its own try/catch so one missing table doesn't skip the rest
+      // 20. Clear every remaining reference the database will not clear itself.
+      //
+      //     With enforcement ON (v2.105.1) this list only needs to cover the
+      //     `ON DELETE NO ACTION` foreign keys — SQLite performs the CASCADEs
+      //     and SET NULLs on its own, and gets them right, which a hand-written
+      //     list demonstrably did not. Anything missed here now FAILS the
+      //     deletion loudly instead of leaving a row pointing at nobody.
+      //
+      //     Each in its own try/catch so one missing table doesn't skip the rest.
       const fkCleanups = [
         ['UPDATE waves SET profile_owner_id = NULL WHERE profile_owner_id = ?', [userId]],
         ['UPDATE warnings SET issued_by = ? WHERE issued_by = ?', [deletedUserId, userId]],
@@ -10642,6 +10670,13 @@ export class DatabaseSQLite {
         ['UPDATE wave_webhooks SET created_by = NULL WHERE created_by = ?', [userId]],
         ['UPDATE watch_parties SET host_user_id = ? WHERE host_user_id = ?', [deletedUserId, userId]],
         ['UPDATE call_sessions SET started_by = ? WHERE started_by = ?', [deletedUserId, userId]],
+        // These four were never on the list, and with enforcement off nothing
+        // said so — they are NO ACTION, so they would have blocked the delete
+        // had anything been checking (v2.105.1).
+        ['UPDATE wave_key_requests SET granted_by = NULL WHERE granted_by = ?', [userId]],
+        ['UPDATE events SET created_by = ? WHERE created_by = ?', [deletedUserId, userId]],
+        ['UPDATE incoming_webhooks SET created_by = NULL WHERE created_by = ?', [userId]],
+        ['UPDATE portal_waves SET added_by = NULL WHERE added_by = ?', [userId]],
         // Safety nets for steps 7/10 (transfer ownership) in case they missed any
         ['UPDATE waves SET created_by = ? WHERE created_by = ?', [deletedUserId, userId]],
         ['UPDATE crews SET created_by = ? WHERE created_by = ?', [deletedUserId, userId]],
@@ -10650,10 +10685,10 @@ export class DatabaseSQLite {
         try { this.db.prepare(sql).run(...params); } catch { /* Table may not exist */ }
       }
 
-      // 20b. Communities (v2.105.0, CORTEX-COMM-015). Foreign keys are off for
-      //      this transaction, so the cascades and SET NULLs the Community
-      //      schema declares have to be performed by hand — and the
-      //      last-owner case has to be decided, which no foreign key can do.
+      // 20b. Communities. The cascades here are now performed by SQLite, but
+      //      the last-owner decision is not something a foreign key can make,
+      //      and `community_bans.user_id` is RESTRICT — it would block the
+      //      delete outright. Both are settled here, before the user row goes.
       try {
         this.detachUserFromCommunities(userId);
       } catch (err) {
@@ -10667,18 +10702,115 @@ export class DatabaseSQLite {
       return { success: true, deletedUserId: userId, handle: user.handle };
     });
 
-    // Temporarily disable FK checks around the transaction.
-    // PRAGMA foreign_keys is a no-op inside transactions, so we must set it before BEGIN.
-    // This is safe because better-sqlite3 is synchronous (same pattern as remote ping insert).
-    this.db.exec('PRAGMA foreign_keys = OFF');
+    // Foreign keys stay ENFORCED (v2.105.1).
+    //
+    // They used to be switched off around this transaction, so that the manual
+    // cleanup below could run in whatever order it liked. The price was that
+    // every `ON DELETE CASCADE` in the schema became advisory: the cleanup list
+    // had to name each table by hand, it was written once and never revisited,
+    // and by the time anyone looked it was missing forty of them. What survived
+    // a deletion included the account's **encrypted E2EE private key**, its
+    // recovery blob, its known devices and its stored Plex credentials — and
+    // two such rows were found in production, belonging to a user who had
+    // deleted their account.
+    //
+    // With enforcement on, the database performs its own cascades and refuses
+    // the delete if anything is still pointing at the row. A missed reference
+    // is now a failed deletion the user can report, rather than silent residue
+    // nobody sees. That is the right way round: this is the code path that
+    // implements "delete my account", and it should be incapable of quietly
+    // keeping things.
+    //
+    // PRAGMA foreign_keys is a no-op inside a transaction, so the setting has
+    // to be established before BEGIN. better-sqlite3 is synchronous, so there
+    // is no interleaving to worry about.
+    this.db.pragma('foreign_keys = ON');
     try {
       return deleteTransaction();
     } catch (err) {
       console.error('Account deletion error:', err);
       return { success: false, error: err.message };
-    } finally {
-      this.db.exec('PRAGMA foreign_keys = ON');
     }
+  }
+
+  /**
+   * Clear rows left behind by deletions that ran without foreign-key
+   * enforcement (v2.105.1).
+   *
+   * Every account deleted before this release left residue: the cleanup list
+   * had to name each table by hand and was missing most of them. On the
+   * production node that included two rows of E2EE key material — an encrypted
+   * private key and a recovery blob — belonging to someone who had asked to be
+   * deleted.
+   *
+   * The repair involves no judgement, which is the point. For each foreign key
+   * into `users(id)`:
+   *
+   *   ON DELETE CASCADE   the row should not exist  -> delete it
+   *   ON DELETE SET NULL  the column should be null -> null it
+   *   ON DELETE NO ACTION the deletion routine clears these by hand, and does
+   *                       it one of two ways depending on whether the column
+   *                       can be empty -> point it at the deleted-user
+   *                       sentinel, or null it
+   *   ON DELETE RESTRICT  the row is meant to outlive the account (a ban) and
+   *                       what to do with it is a policy question -> report it
+   *
+   * That is exactly what the database and the deletion routine between them
+   * would have done, applied late. A
+   * row can only be in this state because of the bug, so there is no legitimate
+   * case to preserve. Idempotent: the second run finds nothing.
+   */
+  repairOrphanedUserReferences({ dryRun = false } = {}) {
+    const report = { deleted: {}, nulled: {}, reassigned: {}, needsDecision: {}, total: 0 };
+    const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
+    // Created lazily, and only if something actually needs it.
+    let sentinel = null;
+    const deletedUser = () => (sentinel ||= this.getOrCreateDeletedUser());
+
+    for (const table of tables) {
+      if (table === 'users') continue;
+      let fks;
+      try { fks = this.db.pragma(`foreign_key_list("${table}")`); } catch { continue; }
+
+      for (const fk of fks.filter(f => f.table === 'users')) {
+        const orphanClause = `"${fk.from}" IS NOT NULL AND "${fk.from}" NOT IN (SELECT id FROM users)`;
+        let count;
+        try {
+          count = this.db.prepare(`SELECT COUNT(*) AS c FROM "${table}" WHERE ${orphanClause}`).get().c;
+        } catch { continue; }
+        if (!count) continue;
+
+        const key = `${table}.${fk.from}`;
+        report.total += count;
+
+        if (fk.on_delete === 'CASCADE') {
+          report.deleted[key] = count;
+          if (!dryRun) this.db.prepare(`DELETE FROM "${table}" WHERE ${orphanClause}`).run();
+        } else if (fk.on_delete === 'SET NULL') {
+          report.nulled[key] = count;
+          if (!dryRun) this.db.prepare(`UPDATE "${table}" SET "${fk.from}" = NULL WHERE ${orphanClause}`).run();
+        } else if (fk.on_delete === 'RESTRICT') {
+          // A ban is meant to outlive the account it names. What to do with one
+          // whose subject is gone is a policy question, not a repair.
+          report.needsDecision[key] = count;
+        } else {
+          // NO ACTION. The deletion routine handles these explicitly, and the
+          // rule it follows is: keep the record, move the attribution. A
+          // conversation or a message must not disappear because its author
+          // left, so a NOT NULL column gets the sentinel rather than a hole.
+          const col = this.db.pragma(`table_info("${table}")`).find(c => c.name === fk.from);
+          report.reassigned[key] = count;
+          if (!dryRun) {
+            if (col && col.notnull) {
+              this.db.prepare(`UPDATE "${table}" SET "${fk.from}" = ? WHERE ${orphanClause}`).run(deletedUser());
+            } else {
+              this.db.prepare(`UPDATE "${table}" SET "${fk.from}" = NULL WHERE ${orphanClause}`).run();
+            }
+          }
+        }
+      }
+    }
+    return report;
   }
 
   /**
