@@ -359,6 +359,52 @@ resistance.
 
 ---
 
+### S-3 — account deletion kept the account's key material **[FIXED v2.105.1]**
+
+Found while verifying the v2.105.0 deploy, not by the audit. The post-deploy
+`PRAGMA foreign_key_check` on the production node came back with two violations,
+both in E2EE tables, both belonging to a user id that no longer existed.
+
+`deleteUserAccount` ran with `PRAGMA foreign_keys = OFF` so its manual cleanup
+could proceed in any order. The consequence is the same one CORTEX-COMM-015
+described for the Community tables, but general: **every `ON DELETE CASCADE` in
+the schema was advisory.** The cleanup list had to name each table by hand, it
+was written once and never revisited, and by v2.105.0 it was missing most of
+them. A test against a fully populated fixture confirmed what survived a
+deletion:
+
+| Survived | Why it matters |
+|---|---|
+| `user_encryption_keys` | the account's **encrypted E2EE private key** |
+| `user_recovery_keys` | its recovery blob |
+| `plex_connections` | encrypted **upstream media credentials** |
+| `known_devices`, `calendar_feed_tokens`, `refresh_tokens` | device history and bearer tokens |
+
+The blobs are encrypted at rest with a passphrase-derived key, so this was not
+an immediate compromise. It was a broken promise: "delete my account" left the
+most sensitive material the account had.
+
+**Fixed by enforcing foreign keys** rather than by adding four more tables to a
+list that had been wrong three times. The four `ON DELETE NO ACTION` references
+that would then have blocked the delete — `wave_key_requests.granted_by`,
+`events.created_by`, `incoming_webhooks.created_by`, `portal_waves.added_by` —
+are cleared explicitly. A reference nobody anticipates now **fails the deletion
+loudly** instead of leaving residue, which is the right way round for the code
+path that implements a privacy right.
+
+`repairOrphanedUserReferences` clears what earlier deletions left, applying
+exactly what the database and the deletion routine between them would have done:
+CASCADE deletes, SET NULL nulls, NO ACTION reattributes to the deleted-user
+sentinel (or nulls, where the column allows it), RESTRICT is reported because a
+ban outliving its subject is a policy question. Idempotent, and it ran on the
+production node at the v2.105.1 deploy.
+
+**The lesson, recorded because it has now cost three releases:** a hand-written
+list of "all the places that reference a user" is a list that silently falls
+behind the schema. The test that catches this does not enumerate tables — it
+walks `foreign_key_list` for every table and asserts that nothing anywhere names
+the deleted user. A table added next year is covered by it the day it is added.
+
 ## 11. Independent audit findings — 2026-09-21
 
 An external audit of v2.103.0 raised 1 Critical, 9 High, 5 Medium, 4 Low and 5
