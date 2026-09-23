@@ -472,6 +472,52 @@ export function canInChannel(db, actor, channel, capability) {
  * Never call this to decide whether a wave inside the channel may be opened.
  * See the module header: a private wave in a visible channel stays private.
  */
+/**
+ * May this actor know that this Community EXISTS? (CORTEX-COMM-014)
+ *
+ * Separate from every capability question, and asked first. The capability
+ * gates used to answer 403 for a private Community the caller was not in, and
+ * 404 for one that did not exist — which turns any gated route into an
+ * existence oracle: probe an id, and the status code tells you whether a
+ * private Community lives there. The detail route had already been written to
+ * 404 both cases; the gates had not.
+ *
+ * The rule is the one the detail route uses, so there is a single answer:
+ * public, or an active member. Unlisted deliberately sits with private here —
+ * "reachable by link" means reachable by someone holding an invitation, not by
+ * anyone walking ids.
+ *
+ * Standing deliberately does NOT count here, and the audit's suggestion that
+ * it should is declined. A remote member whose home node has been unpaired is
+ * refused by every gated endpoint — but she was an active member five minutes
+ * ago and already knows the place exists. Hiding it now protects nothing and
+ * reads as "you were removed" rather than "your node's pairing was withdrawn".
+ * Standing governs what you may DO, not what you already know. The same
+ * reasoning keeps a suspended Community visible to its own members.
+ */
+export function canDiscoverCommunity(db, actor, communityId) {
+  try {
+    const community = db.getCommunityById(communityId);
+    if (!community || community.status === 'deleted') return false;
+
+    // A SUSPENDED Community is still discoverable by the people who could
+    // discover it before. They are owed "this is frozen", not "this is gone" —
+    // and they already knew it existed, so there is nothing left to protect.
+    // A deleted one is gone, and says so.
+    const userId = resolveActor(db, actor);
+    if (!userId) return community.visibility === 'public';
+    if (community.visibility === 'public') return true;
+
+    const membership = db.getCommunityMembership(communityId, userId);
+    return !!membership && membership.state === 'active';
+  } catch {
+    // Fail closed: an error deciding whether someone may know a thing exists
+    // is not a reason to tell them.
+    return false;
+  }
+}
+
+
 export function canDiscoverChannel(db, actor, channelId) {
   const channel = db.getChannelById(channelId);
   if (!channel) return deny(REASON.WRONG_COMMUNITY, 'unknown channel');
