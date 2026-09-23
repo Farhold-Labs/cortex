@@ -20172,7 +20172,11 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
       db, { kind: 'user', userId: req.user.userId }, targetChannel.community_id,
       CommunityCaps.CREATE_WAVE, { resource: { type: 'channel', id: targetChannel.id } }
     );
-    if (!decision.allowed) {
+    // Community-wide permission is necessary but not sufficient: the channel
+    // gets its own say (CORTEX-COMM-011).
+    const inChannel = communityAuthz.canInChannel(
+      db, { kind: 'user', userId: req.user.userId }, targetChannel, CommunityCaps.CREATE_WAVE);
+    if (!decision.allowed || !inChannel) {
       return res.status(403).json({ error: 'You cannot start a conversation in that channel' });
     }
   }
@@ -23511,7 +23515,13 @@ app.delete('/api/communities/:id/members/:userId/roles/:roleId', authenticateTok
 
 app.get('/api/communities/:id/channels', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_CHANNEL)) return;
-  const channels = db.listChannels(req.params.id).map(c => ({
+  // CORTEX-COMM-011 — a restricted channel is not listed to someone who may
+  // not enter it. Leaking the name and description of a staff channel is most
+  // of what a restricted channel exists to prevent.
+  const visible = db.listChannels(req.params.id).filter(c =>
+    communityAuthz.canInChannel(db, communityActor(req), c, CommunityCaps.VIEW_CHANNEL));
+
+  const channels = visible.map(c => ({
     ...c,
     // The wave list per channel is deliberately NOT expanded here. Which waves
     // a given member may see is the waves' decision, not the channel's, so it
@@ -23588,6 +23598,59 @@ app.delete('/api/communities/:id/channels/:channelId', authenticateToken, (req, 
   res.json({ success: true });
 });
 
+
+// ----- Channel permissions (v2.103.3) -----
+//
+// A restricted channel needs a way to let people in, or it is a locked door
+// with the key thrown away. Only someone who may manage channels may change
+// these, and they cannot hand out a capability they do not hold themselves —
+// the same rule that governs roles.
+
+app.get('/api/communities/:id/channels/:channelId/roles', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS,
+    { resource: { type: 'channel', id: req.params.channelId } })) return;
+  res.json({ permissions: db.listChannelPermissions(req.params.channelId) });
+});
+
+app.put('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS,
+    { resource: { type: 'channel', id: req.params.channelId } })) return;
+
+  const role = db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(req.params.roleId);
+  if (!role || role.community_id !== req.params.id) return res.status(404).json({ error: 'Role not found' });
+
+  const allow = Array.isArray(req.body.allow) ? req.body.allow : [];
+  const deny = Array.isArray(req.body.deny) ? req.body.deny : [];
+
+  // You cannot grant into a channel what you do not hold in the Community.
+  const held = communityAuthz.effectiveCapabilities(db, communityActor(req), req.params.id);
+  const unheld = allow.filter(c => !held.has(c));
+  if (unheld.length) {
+    return res.status(403).json({ error: 'You cannot grant a capability you do not hold', detail: unheld.join(',') });
+  }
+
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
+
+  const saved = db.setChannelPermission(req.params.channelId, req.params.roleId, { allow, deny });
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'channel.permission_set',
+    targetType: 'channel', targetId: req.params.channelId,
+    metadata: { role: role.name, allow, deny },
+  });
+  res.json({ permission: saved });
+});
+
+app.delete('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateToken, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS,
+    { resource: { type: 'channel', id: req.params.channelId } })) return;
+  db.clearChannelPermission(req.params.channelId, req.params.roleId);
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'channel.permission_cleared',
+    targetType: 'channel', targetId: req.params.channelId,
+  });
+  res.json({ success: true });
+});
+
 // ----- Filing a wave into a channel -----
 //
 // The operation the whole container model exists to make safe. It changes where
@@ -23605,6 +23668,12 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
   // Community moderator could file anyone's private wave into their Community.
   if (!canManageWave(wave, req.user.userId)) {
     return res.status(403).json({ error: 'You cannot move that wave' });
+  }
+
+  // And over the channel it is going into (CORTEX-COMM-011).
+  const targetForFile = db.getChannelById(req.params.channelId);
+  if (!communityAuthz.canInChannel(db, communityActor(req), targetForFile, CommunityCaps.MOVE_WAVE)) {
+    return res.status(403).json({ error: 'You cannot file into that channel' });
   }
 
   const updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
