@@ -7,6 +7,7 @@ import { VERSION, API_URL, BASE_URL, canAccess, FONT_SIZES, MESSAGE_FONTS, DEFAU
 import { setTerminology } from '../config/terminology.js';
 import { getRandomTagline, SUCCESS, NOTIFICATION, formatError, GHOST_PROTOCOL } from '../../messages.js';
 import { storage } from '../utils/storage.js';
+import { startAttachmentSession, stopAttachmentSession } from '../utils/attachments.js';
 import { updateAppBadge, subscribeToPush } from '../utils/pwa.js';
 import { setupCapacitorPushListeners } from '../utils/capacitor-push.js';
 import { updateDocumentTitle, startFaviconFlash, stopFaviconFlash } from '../utils/favicon.js';
@@ -180,6 +181,16 @@ function MainApp({ sharePingId }) {
   const wrapHeader = !isMobile && headerRoom < 680;
 
   // Apply font scaling to the root HTML element so rem units scale properly
+  // Private attachments (v2.104.0): an <img> cannot send an Authorization
+  // header, so the browser needs a short-lived cookie before any gated file
+  // will load. Mint it as soon as we have a session, and drop it on the way
+  // out — a signed-out browser should not keep reading private waves.
+  useEffect(() => {
+    if (!token) return undefined;
+    startAttachmentSession();
+    return () => stopAttachmentSession();
+  }, [token]);
+
   useEffect(() => {
     document.documentElement.style.fontSize = `${fontScale * 100}%`;
     return () => {
