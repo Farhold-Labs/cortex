@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.1] - 2026-09-23
+
+### Security
+
+- **Deleting an account now actually deletes it (S-3).** Found while verifying the v2.105.0 deploy rather than by the audit: the post-deploy `foreign_key_check` on the production node returned two violations, both E2EE key rows belonging to a user id that no longer existed.
+  - `deleteUserAccount` ran with `PRAGMA foreign_keys = OFF` so its manual cleanup could proceed in whatever order it liked. That made **every `ON DELETE CASCADE` in the schema advisory**: the cleanup list had to name each table by hand, it was written once and never revisited, and by v2.105.0 it was missing most of them. CORTEX-COMM-015 described this for the Community tables; it was general.
+  - A test against a fully populated fixture confirmed what survived a deletion: the account's **encrypted E2EE private key**, its **recovery blob**, its stored **Plex credentials**, its known devices, its calendar feed token and its refresh tokens. The blobs are encrypted at rest with a passphrase-derived key so this was not an immediate compromise — it was a broken promise, and the most sensitive material the account had.
+  - **Fixed by enforcing foreign keys**, not by adding four more tables to a list that had already been wrong three times. The four `ON DELETE NO ACTION` references that would otherwise block the delete — `wave_key_requests.granted_by`, `events.created_by`, `incoming_webhooks.created_by`, `portal_waves.added_by` — are now cleared explicitly. A reference nobody anticipates **fails the deletion loudly** instead of leaving residue nobody sees, which is the right way round for the code path that implements a privacy right: it should be incapable of quietly keeping things.
+  - **`repairOrphanedUserReferences` clears what earlier deletions left**, at boot, idempotently, applying exactly what the database and the deletion routine between them would have done — CASCADE deletes, SET NULL nulls, NO ACTION reattributes to the deleted-user sentinel (or nulls where the column allows), RESTRICT is reported because a ban outliving its subject is a policy question rather than a repair. Measured before shipping: 2 orphaned rows on the production node, 1 on dev, none on QA or the second node.
+  - Conversations are untouched. A wave someone created and a message they wrote survive them, reattributed — a deletion that took the conversation with it would pass every assertion above and be a catastrophe, so that is a test of its own.
+
+### Notes
+
+- **The test does not enumerate tables.** It walks `foreign_key_list` for every table in the schema and asserts that nothing anywhere still names the deleted user. A hand-written list of "all the places that reference a user" is a list that falls behind the schema, which is what went wrong three times; a table added next year is covered by this the day it is added.
+- The one remaining place that disables foreign keys at runtime is the insert of a local reply to a *remote* ping, where `pings.parent_id` genuinely cannot be satisfied. It is scoped to a single statement and restored immediately — a deliberate exception, not the same class of problem.
+- Also fixed: the relay assertion in the federation scoping suite counted every request the fake peer had seen rather than the ones for its own ping, so a straggler from an earlier case could fail it. A timing artefact that reads as a security regression is worse than no test.
+
 ## [2.105.0] - 2026-09-23
 
 ### Security

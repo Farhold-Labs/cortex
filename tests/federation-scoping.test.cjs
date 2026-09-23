@@ -205,25 +205,28 @@ test('a peer may only speak about waves it has joined, and only for its own user
     });
 
     await t.test('the origin relays a new message once, and a repeat not at all', async () => {
-      // Relay is fire-and-forget over HTTP, so wait for the effect rather than
-      // for a fixed interval — a loaded machine is slower than 400ms and a
-      // timing flake here would read as a security regression.
-      const settle = async (want, ms = 4000) => {
+      // Relay is fire-and-forget over HTTP, so count what arrived FOR THIS PING
+      // rather than how many requests the fake peer has seen in total: a relay
+      // from an earlier subtest can land at any moment, and a timing artefact
+      // here would read as a security regression. Then wait on the condition
+      // rather than a fixed interval, because a loaded machine is slower.
+      const id = 'ping-relayed';
+      const relaysForThisPing = () =>
+        relayed.filter(env => env?.payload?.ping?.id === id).length;
+      const settle = async (want, ms = 5000) => {
         const deadline = Date.now() + ms;
-        while (relayed.length < want && Date.now() < deadline) await new Promise(r => setTimeout(r, 25));
-        await new Promise(r => setTimeout(r, 300));  // and a moment for any extra to arrive
+        while (relaysForThisPing() < want && Date.now() < deadline) await new Promise(r => setTimeout(r, 25));
+        await new Promise(r => setTimeout(r, 400));  // and a moment for any extra to arrive
       };
 
-      relayed.length = 0;
-      const id = 'ping-relayed';
       await send('member.example', 'new_ping', ping(id));
       await settle(1);
-      assert.equal(relayed.length, 1, 'the wave\'s other node should have received it exactly once');
+      assert.equal(relaysForThisPing(), 1, 'the wave\'s other node should have received it exactly once');
 
       // Same ping, fresh envelope id — the inbox dedup does not catch this.
       await send('member.example', 'new_ping', ping(id));
       await settle(2);
-      assert.equal(relayed.length, 1, 'a message we already hold is not new, and must not be amplified');
+      assert.equal(relaysForThisPing(), 1, 'a message we already hold is not new, and must not be amplified');
     });
 
     await t.test('an edit cannot reach a message in another wave', async () => {
