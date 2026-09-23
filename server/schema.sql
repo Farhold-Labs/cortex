@@ -1448,6 +1448,18 @@ CREATE TABLE IF NOT EXISTS community_remote_invitations (
 CREATE INDEX IF NOT EXISTS idx_remote_invites_address
           ON community_remote_invitations(node_name, handle, state);
 
+CREATE TABLE IF NOT EXISTS attachments (
+          id          TEXT PRIMARY KEY,
+          -- Relative to the uploads directory, e.g. 'messages/user-x-123.png'.
+          -- Unique so a path resolves to exactly one authority decision.
+          path        TEXT NOT NULL UNIQUE,
+          wave_id     TEXT REFERENCES waves(id) ON DELETE CASCADE,
+          uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at  TEXT NOT NULL,
+          bound_at    TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_attachments_wave ON attachments(wave_id);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);

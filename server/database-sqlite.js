@@ -3294,6 +3294,40 @@ export class DatabaseSQLite {
       console.log('✅ users.cross_port_verified_at added');
     }
 
+    // v2.104.0 — CORTEX-COMM-009: which conversation an uploaded file belongs to.
+    //
+    // Uploads were authenticated when created and then served by a plain static
+    // mount that asked nothing of anybody. Nothing recorded which wave a file
+    // belonged to, so there was no question the server COULD have asked. A
+    // removed participant, someone from another Community, or anybody handed
+    // the URL could fetch an attachment from a private conversation.
+    //
+    // `wave_id` is nullable on purpose. A row with no wave is a public object —
+    // avatars, profile media, and every file uploaded before this table
+    // existed. Those stay reachable: breaking images in existing conversations
+    // to close a gap on files already distributed is a poor trade, and that was
+    // a deliberate decision rather than an oversight.
+    const attachmentsExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'`
+    ).get();
+    if (!attachmentsExist) {
+      console.log('📝 Creating attachments table (v2.104.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS attachments (
+          id          TEXT PRIMARY KEY,
+          -- Relative to the uploads directory, e.g. 'messages/user-x-123.png'.
+          -- Unique so a path resolves to exactly one authority decision.
+          path        TEXT NOT NULL UNIQUE,
+          wave_id     TEXT REFERENCES waves(id) ON DELETE CASCADE,
+          uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at  TEXT NOT NULL,
+          bound_at    TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_attachments_wave ON attachments(wave_id);
+      `);
+      console.log('✅ attachments created');
+    }
+
     const waveColsForCommunity = this.db.prepare(`PRAGMA table_info(waves)`).all();
     if (waveColsForCommunity.length && !waveColsForCommunity.some(c => c.name === 'community_id')) {
       console.log('📝 Adding wave container columns (v2.94.0)...');
@@ -13846,6 +13880,41 @@ export class DatabaseSQLite {
     ).all(channelId);
   }
 
+
+
+  // ----- Attachments (v2.104.0, CORTEX-COMM-009) -----
+
+  /**
+   * Record that a stored file belongs to a wave.
+   *
+   * Idempotent, and it will not silently move a file from one wave to another:
+   * re-binding an already-bound path to a different wave is refused, because
+   * the only reason to do that is to make somebody else's attachment readable
+   * from a conversation the caller controls.
+   */
+  bindAttachment({ path, waveId, uploadedBy }) {
+    const existing = this.db.prepare('SELECT * FROM attachments WHERE path = ?').get(path);
+    const now = new Date().toISOString();
+
+    if (existing) {
+      if (existing.wave_id && waveId && existing.wave_id !== waveId) return { ok: false, reason: 'already bound' };
+      if (!existing.wave_id && waveId) {
+        this.db.prepare('UPDATE attachments SET wave_id = ?, bound_at = ? WHERE id = ?')
+          .run(waveId, now, existing.id);
+      }
+      return { ok: true, attachment: this.getAttachmentByPath(path) };
+    }
+
+    this.db.prepare(`
+      INSERT INTO attachments (id, path, wave_id, uploaded_by, created_at, bound_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(uuidv4(), path, waveId || null, uploadedBy || null, now, waveId ? now : null);
+    return { ok: true, attachment: this.getAttachmentByPath(path) };
+  }
+
+  getAttachmentByPath(path) {
+    return this.db.prepare('SELECT * FROM attachments WHERE path = ?').get(path) || null;
+  }
 
   // ----- Communities: Phase 3 additions (v2.96.0) -----
 
