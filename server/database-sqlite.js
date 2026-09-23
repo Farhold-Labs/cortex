@@ -18,6 +18,11 @@ import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import sanitizeHtml from 'sanitize-html';
 import crypto from 'crypto';
+import { canInviteConferRole } from './lib/communities/authorize.js';
+import { CAPS as COMMUNITY_CAPS } from './lib/communities/limits.js';
+
+/** Shared with the HTTP admission paths — see lib/communities/limits.js. */
+const COMMUNITY_MEMBER_CAP = COMMUNITY_CAPS.membersPerCommunity;
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import { BUILT_IN_ROLES, isCapability, unionCapabilities } from './lib/communities/capabilities.js';
 
@@ -3280,6 +3285,21 @@ export class DatabaseSQLite {
       console.log('✅ community_remote_invitations created');
     }
 
+    // v2.105.0 — CORTEX-COMM-012: remote invitations expire.
+    //
+    // They bind an ADDRESS rather than a person, and a handle on someone else's
+    // node can be released and re-registered. An invitation with no lifetime
+    // eventually points at whoever holds that name now, which is not who was
+    // invited. Existing rows stay open — retroactively expiring invitations
+    // people are waiting on would be its own outage — and get a lifetime only
+    // when reissued.
+    const remoteInviteCols = this.db.prepare(`PRAGMA table_info(community_remote_invitations)`).all();
+    if (remoteInviteCols.length && !remoteInviteCols.some(c => c.name === 'expires_at')) {
+      console.log('📝 Adding community_remote_invitations.expires_at (v2.105.0)...');
+      this.db.exec(`ALTER TABLE community_remote_invitations ADD COLUMN expires_at TEXT;`);
+      console.log('✅ community_remote_invitations.expires_at added');
+    }
+
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
     //
     // A remote person's standing here is borrowed, and until now it was borrowed
@@ -5771,6 +5791,7 @@ export class DatabaseSQLite {
   getWavesForUser(userId, showArchived = false, showHidden = false, participation = null) {
     // v2.84.0 — one lookup for the whole list rather than a query per row.
     const mutedWaveIds = new Set(this.getMutedWaveIds(userId));
+    const visibleCommunities = this.visibleCommunityIds(userId);
     // Get user's crew IDs
     const userCrewIds = this.db.prepare('SELECT crew_id FROM crew_members WHERE user_id = ?').all(userId).map(r => r.crew_id);
 
@@ -5958,8 +5979,12 @@ export class DatabaseSQLite {
       allowReactions: r.allow_reactions == null ? true : r.allow_reactions === 1,
       // Container (v2.94.0) — see rowToWave. A list needs these to group a wave
       // under its channel without a second round trip.
-      communityId: r.community_id || null,
-      channelId: r.channel_id || null,
+      //
+      // Withheld when the reader may not know the Community exists
+      // (CORTEX-COMM-014): being in a wave is not being in the Community whose
+      // channel holds it.
+      communityId: visibleCommunities.has(r.community_id) ? (r.community_id || null) : null,
+      channelId: visibleCommunities.has(r.community_id) ? (r.channel_id || null) : null,
       muted: mutedWaveIds.has(r.id),
     }));
   }
@@ -5970,6 +5995,7 @@ export class DatabaseSQLite {
   getWavesForUserMinimal(userId, showArchived = false, showHidden = false, participation = null) {
     // v2.84.0 — one lookup for the whole list rather than a query per row.
     const mutedWaveIds = new Set(this.getMutedWaveIds(userId));
+    const visibleCommunities = this.visibleCommunityIds(userId);
     // Get user's crew IDs
     const userCrewIds = this.db.prepare('SELECT crew_id FROM crew_members WHERE user_id = ?').all(userId).map(r => r.crew_id);
 
@@ -6104,8 +6130,12 @@ export class DatabaseSQLite {
       allowReactions: r.allow_reactions == null ? true : r.allow_reactions === 1,
       // Container (v2.94.0) — see rowToWave. A list needs these to group a wave
       // under its channel without a second round trip.
-      communityId: r.community_id || null,
-      channelId: r.channel_id || null,
+      //
+      // Withheld when the reader may not know the Community exists
+      // (CORTEX-COMM-014): being in a wave is not being in the Community whose
+      // channel holds it.
+      communityId: visibleCommunities.has(r.community_id) ? (r.community_id || null) : null,
+      channelId: visibleCommunities.has(r.community_id) ? (r.channel_id || null) : null,
       muted: mutedWaveIds.has(r.id),
       updatedAt: r.updated_at,
       encrypted: r.encrypted === 1,
@@ -10620,6 +10650,17 @@ export class DatabaseSQLite {
         try { this.db.prepare(sql).run(...params); } catch { /* Table may not exist */ }
       }
 
+      // 20b. Communities (v2.105.0, CORTEX-COMM-015). Foreign keys are off for
+      //      this transaction, so the cascades and SET NULLs the Community
+      //      schema declares have to be performed by hand — and the
+      //      last-owner case has to be decided, which no foreign key can do.
+      try {
+        this.detachUserFromCommunities(userId);
+      } catch (err) {
+        console.error('[account deletion] Community detach failed:', err.message);
+        throw err;
+      }
+
       // 21. Finally, delete the user
       this.db.prepare('DELETE FROM users WHERE id = ?').run(userId);
 
@@ -10638,6 +10679,107 @@ export class DatabaseSQLite {
     } finally {
       this.db.exec('PRAGMA foreign_keys = ON');
     }
+  }
+
+  /**
+   * Remove a person from every Community when their account is deleted
+   * (CORTEX-COMM-015).
+   *
+   * `deleteUserAccount` runs with `PRAGMA foreign_keys = OFF`, because the
+   * manual cleanup it performs would otherwise trip constraints in the order it
+   * happens to do things. The cost is that every `ON DELETE CASCADE` and
+   * `ON DELETE SET NULL` the schema declares becomes a promise nobody keeps —
+   * and the Community tables were never added to the manual list at all. A
+   * deleted owner left behind an active membership, an owner grant and a
+   * Community still pointing at them; `PRAGMA foreign_key_check` reported
+   * violations in five tables.
+   *
+   * So this does explicitly what the disabled foreign keys would have done,
+   * plus the one thing a foreign key cannot express: what happens to a
+   * Community whose last owner has just deleted their account.
+   *
+   * That case **suspends** the Community rather than promoting someone.
+   * Suspension is reversible, freezes everything for everyone, and leaves
+   * memberships, roles and channels intact for a node admin to reassign.
+   * Auto-promoting the next member would hand real authority to somebody who
+   * never asked for it because a stranger closed their account — and in a
+   * system where every other grant is deliberate, that is the wrong default.
+   */
+  detachUserFromCommunities(userId) {
+    const result = { suspended: [], memberships: 0, bansDropped: 0 };
+
+    // Read ownership BEFORE anything is deleted — afterwards there is no
+    // membership row left to tell us what they owned.
+    const ownerships = this.db.prepare(`
+      SELECT m.community_id
+      FROM community_memberships m
+      JOIN community_membership_roles mr ON mr.membership_id = m.id
+      JOIN community_roles r ON r.id = mr.role_id
+      WHERE m.user_id = ? AND m.state = 'active' AND r.name = 'owner'
+    `).all(userId).map(r => r.community_id);
+
+    for (const communityId of ownerships) {
+      const otherOwners = this.db.prepare(`
+        SELECT COUNT(*) AS c
+        FROM community_memberships m
+        JOIN community_membership_roles mr ON mr.membership_id = m.id
+        JOIN community_roles r ON r.id = mr.role_id
+        WHERE m.community_id = ? AND m.state = 'active' AND r.name = 'owner' AND m.user_id != ?
+      `).get(communityId, userId).c;
+      if (otherOwners > 0) continue;
+
+      this.db.prepare("UPDATE communities SET status = 'suspended', state_version = state_version + 1, updated_at = ? WHERE id = ? AND status = 'active'")
+        .run(new Date().toISOString(), communityId);
+      try {
+        this.logCommunityAudit(communityId, {
+          actorId: null,
+          action: 'community.suspended_last_owner_deleted',
+          metadata: { note: 'The only owner deleted their account. A node admin must appoint a new owner before this reopens.' },
+        });
+      } catch { /* audit table may predate this */ }
+      result.suspended.push(communityId);
+    }
+
+    // What the cascades would have removed.
+    const memberships = this.db.prepare('SELECT id FROM community_memberships WHERE user_id = ?').all(userId);
+    for (const m of memberships) {
+      this.db.prepare('DELETE FROM community_membership_roles WHERE membership_id = ?').run(m.id);
+    }
+    result.memberships = this.db.prepare('DELETE FROM community_memberships WHERE user_id = ?').run(userId).changes;
+
+    // A ban names a user id. Once that id belongs to nobody it cannot match
+    // anybody either — the same person returning gets a new account and a new
+    // id, so keeping the row buys a broken foreign key and no protection. It is
+    // dropped, and the Community's audit log records that it was.
+    const bans = this.db.prepare('SELECT community_id FROM community_bans WHERE user_id = ?').all(userId);
+    for (const ban of bans) {
+      try {
+        this.logCommunityAudit(ban.community_id, {
+          actorId: null,
+          action: 'community.ban_dropped_account_deleted',
+          metadata: { note: 'The banned account was deleted. A ban keyed to a deleted identity cannot match a returning person.' },
+        });
+      } catch { /* audit table may predate this */ }
+    }
+    result.bansDropped = this.db.prepare('DELETE FROM community_bans WHERE user_id = ?').run(userId).changes;
+
+    // What the SET NULLs would have cleared. Attribution to a deleted account
+    // becomes null here, which is what each foreign key already declares.
+    for (const sql of [
+      'UPDATE communities SET created_by = NULL WHERE created_by = ?',
+      'UPDATE channels SET created_by = NULL WHERE created_by = ?',
+      'UPDATE community_memberships SET invited_by = NULL WHERE invited_by = ?',
+      'UPDATE community_membership_roles SET granted_by = NULL WHERE granted_by = ?',
+      'UPDATE community_invites SET created_by = NULL WHERE created_by = ?',
+      'UPDATE community_bans SET banned_by = NULL WHERE banned_by = ?',
+      'UPDATE community_audit_log SET actor_id = NULL WHERE actor_id = ?',
+      'UPDATE community_remote_invitations SET invited_by = NULL WHERE invited_by = ?',
+      'UPDATE community_remote_invitations SET bound_user_id = NULL WHERE bound_user_id = ?',
+    ]) {
+      try { this.db.prepare(sql).run(userId); } catch { /* table may not exist on an older node */ }
+    }
+
+    return result;
   }
 
   // ============ E2EE Methods (v1.19.0) ============
@@ -13694,14 +13836,54 @@ export class DatabaseSQLite {
     return this.getCommunityMembership(communityId, userId);
   }
 
-  listCommunityMembers(communityId, { state = 'active' } = {}) {
-    return this.db.prepare(`
+  listCommunityMembers(communityId, { state = 'active', limit = null, offset = 0 } = {}) {
+    // Paged since v2.105.0 (CORTEX-COMM-013). `memberPageSize` was defined in
+    // limits.js from the start and never used here, so a Community approaching
+    // its 10,000-member cap serialised all of them on every open of the member
+    // list — on a synchronous server, where that is everyone else's latency too.
+    let sql = `
       SELECT m.*, u.handle, u.display_name, u.avatar_url, u.is_cross_port, u.home_node
       FROM community_memberships m
       JOIN users u ON u.id = m.user_id
       WHERE m.community_id = ? AND (? IS NULL OR m.state = ?)
-      ORDER BY u.display_name COLLATE NOCASE ASC
-    `).all(communityId, state, state);
+      ORDER BY u.display_name COLLATE NOCASE ASC`;
+    const params = [communityId, state, state];
+    if (limit != null) {
+      sql += ' LIMIT ? OFFSET ?';
+      params.push(limit, Math.max(0, offset));
+    }
+    return this.db.prepare(sql).all(...params);
+  }
+
+  /** How many members a Community has, without loading any of them. */
+  countCommunityMembers(communityId, { state = 'active' } = {}) {
+    return this.db.prepare(
+      'SELECT COUNT(*) AS c FROM community_memberships WHERE community_id = ? AND (? IS NULL OR state = ?)'
+    ).get(communityId, state, state).c;
+  }
+
+  /**
+   * Roles for many members in one query (CORTEX-COMM-013).
+   *
+   * The member list called `getMemberRoles` once per person, so rendering a
+   * page of 500 meant 501 queries. Same rows, one round trip.
+   */
+  getMemberRolesBulk(communityId, userIds) {
+    const out = new Map(userIds.map(id => [id, []]));
+    if (!userIds.length) return out;
+    const placeholders = userIds.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT m.user_id, r.id, r.name, r.priority
+      FROM community_membership_roles mr
+      JOIN community_roles r       ON r.id = mr.role_id
+      JOIN community_memberships m ON m.id = mr.membership_id
+      WHERE m.community_id = ? AND m.user_id IN (${placeholders})
+      ORDER BY r.priority DESC
+    `).all(communityId, ...userIds);
+    for (const row of rows) {
+      out.get(row.user_id)?.push({ id: row.id, name: row.name, priority: row.priority });
+    }
+    return out;
   }
 
   // ----- Roles -----
@@ -13848,7 +14030,19 @@ export class DatabaseSQLite {
     // ON DELETE SET NULL on waves.channel_id: deleting a container must never
     // delete the conversations inside it. They fall back to uncontained, which
     // is a state the rest of Cortex already handles because it is the normal one.
-    this.db.prepare('DELETE FROM channels WHERE id = ?').run(id);
+    //
+    // "Uncontained" has to mean both columns, though (CORTEX-COMM-019). The
+    // foreign key clears `channel_id` and knows nothing about `community_id`,
+    // so a deleted channel used to leave its waves still claiming membership of
+    // a Community with no channel to put them in — the comment above described
+    // a state the data did not reach. Cleared first, in one transaction, so
+    // there is no moment where a wave names a channel that has gone.
+    this.db.transaction(() => {
+      this.db.prepare(
+        'UPDATE waves SET community_id = NULL, channel_id = NULL, updated_at = ? WHERE channel_id = ?'
+      ).run(new Date().toISOString(), id);
+      this.db.prepare('DELETE FROM channels WHERE id = ?').run(id);
+    })();
   }
 
 
@@ -13914,6 +14108,54 @@ export class DatabaseSQLite {
     return this.db.prepare(
       'SELECT * FROM waves WHERE channel_id = ? ORDER BY updated_at DESC'
     ).all(channelId);
+  }
+
+  /**
+   * Just enough of each wave in a channel to decide who may see it
+   * (CORTEX-COMM-014 / 013).
+   *
+   * The channel listing used to count waves with `listWavesInChannel(id).length`
+   * — every column of every row, loaded and discarded, to produce one integer,
+   * and an integer that counted waves the caller could not read. A member could
+   * watch the private waves in a channel appear and disappear without ever
+   * being in one.
+   */
+  /**
+   * Which Communities may this person know exist? (CORTEX-COMM-014)
+   *
+   * A wave carries the id of the channel and Community it was filed into, and
+   * the wave list handed those out to every participant. Wave membership and
+   * Community membership are not the same thing: someone invited into a single
+   * wave that happens to live in a private Community's channel could read the
+   * private Community's id straight out of their own sidebar payload, and from
+   * there probe for more.
+   *
+   * Public Communities are knowable by anyone; the rest need an active
+   * membership. Computed once per list rather than per wave.
+   */
+  visibleCommunityIds(userId) {
+    const ids = new Set();
+    try {
+      for (const r of this.db.prepare("SELECT id FROM communities WHERE visibility = 'public' AND status = 'active'").all()) {
+        ids.add(r.id);
+      }
+      if (userId) {
+        for (const r of this.db.prepare(
+          "SELECT community_id FROM community_memberships WHERE user_id = ? AND state = 'active'"
+        ).all(userId)) {
+          ids.add(r.community_id);
+        }
+      }
+    } catch { /* Communities may not exist on an older node */ }
+    return ids;
+  }
+
+  listChannelWaveContainment(channelId, limit = 500) {
+    return this.db.prepare(`
+      SELECT id, privacy, crew_id, federation_state
+      FROM waves WHERE channel_id = ?
+      ORDER BY updated_at DESC LIMIT ?
+    `).all(channelId, limit);
   }
 
 
@@ -14123,17 +14365,25 @@ export class DatabaseSQLite {
    * the invitation simply waits, and is redeemed by the act of that person
    * cross-porting in for the first time.
    */
-  createRemoteInvitation({ communityId, handle, nodeName, roleId = null, invitedBy = null }) {
+  /** How long a remote invitation stays open. See the expires_at migration. */
+  static REMOTE_INVITATION_TTL_DAYS = 30;
+
+  createRemoteInvitation({ communityId, handle, nodeName, roleId = null, invitedBy = null, expiresAt = undefined }) {
     const id = uuidv4();
+    const now = new Date();
+    const expiry = expiresAt === undefined
+      ? new Date(now.getTime() + DatabaseSQLite.REMOTE_INVITATION_TTL_DAYS * 86400_000).toISOString()
+      : expiresAt;
     this.db.prepare(`
       INSERT INTO community_remote_invitations
-        (id, community_id, handle, node_name, role_id, invited_by, state, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+        (id, community_id, handle, node_name, role_id, invited_by, state, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
       ON CONFLICT(community_id, handle, node_name) DO UPDATE SET
         role_id = excluded.role_id, invited_by = excluded.invited_by,
-        state = 'pending', bound_user_id = NULL, bound_at = NULL
+        state = 'pending', bound_user_id = NULL, bound_at = NULL,
+        expires_at = excluded.expires_at
     `).run(id, communityId, String(handle).toLowerCase(), String(nodeName).toLowerCase(),
-           roleId, invitedBy, new Date().toISOString());
+           roleId, invitedBy, now.toISOString(), expiry);
     return this.db.prepare(
       'SELECT * FROM community_remote_invitations WHERE community_id = ? AND handle = ? AND node_name = ?'
     ).get(communityId, String(handle).toLowerCase(), String(nodeName).toLowerCase());
@@ -14182,13 +14432,58 @@ export class DatabaseSQLite {
         // An invitation cannot overrule a ban imposed since it was sent.
         if (this.getCommunityBan(invite.community_id, userId)) continue;
 
-        const membershipId = this.addCommunityMember(invite.community_id, userId, {
-          state: 'active', invitedBy: invite.invited_by, at: now,
-        });
+        // An invitation has a lifetime (CORTEX-COMM-012). It binds an ADDRESS,
+        // not a person — @someone@their.node — and a handle on a remote node
+        // can be released and re-registered by somebody else. An invitation
+        // that waits forever eventually points at whoever holds the name now.
+        if (invite.expires_at && invite.expires_at <= now) {
+          this.db.prepare("UPDATE community_remote_invitations SET state = 'revoked' WHERE id = ?").run(invite.id);
+          continue;
+        }
+
         const role = invite.role_id
           ? this.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(invite.role_id)
           : this.getCommunityRole(invite.community_id, 'member');
-        if (role) this.grantCommunityRole(membershipId, role.id, { grantedBy: invite.invited_by, at: now });
+
+        // Re-check what the role confers NOW, not what it conferred when the
+        // invitation was written (CORTEX-COMM-012). Creation refuses to issue
+        // an invitation for an administrative role; binding used to grant
+        // whatever that role had since become. Give a harmless role
+        // `member.roles` a week later and every outstanding invitation for it
+        // turns into an administrative one. Bearer-invite redemption has always
+        // repeated this check; the remote path never did.
+        if (role && !canInviteConferRole(role).allowed) {
+          try {
+            this.logCommunityAudit(invite.community_id, {
+              actorId: null,
+              action: 'community.remote_invite_role_withheld',
+              targetType: 'remote_invitation', targetId: invite.id,
+              metadata: { role: role.name, note: 'The role became administrative after the invitation was issued. Membership granted without it.' },
+            });
+          } catch { /* audit table may predate this */ }
+        }
+
+        // The member cap applies here too (CORTEX-COMM-013). Remote binding
+        // happens during a cross-port login, far from the routes that check
+        // it, which is exactly why it was missed.
+        const existingMembership = this.getCommunityMembership(invite.community_id, userId);
+        if (!(existingMembership && existingMembership.state === 'active') &&
+            this.countCommunityMembers(invite.community_id) >= COMMUNITY_MEMBER_CAP) {
+          console.warn(`[communities] remote invitation for ${invite.community_id} not bound: member cap reached`);
+          continue;
+        }
+
+        const membershipId = this.addCommunityMember(invite.community_id, userId, {
+          state: 'active', invitedBy: invite.invited_by, at: now,
+        });
+
+        // They still become a member — the invitation was genuine and refusing
+        // it outright would strand someone who did nothing wrong. What they do
+        // not get is authority nobody checked.
+        const grantable = role && canInviteConferRole(role).allowed
+          ? role
+          : this.getCommunityRole(invite.community_id, 'member');
+        if (grantable) this.grantCommunityRole(membershipId, grantable.id, { grantedBy: invite.invited_by, at: now });
 
         this.db.prepare(`
           UPDATE community_remote_invitations

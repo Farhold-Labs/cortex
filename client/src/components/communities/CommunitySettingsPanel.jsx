@@ -14,6 +14,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
   const can = (c) => (capabilities || []).includes(c);
 
   const [members, setMembers] = useState([]);
+  const [memberTotal, setMemberTotal] = useState(0);
   const [invites, setInvites] = useState([]);
   const [mintedToken, setMintedToken] = useState(null);
   const [channelName, setChannelName] = useState('');
@@ -36,6 +37,9 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
       try {
         const m = await fetchAPI(`/communities/${community.id}/members`);
         setMembers(m.members || []);
+        // The server pages this from v2.105.0. Showing 500 of 3000 as though it
+        // were the whole list would be a quietly wrong answer.
+        setMemberTotal(typeof m.total === 'number' ? m.total : (m.members || []).length);
       } catch { /* the panel is still useful without it */ }
     }
     if (can('member.invite')) {
@@ -346,7 +350,9 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
 
       {can('member.view') && (
         <div style={box}>
-          <div style={label}>MEMBERS ({members.length})</div>
+          <div style={label}>
+            MEMBERS ({memberTotal > members.length ? `${members.length} of ${memberTotal}` : members.length})
+          </div>
           {members.map(m => (
             <div key={m.userId} style={{ fontSize: '0.78rem', padding: '0.2rem 0' }}>
               {m.displayName || m.handle}

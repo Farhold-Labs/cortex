@@ -64,6 +64,7 @@ test('Communities API', async (t) => {
     });
     child.stdout.on('data', b => { output += b; });
     child.stderr.on('data', b => { output += b; });
+    if (process.env.DEBUG_SERVER) { child.stdout.pipe(process.stderr); child.stderr.pipe(process.stderr); }
 
     const deadline = Date.now() + 25000;
     while (!/API_TEST_PORT=(\d+)/.test(output)) {
