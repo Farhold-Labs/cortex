@@ -4438,20 +4438,29 @@ class Database {
     };
 
     if (existingIndex >= 0) {
+      // Same provenance rule as the SQLite store (CORTEX-COMM-007): an id
+      // already cached for one wave and origin cannot be reused to rewrite it
+      // from somewhere else. This copy replaced the whole record, author
+      // included, which made it the more damaging of the two.
+      const prior = data.remoteDroplets[existingIndex];
+      if (prior.waveId !== waveId || prior.originNode !== originNode) {
+        console.warn(`[federation] refused to overwrite ping ${id}: cached as ${prior.waveId}/${prior.originNode}, offered as ${waveId}/${originNode}`);
+        return { ...prior, isRemote: true, applied: false };
+      }
       data.remoteDroplets[existingIndex] = droplet;
     } else {
       data.remoteDroplets.push(droplet);
     }
 
     this.saveFile(DATA_FILES.federation, data);
-    return { ...droplet, isRemote: true };
+    return { ...droplet, isRemote: true, applied: true };
   }
 
-  markRemoteDropletDeleted(id) {
+  markRemoteDropletDeleted(id, waveId = null) {
     const now = new Date().toISOString();
     const data = this.loadFile(DATA_FILES.federation, { identity: null, nodes: [], remoteUsers: [], waveFederation: [], remoteDroplets: [], queue: [], inboxLog: [] });
 
-    const dropletIndex = (data.remoteDroplets || []).findIndex(d => d.id === id);
+    const dropletIndex = (data.remoteDroplets || []).findIndex(d => d.id === id && (!waveId || d.waveId === waveId));
     if (dropletIndex === -1) return false;
 
     data.remoteDroplets[dropletIndex].deleted = true;
@@ -18632,6 +18641,40 @@ app.post('/api/federation/inbox/decline', federationRequestLimiter, authenticate
 
 // Federation inbox - receives signed messages from other servers
 // This is the main entry point for federated content delivery
+/**
+ * Per-wave relay budget (CORTEX-COMM-006).
+ *
+ * When this node is a wave's origin it re-sends every incoming ping to the
+ * other member nodes, signed by us. That is one inbound request turning into
+ * several authenticated outbound ones — useful for a conversation, and a
+ * multiplier for anyone who has found a way to feed the path. Membership and
+ * the no-relay-what-we-already-hold rule are the real fixes; this is the
+ * ceiling that holds when a novel-looking flood gets through both.
+ *
+ * Process-local, like the Communities mutation budget it copies: a restart
+ * forgives the wave, and a second process counts separately. It bounds a
+ * runaway, it is not an access control.
+ */
+const RELAY_BUDGET = Object.freeze({ windowMs: 60_000, max: 120 });
+const relayBuckets = new Map();
+
+function chargeFederationRelay(waveId, now = Date.now()) {
+  for (const [key, hits] of relayBuckets) {
+    const live = hits.filter(t => now - t < RELAY_BUDGET.windowMs);
+    if (live.length) relayBuckets.set(key, live);
+    else relayBuckets.delete(key);
+  }
+
+  const hits = relayBuckets.get(waveId) || [];
+  if (hits.length >= RELAY_BUDGET.max) {
+    console.warn(`[federation] relay budget exhausted for wave ${waveId} — dropping relays this minute`);
+    return false;
+  }
+  hits.push(now);
+  relayBuckets.set(waveId, hits);
+  return true;
+}
+
 app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederationRequest, async (req, res) => {
   // Strip padding from incoming messages (v2.28.0)
   stripPadding(req.body);
@@ -18926,10 +18969,22 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         let localWave = db.getWaveByOrigin(sourceNode.nodeName, originWaveId);
         let isOriginServer = false;
 
-        // Second try: this server is origin, sourceNode is participant
+        // Second try: this server is origin, sourceNode is participant.
+        //
+        // Being paired is not being in the conversation (CORTEX-COMM-006).
+        // This branch used to accept any origin wave whose id the sender could
+        // name, so a paired node that had never joined a wave could post into
+        // it — and, because the origin relays, have this node sign that post
+        // onward to everyone else in it. The wave's federation list is the
+        // membership record; the backfill endpoint has always consulted it.
         if (!localWave) {
           const maybeOriginWave = db.getWave(originWaveId);
           if (maybeOriginWave && maybeOriginWave.federationState === 'origin') {
+            const partners = db.getWaveFederationNodes(originWaveId).map(n => n.nodeName);
+            if (!partners.includes(sourceNode.nodeName)) {
+              console.warn(`[federation] ${sourceNode.nodeName} tried to post into wave ${originWaveId}, which it has not joined`);
+              break;
+            }
             localWave = maybeOriginWave;
             isOriginServer = true;
           }
@@ -18937,6 +18992,18 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
 
         if (!localWave) {
           console.error(`${type}: No local wave found for origin ${originWaveId} from ${sourceNode.nodeName}`);
+          break;
+        }
+
+        // A node may only speak for its own users when we are the origin
+        // (CORTEX-COMM-006). Attribution arrived as a bare claim, so a peer
+        // could sign a message and label it as somebody on a third node —
+        // and the origin would then relay that forgery under its own
+        // signature. The participant side is different: there the sender IS
+        // the wave's origin, matched on (origin_node, origin_wave_id), and
+        // relaying other members' messages is exactly its job.
+        if (isOriginServer && author?.nodeName && author.nodeName !== sourceNode.nodeName) {
+          console.warn(`[federation] ${sourceNode.nodeName} claimed authorship for ${author.nodeName}`);
           break;
         }
 
@@ -18953,7 +19020,11 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           });
         }
 
-        // Cache the remote ping
+        // Cache the remote ping. A ping we already hold is not new, so it is
+        // neither re-broadcast nor relayed (CORTEX-COMM-006): repeating one
+        // envelope under fresh ids was free amplification, since every relay
+        // leaves this node under its own signature.
+        const priorPing = db.getRemotePing(fedPing.id);
         const cachedPing = db.cacheRemotePing({
           id: fedPing.id,
           waveId: localWave.id,
@@ -18968,23 +19039,30 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           reactions: fedPing.reactions,
         });
 
+        if (cachedPing.applied === false) {
+          console.warn(`[federation] ${sourceNode.nodeName} offered ping ${fedPing.id} against another wave's copy — ignored`);
+          break;
+        }
+
         // Broadcast to local WebSocket clients on this wave
-        broadcastToWave(localWave.id, {
-          type: 'new_ping',
-          ping: {
-            ...cachedPing,
-            sender_name: author?.displayName || 'Unknown',
-            sender_handle: author?.handle || 'unknown',
-            sender_avatar: author?.avatar || '?',
-            sender_avatar_url: author?.avatarUrl,
-          },
-          isRemote: true,
-        });
+        if (!priorPing) {
+          broadcastToWave(localWave.id, {
+            type: 'new_ping',
+            ping: {
+              ...cachedPing,
+              sender_name: author?.displayName || 'Unknown',
+              sender_handle: author?.handle || 'unknown',
+              sender_avatar: author?.avatar || '?',
+              sender_avatar_url: author?.avatarUrl,
+            },
+            isRemote: true,
+          });
+        }
 
         console.log(`✅ Cached remote ping ${fedPing.id} in wave ${localWave.id} (origin=${isOriginServer})`);
 
         // If this is the origin server, relay the ping to other participant nodes
-        if (isOriginServer) {
+        if (isOriginServer && !priorPing && chargeFederationRelay(localWave.id)) {
           const federationNodes = db.getWaveFederationNodes(localWave.id);
           for (const fed of federationNodes) {
             // Don't send back to the node that sent it
@@ -19027,15 +19105,27 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           break;
         }
 
-        // Check if we have this ping cached
+        // Check if we have this ping cached, IN THE WAVE THIS SENDER NAMED
+        // (CORTEX-COMM-007). The outer check proved the sender owns some wave
+        // here; it said nothing about the message. The ping was then looked up
+        // by id across the whole node, so a peer with one legitimate wave of
+        // its own could rewrite any federated message cached anywhere —
+        // another Community's, another peer's — by naming its id.
         const existingPing = db.getRemotePing(editPingId);
+        if (existingPing && existingPing.waveId !== editLocalWave.id) {
+          console.warn(`[federation] ${sourceNode.nodeName} tried to edit ping ${editPingId}, which belongs to wave ${existingPing.waveId}`);
+          break;
+        }
         if (existingPing) {
           // Update via cacheRemotePing (upsert)
           db.cacheRemotePing({
             id: editPingId,
             waveId: editLocalWave.id,
             originWaveId: editOriginWaveId,
-            originNode: sourceNode.nodeName,
+            // Provenance does not change on an edit. Overwriting it with the
+            // sender's name made every legitimate edit of a relayed ping look
+            // like a change of origin to the guard in cacheRemotePing.
+            originNode: existingPing.originNode || sourceNode.nodeName,
             authorId: existingPing.authorId,
             authorNode: existingPing.authorNode,
             parentId: existingPing.parentId,
@@ -19081,8 +19171,15 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           break;
         }
 
-        // Mark as deleted
-        if (db.markRemotePingDeleted(deletePingId)) {
+        // Mark as deleted — scoped to the wave the sender was authorized for
+        // (CORTEX-COMM-007). Deleting by id alone let any paired peer
+        // tombstone any federated message on this node.
+        const doomedPing = db.getRemotePing(deletePingId);
+        if (doomedPing && doomedPing.waveId !== deleteLocalWave.id) {
+          console.warn(`[federation] ${sourceNode.nodeName} tried to delete ping ${deletePingId}, which belongs to wave ${doomedPing.waveId}`);
+          break;
+        }
+        if (db.markRemotePingDeleted(deletePingId, deleteLocalWave.id)) {
           // Broadcast to local clients
           broadcastToWave(deleteLocalWave.id, {
             type: 'ping_deleted',

@@ -5,6 +5,30 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.104.1] - 2026-09-23
+
+### Security
+
+Two inherited federation findings. Cortex has always used a peer's signature to establish **who** is speaking; it was letting that peer decide **what** it was speaking about. Both regression suites were confirmed to fail with their fixes removed, while the two control cases — a genuine member posting, and a wave's own origin editing and deleting its messages — keep passing, so the tests discriminate rather than simply refusing everything.
+
+- **A paired node could post into waves it had never joined (CORTEX-COMM-006, High).** When no participant copy matched the sender, the handler accepted any local wave whose id the sender supplied, as long as that wave was one this node originates. Pairing is not membership: any allied node that learned a wave id — and ids travel in messages and logs — could post into that conversation. Because the origin relays, this node would then sign the injected message onward to every other member, turning one inbound request into authenticated outbound traffic to the whole wave.
+  - The origin branch now requires the sender to appear in that wave's `wave_federation` list. The backfill endpoint has always consulted exactly this record before serving history; the live path simply never asked.
+  - **Attribution is constrained to the sender's namespace when we are the origin.** `author.nodeName` was an unchecked claim, so a peer could sign a message and label it as someone on a third node — and have the origin relay that forgery under its own signature. The participant side is deliberately different: there the sender *is* the wave's origin, matched on `(origin_node, origin_wave_id)`, and relaying other members' messages is its job.
+  - **A ping we already hold is not new**, so it is neither re-broadcast to local clients nor relayed. Repeating one message under fresh envelope ids defeated the inbox's idempotency check and bought free amplification.
+  - A per-wave relay budget (120/minute, process-local) bounds what gets through anyway. It stops a runaway; membership is the actual control.
+
+- **Remote edits and deletions were not scoped to a wave (CORTEX-COMM-007, High).** The handlers checked that the sender owned *some* wave here, then looked the target ping up by id across the entire database. One legitimate federated wave was therefore a foothold for rewriting or tombstoning any federated message cached on the node — another Community's, another peer's. Deletion was the worse of the two: it took no ownership predicate at all.
+  - Edits and deletions must now name the wave the sender was authorized for, and the ping must live in it. `markRemotePingDeleted` takes the wave rather than trusting an id.
+  - **The upsert refuses conflicting provenance.** `ON CONFLICT(id) DO UPDATE` rewrote content with no ownership test, so a fabricated ping bearing a known id overwrote the real one. It now declines to change a row whose wave or origin node differs. Ids were never secrets and were never meant to carry authority.
+  - An edit no longer overwrites a ping's origin node with the sender's name. Provenance does not change when a message is edited, and writing it that way made every legitimate edit of a relayed ping look like a change of origin to the new guard.
+  - The remote-user cache had the same shape: its fallback path updated a row by id alone, letting one peer rewrite another peer's cached user. It is now scoped to the node that owns the row.
+  - **The legacy JSON store was patched too**, where the conflict path replaced the entire record including the author. Production runs SQLite, but a fix that only holds in one of two copies is not a fix.
+
+### Notes
+
+- Verified against live data before shipping: every origin-side remote-ping sender on both production nodes is already a recorded `wave_federation` member, and the 404 cached pings on the PMP node have consistent provenance with no id collisions — so neither guard rejects traffic that works today.
+- Remaining audit findings: the 002 remainder (binding the cross-port code to browser and audience) and 012–019/021.
+
 ## [2.104.0] - 2026-09-23
 
 ### Security
