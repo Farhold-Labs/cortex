@@ -320,7 +320,7 @@ affects federation as it ships today.
 
 ## 10. Found while building Phase 4 — 2026-09-18
 
-### S-1 — a cross-port user's standing was never re-checked **[ADDRESSED for Communities in v2.97.0]**
+### S-1 — a cross-port user's standing was never re-checked **[ADDRESSED for Communities in v2.97.0; RESOLVED node-wide in v2.105.2]**
 
 Once cross-port auth created a stub row, nothing ever asked again whether the
 node that vouched for that person still did. Suspending or unpairing a
@@ -332,13 +332,42 @@ reach — completely intact.
 for them. Suspension is reversible: re-activating the peer restores standing
 without anyone re-inviting members.
 
-**Deliberately scoped, and still open beyond Communities.** This gate covers
-Communities only. A cross-port user whose node has been unpaired keeps any
-existing session and any wave participation they already held, because
-revoking those is a node-wide authentication decision rather than one for this
-evaluator to make unilaterally. **Someone should decide what unpairing a node is
-meant to mean for sessions and waves** — the answer is not obviously "nothing",
-which is what it means today.
+**RESOLVED in v2.105.2.** The open question was what unpairing a node should
+mean beyond Communities, and it has been answered in two parts.
+
+**Sessions end. Data stays.**
+
+Standing is now checked at *authentication*, not only inside the Communities
+evaluator, so withdrawing a pairing signs its users out of everything on the
+next request — one local read of the peer row, no network call, no waiting for a
+token to expire. Their established WebSockets are closed too, by the
+revalidation sweep described in S-4. Between v2.97.0 and v2.105.1 the gate
+covered Communities alone, which meant an operator's decision to unpair was
+honoured by one feature and ignored by the rest of the application for up to an
+hour — the access-token lifetime.
+
+Their **data is kept**: memberships, wave participation, and the pings they
+wrote all remain, so re-pairing restores everything without anyone re-inviting
+anybody. Jared's decision, and the right one. Unpairing is a change to a
+relationship between two nodes, not a judgement about a person; removing their
+participation would delete conversation history that local users are part of,
+and it is irreversible in a way that suspending a pairing is not. If a node's
+traces ever do need removing, that is a separate and explicit action — not a
+side effect of the safe operational one.
+
+Two invariants this must not break, both covered by the two-node test:
+
+* **Unreachability is not unpairing.** A node that is merely down, rebooting or
+  slow changes nothing — the check reads the local peer row's *status*, never
+  whether the peer answers. Only a deliberate suspend or unpair revokes.
+* **It is reversible.** Re-activating the pairing restores standing. Those users
+  have to sign in again, because their sessions were genuinely revoked, but
+  nothing has to be rebuilt.
+
+This does not contradict the v2.105.0 decision that withdrawn standing must not
+retract knowledge a member already had. That was about not *hiding* a Community
+from someone who knew perfectly well it existed. Being signed out is not being
+kept in the dark; it is the louder and more honest of the two.
 
 ### S-2 — a handler computing its own capability list **[FIXED v2.97.0]**
 
@@ -404,6 +433,41 @@ list of "all the places that reference a user" is a list that silently falls
 behind the schema. The test that catches this does not enumerate tables — it
 walks `foreign_key_list` for every table and asserts that nothing anywhere names
 the deleted user. A table added next year is covered by it the day it is added.
+
+### S-4 — a revoked session kept its realtime feed **[FIXED v2.105.2]**
+
+Found while working out what S-1 should mean. A WebSocket was authorised once,
+at the `auth` handshake, and never asked again. The heartbeat checked whether a
+connection was *alive*, not whether it was still *allowed*, and **nothing closed
+a socket when its session was revoked.**
+
+The moderation routes had always done it by hand — disable, ban and delete each
+iterated the user's sockets and closed them. Session revocation never did, so:
+
+* "sign out my other devices" left those devices streaming;
+* a password change after a compromise left the intruder's socket reading every
+  new message as it arrived;
+* refresh-token reuse detection killed the token family and the replayed session
+  kept receiving;
+* and unpairing a peer left its users connected.
+
+CORTEX-COMM-008 (v2.103.2) closed the *handshake*, so a revoked token could no
+longer open a socket. It did not touch sockets already established, which is the
+half that matters once someone is already inside. That was in the finding's
+scope and the fix under-delivered on it.
+
+Two mechanisms now, deliberately:
+
+1. **Immediate** — every revocation site closes the affected sockets.
+   `disconnectUser` closes all of a person's; `disconnectRevokedSessions` closes
+   only those whose remembered token no longer validates, because sockets are
+   grouped per user and "sign out my *other* devices" must not sign you out of
+   the one in your hand.
+2. **A sweep**, every 60 seconds, re-asking each established socket the two
+   questions its handshake asked. This is the net under the first, and it exists
+   because of the lesson from S-3: a hand-maintained list of "everywhere
+   authority is withdrawn" falls behind. A path nobody remembered to wire up is
+   closed within a minute instead of never.
 
 ## 11. Independent audit findings — 2026-09-21
 

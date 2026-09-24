@@ -582,11 +582,26 @@ test('Communities across two federated nodes', async (t) => {
       }
     });
 
-    await t.test('suspending her home node withdraws her Community access', async () => {
+    await t.test('suspending her home node ends her session here', async () => {
       // Rights held here were borrowed from the relationship with her node.
       // Before v2.97.0 nothing checked this: her stub row behaved like a local
       // account forever, so unpairing the node that vouched for her left her
       // membership fully intact.
+      //
+      // REVISED in v2.105.2, deliberately. Between v2.97.0 and v2.105.1 the
+      // check lived only in the Communities evaluator, so this asserted that her
+      // SESSION survived with an empty capability list — Community endpoints
+      // refused her while ordinary ones did not. That split was the open half of
+      // threat-model S-1: her current access token kept working for up to an
+      // hour, which meant unpairing a node was a decision the rest of the
+      // application ignored until a timer ran out.
+      //
+      // Standing is now checked at authentication, so the answer is 401 rather
+      // than "200 with nothing in it". This does not contradict the v2.105.0
+      // decision that withdrawn standing must not retract knowledge she already
+      // had — that was about not *hiding* a Community from someone who knew it
+      // existed. She is not being kept in the dark here; she is being signed
+      // out, which is a different and louder thing.
       assert.equal((await call(B, 'GET', `/api/communities/${community.id}`,
         { token: aliceOnB.token })).status, 200, 'precondition: she can see it');
 
@@ -595,16 +610,23 @@ test('Communities across two federated nodes', async (t) => {
       dbB.db.close();
 
       const after = await call(B, 'GET', `/api/communities/${community.id}`, { token: aliceOnB.token });
-      assert.equal(after.status, 200, 'the Community row is still visible to her session');
-      assert.deepEqual(after.body.capabilities, [],
-        'but she holds no capabilities once her node is no longer vouching for her');
+      assert.equal(after.status, 401, 'her session is borrowed, and the lender has withdrawn it');
+      assert.equal(after.body.code, 'SESSION_REVOKED');
 
-      const blocked = await call(B, 'GET', `/api/communities/${community.id}/members`,
-        { token: aliceOnB.token });
-      assert.equal(blocked.status, 403, 'and gated endpoints refuse her');
+      // Every other endpoint agrees, because the gate is at the front door
+      // rather than inside one feature.
+      for (const route of [`/api/communities/${community.id}/members`, '/api/communities/mine', '/api/waves']) {
+        assert.equal((await call(B, 'GET', route, { token: aliceOnB.token })).status, 401,
+          `${route} should refuse a session whose home node is suspended`);
+      }
 
-      const mine = await call(B, 'GET', '/api/communities/mine', { token: aliceOnB.token });
-      assert.ok(mine.status === 200, 'membership rows survive — this is a suspension, not a deletion');
+      // Her membership rows are untouched. This is a suspension, not a deletion,
+      // and the next test proves it is reversible.
+      const rows = new DatabaseSQLite({ dbPath: path.join(B.dir, 'data/farhold.db') });
+      const membership = rows.getCommunityMembership(community.id, aliceOnB.id);
+      assert.ok(membership && membership.state === 'active',
+        'unpairing keeps the data — only the ability to use it is withdrawn');
+      rows.db.close();
     });
 
     await t.test('restoring the pairing restores her standing', async () => {
@@ -613,7 +635,12 @@ test('Communities across two federated nodes', async (t) => {
       dbB.db.prepare("UPDATE federation_nodes SET status = 'active' WHERE node_name = ?").run(nodeA);
       dbB.db.close();
 
+      // She has to sign in again — her old sessions were revoked when the
+      // pairing was withdrawn, which is the point. What she does not have to do
+      // is be re-invited to anything.
+      aliceOnB = await signInCrossPort();
       const detail = await call(B, 'GET', `/api/communities/${community.id}`, { token: aliceOnB.token });
+      assert.equal(detail.status, 200, 'and she can come back');
       assert.ok(detail.body.capabilities.includes('channel.create_wave'), 'her powers come back');
     });
 
