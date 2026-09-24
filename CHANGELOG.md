@@ -5,6 +5,28 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.2] - 2026-09-23
+
+### Security
+
+Two halves of the same question: what does withdrawing someone's authority actually reach? Both regression suites were confirmed to fail with their fix disabled while the controls keep passing.
+
+- **A revoked session no longer keeps its realtime feed (S-4).** A WebSocket was authorised once, at the `auth` handshake, and never asked again. The heartbeat checked whether a connection was *alive*, not whether it was still *allowed*, and nothing closed a socket when its session was revoked. So "sign out my other devices" left those devices streaming; a password change after a compromise left the intruder's socket reading every new message as it arrived; refresh-token reuse detection killed the token family and the replayed session kept receiving. CORTEX-COMM-008 closed the handshake in v2.103.2 so a revoked token could not *open* a socket — it did not touch sockets already established, which is the half that matters once someone is already inside.
+  - **Immediately**, at every revocation site. `disconnectUser` closes all of a person's sockets; `disconnectRevokedSessions` closes only those whose remembered token no longer validates — because sockets are grouped per user, and "sign out my *other* devices" must not sign you out of the one in your hand.
+  - **And on a 60-second sweep**, re-asking each established socket the two questions its handshake asked. That is the net under the first, and it exists because of the lesson from v2.105.1: a hand-maintained list of "everywhere authority is withdrawn" falls behind. A path nobody remembered to wire up is now closed within a minute rather than never.
+  - The three moderation routes that had always done this by hand now use the shared helper, so there is one implementation rather than four.
+
+- **Unpairing a federation peer now means something everywhere (S-1).** Standing was checked inside the Communities evaluator from v2.97.0, and on both refresh paths from v2.100.0 and v2.103.1 — but not at authentication. A remote member's *current* access token kept working for ordinary reads and posts until it expired: up to an hour by default, and up to a day where an admin had raised `accessTokenMinutes`. An operator's decision to unpair was honoured by one feature and ignored by the rest of the application until a timer ran out.
+  - Checked now on every request, for cross-port rows only, by one indexed read of the peer row. No network call: whether a peer is *paired* is local knowledge, and it should not wait on the peer to answer.
+  - **Two invariants preserved, both covered by the two-node test.** Unreachability is still not unpairing — a node that is down, rebooting or slow changes nothing, because the check reads the peer's recorded *status* and never its reachability. And it is still reversible: re-activating a pairing restores standing, with a fresh sign-in but nothing to rebuild.
+
+### Notes
+
+- **Unpairing keeps their data.** Jared's decision: memberships, wave participation and the pings they wrote all remain, so re-pairing restores everything without anyone being re-invited. Unpairing is a change to a relationship between two nodes, not a judgement about a person — and removing participation would delete conversation history that local users are part of, irreversibly, as a side effect of an action operators reach for precisely because it is safe. If a node's traces ever need removing, that should be its own explicit action.
+- **This revises an assertion from v2.97.0, deliberately.** That test said a remote member whose node was suspended kept her session with an empty capability list. It was right for the behaviour of the time, when the gate lived in one feature; now that standing is checked at the front door the honest answer is 401. It does not contradict the v2.105.0 decision to let her still *see* a Community she was in — that was about not hiding something she already knew about. Being signed out is not being kept in the dark.
+- The 60-second sweep interval is overridable by environment variable so the test suite need not wait a real minute for it. Every deployment uses the default.
+- A fixture flaw worth recording: the password-change case changed a shared account's password and restored it at the end, so when it failed on the counterfactual run it left every later test unable to log in — four failures that looked like findings. It has its own account now. A test that alters shared state is a test that lies to you about its neighbours.
+
 ## [2.105.1] - 2026-09-23
 
 ### Security

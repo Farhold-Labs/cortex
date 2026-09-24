@@ -5181,6 +5181,24 @@ function authenticateToken(req, res, next) {
       }
     }
 
+    // A remote person's standing is borrowed, and withdrawing it takes effect
+    // on their next request rather than whenever their token happens to expire
+    // (S-1, v2.105.2). One local read, and only for cross-port rows.
+    const withdrawn = crossPortStandingWithdrawn(db.findUserById(decoded.userId));
+    if (withdrawn) {
+      console.warn(`[cross-port] refusing ${decoded.userId}: ${withdrawn}`);
+      try {
+        if (db.revokeAllUserSessions) db.revokeAllUserSessions(decoded.userId);
+        disconnectUser(decoded.userId, 'Home server no longer authorises this session');
+      } catch (err) {
+        console.error('[cross-port] could not tear down sessions:', err.message);
+      }
+      return res.status(401).json({
+        error: 'Your home server no longer authorises this session. Please sign in again.',
+        code: 'SESSION_REVOKED',
+      });
+    }
+
     next();
   });
 }
@@ -5453,6 +5471,8 @@ app.post('/api/auth/logout', authenticateToken, (req, res) => {
   if (req.token) {
     const revoked = revokeSessionByToken(req.token);
     if (revoked) {
+      // This device's realtime feed goes with the session (v2.105.2).
+      disconnectUser(req.user.userId, 'Signed out');
       console.log(`📱 Session revoked for: ${req.user.handle}`);
     } else {
       console.log(`📱 Session revocation skipped for: ${req.user.handle} (no session found or tracking disabled)`);
@@ -5573,6 +5593,30 @@ const CROSS_PORT_OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;    // 7 days
  *
  * A LOCAL user always returns 'ok'; they have no home but this one.
  */
+/**
+ * Has this remote person's home node stopped vouching for them? (S-1)
+ *
+ * The synchronous half of `verifyCrossPortStanding`: no cache, no network, one
+ * indexed read of the peer row. That is the half that matters for an operator
+ * action, because suspending or unpairing a node is a deliberate local decision
+ * and should not wait on a remote round trip to take effect.
+ *
+ * Until v2.105.2 unpairing a peer left its users' *current* access tokens
+ * working until they expired — up to an hour by default, and up to a day if an
+ * admin had raised `accessTokenMinutes`. Their Communities access stopped at
+ * once and their refreshes were refused, but ordinary reads and posts carried on.
+ *
+ * Returns a reason string, or null when they still have standing.
+ */
+function crossPortStandingWithdrawn(user) {
+  if (!user || !user.is_cross_port) return null;
+  if (!user.home_node) return 'no home node';
+  const node = db.getFederationNodeByName(user.home_node);
+  if (!node) return `${user.home_node} is no longer a peer`;
+  if (node.status !== 'active') return `${user.home_node} is ${node.status}`;
+  return null;
+}
+
 async function verifyCrossPortStanding(user) {
   if (!user || !user.is_cross_port) return { state: 'ok' };
   if (!user.home_node || !user.home_user_id) return { state: 'revoked', reason: 'no home node' };
@@ -5647,6 +5691,9 @@ app.post('/api/auth/token/refresh', refreshLimiter, async (req, res) => {
   if (record.usedAt) {
     try {
       const killed = db.revokeRefreshFamily(record.familyId, 'reuse-detected');
+      // Two parties hold the same credential and we cannot tell which is
+      // legitimate, so neither keeps a live feed either (v2.105.2).
+      disconnectUser(record.userId, 'Session ended for security reasons');
       console.warn(`🚨 [Auth] Refresh token reuse detected for user ${record.userId} — revoked ${killed} token(s) in family ${record.familyId}`);
       if (db.logActivity) {
         db.logActivity(record.userId, 'session_reuse_detected', 'user', record.userId, getRequestMeta(req));
@@ -5687,6 +5734,7 @@ app.post('/api/auth/token/refresh', refreshLimiter, async (req, res) => {
     const status = db.getUserAccountStatus(user.id);
     if (status && (status.accountStatus === 'disabled' || status.accountStatus === 'banned')) {
       db.revokeRefreshFamily(record.familyId, `account-${status.accountStatus}`);
+      disconnectUser(record.userId, `Account ${status.accountStatus}`);
       return res.status(403).json({
         error: `Account ${status.accountStatus}`,
         code: status.accountStatus === 'disabled' ? 'ACCOUNT_DISABLED' : 'ACCOUNT_BANNED',
@@ -5703,6 +5751,7 @@ app.post('/api/auth/token/refresh', refreshLimiter, async (req, res) => {
     if (standing.state !== 'ok') {
       db.revokeRefreshFamily(record.familyId, `cross-port-${standing.state}`);
       if (db.revokeAllUserSessions) db.revokeAllUserSessions(user.id);
+      disconnectUser(user.id, 'Home server no longer authorises this session');
       if (db.logActivity) {
         db.logActivity(user.id, 'cross_port_session_revoked', 'user', user.id,
           { ...getRequestMeta(req), reason: standing.reason || standing.state });
@@ -5844,6 +5893,7 @@ app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) =>
       if (standing.state !== 'ok') {
         revokeSessionByToken(req.token);
         if (db.revokeAllUserSessions) db.revokeAllUserSessions(renewing.id);
+        disconnectUser(renewing.id, 'Home server no longer authorises this session');
         if (db.logActivity) {
           db.logActivity(renewing.id, 'cross_port_session_revoked', 'user', renewing.id,
             { ...getRequestMeta(req), reason: standing.reason || standing.state, via: 'renew' });
@@ -6024,6 +6074,9 @@ app.post('/api/auth/sessions/revoke-all', authenticateToken, requireStepUp, (req
     const currentSessionId = currentSession?.id || null;
 
     const revoked = db.revokeAllUserSessions(req.user.userId, currentSessionId);
+    // "Sign out my other devices" has to reach those devices' sockets, which is
+    // the whole point of asking (v2.105.2) — and only theirs.
+    disconnectRevokedSessions(req.user.userId);
     console.log(`📱 ${revoked} sessions revoked for user: ${req.user.handle}`);
 
     if (db.logActivity) db.logActivity(req.user.userId, 'all_sessions_revoked', 'user', req.user.userId, { ...getRequestMeta(req), count: revoked });
@@ -7724,6 +7777,9 @@ app.post('/api/profile/password', authenticateToken, async (req, res) => {
     if (db.revokeAllRefreshTokensForUser) {
       db.revokeAllRefreshTokensForUser(req.user.userId, 'password-changed', currentFamilyId(req));
     }
+    // And their realtime feeds. Evicting someone from the API while leaving
+    // their socket streaming your messages is not eviction (v2.105.2).
+    disconnectRevokedSessions(req.user.userId, 'Password changed');
   } catch (err) {
     console.error('[Auth] Session revocation after password change failed:', err.message);
   }
@@ -16592,13 +16648,7 @@ app.post('/api/admin/users/:id/disable', authenticateToken, (req, res) => {
     // Revoke all sessions and disconnect WebSocket
     if (db.revokeAllUserSessions) db.revokeAllUserSessions(targetUserId);
     broadcastToUser(targetUserId, { type: 'account_moderated', status: 'disabled', reason: reason.trim() });
-    // Close WebSocket connections
-    const userClients = clients.get(targetUserId);
-    if (userClients) {
-      for (const ws of userClients) {
-        ws.close(1008, 'Account disabled');
-      }
-    }
+    disconnectUser(targetUserId, 'Account disabled');
 
     if (db.logModerationAction) db.logModerationAction(admin.id, 'disable_account', 'user', targetUserId, reason.trim());
     if (db.logActivity) db.logActivity(admin.id, 'admin_disable_account', 'user', targetUserId, getRequestMeta(req));
@@ -16644,12 +16694,7 @@ app.post('/api/admin/users/:id/ban', authenticateToken, (req, res) => {
 
     if (db.revokeAllUserSessions) db.revokeAllUserSessions(targetUserId);
     broadcastToUser(targetUserId, { type: 'account_moderated', status: 'banned', reason: reason.trim() });
-    const userClients = clients.get(targetUserId);
-    if (userClients) {
-      for (const ws of userClients) {
-        ws.close(1008, 'Account banned');
-      }
-    }
+    disconnectUser(targetUserId, 'Account banned');
 
     if (db.logModerationAction) db.logModerationAction(admin.id, 'ban_account', 'user', targetUserId, reason.trim());
     if (db.logActivity) db.logActivity(admin.id, 'admin_ban_account', 'user', targetUserId, getRequestMeta(req));
@@ -16758,12 +16803,7 @@ app.post('/api/admin/users/:id/delete', authenticateToken, (req, res) => {
 
     // Revoke sessions and disconnect first
     if (db.revokeAllUserSessions) db.revokeAllUserSessions(targetUserId);
-    const userClients = clients.get(targetUserId);
-    if (userClients) {
-      for (const ws of userClients) {
-        ws.close(1008, 'Account deleted');
-      }
-    }
+    disconnectUser(targetUserId, 'Account deleted');
 
     const result = db.deleteUserAccount(targetUserId);
     if (!result.success) {
@@ -24727,6 +24767,10 @@ wss.on('connection', (ws, req) => {
 
           ws.userId = userId;
           ws.userName = user?.displayName || 'Unknown';
+          // Kept so the revalidation sweep can ask the same question the
+          // handshake asked. It is the token the client already holds; nothing
+          // new is exposed by remembering it for the life of the socket.
+          ws.authToken = message.token;
           if (!clients.has(userId)) clients.set(userId, new Set());
           clients.get(userId).add(ws);
           db.updateUserStatus(userId, 'online');
@@ -24978,8 +25022,110 @@ const heartbeatInterval = setInterval(() => {
   });
 }, 30000);
 
+/**
+ * Close every socket belonging to one person (v2.105.2).
+ *
+ * The moderation routes have always done this by hand when disabling, banning
+ * or deleting an account. Session revocation never did — so signing out your
+ * other devices, changing your password after a compromise, or having a
+ * replayed refresh token kill its family all left those sockets open and
+ * receiving. A revocation the realtime layer ignores is not a revocation; it
+ * just takes the slow door, and there is no expiry on a socket to make it
+ * eventually true.
+ */
+function disconnectUser(userId, reason = 'Session ended') {
+  const sockets = clients.get(userId);
+  if (!sockets || !sockets.size) return 0;
+  let closed = 0;
+  for (const ws of [...sockets]) {
+    try {
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'auth_error', error: reason, code: 'SESSION_REVOKED' }));
+      }
+      ws.close(1008, reason);
+      closed++;
+    } catch { /* already gone */ }
+  }
+  return closed;
+}
+
+/**
+ * Close only the sockets whose session has actually been revoked (v2.105.2).
+ *
+ * Sockets are grouped per user, not per session, so "sign out my other devices"
+ * and "change my password" cannot use `disconnectUser` — it would sign the
+ * caller out of the device they are sitting at. Each socket remembers the token
+ * it was authorised with, so the right ones can be picked out.
+ */
+function disconnectRevokedSessions(userId, reason = 'Signed out on another device') {
+  const sockets = clients.get(userId);
+  if (!sockets || !sockets.size) return 0;
+  let closed = 0;
+  for (const ws of [...sockets]) {
+    if (!ws.authToken) continue;
+    if (validateSession(ws.authToken).valid) continue;
+    try {
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'auth_error', error: reason, code: 'SESSION_REVOKED' }));
+      }
+      ws.close(1008, reason);
+      closed++;
+    } catch { /* already gone */ }
+  }
+  return closed;
+}
+
+/**
+ * The net under the above.
+ *
+ * Closing sockets at each revocation site only works for the sites someone
+ * remembered — and a hand-maintained list of "everywhere authority is
+ * withdrawn" is exactly the shape of thing that fell behind the schema in
+ * v2.105.1. So every established socket is also re-checked on a timer against
+ * the same two questions its handshake asked: is the session still valid, and
+ * does the home node still vouch. A path nobody wired up is closed within a
+ * minute rather than never.
+ */
+// Overridable only so the test suite does not have to wait a real minute for a
+// sweep; every deployment uses the default.
+const SOCKET_REVALIDATE_MS = Math.max(1000, Number(process.env.SOCKET_REVALIDATE_MS) || 60 * 1000);
+const socketRevalidateInterval = setInterval(() => {
+  for (const [userId, sockets] of clients) {
+    let reason = null;
+
+    const user = db.findUserById(userId);
+    if (!user) {
+      reason = 'Account no longer exists';
+    } else if (user.accountStatus === 'disabled' || user.accountStatus === 'banned') {
+      reason = `Account ${user.accountStatus}`;
+    } else {
+      reason = crossPortStandingWithdrawn(user);
+      if (reason) reason = 'Home server no longer authorises this session';
+    }
+
+    // Per socket, because two devices are two sessions and only one of them
+    // may have been signed out.
+    for (const ws of [...sockets]) {
+      let socketReason = reason;
+      if (!socketReason && ws.authToken) {
+        const validation = validateSession(ws.authToken);
+        if (!validation.valid) socketReason = validation.reason || 'Session ended';
+      }
+      if (!socketReason) continue;
+      try {
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'auth_error', error: socketReason, code: 'SESSION_REVOKED' }));
+        }
+        ws.close(1008, socketReason);
+        console.log(`🔌 Closed socket for ${userId}: ${socketReason}`);
+      } catch { /* already gone */ }
+    }
+  }
+}, SOCKET_REVALIDATE_MS);
+
 wss.on('close', () => {
   clearInterval(heartbeatInterval);
+  clearInterval(socketRevalidateInterval);
 });
 
 // ============ Federation Queue Processor ============
