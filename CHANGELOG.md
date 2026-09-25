@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.4] - 2026-09-25
+
+### Fixed
+
+Both found while bringing up a third federation node, and both affect anyone doing the same.
+
+- **`SEED_DEMO_DATA=true` produced a node with no working admin.** `getUserRole` reads the `role` column first and only falls back to the legacy `is_admin` flag when role is empty — and `role` defaults to `'user'`, which is not empty. The demo seed set `is_admin = 1` and never set `role`, so the demo "admin" was refused by every admin route: a freshly seeded node had nobody who could configure federation, set instance config, or open the admin UI. The one-off migration that backfills `role` from `is_admin` runs *before* seeding, so it never covered these rows. The seed now sets both.
+
+- **The demo seed threw partway through and left the node half-populated.** `wave-3` referenced `crew_id: 'group-crew'` — a name left behind by the v2.0.0 group→crew rename that has never existed as a row. The foreign key refused it, `seedDemoData` threw on that line, and everything after was skipped: two more waves, every wave participant, and every demo ping. A freshly seeded node came up with 5 users, 2 waves and no conversation at all, which is a poor first impression of a chat application. A full seed now produces 5 users, 1 crew, 5 waves, 9 participants and 5 pings, with zero foreign-key violations.
+
+### Notes
+
+- `CLAUDE.md` listed eight demo accounts; there have only ever been five in `seedDemoData`. Corrected rather than the code changed — the three phantom names were documentation, not a missing feature.
+- The seed failure was silent because the throw is caught upstream and the server starts anyway. That is the right call for a *demo* seed — a bad fixture should not stop a node booting — but it is why this went unnoticed for months.
+
 ## [2.105.3] - 2026-09-24
 
 ### Security
