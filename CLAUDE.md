@@ -333,7 +333,7 @@ The crawl bar is **no longer configured here** — as of v2.80.0 its feeds, keys
 
 ## Testing Accounts
 
-With `SEED_DEMO_DATA=true` (password `Demo123!`): `mal` (admin), `zoe`, `wash`, `kaylee`, `jayne`, `inara`, `simon`, `river`.
+With `SEED_DEMO_DATA=true` (password `Demo123!`): `mal` (admin), `zoe`, `wash`, `kaylee`, `jayne` — five accounts, one crew, five waves, five pings. `inara`, `simon` and `river` were listed here but have never been in `seedDemoData`.
 
 ---
 
