@@ -485,6 +485,26 @@ gpg --batch --passphrase-file /root/.cortex-backup-key \
 pm2 restart cortex-api
 ```
 
+### Taking a release backup
+
+One writer, one destination, and it verifies what it wrote:
+
+```bash
+tools/backup-release-db.sh 2.105.6        # -> ~/backups/<node>-pre-2.105.6-<ts>.db
+```
+
+It refuses if the disk lacks room, and exits non-zero if the snapshot is missing,
+empty, or fails `integrity_check` — so `backup-release-db.sh X && deploy` really
+does gate the deploy on a good backup. "A backup exists" and "a backup is
+readable" are different claims and only the second is worth anything.
+
+`$HOME/backups` is the canonical location. It was three directories with three
+naming schemes (`~/db-backups`, `~/backups`, `~/cortex-backups`) until
+2026-09-25, because the rule was honoured by hand with an inline `node -e` typed
+fresh each release. That is also how a release once shipped with **no backup at
+all**: nested shell quoting swallowed the variables and the failure printed
+nothing. A script cannot make that mistake twice.
+
 ### Pruning release backups
 
 The scheduled backup above rotates itself. The **pre-release** backups do not —
@@ -509,11 +529,16 @@ directory, will not touch a filename it does not recognise, leaves
 `env-pre-*.bak` alone, and orders by modification time rather than by filename —
 two timestamp formats are in circulation and mtime is not ambiguous between them.
 
-Run it from cron on a constrained node:
+Run it from cron, and **pass `--keep` explicitly**: the depth is a policy
+decision and belongs where an operator can read it, not in a script default that
+might move under them.
 
 ```bash
-(crontab -l 2>/dev/null; echo "30 4 * * 0 \$HOME/cortex/tools/prune-backups.sh --apply >> \$HOME/prune-backups.log 2>&1") | crontab -
+(crontab -l 2>/dev/null; echo "30 4 * * 0 \$HOME/cortex/tools/prune-backups.sh --keep 6 --apply >> \$HOME/prune-backups.log 2>&1") | crontab -
 ```
+
+Pick the depth from the disk, not from a habit. As of 2026-09-25 farhold keeps 6
+(≈175 MB of a 978 MB margin) and the second node keeps 10, having 17 GB spare.
 
 **Check `df -h /` before a release** on any node near its ceiling. Retention
 buys headroom; it does not replace a disk that is simply too small for the

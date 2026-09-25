@@ -37,7 +37,11 @@
 #
 set -uo pipefail
 
-KEEP=4              # snapshots to retain per directory
+# Six snapshots of a ~30 MB database is ~175 MB, which is a reasonable standing
+# cost. This was 4-per-directory while three directories existed by accident;
+# consolidating to one would have quietly cut retention from 12 to 4, so the
+# default moved rather than the depth changing behind anyone's back.
+KEEP=6              # snapshots to retain per directory
 KEEP_DIST=2         # client bundles: rebuildable from git, so keep fewer
 APPLY=0
 
@@ -54,7 +58,10 @@ done
 case "$KEEP" in ''|*[!0-9]*) echo "--keep must be a whole number" >&2; exit 2 ;; esac
 [ "$KEEP" -lt 1 ] && { echo "--keep must be at least 1: never prune to nothing" >&2; exit 2; }
 
-DIRS=("$HOME/db-backups" "$HOME/backups" "$HOME/cortex-backups")
+# ~/backups is canonical (see tools/backup-release-db.sh). The other two are
+# retired, and stay on this list so that anything still writing to them is swept
+# rather than silently accumulating again.
+DIRS=("$HOME/backups" "$HOME/db-backups" "$HOME/cortex-backups")
 
 # Snapshot name shapes seen in the wild. Explicit, so nothing unexpected matches.
 PATTERNS=('farhold-pre-*.db' 'farhold-post-*.db' 'farhold-prod-pre-*.db'
