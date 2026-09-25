@@ -87,11 +87,32 @@ export function resolveActor(db, actor) {
     if (!actor.node || (!actor.handle && !actor.homeUserId)) return null;
     // home_user_id is the stable identifier; handle is what a person typed and
     // can be changed at home. Prefer the former when the peer supplies it.
-    const row = actor.homeUserId
-      ? db.db.prepare('SELECT id FROM users WHERE is_cross_port = 1 AND home_node = ? AND home_user_id = ?')
-          .get(actor.node, actor.homeUserId)
-      : db.db.prepare('SELECT id FROM users WHERE is_cross_port = 1 AND home_node = ? AND home_user_id IS NOT NULL AND handle LIKE ?')
-          .get(actor.node, `${actor.handle}%`);
+    if (actor.homeUserId) {
+      const row = db.db.prepare(
+        'SELECT id FROM users WHERE is_cross_port = 1 AND home_node = ? AND home_user_id = ?'
+      ).get(actor.node, actor.homeUserId);
+      return row ? row.id : null;
+    }
+
+    // Handle fallback, EXACT rather than a prefix (CORTEX-COMM-024).
+    //
+    // This was `handle LIKE ?` with a constructed `${handle}%`, which meant
+    // `alice` also matched `alice_admin` — and cross-port auth manufactures
+    // exactly that collision, because a remote handle that clashes with a local
+    // account is stored suffixed. A wildcard resolving one person to another is
+    // the worst possible outcome for a function whose entire job is deciding
+    // who someone is.
+    //
+    // There are only ever two legitimate local handles for a given remote
+    // address, and `upsertCrossPortUser` decides between them: the handle
+    // itself, or the handle suffixed with the first label of the home node. So
+    // ask for those two, exactly, and nothing else.
+    const suffixed = `${actor.handle}_${String(actor.node).split('.')[0]}`;
+    const row = db.db.prepare(`
+      SELECT id FROM users
+      WHERE is_cross_port = 1 AND home_node = ? AND home_user_id IS NOT NULL
+        AND handle IN (?, ?) COLLATE NOCASE
+    `).get(actor.node, actor.handle, suffixed);
     return row ? row.id : null;
   }
 

@@ -14009,7 +14009,9 @@ export class DatabaseSQLite {
       FROM community_membership_roles mr
       JOIN community_roles r       ON r.id = mr.role_id
       JOIN community_memberships m ON m.id = mr.membership_id
+      -- Same containment rule as getMemberRoles (CORTEX-COMM-024).
       WHERE m.community_id = ? AND m.user_id IN (${placeholders})
+        AND r.community_id = m.community_id
       ORDER BY r.priority DESC
     `).all(communityId, ...userIds);
     for (const row of rows) {
@@ -14055,10 +14057,33 @@ export class DatabaseSQLite {
   }
 
   grantCommunityRole(membershipId, roleId, { grantedBy = null, at = null } = {}) {
+    // Refuse to CREATE a cross-Community grant, not merely to read one back
+    // (CORTEX-COMM-024). The foreign keys check that the membership and the
+    // role each exist; nothing checked they belong together, so a future
+    // importer or a mistake here could store a row that unions one Community's
+    // capabilities into another. Better never to hold the invalid state than
+    // to filter it at every read — the reads are defended too, because the rows
+    // are already out there on live nodes.
+    const scope = this.db.prepare(`
+      SELECT m.community_id AS membership_community, r.community_id AS role_community
+      FROM community_memberships m, community_roles r
+      WHERE m.id = ? AND r.id = ?
+    `).get(membershipId, roleId);
+
+    if (!scope) {
+      console.warn(`[communities] refused role grant: membership ${membershipId} or role ${roleId} does not exist`);
+      return false;
+    }
+    if (scope.membership_community !== scope.role_community) {
+      console.warn(`[communities] refused cross-community role grant: membership is in ${scope.membership_community}, role belongs to ${scope.role_community}`);
+      return false;
+    }
+
     this.db.prepare(`
       INSERT OR IGNORE INTO community_membership_roles (membership_id, role_id, granted_by, granted_at)
       VALUES (?, ?, ?, ?)
     `).run(membershipId, roleId, grantedBy, at || new Date().toISOString());
+    return true;
   }
 
   revokeCommunityRole(membershipId, roleId) {
@@ -14072,7 +14097,13 @@ export class DatabaseSQLite {
       SELECT r.* FROM community_membership_roles mr
       JOIN community_roles r      ON r.id = mr.role_id
       JOIN community_memberships m ON m.id = mr.membership_id
-      WHERE m.community_id = ? AND m.user_id = ?
+      -- The ROLE has to belong to the same Community as the membership
+      -- (CORTEX-COMM-024). The foreign keys check that each referenced row
+      -- exists, never that the two belong together, so a role from Community A
+      -- granted against a membership in B would have its capabilities unioned
+      -- into B's answer. The live routes check scope separately, so there is no
+      -- path to it today — this is the predicate that means there never is one.
+      WHERE m.community_id = ? AND m.user_id = ? AND r.community_id = m.community_id
       ORDER BY r.priority DESC
     `).all(communityId, userId);
   }
