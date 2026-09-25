@@ -5,6 +5,18 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`tools/prune-backups.sh`** — retention for pre-release database backups. The standing rule that no migrating release ships without a verified backup meant every release left another ~30 MB snapshot behind, and nothing ever removed them. By 2026-09-25 the production node held ~1.3 GB of snapshots of the same database across three directories with three naming schemes, filled its 8.7 GB disk, and a release backup failed `SQLITE_FULL` with 18 MB free. The deploy aborting was correct; a node that cannot write is not.
+  - Keeps the newest N snapshots per directory (default 4), and fewer client bundles since those rebuild from git in seconds.
+  - **Dry run by default.** A script that deletes backups should not do so because somebody typed its name; `--apply` is required.
+  - It will not empty a directory, will not touch a filename it does not recognise, and never touches `env-pre-*.bak` — kilobytes, and the hardest thing in there to reconstruct.
+  - Orders by modification time rather than filename: two timestamp formats are in circulation (`20260909T170959` and `20260923-125241`) and mtime is not ambiguous between them.
+  - Documented in `docs/DEPLOYMENT.md` § 9 with a weekly cron line for constrained nodes.
+  - Tooling only — no version bump, following the precedent set by the v8 heap-limit build fix.
+
 ## [2.105.5] - 2026-09-25
 
 ### Fixed
