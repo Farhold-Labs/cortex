@@ -15,6 +15,7 @@
  */
 
 import crypto from 'crypto';
+import { reportDecryptHealth } from './field-crypto-health.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // Encryption key from environment
@@ -132,6 +133,29 @@ export async function initializeCache(database) {
     ? db.db.prepare('SELECT COUNT(*) as count FROM push_subscriptions_encrypted').get()?.count || 0
     : 0;
 
+  // Shared by the ordinary plaintext path and by the recovery path when the
+  // encrypted rows will not open (v2.105.5). One implementation, so the two
+  // cannot drift.
+  function loadFromPlaintext() {
+    const rows = db.db.prepare('SELECT * FROM push_subscriptions').all();
+    for (const row of rows) {
+      const userId = row.user_id;
+      const subscription = {
+        id: row.id,
+        endpoint: row.endpoint,
+        keys: JSON.parse(row.keys),
+        createdAt: row.created_at
+      };
+      if (!userToSubscriptions.has(userId)) {
+        userToSubscriptions.set(userId, []);
+        userCount++;
+      }
+      userToSubscriptions.get(userId).push(subscription);
+      endpointToUser.set(row.endpoint, userId);
+      subscriptionCount++;
+    }
+  }
+
   if (encryptedTableExists && SUBSCRIPTION_KEY && encryptedCount > 0) {
     // Load from encrypted table (migration has been run)
     console.log('🔐 Loading encrypted push subscription data...');
@@ -146,12 +170,18 @@ export async function initializeCache(database) {
       userIdToHash.set(hashUserId(row.user_id), row.user_id);
     }
 
+    // Rows that were matched to a user but would not open. Orphans (no plaintext
+    // row) are a different thing and are not counted as decrypt failures.
+    let attempted = 0;
+    const unreadable = [];
+
     for (const row of rows) {
       const userId = userIdToHash.get(row.user_hash);
       if (!userId) {
         // Encrypted record without corresponding plaintext - skip (orphaned data)
         continue;
       }
+      attempted++;
 
       const subscriptions = decryptSubscriptions(row.subscriptions_blob, row.iv);
       if (subscriptions && Array.isArray(subscriptions)) {
@@ -162,10 +192,34 @@ export async function initializeCache(database) {
           endpointToUser.set(sub.endpoint, userId);
           subscriptionCount++;
         }
+      } else {
+        unreadable.push(userId);
       }
     }
 
-    console.log(`✅ Loaded ${userCount} users with ${subscriptionCount} encrypted push subscriptions`);
+    // v2.105.5 — a wrong key here means nobody gets a push notification, which
+    // is the most silent failure of the three: there is nothing for a user to
+    // notice except an absence.
+    const health = reportDecryptHealth({
+      label: 'push subscriptions',
+      keyEnvVar: 'PUSH_SUBSCRIPTION_KEY',
+      total: attempted,
+      decrypted: userCount,
+      failedKeys: unreadable,
+    });
+
+    if (health.totalFailure) {
+      // Plaintext is maintained alongside the encrypted store, so recover from it
+      // rather than leaving every device unreachable.
+      userToSubscriptions.clear();
+      endpointToUser.clear();
+      userCount = 0;
+      subscriptionCount = 0;
+      loadFromPlaintext();
+      console.log(`📂 Recovered ${userCount} user(s) with ${subscriptionCount} subscription(s) from plaintext`);
+    } else {
+      console.log(`✅ Loaded ${userCount} users with ${subscriptionCount} encrypted push subscriptions`);
+    }
   } else {
     // Encryption not enabled, table doesn't exist, or no migration yet - load from plaintext table
     if (SUBSCRIPTION_KEY && encryptedCount === 0) {
@@ -173,27 +227,7 @@ export async function initializeCache(database) {
     } else {
       console.log('📂 Loading push subscription data from plaintext table...');
     }
-
-    const rows = db.db.prepare('SELECT * FROM push_subscriptions').all();
-
-    for (const row of rows) {
-      const userId = row.user_id;
-      const subscription = {
-        id: row.id,
-        endpoint: row.endpoint,
-        keys: JSON.parse(row.keys),
-        createdAt: row.created_at
-      };
-
-      if (!userToSubscriptions.has(userId)) {
-        userToSubscriptions.set(userId, []);
-        userCount++;
-      }
-      userToSubscriptions.get(userId).push(subscription);
-      endpointToUser.set(row.endpoint, userId);
-      subscriptionCount++;
-    }
-
+    loadFromPlaintext();
     console.log(`✅ Loaded ${userCount} users with ${subscriptionCount} push subscriptions into cache`);
   }
 

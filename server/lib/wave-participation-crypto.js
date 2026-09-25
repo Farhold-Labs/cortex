@@ -15,6 +15,7 @@
  */
 
 import crypto from 'crypto';
+import { reportDecryptHealth } from './field-crypto-health.js';
 
 // Encryption key from environment
 const PARTICIPATION_KEY = process.env.WAVE_PARTICIPATION_KEY || null;
@@ -196,6 +197,13 @@ export async function initializeCache(database) {
     ? db.db.prepare('SELECT COUNT(*) as count FROM wave_participants_encrypted').get()?.count || 0
     : 0;
 
+  // `encryptedCount > 0` means rows EXIST. It does not mean they can be READ
+  // (v2.105.5) — see lib/field-crypto-health.js for what went wrong on a real
+  // node. So the decrypt pass is counted, and a wholesale failure falls through
+  // to the plaintext table rather than reporting an empty cache as success.
+  let decryptHealth = { healthy: true, totalFailure: false, partial: false };
+  const unreadableWaves = [];
+
   if (encryptedTableExists && PARTICIPATION_KEY && encryptedCount > 0) {
     // Load from encrypted table (migration has been run)
     console.log('🔐 Loading encrypted wave participation data...');
@@ -214,11 +222,56 @@ export async function initializeCache(database) {
           userToWaves.get(userId).add(row.wave_id);
           participantCount++;
         }
+      } else {
+        unreadableWaves.push(row.wave_id);
       }
     }
 
-    console.log(`✅ Loaded ${waveCount} encrypted waves with ${participantCount} participant mappings`);
-  } else {
+    decryptHealth = reportDecryptHealth({
+      label: 'wave participation',
+      keyEnvVar: 'WAVE_PARTICIPATION_KEY',
+      total: rows.length,
+      decrypted: waveCount,
+      failedKeys: unreadableWaves,
+    });
+
+    if (decryptHealth.partial) {
+      // Only the waves whose blob would not open. The rest keep the encrypted
+      // store's answer, which is authoritative where it is readable.
+      const missing = new Set(unreadableWaves);
+      const plaintextForMissing = db.db.prepare(`
+        SELECT wave_id, user_id FROM wave_participants
+        WHERE wave_id IN (${unreadableWaves.map(() => '?').join(',') || "''"})
+      `).all(...unreadableWaves);
+      for (const row of plaintextForMissing) {
+        if (!missing.has(row.wave_id)) continue;
+        if (!waveToParticipants.has(row.wave_id)) {
+          waveToParticipants.set(row.wave_id, new Set());
+          waveCount++;
+        }
+        waveToParticipants.get(row.wave_id).add(row.user_id);
+        if (!userToWaves.has(row.user_id)) userToWaves.set(row.user_id, new Set());
+        userToWaves.get(row.user_id).add(row.wave_id);
+        participantCount++;
+      }
+      console.log(`📂 Recovered ${plaintextForMissing.length} participant mapping(s) from plaintext for unreadable waves`);
+    }
+
+    if (!decryptHealth.totalFailure) {
+      console.log(`✅ Loaded ${waveCount} encrypted waves with ${participantCount} participant mappings`);
+    }
+  }
+
+  if (decryptHealth.totalFailure) {
+    // Every blob was locked. Start over from plaintext — the banner above has
+    // already said why, loudly.
+    waveToParticipants.clear();
+    userToWaves.clear();
+    waveCount = 0;
+    participantCount = 0;
+  }
+
+  if (!(encryptedTableExists && PARTICIPATION_KEY && encryptedCount > 0) || decryptHealth.totalFailure) {
     // Encryption not enabled, table doesn't exist, or no migration yet - load from plaintext table
     if (PARTICIPATION_KEY && encryptedCount === 0) {
       console.log('📂 Loading from plaintext table (run migration to encrypt existing data)...');
