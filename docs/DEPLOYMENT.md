@@ -485,6 +485,40 @@ gpg --batch --passphrase-file /root/.cortex-backup-key \
 pm2 restart cortex-api
 ```
 
+### Pruning release backups
+
+The scheduled backup above rotates itself. The **pre-release** backups do not —
+the standing rule that no migrating release ships without a verified database
+backup means every release leaves another snapshot behind, and nothing removes
+them.
+
+On 2026-09-25 this filled the production disk. There were ~1.3 GB of snapshots
+of the same 30 MB database across three directories with three naming schemes,
+the release backup failed `SQLITE_FULL` with 18 MB free, and the deploy aborted.
+The deploy aborting was correct; a node that cannot write is not.
+
+```bash
+tools/prune-backups.sh                 # show what would go — dry run by default
+tools/prune-backups.sh --apply         # delete it
+tools/prune-backups.sh --keep 6 --apply
+```
+
+It keeps the newest `--keep` snapshots per directory (default 4) and fewer
+client bundles, since those rebuild from git in seconds. It will not empty a
+directory, will not touch a filename it does not recognise, leaves
+`env-pre-*.bak` alone, and orders by modification time rather than by filename —
+two timestamp formats are in circulation and mtime is not ambiguous between them.
+
+Run it from cron on a constrained node:
+
+```bash
+(crontab -l 2>/dev/null; echo "30 4 * * 0 \$HOME/cortex/tools/prune-backups.sh --apply >> \$HOME/prune-backups.log 2>&1") | crontab -
+```
+
+**Check `df -h /` before a release** on any node near its ceiling. Retention
+buys headroom; it does not replace a disk that is simply too small for the
+history it is being asked to hold.
+
 ### Offsite Backup (Optional)
 
 Copy encrypted backups to a remote location. Since they're GPG-encrypted, they're safe to store on untrusted storage:
