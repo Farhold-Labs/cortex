@@ -3428,12 +3428,22 @@ export class DatabaseSQLite {
     ];
 
     const insertUser = this.db.prepare(`
-      INSERT INTO users (id, handle, email, password_hash, display_name, avatar, node_name, status, is_admin, created_at, last_seen, preferences)
-      VALUES (?, ?, ?, ?, ?, ?, 'Serenity', 'offline', ?, ?, ?, '{}')
+      INSERT INTO users (id, handle, email, password_hash, display_name, avatar, node_name, status, is_admin, role, created_at, last_seen, preferences)
+      VALUES (?, ?, ?, ?, ?, ?, 'Serenity', 'offline', ?, ?, ?, ?, '{}')
     `);
 
     for (const u of demoUsers) {
-      insertUser.run(u.id, u.handle, u.email, passwordHash, u.displayName, u.avatar, u.isAdmin ? 1 : 0, now, now);
+      // `role` as well as the legacy `is_admin` flag.
+      //
+      // `getUserRole` reads `role` FIRST and only falls back to `is_admin` when
+      // role is empty — and the column defaults to 'user', which is not empty.
+      // So seeding `is_admin = 1` alone produced a demo "admin" that every admin
+      // route refused: a freshly seeded node had nobody who could configure
+      // federation, set instance config, or reach the admin UI at all. The
+      // one-off migration that backfills role from is_admin runs before this, so
+      // it never covered the seeded rows.
+      insertUser.run(u.id, u.handle, u.email, passwordHash, u.displayName, u.avatar,
+                     u.isAdmin ? 1 : 0, u.isAdmin ? 'admin' : 'user', now, now);
     }
 
     // Create demo crew
@@ -3453,7 +3463,13 @@ export class DatabaseSQLite {
     const waves = [
       { id: 'wave-1', title: 'Welcome to Cortex', privacy: 'public', createdBy: 'user-mal' },
       { id: 'wave-2', title: 'Private Chat Test', privacy: 'private', createdBy: 'user-mal' },
-      { id: 'wave-3', title: 'Crew Discussion', privacy: 'group', groupId: 'group-crew', createdBy: 'user-mal' },
+      // 'crew-serenity' is the crew created above. This said 'group-crew', a
+      // name left behind by the v2.0.0 group->crew rename that has never
+      // existed as a row — so the foreign key refused it, seedDemoData threw on
+      // this line, and everything after it (two more waves, every participant,
+      // every demo ping) was silently skipped. A freshly seeded node came up
+      // with 5 users, 2 waves and no conversation at all.
+      { id: 'wave-3', title: 'Crew Discussion', privacy: 'crew', groupId: 'crew-serenity', createdBy: 'user-mal' },
       { id: 'wave-4', title: 'Zoe Private Wave', privacy: 'private', createdBy: 'user-zoe' },
       { id: 'wave-5', title: 'Wash Public Wave', privacy: 'public', createdBy: 'user-wash' },
     ];
