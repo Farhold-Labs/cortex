@@ -5,6 +5,22 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`tools/backup-release-db.sh`** — one writer for pre-release database backups, replacing an inline `node -e` typed fresh each release. Writes to a single canonical `$HOME/backups`, names snapshots consistently, refuses when the disk lacks room (a backup that fills the disk takes the live database with it), and **verifies what it wrote** — exiting non-zero if the snapshot is missing, empty, or fails `integrity_check`, so `backup && deploy` genuinely gates the deploy. "A backup exists" and "a backup is readable" are different claims. It also cleans up the WAL sidecars that verifying a snapshot creates, rather than leaving litter for the pruner to classify as orphaned journals.
+  - The three-directory sprawl this consolidates — `~/db-backups`, `~/backups`, `~/cortex-backups`, three naming schemes — is what hand-rolling the rule produced over time. It is also how a release once shipped with no backup at all: nested shell quoting swallowed the variables and the failure printed nothing.
+
+- **`tools/prune-backups.sh`** — retention for pre-release database backups. The standing rule that no migrating release ships without a verified backup meant every release left another ~30 MB snapshot behind, and nothing ever removed them. By 2026-09-25 the production node held ~1.3 GB of snapshots of the same database across three directories with three naming schemes, filled its 8.7 GB disk, and a release backup failed `SQLITE_FULL` with 18 MB free. The deploy aborting was correct; a node that cannot write is not.
+  - Keeps the newest N snapshots per directory (default 4), and fewer client bundles since those rebuild from git in seconds.
+  - **Dry run by default.** A script that deletes backups should not do so because somebody typed its name; `--apply` is required.
+  - It will not empty a directory, will not touch a filename it does not recognise, and never touches `env-pre-*.bak` — kilobytes, and the hardest thing in there to reconstruct.
+  - Orders by modification time rather than filename: two timestamp formats are in circulation (`20260909T170959` and `20260923-125241`) and mtime is not ambiguous between them.
+  - Default retention is 6 per directory. It was 4 while three directories existed by accident; consolidating to one would have quietly cut retention from 12 to 4, so the default moved rather than the depth changing behind anyone's back. The cron line passes `--keep` explicitly, because the depth is a policy decision and belongs where an operator can read it.
+  - Documented in `docs/DEPLOYMENT.md` § 9 with a weekly cron line.
+  - Tooling only — no version bump, following the precedent set by the v8 heap-limit build fix.
+
 ## [2.105.5] - 2026-09-25
 
 ### Fixed
