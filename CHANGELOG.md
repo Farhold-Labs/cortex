@@ -5,6 +5,26 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.3] - 2026-09-24
+
+### Security
+
+Two small, contained findings taken together because both are the same idea: a check that trusted something it did not have to.
+
+- **A cross-port approval code is redeemable only by the peer it was issued to (CORTEX-COMM-002, the exchange half).** `/api/federation/cross-port/exchange` validated the code against the `guestNode` in the request **body** — a value the caller writes — while the authenticated peer sat unused in `req.federationNode`. A paired but hostile peer holding a code issued for an honest guest could redeem it by simply naming that guest: it would receive the identity assertion, and burn the single-use code so the honest guest's own exchange failed. The same shape as CORTEX-COMM-001, which is why it is worth a release of its own: the signature said one thing, the body said another, and the body was believed.
+  - The record is now compared against the signing peer. The body must still agree — redundant on purpose, so a caller that drifts fails loudly rather than being quietly ignored.
+  - **A refusal does not spend the code.** Burning it on a rejected attempt would have turned the fix into the denial of service it was meant to prevent.
+  - This does **not** close 002 entirely. Pending requests are still not bound to the initiating browser, and the exchange still does not check the stored `request_id`/`nonce`. That remainder is a PKCE-shaped redesign of the flow, not a patch, and is best done against a three-node lab.
+
+- **Remote identity and role scope are exact (CORTEX-COMM-024).** Two latent hazards with no reachable path today — which is the reason to close them now rather than after something reaches them.
+  - `resolveActor` matched remote handles with `LIKE 'handle%'`, so `alice` also matched `alice_admin`. Cross-port auth manufactures precisely that collision: a remote handle clashing with a local account is stored suffixed with the home node's first label. There are only ever two legitimate local spellings of a remote address, so both are now matched exactly and nothing else is. A wildcard resolving one person to another is the worst outcome available to a function whose whole job is deciding who someone is.
+  - **Role grants are now scoped to their Community on both sides.** The foreign keys check that a membership and a role each exist, never that they belong together, so a role from one Community attached to a membership in another would have had its capabilities unioned into the wrong answer. `grantCommunityRole` refuses to create such a row, and `getMemberRoles`/`getMemberRolesBulk` refuse to read one back — the writes because the invalid state is better never held, the reads because live nodes may already hold it.
+
+### Notes
+
+- The counterfactual run puts both defects back: 6 of 11 cases fail, and the 5 that pass are the controls — an honest guest redeeming normally, both legitimate handle spellings resolving, and a handle from an unrelated node not resolving.
+- Still open from the audit: the 002 remainder above, **021** (ownership transfer — the only finding where a user can become genuinely stuck: a sole owner can neither transfer, appoint, nor leave, and a remote owner can never step up because their stub has no password to compare), and the informational 020/022/023. The last of those is worth a note: `multer@2.3.0` is inside the range of GHSA-3pph-fpjx-jg34, but the advisory covers `diskStorage` only and every upload here uses `memoryStorage`, so it is not reachable — bump it on the next dependency pass to keep it that way.
+
 ## [2.105.2] - 2026-09-23
 
 ### Security

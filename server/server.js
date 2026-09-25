@@ -14801,7 +14801,29 @@ app.post('/api/federation/cross-port/exchange', createFederationAuthMiddleware([
     if (!record) return res.status(404).json({ error: 'Invalid auth code' });
     if (record.used) return res.status(410).json({ error: 'Auth code already used' });
     if (new Date(record.expires_at) < new Date()) return res.status(410).json({ error: 'Auth code expired' });
-    if (record.guest_node !== sanitizeInput(guestNode)) return res.status(403).json({ error: 'Auth code not issued for this server' });
+    // The code belongs to the node that ASKED for it, and the signature says
+    // who is asking (CORTEX-COMM-002).
+    //
+    // This compared the record against the `guestNode` in the request BODY —
+    // a value the caller writes. A paired but hostile peer M holding a code
+    // issued for honest guest B could redeem it simply by saying `B`: M would
+    // receive Alice's identity assertion, and burn the single-use code so B's
+    // legitimate exchange failed. The authenticated peer was sitting in
+    // `req.federationNode` the whole time, unused.
+    //
+    // Same shape as CORTEX-COMM-001: the signature said one thing, the body
+    // said another, and the body was believed.
+    const callerNode = req.federationNode?.nodeName;
+    if (!callerNode || record.guest_node !== callerNode) {
+      console.warn(`[cross-port] ${callerNode || 'unauthenticated caller'} tried to redeem a code issued for ${record.guest_node}`);
+      return res.status(403).json({ error: 'Auth code not issued for this server' });
+    }
+    // The body must agree with the signature. It is redundant now, and that is
+    // the point: a future caller that stops sending it, or sends something
+    // else, should fail loudly rather than be quietly ignored.
+    if (sanitizeInput(guestNode) !== callerNode) {
+      return res.status(403).json({ error: 'Auth code not issued for this server' });
+    }
 
     db.markCrossPortCodeUsed(code);
 
