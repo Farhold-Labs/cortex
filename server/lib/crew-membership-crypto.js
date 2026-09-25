@@ -16,6 +16,7 @@
  */
 
 import crypto from 'crypto';
+import { reportDecryptHealth } from './field-crypto-health.js';
 
 // Encryption key from environment
 const MEMBERSHIP_KEY = process.env.CREW_MEMBERSHIP_KEY || null;
@@ -145,6 +146,19 @@ export async function initializeCache(database) {
     }
 
     console.log(`Loaded ${crewCount} encrypted crews with ${memberCount} member mappings`);
+
+    // Say so when the key does not fit (v2.105.5). The backfill below already
+    // repairs this from plaintext, which is why a rotated key never broke crews
+    // the way it broke wave participation — but it repaired it *silently*, so an
+    // operator with the wrong key had no way to know. A self-healing failure is
+    // still a failure worth reporting.
+    reportDecryptHealth({
+      label: 'crew membership',
+      keyEnvVar: 'CREW_MEMBERSHIP_KEY',
+      total: rows.length,
+      decrypted: crewCount,
+      failedKeys: rows.filter(r => !crewToMembers.has(r.crew_id)).map(r => r.crew_id),
+    });
 
     // Backfill: check plaintext table for members missing from encrypted table
     // This handles crews created by db.createGroup() before the cache sync fix
