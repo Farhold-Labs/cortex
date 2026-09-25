@@ -5,6 +5,23 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.5] - 2026-09-25
+
+### Fixed
+
+- **A field-encryption key that no longer fits is now reported instead of read as an empty database.** The three field-level caches — wave participation, crew membership, push subscriptions — each loaded the same way: if the encrypted table holds rows, read from it; otherwise fall back to the plaintext table the migration was meant to replace. The unexamined assumption is that rows *existing* means rows being *readable*. Rotate `WAVE_PARTICIPATION_KEY`, or restore a database onto a host whose `.env` holds different keys, and every row fails to decrypt while the loader prints a cheerful `✅ Loaded 0 encrypted waves`.
+  - This is what happened bringing up the third federation node: 40 unreadable participation rows, an empty cache, **nobody able to see their waves**, and a hundred nondescript `console.error` lines as the only evidence. Not a security hole — the cache denies rather than permits — but a silent total outage, which is harder to diagnose than a loud one.
+  - A decrypt pass is now counted. Zero successes against a non-empty table means the key is wrong, and says so in an unmissable banner naming the variable to look at, what most likely caused it, and how to resolve it. A partial failure warns with the affected ids.
+  - **The node stays usable**, recovering from the plaintext table. That is safe here and it was checked rather than assumed: `addParticipant` writes both stores and `removeParticipant` deletes from both, so plaintext is current rather than a stale snapshot — verified against both production nodes, which retain the full mapping alongside the encrypted rows. A fallback to a stale table could have resurrected removed participants, and would have been the wrong fix.
+  - **Crew membership already recovered from plaintext but did so silently**, which is why a rotated key never broke crews the way it broke participation. It now reports. A self-healing failure is still a failure worth knowing about.
+  - **Push subscriptions** get the same treatment, and are the most silent of the three: a wrong key there means nobody receives a notification, and there is nothing for a user to notice except an absence.
+  - The repair path the banner recommends — the admin re-encrypt endpoint, which reads plaintext and upserts under the current key — was tested end to end rather than assumed: warn, stay up, repair, and the next boot reads from the encrypted store with nothing left to complain about.
+
+### Notes
+
+- A healthy node stays silent. There is a test for that specifically: a warning that fires when nothing is wrong trains people to ignore the one that matters.
+- **Worth a separate look:** on both production nodes the plaintext `wave_participants` table retains the complete `(wave_id, user_id)` mapping in the clear alongside the encrypted blob — 153 rows against 43 encrypted on one of them. The encrypted store is what the cache reads, but it is not concealing anything the plaintext table does not already expose, so the at-rest protection for *this* table is weaker than it appears. The plaintext row is needed for its metadata columns, so this is a design question rather than a quick fix, and no behaviour was changed here on the strength of it.
+
 ## [2.105.4] - 2026-09-25
 
 ### Fixed
