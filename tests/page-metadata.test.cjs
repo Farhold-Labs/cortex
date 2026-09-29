@@ -342,4 +342,15 @@ test('robots.txt is a single well-formed record', async (t) => {
     assert.match(src, /api\/public\/events\/calendar\.ics/,
       'an agent asking for .ics should be told where it is');
   });
+
+  await t.test('it does not forbid the endpoints it recommends', () => {
+    // The first version disallowed /api/ wholesale while its own comment told
+    // machines to use /api/public/events. A crawler that honours robots.txt
+    // would have obeyed the directive and ignored the advice.
+    const allowIdx = src.indexOf("'Allow: /api/public/'");
+    assert.notEqual(allowIdx, -1, 'the public API must be explicitly allowed');
+    // More specific wins (RFC 9309 §2.2.2), so order in the file does not
+    // matter — but the blanket rule must still be present for everything else.
+    assert.match(src, /'Disallow: \/api\/'/, 'the rest of the API stays closed');
+  });
 });
