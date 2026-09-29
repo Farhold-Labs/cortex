@@ -142,7 +142,16 @@ app.get('/robots.txt', async (req, res) => {
     '# Cortex. Almost everything here is private.',
     'User-agent: *',
     ...(portalPublic
-      ? ['Allow: /portal', 'Allow: /events']
+      ? [
+          'Allow: /portal',
+          'Allow: /events',
+          // The public API is the readable form of those pages, and the comment
+          // below tells machines to use it — so it must not be forbidden three
+          // lines above. `Allow: /api/public/` is more specific than
+          // `Disallow: /api/`, and the most specific match wins (RFC 9309
+          // §2.2.2), so these survive the blanket rule that follows.
+          'Allow: /api/public/',
+        ]
       : ['Disallow: /']),
     'Disallow: /api/',
     'Disallow: /uploads/',
