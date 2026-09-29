@@ -925,11 +925,29 @@
     </script>
 
     <div id="root">
+      <!-- server-fallback:start
+           On the public routes (/portal, /events) the static server replaces
+           everything between these markers with a readable version of the page:
+           see client/page-metadata.mjs and client/serve.mjs.
+
+           It has to live HERE, inside #root, rather than in a <noscript> block.
+           A headless browser with JavaScript enabled never renders <noscript>
+           content — so a reader that fetches the page with a real engine, and
+           snapshots it before the app finishes booting, captured this loader and
+           nothing else. Which is exactly what one reported.
+
+           React replaces the contents of #root when it mounts, so whatever sits
+           here is a fallback by construction: machines and scriptless readers
+           keep it, everyone else sees the real app.
+
+           The markers are explicit so the substitution does not depend on
+           matching the loader's markup, which a build step is free to reshape. -->
       <div id="initial-loader">
         <div class="il-logo">CORTEX</div>
         <div class="il-sub">ESTABLISHING SIGNAL…</div>
         <div class="il-track"><div class="il-bar"></div></div>
       </div>
+      <!-- server-fallback:end -->
     </div>
     <script type="module" src="/capacitor-boot.js"></script>
     <script type="module" src="/main.jsx"></script>

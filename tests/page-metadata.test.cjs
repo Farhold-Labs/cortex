@@ -134,8 +134,8 @@ test('the metadata composer', async (t) => {
   });
 });
 
-test('the noscript fallback', async (t) => {
-  const { buildNoscript, classifyPath, injectNoscript } = await import('../client/page-metadata.mjs');
+test('the fallback content', async (t) => {
+  const { buildFallbackContent, classifyPath, injectFallback } = await import('../client/page-metadata.mjs');
   const branding = { instanceName: 'Potter-McKean Players', tagline: 'Small town theater with Broadway spirit' };
   const events = [
     { id: 'e1', title: 'Opening night', date: '2026-10-02', time: '19:30', endTime: '21:00',
@@ -144,8 +144,11 @@ test('the noscript fallback', async (t) => {
   ];
 
   await t.test('the events index lists real events a scriptless reader can read', () => {
-    const html = buildNoscript({ route: classifyPath('/events'), branding, events });
-    assert.match(html, /^<noscript>/, 'must be inside <noscript> so a scripted browser never shows it twice');
+    const html = buildFallbackContent({ route: classifyPath('/events'), branding, events });
+    // NOT <noscript>. A headless browser with scripting enabled never renders
+    // noscript content, so an agent using a real engine saw only the splash.
+    assert.doesNotMatch(html, /<noscript/, 'noscript is invisible to a scripted headless browser');
+    assert.match(html, /id="server-fallback"/, 'it must be in the rendered DOM');
     assert.match(html, /Opening night/);
     assert.match(html, /Friday, 2 October 2026/);
     assert.match(html, /at CHS/);
@@ -153,13 +156,13 @@ test('the noscript fallback', async (t) => {
   });
 
   await t.test('a slug narrows the list to that page', () => {
-    const html = buildNoscript({ route: classifyPath('/events/earnest'), branding, events });
+    const html = buildFallbackContent({ route: classifyPath('/events/earnest'), branding, events });
     assert.match(html, /Opening night/);
     assert.doesNotMatch(html, /Matinee/, 'another page\'s events do not belong here');
   });
 
   await t.test('a single event page shows that event', () => {
-    const html = buildNoscript({ route: classifyPath('/events/earnest/e1'), branding, events });
+    const html = buildFallbackContent({ route: classifyPath('/events/earnest/e1'), branding, events });
     assert.match(html, /Opening night/);
     assert.match(html, /When/);
     assert.match(html, /Doors at 7/);
@@ -169,18 +172,18 @@ test('the noscript fallback', async (t) => {
   await t.test('"could not find out" is not rendered as "there are none"', () => {
     // null means the API was unreachable; [] means there genuinely are none.
     // Saying "no events" when we do not know would be a lie.
-    const unknown = buildNoscript({ route: classifyPath('/events'), branding, events: null });
+    const unknown = buildFallbackContent({ route: classifyPath('/events'), branding, events: null });
     assert.match(unknown, /could not be loaded/);
     assert.match(unknown, /api\/public\/events/, 'point them somewhere that works');
     assert.doesNotMatch(unknown, /No upcoming events/);
 
-    const none = buildNoscript({ route: classifyPath('/events'), branding, events: [] });
+    const none = buildFallbackContent({ route: classifyPath('/events'), branding, events: [] });
     assert.match(none, /No upcoming events/);
     assert.doesNotMatch(none, /could not be loaded/);
   });
 
   await t.test('the portal lists its published pages', () => {
-    const html = buildNoscript({
+    const html = buildFallbackContent({
       route: classifyPath('/portal'), branding,
       portalWaves: [{ slug: 'earnest', title: 'Earnest', topic: 'Autumn production' }],
     });
@@ -192,13 +195,13 @@ test('the noscript fallback', async (t) => {
   await t.test('private routes get no content at all', () => {
     // Their content is not ours to put in a page anyone can fetch.
     for (const p of ['/waves', '/settings', '/']) {
-      assert.equal(buildNoscript({ route: classifyPath(p), branding, events }), '',
+      assert.equal(buildFallbackContent({ route: classifyPath(p), branding, events }), '',
         `${p} must not render content`);
     }
   });
 
   await t.test('event text cannot inject markup', () => {
-    const html = buildNoscript({
+    const html = buildFallbackContent({
       route: classifyPath('/events'), branding,
       events: [{ id: 'x', title: '<img src=x onerror=alert(1)>', date: '2026-10-05',
                  description: '</noscript><script>alert(1)</script>', href: '/events/a/x' }],
@@ -212,16 +215,33 @@ test('the noscript fallback', async (t) => {
     const many = Array.from({ length: 80 }, (_, i) => ({
       id: `e${i}`, title: `Event ${i}`, date: '2026-10-05', href: `/events/a/e${i}`,
     }));
-    const html = buildNoscript({ route: classifyPath('/events'), branding, events: many });
+    const html = buildFallbackContent({ route: classifyPath('/events'), branding, events: many });
     assert.ok(!html.includes('Event 79'), 'a node with hundreds of events must not bloat every page');
     assert.match(html, /Showing the next 50 of 80/);
   });
 
-  await t.test('it goes inside <body>, leaving the root div alone', () => {
-    const html = '<!doctype html><html><head></head><body><div id="root"></div></body></html>';
-    const out = injectNoscript(html, buildNoscript({ route: classifyPath('/events'), branding, events }));
-    assert.match(out, /<body[^>]*>\s*<noscript>/, 'immediately inside body');
-    assert.match(out, /<div id="root"><\/div>/, 'React still gets its mount point untouched');
+  await t.test('it replaces the marked region inside #root', () => {
+    const shell = '<!doctype html><html><head></head><body><div id="root">' +
+      '<!-- server-fallback:start --><div id="initial-loader">ESTABLISHING SIGNAL…</div>' +
+      '<!-- server-fallback:end --></div></body></html>';
+    const out = injectFallback(shell, buildFallbackContent({ route: classifyPath('/events'), branding, events }));
+    assert.match(out, /<div id="root"><div id="server-fallback"/, 'content sits inside the React root');
+    assert.doesNotMatch(out, /ESTABLISHING SIGNAL/, 'the splash is replaced, not appended to');
+    assert.doesNotMatch(out, /server-fallback:start/, 'markers are consumed');
+  });
+
+  await t.test('with nothing to inject, the loader is left exactly as built', () => {
+    const shell = '<!doctype html><html><body><div id="root">' +
+      '<!-- server-fallback:start --><div id="initial-loader">ESTABLISHING SIGNAL…</div>' +
+      '<!-- server-fallback:end --></div></body></html>';
+    // A private route produces no fallback, so the shell must be untouched.
+    assert.equal(injectFallback(shell, ''), shell);
+    assert.match(injectFallback(shell, ''), /ESTABLISHING SIGNAL/);
+  });
+
+  await t.test('missing markers leave the document alone rather than mangling it', () => {
+    const shell = '<!doctype html><html><body><div id="root"></div></body></html>';
+    assert.equal(injectFallback(shell, '<div id="server-fallback">x</div>'), shell);
   });
 });
 
@@ -252,10 +272,17 @@ test('the static server serves composed metadata and robots.txt', { timeout: 600
       fs.copyFileSync(path.join(root, 'client', f), path.join(dir, f));
     }
     fs.symlinkSync(path.join(root, 'client/node_modules'), path.join(dir, 'node_modules'), 'dir');
+    // Mirrors the real shell: the fallback markers and the loader inside #root.
+    // Without them injectFallback has nothing to replace, which is itself the
+    // behaviour asserted by the "missing markers" case above.
     fs.writeFileSync(path.join(dir, 'dist', 'index.html'),
       '<!doctype html><html><head><title>CORTEX - Secure Wave Communications</title>' +
       '<meta name="description" content="Privacy-first federated communication platform"></head>' +
-      '<body><div id="root"></div></body></html>');
+      '<body><div id="root">' +
+      '<!-- server-fallback:start -->' +
+      '<div id="initial-loader"><div class="il-sub">ESTABLISHING SIGNAL…</div></div>' +
+      '<!-- server-fallback:end -->' +
+      '</div></body></html>');
     fs.writeFileSync(path.join(dir, 'dist', 'assets', 'index-abc123.js'), 'x');
 
     const port = await freePort();
@@ -300,12 +327,16 @@ test('the static server serves composed metadata and robots.txt', { timeout: 600
       assert.match(res.body, /api\/public\/events/, 'tell machines where the readable data is');
     });
 
-    await t.test('a scriptless reader gets the events, end to end', async () => {
+    await t.test('any reader gets the events in the rendered DOM, end to end', async () => {
       const res = await get('/events');
-      assert.match(res.body, /<noscript>/);
-      assert.match(res.body, /Opening night/, 'the event itself, in the HTML body');
+      assert.match(res.body, /id="server-fallback"/);
+      assert.match(res.body, /Opening night/, 'the event itself, in #root');
+      assert.doesNotMatch(res.body, /ESTABLISHING SIGNAL/, 'the splash is gone on a public route');
+      assert.doesNotMatch(res.body, /<noscript/, 'not hidden where a scripted browser cannot see it');
+
       const priv = await get('/waves');
-      assert.doesNotMatch(priv.body, /<noscript><div/, 'private routes stay empty');
+      assert.doesNotMatch(priv.body, /id="server-fallback"/, 'private routes render no content');
+      assert.match(priv.body, /ESTABLISHING SIGNAL/, 'and keep their loader');
     });
 
     await t.test('assets are untouched by any of this', async () => {
