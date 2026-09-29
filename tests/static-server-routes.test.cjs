@@ -45,7 +45,10 @@ const root = path.resolve(__dirname, '..');
 function stage(temp) {
   const dir = path.join(temp, 'client');
   fs.mkdirSync(path.join(dir, 'dist', 'assets'), { recursive: true });
-  fs.copyFileSync(path.join(root, 'client/serve.mjs'), path.join(dir, 'serve.mjs'));
+  // serve.mjs imports page-metadata.mjs, so both have to travel.
+  for (const f of ['serve.mjs', 'page-metadata.mjs']) {
+    fs.copyFileSync(path.join(root, 'client', f), path.join(dir, f));
+  }
   fs.symlinkSync(path.join(root, 'client/node_modules'), path.join(dir, 'node_modules'), 'dir');
   fs.writeFileSync(path.join(dir, 'dist', 'index.html'),
     '<!doctype html><html><head><title>Cortex</title></head><body><div id="root"></div></body></html>');
@@ -54,6 +57,9 @@ function stage(temp) {
   return dir;
 }
 
+// No stand-in API is started here, deliberately: this file also proves the
+// server behaves when the API is unreachable, which is when metadata degrades to
+// something generic rather than the page failing.
 test('the static server distinguishes routes from assets', { timeout: 60000 }, async (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-serve-'));
   let child;
