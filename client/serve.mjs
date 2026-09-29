@@ -6,7 +6,7 @@ import expressStaticGzip from 'express-static-gzip';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
-import { buildMetadata, injectMetadata, buildNoscript, injectNoscript } from './page-metadata.mjs';
+import { buildMetadata, injectMetadata, buildFallbackContent, injectFallback } from './page-metadata.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, 'dist');
@@ -226,8 +226,8 @@ async function serveShell(req, res) {
     if (event) meta = buildMetadata({ pathname, branding: brand, event, origin });
   }
 
-  const noscript = buildNoscript({ route: meta.route, branding: brand, events, portalWaves });
-  res.send(injectNoscript(injectMetadata(shell(), meta), noscript));
+  const fallback = buildFallbackContent({ route: meta.route, branding: brand, events, portalWaves });
+  res.send(injectFallback(injectMetadata(shell(), meta), fallback));
 }
 
 app.listen(PORT, HOST, () => {

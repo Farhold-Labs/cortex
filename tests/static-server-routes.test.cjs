@@ -51,7 +51,9 @@ function stage(temp) {
   }
   fs.symlinkSync(path.join(root, 'client/node_modules'), path.join(dir, 'node_modules'), 'dir');
   fs.writeFileSync(path.join(dir, 'dist', 'index.html'),
-    '<!doctype html><html><head><title>Cortex</title></head><body><div id="root"></div></body></html>');
+    '<!doctype html><html><head><title>Cortex</title></head><body><div id="root">' +
+    '<!-- server-fallback:start --><div id="initial-loader">ESTABLISHING SIGNAL…</div>' +
+    '<!-- server-fallback:end --></div></body></html>');
   fs.writeFileSync(path.join(dir, 'dist', 'assets', 'index-abc123.js'), 'console.log("bundle");');
   fs.writeFileSync(path.join(dir, 'dist', 'sw.js'), '// service worker');
   return dir;
