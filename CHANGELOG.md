@@ -5,6 +5,26 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.7] - 2026-09-29
+
+### Added
+
+- **Public pages now describe themselves.** `index.html` is built once and serves every route on every node — the same `dist` ships to each instance, which is what makes a single build reusable — so it could never name a route or an instance. Every page of every node carried the title *"CORTEX - Secure Wave Communications"* and a description about Google Wave, including the public pages a theatre company shares with its audience. Paste an events link into a chat and it unfurled as a generic platform page.
+  - The `<head>` is now composed per request by `client/serve.mjs`, from what the server already knows: `/events` becomes *"Events — Potter-McKean Players"*, `/portal` the instance name, and `/events/:slug/:eventId` names the event with its date, time and location. Open Graph, Twitter card and canonical tags come along, so link previews work.
+  - **This is not server-side rendering**, and the tests say so explicitly: the body is still an empty div and the page still needs JavaScript to show anything. It fixes what machines read, not what a person sees with scripting off.
+  - It degrades rather than inventing detail. No branding, an unreachable API, or an event that cannot be found all produce something accurate and plain — a wrong preview is worse than a generic one. Event titles and locations are escaped, with a test that attribute-breaking input cannot get through.
+  - Private routes are marked `noindex, nofollow` and say nothing beyond the instance name. Their titles are not the place to start describing pages that are not public.
+
+- **`robots.txt`**, which did not exist — it 404'd, so crawlers had no guidance and no signal about which pages are meant to be public. Generated rather than shipped as a file, because the answer depends on the instance: a node with the public portal switched off has nothing to allow. It also points machines at `/api/public/events`, which needs no authentication and returns the data the page renders.
+
+### Fixed
+
+- **A correction to v2.105.6.** That release claimed two independent protections against the trailing-slash 404, and one of them was inert: `express-static-gzip` reads `options.index`, never `options.serveStatic.index`, so the `index: false` was silently ignored and the fix was carried entirely by the `req.originalUrl` change. It is now at the level the library actually reads — which also fixes the reason `/` alone kept the built-in title, since the static middleware was answering it before the fallback could compose anything.
+
+### Notes
+
+- The remaining reason an automated reader cannot read these pages is unchanged and is the large one: the content is client-rendered, so the HTML body carries no events. `/api/public/events` remains the answer for anything without a JavaScript runtime. Real server-side rendering or a prerendered snapshot for these two routes is a separate piece of work.
+
 ## [2.105.6] - 2026-09-29
 
 ### Fixed
