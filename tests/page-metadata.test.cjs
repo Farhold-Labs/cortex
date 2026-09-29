@@ -318,3 +318,28 @@ test('the static server serves composed metadata and robots.txt', { timeout: 600
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test('robots.txt is a single well-formed record', async (t) => {
+  // A blank line terminates a record (RFC 9309). The first version of this file
+  // put every Disallow after a blank line, leaving an orphaned group with no
+  // User-agent — malformed, and a parser that cannot read robots.txt may decline
+  // to fetch the site at all.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.resolve(__dirname, '../client/serve.mjs'), 'utf8');
+
+  await t.test('the record has no blank line inside it', () => {
+    // Read the composed lines out of the source rather than starting a server:
+    // what matters is that no '' sits between User-agent and the last directive.
+    const block = src.slice(src.indexOf("'User-agent: *'"), src.indexOf("res.send(`${lines.join"));
+    const beforeComments = block.slice(0, block.indexOf("lines.push("));
+    assert.doesNotMatch(beforeComments, /''\s*,/,
+      'an empty string inside the record terminates it and orphans what follows');
+  });
+
+  await t.test('it points machines at the machine-readable endpoints', () => {
+    assert.match(src, /api\/public\/events\b/);
+    assert.match(src, /api\/public\/events\/calendar\.ics/,
+      'an agent asking for .ics should be told where it is');
+  });
+});
