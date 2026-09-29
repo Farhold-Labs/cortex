@@ -63,9 +63,18 @@ case "$KEEP" in ''|*[!0-9]*) echo "--keep must be a whole number" >&2; exit 2 ;;
 # rather than silently accumulating again.
 DIRS=("$HOME/backups" "$HOME/db-backups" "$HOME/cortex-backups")
 
-# Snapshot name shapes seen in the wild. Explicit, so nothing unexpected matches.
-PATTERNS=('farhold-pre-*.db' 'farhold-post-*.db' 'farhold-prod-pre-*.db'
-          'db-pre-*.db' 'db-post-*.db' 'pmp-pre-*.db' 'pmp-post-*.db')
+# Snapshot name shapes. Matched on the <label>-pre-<version>-<timestamp>.db
+# STRUCTURE rather than on a list of known labels.
+#
+# The list used to be explicit — farhold-pre-*, db-pre-*, pmp-pre-* — and that
+# was wrong the moment backup-release-db.sh started deriving its label from
+# `hostname -s`. farhold's hostname is "cortex", so its first automated backup
+# landed as `cortex-pre-2.105.6-…db` and the pruner could not see it: retention
+# would have silently stopped applying to exactly the files it was written for,
+# and the disk would have filled again with nobody the wiser.
+#
+# The label is for humans. Retention must not depend on it.
+PATTERNS=('*-pre-*.db' '*-post-*.db')
 
 human() { local k=$1; if [ "$k" -ge 1048576 ]; then echo "$((k/1048576))G"; elif [ "$k" -ge 1024 ]; then echo "$((k/1024))M"; else echo "${k}K"; fi; }
 
