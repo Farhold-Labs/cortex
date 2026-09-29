@@ -162,7 +162,7 @@ export function injectMetadata(html, metadata) {
 }
 
 // ---------------------------------------------------------------------------
-// <noscript> content for the public pages
+// Fallback content for the public pages
 // ---------------------------------------------------------------------------
 //
 // The metadata above fixed what machines read ABOUT these pages. This fixes
@@ -175,9 +175,15 @@ export function injectMetadata(html, metadata) {
 // that its audience can read them, it means the audience cannot.
 //
 // This is still not server-side rendering. React renders the real page into
-// #root and never sees this block; it exists purely as a readable fallback, and
-// it lives in <noscript> so a scripted browser never shows it twice. Crawlers
-// and agents parse the source and find it regardless, which is the point.
+// #root and replaces whatever is there, so this is a fallback by construction:
+// machines and scriptless readers keep it, everyone else gets the real app.
+//
+// It deliberately does NOT live in <noscript>. That was the first attempt, and
+// it failed for the reader it was written for: a headless browser with scripting
+// ENABLED never renders noscript content, so an agent fetching the page with a
+// real engine and snapshotting it before the bundle finished booting captured the
+// loading splash and nothing else. Putting the content inside #root means it is
+// in the rendered DOM for anyone who looks, whatever their JavaScript support.
 
 /** How many events to include. A node with hundreds should not bloat every page. */
 const NOSCRIPT_EVENT_LIMIT = 50;
@@ -208,13 +214,15 @@ function eventItem(event) {
  * list, because "there are no events" and "I could not find out" are different
  * statements and only one of them is true.
  */
-export function buildNoscript({ route, branding = {}, events = null, portalWaves = null } = {}) {
+export function buildFallbackContent({ route, branding = {}, events = null, portalWaves = null } = {}) {
   const site = branding.instanceName || 'Cortex';
+  // NOT wrapped in <noscript>. A headless browser with scripting enabled never
+  // renders noscript content, so a reader using a real engine — and snapshotting
+  // before the app finished booting — saw only the loading splash. This goes
+  // inside #root instead, where React replaces it on mount.
   const wrap = (inner) =>
-    '<noscript>' +
-    '<div style="max-width:42em;margin:2em auto;padding:0 1.5em;font-family:system-ui,sans-serif;line-height:1.5">' +
-    inner +
-    '</div></noscript>';
+    '<div id="server-fallback" style="max-width:42em;margin:2em auto;padding:0 1.5em;' +
+    'font-family:system-ui,sans-serif;line-height:1.5">' + inner + '</div>';
 
   if (route.kind !== 'events' && route.kind !== 'portal') return '';
 
@@ -285,13 +293,22 @@ export function buildNoscript({ route, branding = {}, events = null, portalWaves
   );
 }
 
-/** Put the block just inside <body>, where React will never look at it. */
-export function injectNoscript(html, block) {
+/**
+ * Swap the fallback region inside #root for readable content.
+ *
+ * The region is delimited by explicit markers in index.html rather than matched
+ * against the loader's markup, which a build step may reshape. With no block to
+ * insert — a private route — the loader is left exactly as built.
+ */
+const FALLBACK_START = '<!-- server-fallback:start';
+const FALLBACK_END = '<!-- server-fallback:end -->';
+
+export function injectFallback(html, block) {
   if (!block) return html;
-  const match = html.match(/<body[^>]*>/i);
-  if (!match) return html;
-  const at = match.index + match[0].length;
-  return `${html.slice(0, at)}\n    ${block}${html.slice(at)}`;
+  const start = html.indexOf(FALLBACK_START);
+  const end = html.indexOf(FALLBACK_END);
+  if (start === -1 || end === -1 || end < start) return html;  // markers gone: leave it alone
+  return html.slice(0, start) + block + html.slice(end + FALLBACK_END.length);
 }
 
-export default { classifyPath, buildMetadata, injectMetadata, buildNoscript, injectNoscript };
+export default { classifyPath, buildMetadata, injectMetadata, buildFallbackContent, injectFallback };

@@ -5,6 +5,21 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.11] - 2026-09-29
+
+### Fixed
+
+- **The public-page fallback was invisible to the readers it was written for.** v2.105.8 put it in a `<noscript>` block. A headless browser with scripting **enabled** never renders `<noscript>` content — so an automated reader fetching the page with a real engine, and snapshotting it before the bundle finished booting, captured the loading splash and nothing else. Which is exactly what one reported.
+  - The content now sits **inside `<div id="root">`**, where the loading splash already lives. React replaces that container's children when it mounts, so the fallback is a fallback by construction: machines and scriptless readers keep it, everyone else gets the real application.
+  - The region is delimited by explicit `<!-- server-fallback:start -->` / `:end` markers in `index.html` rather than matched against the loader's markup, which a build step is free to reshape. With no fallback to inject — any private route — the shell is left exactly as built.
+  - `buildNoscript` is renamed `buildFallbackContent`, because it no longer builds a `<noscript>` block and a name that says otherwise misleads whoever reads it next.
+
+### Notes
+
+- **Verified in real Chrome, not by reading the code**: navigating to `/events` and `/waves` on a running node, waiting for the bundle, then inspecting the live DOM. On both routes React replaces the injected content — `#root` ends with a single child, the fallback element is gone, and a user sees the real page. That was the regression worth checking: a fallback React failed to replace would strand every visitor on a static snapshot.
+- Both test fixtures built their own minimal `index.html` without the markers, so they were updated to mirror the real shell. A fixture that differs from production in the one structural detail under test proves nothing.
+- This is the third defect in this sequence found by looking at what a consumer actually receives rather than at the source — after the double-escaped `&` and the `robots.txt` that forbade its own recommendations.
+
 ## [2.105.10] - 2026-09-29
 
 ### Fixed
