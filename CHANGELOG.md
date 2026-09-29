@@ -5,6 +5,26 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.8] - 2026-09-29
+
+### Added
+
+- **The public pages are now readable without JavaScript.** v2.105.7 fixed what machines could read *about* these pages; this fixes what they can read *of* them. The body was a single empty div, so a crawler, an agent, a text browser or anyone with scripting off saw a page whose entire content was `ESTABLISHING SIGNAL…`. For a private application that is unremarkable. For the two pages a company publishes so its audience can read them, it meant the audience could not.
+  - `/events` lists real events — date, time, location, description — each linked to its own page. `/events/:slug` narrows to one published page. `/events/:slug/:eventId` shows that event on its own. `/portal` lists the published pages.
+  - **Still not server-side rendering.** React renders the real page into `#root` and never sees this block, which lives in `<noscript>` so a scripted browser cannot show it twice. Crawlers and agents parse the source and find it regardless, which is the point.
+  - **Private routes render nothing.** Their content is not ours to put in a page anyone can fetch.
+  - **"Could not find out" is never rendered as "there are none".** An unreachable API produces an honest message and a pointer to `/api/public/events`; an empty list says there are no events. Only one of those is true at a time, and the tests keep them apart.
+  - Capped at 50 events per page, with a line saying so, because a node with hundreds should not bloat every request.
+
+### Fixed
+
+- **Text from the API was being escaped twice.** Cortex sanitizes on input, so the API returns `Hard Transitions &amp; Timing` for an event actually called `Hard Transitions & Timing`. Escaping that again produced `&amp;amp;`, which readers saw as a literal `&amp;` — in the page title from v2.105.7 as well as in the new body content. Text is now decoded and then escaped exactly once, which renders both already-escaped and raw input correctly while still neutralising markup: `<img src=x onerror=…>` remains inert, and numeric entities like `Caf&#233;` read as `Café`. Found by looking at the rendered output on a real node rather than at the code.
+
+### Notes
+
+- Checked before building: the service worker is network-first for navigations and caches per request URL, so per-route HTML cannot leak between routes; and the client captures `document.title` at load, so the composed title survives hydration.
+- Two test assertions of mine were wrong and the code was right — an asserted weekday that was off by a day, and a malformed regex. Worth recording because both would have looked like implementation bugs at a glance.
+
 ## [2.105.7] - 2026-09-29
 
 ### Added
