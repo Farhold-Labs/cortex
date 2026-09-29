@@ -5,6 +5,8 @@ import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
+import { buildMetadata, injectMetadata } from './page-metadata.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, 'dist');
@@ -14,27 +16,79 @@ const PORT = process.env.PORT || 3000;
 // the same box (e.g. the prod VPS, via its pm2 ecosystem env).
 const HOST = process.env.HOST || '0.0.0.0';
 
+// Where to ask about this instance. Same box by default; the static server and
+// the API are separate processes but always deployed together.
+const API_ORIGIN = process.env.API_ORIGIN || `http://127.0.0.1:${process.env.API_PORT || 3001}`;
+
 const app = express();
+
+// The shell, read once. It is immutable for the life of the process — a deploy
+// replaces the file and restarts pm2.
+let SHELL = null;
+const shell = () => (SHELL ??= fs.readFileSync(path.join(DIST, 'index.html'), 'utf8'));
+
+// Instance branding, cached. A link preview must not wait on an API call, and
+// the instance name changes about once ever.
+let brandingCache = { value: {}, at: 0 };
+const BRANDING_TTL_MS = 5 * 60 * 1000;
+
+async function branding() {
+  if (Date.now() - brandingCache.at < BRANDING_TTL_MS) return brandingCache.value;
+  try {
+    const res = await fetch(`${API_ORIGIN}/api/instance-config`, { signal: AbortSignal.timeout(2000) });
+    if (res.ok) {
+      const cfg = await res.json();
+      brandingCache = { value: cfg.branding || {}, at: Date.now() };
+    }
+  } catch {
+    // Unreachable API: keep whatever we had and try again after the TTL. The
+    // page still works; its metadata is just less specific.
+    brandingCache.at = Date.now();
+  }
+  return brandingCache.value;
+}
+
+// One event, for the case where the URL names one. Short TTL because an event
+// can be edited, and this only exists to make a shared link unfurl correctly.
+const eventCache = new Map();
+const EVENT_TTL_MS = 60 * 1000;
+
+async function findEvent(eventId) {
+  const hit = eventCache.get(eventId);
+  if (hit && Date.now() - hit.at < EVENT_TTL_MS) return hit.value;
+  let value = null;
+  try {
+    const res = await fetch(`${API_ORIGIN}/api/public/events`, { signal: AbortSignal.timeout(2000) });
+    if (res.ok) {
+      const data = await res.json();
+      value = (data.events || []).find(e => e.id === eventId) || null;
+    }
+  } catch { /* leave it null — generic metadata is better than wrong metadata */ }
+  eventCache.set(eventId, { value, at: Date.now() });
+  if (eventCache.size > 500) eventCache.clear();   // bounded; it is a cache, not a store
+  return value;
+}
 
 app.use(
   expressStaticGzip(DIST, {
     enableBrotli: true,
     orderPreference: ['br', 'gz'],
+    // No directory-index lookup, and this MUST be top-level: express-static-gzip
+    // reads `options.index`, never `options.serveStatic.index`. Placed inside
+    // serveStatic in v2.105.6 it was inert, and the trailing-slash fix shipped
+    // there was carried entirely by the `req.originalUrl` change below.
+    //
+    // Why it matters: with the lookup on, a request for `/events/` is rewritten
+    // to `/events/index.html`, and `/` is answered by the static middleware
+    // instead of the fallback — so `/` never reached the metadata composer and
+    // kept the built-in title.
+    //
+    // Nothing is lost. `/` resolves through the fallback, which serves the same
+    // file with the same no-cache headers, and now with its metadata composed.
+    index: false,
     serveStatic: {
       etag: true,
       lastModified: true,
-      // No directory-index lookup. Without this, a request for `/events/`
-      // becomes a search for `dist/events/index.html`, and serve-static
-      // REWRITES req.path to `/events/index.html` before handing on — so the
-      // SPA fallback below saw a filename with a dot in it and 404'd a
-      // perfectly good route. `/events/` and `/portal/` both returned
-      // "Not found" while `/events` worked, and the client router accepts
-      // either (see AppContent.jsx, the pattern ends `\/?$`).
-      //
-      // Nothing is lost: `/` still resolves, via the fallback, which serves the
-      // same file with the same no-cache headers. There is now exactly one
-      // place that decides "this is a route, serve the shell".
-      index: false,
       setHeaders(res, filePath) {
         if (/\.html(?:\.gz|\.br)?$/.test(filePath) || /(?:^|\/)(sw\.js|manifest\.json)(?:\.gz|\.br)?$/.test(filePath)) {
           // HTML must never be cached — it references hashed asset filenames.
@@ -49,6 +103,52 @@ app.use(
     },
   })
 );
+
+/**
+ * robots.txt, composed rather than shipped as a file.
+ *
+ * There was none at all — a 404 — so crawlers had no guidance and no signal
+ * about which of these pages are meant to be public. Almost all of Cortex is
+ * private, and the two pages that are not (`/portal`, `/events`) are public
+ * because an operator deliberately published them.
+ *
+ * It is generated because the answer depends on the instance: a node with the
+ * public portal switched off has nothing to allow, and saying otherwise would
+ * invite crawlers to pages that will only redirect them.
+ */
+app.get('/robots.txt', async (req, res) => {
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+
+  let portalPublic = true;
+  try {
+    const r = await fetch(`${API_ORIGIN}/api/instance-config`, { signal: AbortSignal.timeout(2000) });
+    if (r.ok) portalPublic = ((await r.json()).features || {}).publicPortal !== false;
+  } catch {
+    // Unreachable API. Assume the portal is on, because the cost of being wrong
+    // that way is a crawler following a link that redirects — whereas assuming
+    // it is off would hide pages an operator chose to publish.
+  }
+
+  const lines = ['# Cortex. Almost everything here is private.', 'User-agent: *'];
+  if (portalPublic) {
+    lines.push('Allow: /portal', 'Allow: /events', '');
+  }
+  lines.push(
+    'Disallow: /api/',
+    'Disallow: /uploads/',
+    'Disallow: /waves',
+    'Disallow: /settings',
+    'Disallow: /admin',
+    'Disallow: /cross-port/',
+    ...(portalPublic ? [] : ['Disallow: /']),
+    '',
+    '# The public pages need JavaScript to render. For machine-readable event',
+    '# data, use the API instead — it needs no authentication:',
+    '#   /api/public/events',
+  );
+  res.send(`${lines.join('\n')}\n`);
+});
 
 // SPA fallback: unmatched ROUTES serve index.html (Express 5 wildcard syntax).
 // File-like paths (last segment has an extension) must 404 instead: answering
@@ -65,8 +165,47 @@ app.get('/{*path}', (req, res) => {
     return res.status(404).type('text/plain').send('Not found');
   }
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.sendFile(path.join(DIST, 'index.html'));
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  serveShell(req, res).catch(() => {
+    // Metadata is a nicety; serving the page is not. Any failure falls back to
+    // the file as built.
+    res.send(shell());
+  });
 });
+
+/**
+ * The shell, with its <head> metadata composed for this URL.
+ *
+ * Not server-side rendering: the body is the same empty div and the page still
+ * needs JavaScript to show anything. This fixes only what machines read —
+ * link previews, crawlers, agents without a script runtime — which until now
+ * saw "CORTEX - Secure Wave Communications" on every page of every instance.
+ */
+async function serveShell(req, res) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  const meta = buildMetadata({
+    pathname: req.originalUrl || req.path,
+    branding: await branding(),
+    event: null,
+    origin: host ? `${proto}://${host}` : '',
+  });
+
+  // Only reach for the event when the URL actually names one.
+  if (meta.route.kind === 'events' && meta.route.eventId) {
+    const event = await findEvent(meta.route.eventId);
+    if (event) {
+      const withEvent = buildMetadata({
+        pathname: req.originalUrl || req.path,
+        branding: await branding(),
+        event,
+        origin: host ? `${proto}://${host}` : '',
+      });
+      return res.send(injectMetadata(shell(), withEvent));
+    }
+  }
+  res.send(injectMetadata(shell(), meta));
+}
 
 app.listen(PORT, HOST, () => {
   console.log(`Cortex client serving on ${HOST}:${PORT} (pre-compressed static)`);
