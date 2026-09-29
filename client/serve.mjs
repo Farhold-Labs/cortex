@@ -23,6 +23,18 @@ app.use(
     serveStatic: {
       etag: true,
       lastModified: true,
+      // No directory-index lookup. Without this, a request for `/events/`
+      // becomes a search for `dist/events/index.html`, and serve-static
+      // REWRITES req.path to `/events/index.html` before handing on — so the
+      // SPA fallback below saw a filename with a dot in it and 404'd a
+      // perfectly good route. `/events/` and `/portal/` both returned
+      // "Not found" while `/events` worked, and the client router accepts
+      // either (see AppContent.jsx, the pattern ends `\/?$`).
+      //
+      // Nothing is lost: `/` still resolves, via the fallback, which serves the
+      // same file with the same no-cache headers. There is now exactly one
+      // place that decides "this is a route, serve the shell".
+      index: false,
       setHeaders(res, filePath) {
         if (/\.html(?:\.gz|\.br)?$/.test(filePath) || /(?:^|\/)(sw\.js|manifest\.json)(?:\.gz|\.br)?$/.test(filePath)) {
           // HTML must never be cached — it references hashed asset filenames.
@@ -44,7 +56,11 @@ app.use(
 // HTML as if it were the bundle, permanently bricking clients whose shell
 // still references a previous build's hashed assets (v2.60.3).
 app.get('/{*path}', (req, res) => {
-  const lastSegment = req.path.split('/').pop() || '';
+  // Judge the URL the CLIENT asked for, not `req.path`, which upstream
+  // middleware is free to rewrite — that rewrite is exactly what broke
+  // trailing-slash routes. `originalUrl` is set once and never altered.
+  const requested = (req.originalUrl || req.path).split('?')[0].split('#')[0];
+  const lastSegment = requested.split('/').pop() || '';
   if (lastSegment.includes('.')) {
     return res.status(404).type('text/plain').send('Not found');
   }
