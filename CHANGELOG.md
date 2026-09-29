@@ -5,6 +5,24 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.6] - 2026-09-29
+
+### Fixed
+
+- **A route with a trailing slash no longer 404s.** `/events/` and `/portal/` — both public pages, reachable by anyone with the link — returned `Not found`, while `/events` and `/portal` worked. The client router accepts either form (its pattern ends `\/?$`), so the server and the client disagreed about the same URL.
+  - `serve-static` looks for a directory index and **rewrites `req.path`** before handing on, so `/events/` arrived at the SPA fallback as `/events/index.html`. The fallback's guard — which 404s anything whose last segment contains a dot — then rejected it as a missing asset.
+  - That guard is not the bug and is deliberately kept. It exists because of v2.60.3: answering a missing `/assets/*.js` with `200 index.html` let the service worker cache HTML as if it were the bundle, permanently bricking clients whose shell still referenced a previous build's hashed filenames.
+  - Fixed in two independent ways, because the guard protects against a client-bricking failure and one layer of protection for that is not enough. The directory-index lookup is switched off, so nothing rewrites the path; and the guard now reads `req.originalUrl`, which Express sets once and no middleware may alter. Either alone would fix it.
+  - Nothing is lost by disabling the index lookup: `/` still resolves, through the fallback, which serves the same file with the same no-cache headers. There is now exactly one place that decides "this is a route, serve the shell".
+
+### Notes
+
+- `client/serve.mjs` had no tests. It now has six, covering both halves of a requirement that pulls in two directions — unknown *routes* must serve the shell, missing *assets* must not. With the bug restored, four fail and the two that pass are the asset-guard cases, correctly unaffected.
+- Verified that pre-compressed negotiation, cache headers on hashed assets, and the no-cache header on the shell are all byte-identical to before, by comparing against the untouched server still running alongside.
+- **Two related findings from the same investigation are NOT fixed here**, because they are larger and worth deciding on separately. Neither is a bug in the sense this was:
+  - The public pages are client-rendered, so an agent or crawler without JavaScript receives a shell whose entire visible text is `CORTEX — ESTABLISHING SIGNAL…`. Events load afterwards from `/api/public/events`, which is unauthenticated and returns them correctly — so the data is reachable, the *page* is not.
+  - The `<title>` and `<meta name="description">` are the generic Cortex ones on every route, so link previews and metadata-only readers see nothing about the instance or the event, even though `/api/instance-config` knows the branding.
+
 ## [Unreleased]
 
 ### Added
