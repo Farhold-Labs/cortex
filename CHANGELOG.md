@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.10] - 2026-09-29
+
+### Fixed
+
+- **`robots.txt` forbade the endpoints it recommended.** v2.105.9 shipped a comment block telling machines to use `/api/public/events` and `/api/public/events/calendar.ics`, three lines below `Disallow: /api/`. A crawler that honours robots.txt would have obeyed the directive and ignored the advice — which makes the whole point of that release unreachable to exactly the readers it was for. `Allow: /api/public/` is now present, and being more specific it wins over the blanket rule (RFC 9309 §2.2.2) while everything else under `/api/` stays closed.
+
+### Notes
+
+- Caught by reading the file as a crawler would rather than as its author — the same way the double-escaping in v2.105.7 was found. Both were cases of shipping something, looking at the actual output, and finding it contradicted itself.
+
 ## [2.105.9] - 2026-09-29
 
 ### Added
