@@ -15345,6 +15345,43 @@ app.get('/api/public/events/:slug/calendar.ics', (req, res) => {
   }
 });
 
+/**
+ * GET /api/public/events/calendar.ics — everything published, in one feed.
+ *
+ * The per-slug feeds above are per production. This is the one an audience
+ * member subscribes to once, and the one an automated reader asks for: a single
+ * URL covering every published event on the instance.
+ *
+ * It must be registered BEFORE `/api/public/events/:slug`, which would
+ * otherwise match this path with slug="calendar.ics".
+ */
+app.get('/api/public/events/calendar.ics', (req, res) => {
+  try {
+    if (!isFeatureEnabled('publicPortal') || !isFeatureEnabled('calendar')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const includeServer = isFeatureEnabled('publicServerEvents');
+    const includePast = req.query.past === '1';
+    const rows = db.getPublicEventsIndex({ includeServer, includePast });
+    const name = (db.getInstanceConfig?.().branding?.instanceName) || 'Cortex';
+
+    // No Content-Disposition: a subscribable feed should open in a calendar
+    // application, not land in the downloads folder. The per-event and per-slug
+    // routes keep theirs, because those are one-off downloads.
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    // Raw rows, NOT publicEvent(rows): buildICS reads eventDate/eventTime/
+    // eventEndTime, and publicEvent renames those to date/time/endTime for the
+    // JSON API. Mapping them first produces VEVENTs with undefined dates — a
+    // feed that parses but means nothing. The per-slug route above passes raw
+    // rows for the same reason.
+    res.send(buildICS(rows, name));
+  } catch (err) {
+    console.error('Public aggregate ICS error:', err);
+    res.status(500).json({ error: 'Failed to generate calendar file' });
+  }
+});
+
 // GET /api/public/events — everything published across the instance.
 // This is the front door: /events with no slug. It spans every portal wave that
 // has publishing switched on, plus server-wide events when the operator has
