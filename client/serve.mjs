@@ -134,22 +134,31 @@ app.get('/robots.txt', async (req, res) => {
     // it is off would hide pages an operator chose to publish.
   }
 
-  const lines = ['# Cortex. Almost everything here is private.', 'User-agent: *'];
-  if (portalPublic) {
-    lines.push('Allow: /portal', 'Allow: /events', '');
-  }
-  lines.push(
+  // ONE record, no blank lines inside it. A blank line terminates a record
+  // (RFC 9309), so the first version of this file put every Disallow into an
+  // orphaned group with no User-agent — malformed, and a parser that cannot read
+  // robots.txt may decline to fetch at all.
+  const lines = [
+    '# Cortex. Almost everything here is private.',
+    'User-agent: *',
+    ...(portalPublic
+      ? ['Allow: /portal', 'Allow: /events']
+      : ['Disallow: /']),
     'Disallow: /api/',
     'Disallow: /uploads/',
     'Disallow: /waves',
     'Disallow: /settings',
     'Disallow: /admin',
     'Disallow: /cross-port/',
-    ...(portalPublic ? [] : ['Disallow: /']),
+  ];
+  // Comments go after the record, where a blank line is harmless.
+  lines.push(
     '',
-    '# The public pages need JavaScript to render. For machine-readable event',
-    '# data, use the API instead — it needs no authentication:',
-    '#   /api/public/events',
+    '# The public pages render with JavaScript. Machine-readable equivalents,',
+    '# no authentication required:',
+    '#   /api/public/events                  JSON, every published event',
+    '#   /api/public/events/calendar.ics     iCalendar, subscribable',
+    '#   /api/public/portal                  JSON, the published pages',
   );
   res.send(`${lines.join('\n')}\n`);
 });

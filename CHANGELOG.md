@@ -5,6 +5,24 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.105.9] - 2026-09-29
+
+### Added
+
+- **`GET /api/public/events/calendar.ics` — every published event in one subscribable feed.** Per-production feeds already existed at `/api/public/events/:slug/calendar.ics`; what was missing was the single URL an audience member subscribes to once, and the one an automated reader asks for. No `Content-Disposition`, so a calendar application opens it rather than a browser filing it in Downloads — the per-event and per-slug routes keep theirs, because those are one-off downloads. Registered before `/api/public/events/:slug`, which would otherwise match this path with `slug="calendar.ics"`.
+
+### Fixed
+
+- **`robots.txt` was malformed.** It was shipped in v2.105.7 with a blank line after the `Allow:` lines, and a blank line terminates a record (RFC 9309) — so every `Disallow:` after it formed an orphaned group with no `User-agent:`. It is now one record with the comments after it, where a blank line is harmless. A parser that cannot read robots.txt may decline to fetch a site at all, so this was worth correcting even though `/events` was explicitly allowed either way.
+  - The comment block now lists all three machine-readable endpoints — JSON events, the iCalendar feed, and the portal index — rather than only the first.
+
+### Notes
+
+- Two things were caught before shipping rather than after, both by checking shapes instead of trusting them:
+  - The aggregate feed originally passed `rows.map(publicEvent)` to `buildICS`. `publicEvent()` renames `eventDate`/`eventTime`/`eventEndTime` to `date`/`time`/`endTime` for the JSON API, while `buildICS` reads the former — so the feed would have emitted VEVENTs with undefined dates: a calendar that parses and means nothing. The per-slug route passes raw rows for exactly this reason, and now so does this one.
+  - Verified against a real seeded event rather than an empty instance, including that the output is CRLF-delimited as RFC 5545 requires and that every VEVENT carries `UID`, `DTSTART` and `SUMMARY`. An earlier CRLF check reported a false negative because Python's text mode translates newlines on read.
+- **The reported `DisabledError` is not on this side.** Every OpenAI fetcher user agent — `GPTBot`, `ChatGPT-User`, `OAI-SearchBot` — receives `200` with the full 40 KB page, and the TLS chain verifies with return code 0. Nothing in nginx or the application distinguishes them. The endpoints above are the reliable route for a reader that cannot fetch the page.
+
 ## [2.105.8] - 2026-09-29
 
 ### Added
