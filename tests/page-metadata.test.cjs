@@ -94,6 +94,34 @@ test('the metadata composer', async (t) => {
     assert.match(m.tags, /&quot;|&lt;/);
   });
 
+  await t.test('text already escaped by the API is not escaped twice', () => {
+    // Cortex sanitizes on input, so the API returns `Hard Transitions &amp;
+    // Timing` for an event actually called `Hard Transitions & Timing`.
+    // Escaping that again showed readers a literal "&amp;".
+    const m = buildMetadata({
+      pathname: '/events/pmp/e1', branding,
+      event: { title: 'Hard Transitions &amp; Timing', date: '2026-10-05' },
+    });
+    const title = (m.tags.match(/<title>([^<]*)<\/title>/) || [])[1];
+    assert.match(title, /Hard Transitions &amp; Timing/);
+    assert.doesNotMatch(title, /&amp;amp;/, 'double-escaped');
+  });
+
+  await t.test('numeric entities decode, and markup stays inert', () => {
+    const m = buildMetadata({
+      pathname: '/events/pmp/e1', branding,
+      event: { title: 'Caf&#233; &#x2014; show', date: '2026-10-05' },
+    });
+    assert.match(m.tags, /Café/, 'numeric entities should read as characters');
+
+    const evil = buildMetadata({
+      pathname: '/events/pmp/e1', branding,
+      event: { title: '<img src=x onerror=alert(1)>', date: '2026-10-05' },
+    });
+    assert.doesNotMatch(evil.tags, /<img/i, 'decode-then-escape must still neutralise markup');
+    assert.match(evil.tags, /&lt;img/i);
+  });
+
   await t.test('injection replaces the built-in tags rather than duplicating them', () => {
     const html = '<!doctype html><html><head><title>CORTEX - Secure Wave Communications</title>' +
                  '<meta name="description" content="Privacy-first federated communication platform">' +
@@ -103,6 +131,97 @@ test('the metadata composer', async (t) => {
     assert.equal((out.match(/name="description"/g) || []).length, 1, 'exactly one description');
     assert.doesNotMatch(out, /Secure Wave Communications/);
     assert.match(out, /id="root"/, 'the body is untouched — this is not SSR');
+  });
+});
+
+test('the noscript fallback', async (t) => {
+  const { buildNoscript, classifyPath, injectNoscript } = await import('../client/page-metadata.mjs');
+  const branding = { instanceName: 'Potter-McKean Players', tagline: 'Small town theater with Broadway spirit' };
+  const events = [
+    { id: 'e1', title: 'Opening night', date: '2026-10-02', time: '19:30', endTime: '21:00',
+      location: 'CHS', slug: 'earnest', href: '/events/earnest/e1', description: 'Doors at 7.' },
+    { id: 'e2', title: 'Matinee', date: '2026-10-03', time: '14:00', slug: 'other', href: '/events/other/e2' },
+  ];
+
+  await t.test('the events index lists real events a scriptless reader can read', () => {
+    const html = buildNoscript({ route: classifyPath('/events'), branding, events });
+    assert.match(html, /^<noscript>/, 'must be inside <noscript> so a scripted browser never shows it twice');
+    assert.match(html, /Opening night/);
+    assert.match(html, /Friday, 2 October 2026/);
+    assert.match(html, /at CHS/);
+    assert.match(html, /href="\/events\/earnest\/e1"/, 'each event should be followable');
+  });
+
+  await t.test('a slug narrows the list to that page', () => {
+    const html = buildNoscript({ route: classifyPath('/events/earnest'), branding, events });
+    assert.match(html, /Opening night/);
+    assert.doesNotMatch(html, /Matinee/, 'another page\'s events do not belong here');
+  });
+
+  await t.test('a single event page shows that event', () => {
+    const html = buildNoscript({ route: classifyPath('/events/earnest/e1'), branding, events });
+    assert.match(html, /Opening night/);
+    assert.match(html, /When/);
+    assert.match(html, /Doors at 7/);
+    assert.doesNotMatch(html, /Matinee/);
+  });
+
+  await t.test('"could not find out" is not rendered as "there are none"', () => {
+    // null means the API was unreachable; [] means there genuinely are none.
+    // Saying "no events" when we do not know would be a lie.
+    const unknown = buildNoscript({ route: classifyPath('/events'), branding, events: null });
+    assert.match(unknown, /could not be loaded/);
+    assert.match(unknown, /api\/public\/events/, 'point them somewhere that works');
+    assert.doesNotMatch(unknown, /No upcoming events/);
+
+    const none = buildNoscript({ route: classifyPath('/events'), branding, events: [] });
+    assert.match(none, /No upcoming events/);
+    assert.doesNotMatch(none, /could not be loaded/);
+  });
+
+  await t.test('the portal lists its published pages', () => {
+    const html = buildNoscript({
+      route: classifyPath('/portal'), branding,
+      portalWaves: [{ slug: 'earnest', title: 'Earnest', topic: 'Autumn production' }],
+    });
+    assert.match(html, /Earnest/);
+    assert.match(html, /Autumn production/);
+    assert.match(html, /href="\/events\/earnest"/);
+  });
+
+  await t.test('private routes get no content at all', () => {
+    // Their content is not ours to put in a page anyone can fetch.
+    for (const p of ['/waves', '/settings', '/']) {
+      assert.equal(buildNoscript({ route: classifyPath(p), branding, events }), '',
+        `${p} must not render content`);
+    }
+  });
+
+  await t.test('event text cannot inject markup', () => {
+    const html = buildNoscript({
+      route: classifyPath('/events'), branding,
+      events: [{ id: 'x', title: '<img src=x onerror=alert(1)>', date: '2026-10-05',
+                 description: '</noscript><script>alert(1)</script>', href: '/events/a/x' }],
+    });
+    assert.doesNotMatch(html, /<img/i);
+    assert.doesNotMatch(html, /<script/i);
+    assert.doesNotMatch(html, /<\/noscript>[\s\S]*<\/noscript>/, 'must not be able to close the block early');
+  });
+
+  await t.test('a long list is capped, and says so', () => {
+    const many = Array.from({ length: 80 }, (_, i) => ({
+      id: `e${i}`, title: `Event ${i}`, date: '2026-10-05', href: `/events/a/e${i}`,
+    }));
+    const html = buildNoscript({ route: classifyPath('/events'), branding, events: many });
+    assert.ok(!html.includes('Event 79'), 'a node with hundreds of events must not bloat every page');
+    assert.match(html, /Showing the next 50 of 80/);
+  });
+
+  await t.test('it goes inside <body>, leaving the root div alone', () => {
+    const html = '<!doctype html><html><head></head><body><div id="root"></div></body></html>';
+    const out = injectNoscript(html, buildNoscript({ route: classifyPath('/events'), branding, events }));
+    assert.match(out, /<body[^>]*>\s*<noscript>/, 'immediately inside body');
+    assert.match(out, /<div id="root"><\/div>/, 'React still gets its mount point untouched');
   });
 });
 
@@ -179,6 +298,14 @@ test('the static server serves composed metadata and robots.txt', { timeout: 600
       assert.match(res.body, /Allow: \/portal/);
       assert.match(res.body, /Disallow: \/api\//);
       assert.match(res.body, /api\/public\/events/, 'tell machines where the readable data is');
+    });
+
+    await t.test('a scriptless reader gets the events, end to end', async () => {
+      const res = await get('/events');
+      assert.match(res.body, /<noscript>/);
+      assert.match(res.body, /Opening night/, 'the event itself, in the HTML body');
+      const priv = await get('/waves');
+      assert.doesNotMatch(priv.body, /<noscript><div/, 'private routes stay empty');
     });
 
     await t.test('assets are untouched by any of this', async () => {

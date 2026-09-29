@@ -6,7 +6,7 @@ import expressStaticGzip from 'express-static-gzip';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
-import { buildMetadata, injectMetadata } from './page-metadata.mjs';
+import { buildMetadata, injectMetadata, buildNoscript, injectNoscript } from './page-metadata.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, 'dist');
@@ -48,24 +48,28 @@ async function branding() {
   return brandingCache.value;
 }
 
-// One event, for the case where the URL names one. Short TTL because an event
-// can be edited, and this only exists to make a shared link unfurl correctly.
-const eventCache = new Map();
-const EVENT_TTL_MS = 60 * 1000;
+// The public lists, cached briefly. Short TTL because an event can be edited,
+// and these exist to make a shared link unfurl and to give a scriptless reader
+// something true.
+//
+// `null` means "could not find out", which is deliberately different from `[]`
+// meaning "there are none". Only one of those is safe to render as an empty
+// list.
+const listCache = new Map();
+const LIST_TTL_MS = 60 * 1000;
 
-async function findEvent(eventId) {
-  const hit = eventCache.get(eventId);
-  if (hit && Date.now() - hit.at < EVENT_TTL_MS) return hit.value;
+async function publicList(kind) {
+  const hit = listCache.get(kind);
+  if (hit && Date.now() - hit.at < LIST_TTL_MS) return hit.value;
   let value = null;
   try {
-    const res = await fetch(`${API_ORIGIN}/api/public/events`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${API_ORIGIN}/api/public/${kind}`, { signal: AbortSignal.timeout(2000) });
     if (res.ok) {
       const data = await res.json();
-      value = (data.events || []).find(e => e.id === eventId) || null;
+      value = kind === 'events' ? (data.events || []) : (data.waves || []);
     }
-  } catch { /* leave it null — generic metadata is better than wrong metadata */ }
-  eventCache.set(eventId, { value, at: Date.now() });
-  if (eventCache.size > 500) eventCache.clear();   // bounded; it is a cache, not a store
+  } catch { /* leave it null — see above */ }
+  listCache.set(kind, { value, at: Date.now() });
   return value;
 }
 
@@ -184,27 +188,28 @@ app.get('/{*path}', (req, res) => {
 async function serveShell(req, res) {
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host || '';
-  const meta = buildMetadata({
-    pathname: req.originalUrl || req.path,
-    branding: await branding(),
-    event: null,
-    origin: host ? `${proto}://${host}` : '',
-  });
+  const origin = host ? `${proto}://${host}` : '';
+  const pathname = req.originalUrl || req.path;
+  const brand = await branding();
 
-  // Only reach for the event when the URL actually names one.
-  if (meta.route.kind === 'events' && meta.route.eventId) {
-    const event = await findEvent(meta.route.eventId);
-    if (event) {
-      const withEvent = buildMetadata({
-        pathname: req.originalUrl || req.path,
-        branding: await branding(),
-        event,
-        origin: host ? `${proto}://${host}` : '',
-      });
-      return res.send(injectMetadata(shell(), withEvent));
-    }
+  let meta = buildMetadata({ pathname, branding: brand, event: null, origin });
+
+  // Private routes get metadata and nothing else: their content is not ours to
+  // put in a page anyone can fetch.
+  if (meta.route.kind === 'app') {
+    return res.send(injectMetadata(shell(), meta));
   }
-  res.send(injectMetadata(shell(), meta));
+
+  const events = meta.route.kind === 'events' ? await publicList('events') : null;
+  const portalWaves = meta.route.kind === 'portal' ? await publicList('portal') : null;
+
+  if (meta.route.eventId && events) {
+    const event = events.find(e => e.id === meta.route.eventId);
+    if (event) meta = buildMetadata({ pathname, branding: brand, event, origin });
+  }
+
+  const noscript = buildNoscript({ route: meta.route, branding: brand, events, portalWaves });
+  res.send(injectNoscript(injectMetadata(shell(), meta), noscript));
 }
 
 app.listen(PORT, HOST, () => {

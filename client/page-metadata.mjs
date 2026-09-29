@@ -20,9 +20,32 @@
 // not what people see with scripting off.
 
 
-/** Minimal HTML-attribute escaping. Titles and locations are user-supplied. */
+/**
+ * Escape once, for either an attribute or element text.
+ *
+ * DECODE FIRST. Cortex sanitizes on input, so what comes back from the API is
+ * already HTML-escaped: an event actually titled `Hard Transitions & Timing` is
+ * stored and returned as `Hard Transitions &amp; Timing`. Escaping that again
+ * produced `&amp;amp;`, which a reader sees as a literal "&amp;" — visible in
+ * the noscript body and in the page title alike.
+ *
+ * Decoding and then escaping normalises both shapes and stays safe, because the
+ * escape is what happens last: already-escaped text comes out right, and raw
+ * `<script>` is still neutralised. Only the entities the sanitizer emits are
+ * decoded, plus numeric ones.
+ */
 function attr(value) {
-  return String(value ?? '')
+  const decoded = String(value ?? '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'")
+    .replace(/&#x?[0-9a-f]+;/gi, (m) => {
+      const code = m[2] === 'x' || m[2] === 'X'
+        ? parseInt(m.slice(3, -1), 16) : parseInt(m.slice(2, -1), 10);
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : m;
+    })
+    // &amp; last, so "&amp;lt;" decodes to "&lt;" rather than to "<".
+    .replace(/&amp;/g, '&');
+  return decoded
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
@@ -138,4 +161,137 @@ export function injectMetadata(html, metadata) {
   return `${out.slice(0, idx)}  ${metadata.tags}\n  ${out.slice(idx)}`;
 }
 
-export default { classifyPath, buildMetadata, injectMetadata };
+// ---------------------------------------------------------------------------
+// <noscript> content for the public pages
+// ---------------------------------------------------------------------------
+//
+// The metadata above fixed what machines read ABOUT these pages. This fixes
+// what they can read OF them.
+//
+// The body is a single empty div, so anything without a JavaScript runtime — a
+// crawler, an agent, a text browser, a person who turned scripting off — sees a
+// page whose entire content is "ESTABLISHING SIGNAL…". For a private
+// application that is unremarkable. For the two pages a company publishes so
+// that its audience can read them, it means the audience cannot.
+//
+// This is still not server-side rendering. React renders the real page into
+// #root and never sees this block; it exists purely as a readable fallback, and
+// it lives in <noscript> so a scripted browser never shows it twice. Crawlers
+// and agents parse the source and find it regardless, which is the point.
+
+/** How many events to include. A node with hundreds should not bloat every page. */
+const NOSCRIPT_EVENT_LIMIT = 50;
+
+function timeRange({ time, endTime } = {}) {
+  if (!time) return '';
+  return endTime ? `${time}–${endTime}` : time;
+}
+
+/** One event as a list item. `href` comes from the API, already route-shaped. */
+function eventItem(event) {
+  const when = describeWhen(event);
+  const bits = [
+    `<strong>${attr(event.title || 'Untitled event')}</strong>`,
+    when && `<br><span>${attr(when)}</span>`,
+    event.location && `<br><span>at ${attr(event.location)}</span>`,
+    event.description && `<br><span>${attr(summarise(event.description, 300))}</span>`,
+  ].filter(Boolean).join('');
+  const inner = event.href ? `<a href="${attr(event.href)}">${bits}</a>` : bits;
+  return `<li style="margin:0 0 1em">${inner}</li>`;
+}
+
+/**
+ * A readable version of a public page.
+ *
+ * `events` / `portalWaves` may be null when the API could not be reached. In
+ * that case this says so and points at the API rather than rendering an empty
+ * list, because "there are no events" and "I could not find out" are different
+ * statements and only one of them is true.
+ */
+export function buildNoscript({ route, branding = {}, events = null, portalWaves = null } = {}) {
+  const site = branding.instanceName || 'Cortex';
+  const wrap = (inner) =>
+    '<noscript>' +
+    '<div style="max-width:42em;margin:2em auto;padding:0 1.5em;font-family:system-ui,sans-serif;line-height:1.5">' +
+    inner +
+    '</div></noscript>';
+
+  if (route.kind !== 'events' && route.kind !== 'portal') return '';
+
+  const unavailable =
+    `<p>This page could not be loaded without JavaScript just now. ` +
+    `Event data is also available directly at <a href="/api/public/events">/api/public/events</a>.</p>`;
+
+  if (route.kind === 'portal') {
+    if (!portalWaves) return wrap(`<h1>${attr(site)}</h1>${unavailable}`);
+    if (!portalWaves.length) {
+      return wrap(`<h1>${attr(site)}</h1><p>Nothing has been published here yet.</p>`);
+    }
+    const items = portalWaves.map(w =>
+      `<li style="margin:0 0 .5em"><a href="/events/${attr(w.slug)}">${attr(w.title || w.slug)}</a>` +
+      `${w.topic ? ` — ${attr(summarise(w.topic, 160))}` : ''}</li>`
+    ).join('');
+    return wrap(
+      `<h1>${attr(site)}</h1>` +
+      `${branding.tagline ? `<p>${attr(branding.tagline)}</p>` : ''}` +
+      `<h2>Published pages</h2><ul style="padding-left:1.2em">${items}</ul>` +
+      `<p><a href="/events">All events</a></p>`
+    );
+  }
+
+  // route.kind === 'events'
+  if (!events) return wrap(`<h1>Events — ${attr(site)}</h1>${unavailable}`);
+
+  // A single event: show it on its own, and nothing else.
+  if (route.eventId) {
+    const one = events.find(e => e.id === route.eventId);
+    if (!one) {
+      return wrap(
+        `<h1>Events — ${attr(site)}</h1>` +
+        `<p>That event could not be found. It may have passed or been removed.</p>` +
+        `<p><a href="/events">All events</a></p>`
+      );
+    }
+    return wrap(
+      `<h1>${attr(one.title || 'Event')}</h1>` +
+      `<p>${attr(site)}</p>` +
+      `<dl>` +
+      `${describeWhen(one) ? `<dt>When</dt><dd>${attr(describeWhen(one))}</dd>` : ''}` +
+      `${one.location ? `<dt>Where</dt><dd>${attr(one.location)}</dd>` : ''}` +
+      `</dl>` +
+      `${one.description ? `<p>${attr(summarise(one.description, 600))}</p>` : ''}` +
+      `<p><a href="/events">All events</a></p>`
+    );
+  }
+
+  // An index, optionally narrowed to one published page's events.
+  const scoped = route.slug ? events.filter(e => e.slug === route.slug) : events;
+  const shown = scoped.slice(0, NOSCRIPT_EVENT_LIMIT);
+  if (!shown.length) {
+    return wrap(
+      `<h1>Events — ${attr(site)}</h1>` +
+      `<p>No upcoming events are listed.</p>`
+    );
+  }
+  const more = scoped.length > shown.length
+    ? `<p>Showing the next ${shown.length} of ${scoped.length}. The full list is at ` +
+      `<a href="/api/public/events">/api/public/events</a>.</p>`
+    : '';
+  return wrap(
+    `<h1>Events — ${attr(site)}</h1>` +
+    `${branding.tagline ? `<p>${attr(branding.tagline)}</p>` : ''}` +
+    `<ul style="padding-left:1.2em">${shown.map(eventItem).join('')}</ul>` +
+    more
+  );
+}
+
+/** Put the block just inside <body>, where React will never look at it. */
+export function injectNoscript(html, block) {
+  if (!block) return html;
+  const match = html.match(/<body[^>]*>/i);
+  if (!match) return html;
+  const at = match.index + match[0].length;
+  return `${html.slice(0, at)}\n    ${block}${html.slice(at)}`;
+}
+
+export default { classifyPath, buildMetadata, injectMetadata, buildNoscript, injectNoscript };
