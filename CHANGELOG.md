@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`prune-backups.sh` matches any node label, not a list of known ones.** It was matching explicit prefixes — `farhold-pre-*`, `db-pre-*`, `pmp-pre-*` — which became wrong the moment `backup-release-db.sh` started deriving its label from `hostname -s`. farhold's hostname is `cortex`, so its first automated backup landed as `cortex-pre-2.105.6-…db` and **the pruner could not see it**: retention would have silently stopped applying to exactly the files the pair was written for, and the disk would have refilled with nobody the wiser. Matching is now on the `<label>-pre-<version>-<timestamp>.db` structure. The label is for humans; retention must not depend on it. `env-pre-*.bak` and any name without `-pre-`/`-post-` remain untouched, which the existing tests still assert.
+
 ### Added
 
 - **`tools/backup-release-db.sh`** — one writer for pre-release database backups, replacing an inline `node -e` typed fresh each release. Writes to a single canonical `$HOME/backups`, names snapshots consistently, refuses when the disk lacks room (a backup that fills the disk takes the live database with it), and **verifies what it wrote** — exiting non-zero if the snapshot is missing, empty, or fails `integrity_check`, so `backup && deploy` genuinely gates the deploy. "A backup exists" and "a backup is readable" are different claims. It also cleans up the WAL sidecars that verifying a snapshot creates, rather than leaving litter for the pruner to classify as orphaned journals.

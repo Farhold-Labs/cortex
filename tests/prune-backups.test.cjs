@@ -96,6 +96,30 @@ test('prune-backups.sh is safe to point at a production node', async (t) => {
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   });
 
+  await t.test('it matches any node label, not a hardcoded list', async () => {
+    // The label comes from `hostname -s`, so it is whatever the box is called.
+    // An explicit list of known labels meant farhold's own automated backups
+    // (`cortex-pre-…`, since its hostname is "cortex") were invisible to
+    // retention — which would have refilled the disk silently.
+    const home = fixture();
+    try {
+      const now = Date.now();
+      for (const [i, label] of ['cortex', 'pmp-cortex', 'somenewbox'].entries()) {
+        for (const v of ['1.0.0', '1.0.1', '1.0.2']) {
+          const f = path.join(home, 'backups', `${label}-pre-${v}-20260929-00000${i}.db`);
+          fs.writeFileSync(f, Buffer.alloc(4096));
+          const when = new Date(now - (i * 3 + v.charCodeAt(4)) * 86400000);
+          fs.utimesSync(f, when, when);
+        }
+      }
+      const out = run(home, ['--keep', '2']);
+      for (const label of ['cortex-pre-', 'pmp-cortex-pre-', 'somenewbox-pre-']) {
+        assert.match(out, new RegExp(`prune\\s+${label}`),
+          `${label} snapshots must be visible to retention whatever the box is called`);
+      }
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  });
+
   await t.test('it never touches what it does not recognise', async () => {
     const home = fixture();
     try {
