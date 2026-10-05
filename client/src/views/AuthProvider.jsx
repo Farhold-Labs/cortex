@@ -3,6 +3,9 @@ import { API_URL } from '../config/constants.js';
 import { storage, getTokenExpiry, getTokenIssuedAt } from '../utils/storage.js';
 import { refreshAccessToken, hasRefreshToken, setSessionLostHandler } from '../utils/sessionRefresh.js';
 import { unsubscribeFromPush } from '../utils/pwa.js';
+// Every path that ends a session also drops the cached wave list (v2.106.0):
+// it is shown before the network answers, so it must never outlive its owner.
+import { clearAllCache } from '../utils/waveCache.js';
 import { AuthContext } from '../hooks/useAPI.js';
 import { LoadingSpinner } from '../components/ui/SimpleComponents.jsx';
 
@@ -27,7 +30,15 @@ function getWarningMs(token) {
 function AuthProvider({ children }) {
   const [user, setUser] = useState(storage.getUser());
   const [token, setToken] = useState(storage.getToken());
-  const [loading, setLoading] = useState(true);
+  // A returning user with a cached session renders immediately (v2.106.0). The
+  // identity check below still runs, in the background: on a congested network
+  // it — and the token rotation behind it — could hold the app on the loading
+  // screen for up to 25 seconds before showing waves the device already had.
+  // Nothing is exposed by not waiting: every request still carries the token
+  // and is refused if the session is gone, and a 401 here still signs out.
+  const [loading, setLoading] = useState(() =>
+    !(storage.getToken() && storage.getUser() && !storage.isSessionExpired())
+  );
   // Temporary password storage for E2EE unlock (cleared after use)
   const pendingPasswordRef = useRef(null);
   // Track session-only logins through MFA flow
@@ -69,7 +80,7 @@ function AuthProvider({ children }) {
     if (token && storage.isSessionExpired()) {
       clearTimeout(timeoutId);
       console.log('⏰ Browser session expired. Logging out...');
-      storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
+      storage.removeToken(); storage.removeUser(); clearAllCache(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
       setToken(null); setUser(null);
       setLoading(false);
       clearTimeout(watchdog);
@@ -119,13 +130,16 @@ function AuthProvider({ children }) {
           // Still unauthorised after a rotation attempt: the session really is
           // over (revoked, reused, or idle window elapsed).
           if (res.status === 401) {
-            storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
+            storage.removeToken(); storage.removeUser(); clearAllCache(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
             setToken(null); setUser(null);
           }
           // For other errors (network, 500, etc.), keep existing user data from localStorage
           return Promise.reject(new Error(`Auth check failed: ${res.status}`));
         })
         .then(userData => {
+          // The app may already be on screen with the cached copy; an unchanged
+          // profile must not hand every consumer a new object and re-run them.
+          if (JSON.stringify(userData) === JSON.stringify(storage.getUser())) return;
           setUser(userData);
           storage.setUser(userData); // Save to localStorage
         })
@@ -146,6 +160,7 @@ function AuthProvider({ children }) {
       // the user object remained in localStorage)
       if (storage.getUser()) {
         storage.removeUser();
+        clearAllCache();
         storage.removeSessionStart();
         setUser(null);
       }
@@ -198,7 +213,7 @@ function AuthProvider({ children }) {
     setSessionLostHandler((code) => {
       console.warn(`🔒 Session ended (${code}) — signing out.`);
       pendingPasswordRef.current = null;
-      storage.removeToken(); storage.removeUser(); storage.removeSessionStart();
+      storage.removeToken(); storage.removeUser(); clearAllCache(); storage.removeSessionStart();
       storage.removeRefreshToken(); storage.removeSessionExpiresAt();
       setSessionExpired(false); setSessionExpiring(false); setSessionExpiresAt(null);
       setToken(null); setUser(null);
@@ -255,7 +270,7 @@ function AuthProvider({ children }) {
             // Grace period over — full logout
             console.log('⏰ Session expired and grace period elapsed. Logging out...');
             pendingPasswordRef.current = null;
-            storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
+            storage.removeToken(); storage.removeUser(); clearAllCache(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
             setSessionExpired(false);
             setSessionExpiring(false);
             setSessionExpiresAt(null);
@@ -438,7 +453,7 @@ function AuthProvider({ children }) {
     }
     // Clear password and local storage
     pendingPasswordRef.current = null;
-    storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
+    storage.removeToken(); storage.removeUser(); clearAllCache(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
     setSessionExpiring(false);
     setSessionExpiresAt(null);
     setToken(null); setUser(null);
@@ -494,7 +509,7 @@ function AuthProvider({ children }) {
       if (data.code === 'GRACE_EXPIRED') {
         // Grace window closed — hard logout
         pendingPasswordRef.current = null;
-        storage.removeToken(); storage.removeUser(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
+        storage.removeToken(); storage.removeUser(); clearAllCache(); storage.removeSessionStart(); storage.removeRefreshToken(); storage.removeSessionExpiresAt();
         setSessionExpired(false);
         setSessionExpiresAt(null);
         setToken(null); setUser(null);

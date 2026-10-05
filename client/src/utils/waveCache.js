@@ -1,6 +1,8 @@
 // Low-Bandwidth Mode: IndexedDB Wave Caching (v2.10.0)
 // Provides persistent caching for wave list and wave data for instant load
 
+import { storage } from './storage.js';
+
 const DB_NAME = 'cortex-cache';
 const DB_VERSION = 1;
 const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -81,14 +83,24 @@ async function withTransaction(storeName, mode, callback) {
 }
 
 // ============ Wave List Cache ============
+// The list is what a returning user sees first, so it is shown however old it
+// is (v2.106.0): on a congested connection a week-old list with a "refreshing"
+// state beats a blank screen. It is keyed by user, because this database is
+// per-origin, not per-person — an unkeyed list showed the previous account's
+// waves to whoever signed in next on the same device. Logout clears it too.
+
+const listKey = (userId, showArchived) => `${userId}:${showArchived ? 'list-archived' : 'list'}`;
 
 // Cache the wave list
-export async function cacheWaveList(waves, showArchived = false) {
-  const key = showArchived ? 'list-archived' : 'list';
+export async function cacheWaveList(waves, showArchived = false, userId) {
+  // A response that lands after logout (or after someone else signed in)
+  // must not write a list back for an account that is no longer here.
+  if (!userId || storage.getUser()?.id !== userId) return;
   try {
     await withTransaction(STORES.WAVE_LIST, 'readwrite', (store, resolve) => {
       store.put({
-        key,
+        key: listKey(userId, showArchived),
+        userId,
         waves,
         timestamp: Date.now(),
       });
@@ -100,19 +112,18 @@ export async function cacheWaveList(waves, showArchived = false) {
   }
 }
 
-// Get cached wave list
-export async function getCachedWaveList(showArchived = false) {
-  const key = showArchived ? 'list-archived' : 'list';
+// Get cached wave list — { waves, timestamp } or null
+export async function getCachedWaveList(showArchived = false, userId) {
+  if (!userId) return null;
   try {
     return await withTransaction(STORES.WAVE_LIST, 'readonly', (store, resolve) => {
-      const request = store.get(key);
+      const request = store.get(listKey(userId, showArchived));
       request.onsuccess = () => {
         const result = request.result;
-        if (result && Date.now() - result.timestamp < CACHE_MAX_AGE) {
+        if (result && result.userId === userId && Array.isArray(result.waves)) {
           console.log(`[WaveCache] Cache hit: ${result.waves.length} waves`);
-          resolve(result.waves);
+          resolve({ waves: result.waves, timestamp: result.timestamp });
         } else {
-          console.log('[WaveCache] Cache miss or expired');
           resolve(null);
         }
       };
@@ -283,6 +294,17 @@ export async function clearOldCache() {
         }
       };
 
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => resolve();
+    });
+
+    // Wave lists written before v2.106.0 were not keyed by user. Nothing reads
+    // them any more, and they belong to whoever last used this device.
+    await new Promise((resolve) => {
+      const transaction = db.transaction(STORES.WAVE_LIST, 'readwrite');
+      const store = transaction.objectStore(STORES.WAVE_LIST);
+      store.delete('list');
+      store.delete('list-archived');
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => resolve();
     });
