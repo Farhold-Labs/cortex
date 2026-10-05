@@ -5,6 +5,14 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.107.1] - 2026-10-05
+
+### Changed
+
+- **A connection that goes silent while the app is open is noticed in ~20 seconds instead of ~40.** The client heartbeat now pings every 10 s instead of 30 s; the 10 s pong deadline is unchanged, so a slow link is no likelier to be dropped by mistake.
+  - Cost, worked out from the actual frames: `{"type":"ping"}` and `{"type":"pong"}` are 15 bytes each, and with WebSocket framing, a TLS record, TCP/IP headers and acknowledgements an exchange is ~0.3 KB on the wire. 30 s → 10 s is ~35 → ~105 KB per hour **while the app is open** (10 s vs 15 s alone is ~35 KB an hour); a backgrounded webview's timers are throttled. The less visible cost is the phone's radio, which stays powered for a few seconds after each send, but with the screen on that is minor beside the display.
+  - Measured with the same test rig, a link silent for 45 s: detected in **34.5 s** at the 30 s interval, **14.6 s** at 10 s; the ping posted during the outage appeared 3.3 s after the link returned.
+
 ## [2.107.0] - 2026-10-05
 
 ### Fixed
