@@ -3,6 +3,7 @@ import FollowBox from '../components/public/FollowBox.jsx';
 import LinkedText from '../components/ui/LinkedText.jsx';
 import { API_URL } from '../config/constants.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
+import { plainText } from '../utils/plainText.js';
 
 // Public event pages (v2.68.0) — no auth. Renders /events/:slug (a list of a
 // wave's upcoming events) and /events/:slug/:eventId (one event plus its RSVP
@@ -347,7 +348,7 @@ const EventDetail = ({ slug, eventId, onBack, navigate }) => {
         <h1 style={{
           margin: '0 0 10px', color: 'var(--accent-amber, #ffd23f)',
           fontSize: isMobile ? '1.4rem' : '1.8rem', fontFamily: 'monospace', lineHeight: 1.2,
-        }}>{ev.title}</h1>
+        }}>{plainText(ev.title)}</h1>
 
         {past && (
           <div style={{ color: 'var(--text-muted, #6a806a)', fontSize: '0.75rem', marginBottom: 10 }}>
@@ -367,7 +368,7 @@ const EventDetail = ({ slug, eventId, onBack, navigate }) => {
           {ev.location && (
             <div>
               <div style={label}>Where</div>
-              <div style={{ color: 'var(--text-primary, #d8e8d8)' }}>{ev.location}</div>
+              <div style={{ color: 'var(--text-primary, #d8e8d8)' }}>{plainText(ev.location)}</div>
             </div>
           )}
         </div>
@@ -431,7 +432,7 @@ const EventList = ({ slug, onOpen, navigate }) => {
   if (!data) return <Shell><div style={{ ...card, color: 'var(--text-muted, #6a806a)' }}>Loading…</div></Shell>;
 
   return (
-    <Shell title={data.title} slug={slug} navigate={navigate}>
+    <Shell title={plainText(data.title)} slug={slug} navigate={navigate}>
       {data.topic && (
         <div style={{ color: 'var(--text-dim, #8aa08a)', marginBottom: 18, lineHeight: 1.5 }}>{data.topic}</div>
       )}
@@ -474,10 +475,10 @@ const EventList = ({ slug, onOpen, navigate }) => {
             <div style={{
               color: 'var(--text-primary, #d8e8d8)', fontSize: isMobile ? '1rem' : '1.1rem',
               marginBottom: 4, wordBreak: 'break-word',
-            }}>{ev.title}</div>
+            }}>{plainText(ev.title)}</div>
             {ev.location && (
               <div style={{ color: 'var(--text-dim, #8aa08a)', fontSize: '0.8rem', marginBottom: 4 }}>
-                {ev.location}
+                {plainText(ev.location)}
               </div>
             )}
             {ev.rsvpEnabled && <RsvpCounts counts={ev.rsvpCounts} />}
@@ -485,7 +486,7 @@ const EventList = ({ slug, onOpen, navigate }) => {
         </div>
       ))}
 
-      <FollowBox slug={slug} title={data.title} />
+      <FollowBox slug={slug} title={plainText(data.title)} />
     </Shell>
   );
 };
@@ -548,10 +549,10 @@ const EventIndex = ({ navigate }) => {
                 <div style={{
                   color: 'var(--text-primary, #d8e8d8)', fontSize: isMobile ? '0.95rem' : '1.05rem',
                   marginBottom: 3, wordBreak: 'break-word',
-                }}>{ev.title}</div>
+                }}>{plainText(ev.title)}</div>
                 <div style={{ color: 'var(--text-muted, #6a806a)', fontSize: '0.72rem', fontFamily: 'monospace' }}>
                   {ev.scope === 'server' ? 'Server-wide' : ev.source}
-                  {ev.location ? ` · ${ev.location}` : ''}
+                  {ev.location ? ` · ${plainText(ev.location)}` : ''}
                 </div>
                 {ev.rsvpEnabled && <div style={{ marginTop: 4 }}><RsvpCounts counts={ev.rsvpCounts} /></div>}
               </div>

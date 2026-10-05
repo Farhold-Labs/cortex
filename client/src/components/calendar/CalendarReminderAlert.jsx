@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { T } from '../../config/terminology.js';
+import { plainText } from '../../utils/plainText.js';
 
 // Event reminders escalate as the event approaches (v2.71.0). A day out, a
 // corner card is enough. Fifteen minutes out, a corner card is easy to miss
@@ -157,12 +158,12 @@ const CalendarReminderAlert = ({ reminders, onDismiss, onOpen }) => {
                 color: 'var(--text-primary, #d8e8d8)', fontSize: '1.25rem',
                 fontWeight: 700, margin: '10px 0 6px', wordBreak: 'break-word',
               }}>
-                {r.eventTitle}
+                {plainText(r.eventTitle)}
               </div>
 
               <div style={{ color: 'var(--text-secondary, #b8ccb8)', fontSize: '0.82rem' }}>
                 {r.eventTime && <span>🕐 {fmt12(r.eventTime)}</span>}
-                {r.location && <span style={{ marginLeft: 12 }}>📍 {r.location}</span>}
+                {r.location && <span style={{ marginLeft: 12 }}>📍 {plainText(r.location)}</span>}
               </div>
 
               <Actions r={r} color="var(--accent-orange, #ff6b35)" />
@@ -201,12 +202,12 @@ const CalendarReminderAlert = ({ reminders, onDismiss, onOpen }) => {
               </div>
 
               <div style={{ fontSize: '0.95rem', color: 'var(--text-primary, #d8e8d8)', fontWeight: 700, marginBottom: 6 }}>
-                {r.eventTitle}
+                {plainText(r.eventTitle)}
               </div>
 
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary, #b8ccb8)' }}>
                 {r.eventTime && <span>🕐 {fmt12(r.eventTime)}</span>}
-                {r.location && <span style={{ color: 'var(--text-dim, #8aa08a)', marginLeft: 10 }}>📍 {r.location}</span>}
+                {r.location && <span style={{ color: 'var(--text-dim, #8aa08a)', marginLeft: 10 }}>📍 {plainText(r.location)}</span>}
               </div>
 
               <Actions r={r} color="var(--accent-amber, #ffd23f)" />

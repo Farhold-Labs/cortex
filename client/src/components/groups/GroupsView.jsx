@@ -6,6 +6,7 @@ import { BASE_URL, canAccess } from '../../config/constants.js';
 import GroupInvitationsPanel from './GroupInvitationsPanel.jsx';
 import InviteToGroupModal from './InviteToGroupModal.jsx';
 import { T } from '../../config/terminology.js';
+import { plainText } from '../../utils/plainText.js';
 
 const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitations, onInvitationsChange, contacts }) => {
   const [showNewGroup, setShowNewGroup] = useState(false);
@@ -1608,7 +1609,7 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                               textOverflow: 'ellipsis',
                               whiteSpace: 'nowrap',
                             }}>
-                              {alert.title}
+                              {plainText(alert.title)}
                             </span>
                           </div>
                           <div style={{ display: 'flex', gap: '8px', fontSize: '0.7rem', color: 'var(--text-dim)' }}>

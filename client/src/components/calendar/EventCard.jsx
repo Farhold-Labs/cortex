@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import LinkedText from '../ui/LinkedText.jsx';
+import { plainText } from '../../utils/plainText.js';
 
 // An event card in the wave timeline (v2.72.0).
 //
@@ -154,13 +155,13 @@ const EventCard = ({ eventId, fetchAPI, currentUser, isMobile, waveEncrypted, on
           color: 'var(--text-primary)', fontSize: isMobile ? '0.95rem' : '1rem',
           fontWeight: 700, marginBottom: 4, wordBreak: 'break-word',
         }}>
-          {event.title}
+          {plainText(event.title)}
         </div>
 
         <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontFamily: 'monospace' }}>
           {fmtDate(event.eventDate)}
           {event.eventTime ? ` · ${fmt12(event.eventTime)}` : ''}
-          {event.location ? ` · ${event.location}` : ''}
+          {event.location ? ` · ${plainText(event.location)}` : ''}
         </div>
 
         {event.description && (

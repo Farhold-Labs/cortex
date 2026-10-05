@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { T } from '../../config/terminology.js';
+import { plainText } from '../../utils/plainText.js';
 
 // Upcoming events + pinned pings for the wave you're reading (v2.74.0).
 //
@@ -195,7 +196,7 @@ const WaveContextBar = ({
             role="button"
             tabIndex={0}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenEvent?.(nextEvent); } }}
-            title={nextEvent.title}
+            title={plainText(nextEvent.title)}
             style={{
               flex: 1, minWidth: 0, cursor: 'pointer',
               color: isToday(nextEvent.eventDate) ? 'var(--accent-amber)' : 'var(--text-muted)',
@@ -204,7 +205,7 @@ const WaveContextBar = ({
             }}
           >
             {dayLabel(nextEvent.eventDate)}
-            {nextEvent.eventTime ? ` ${fmt12(nextEvent.eventTime)}` : ''} · {nextEvent.title}
+            {nextEvent.eventTime ? ` ${fmt12(nextEvent.eventTime)}` : ''} · {plainText(nextEvent.title)}
           </span>
         )}
 
@@ -296,7 +297,7 @@ const WaveContextBar = ({
                 color: 'var(--text-primary)', fontSize: isMobile ? '0.85rem' : '0.9rem',
                 flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
-                {ev.title}
+                {plainText(ev.title)}
               </span>
               {ev.eventTime && (
                 <span style={{ flexShrink: 0, color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.7rem' }}>

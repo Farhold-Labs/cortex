@@ -135,6 +135,42 @@ export async function getCachedWaveList(showArchived = false, userId) {
   }
 }
 
+// ============ Community Channels Cache (v2.107.0) ============
+// The COMMUNITIES section of the wave list used to wait for three round trips
+// in a row — instance config, /communities/mine, then each community's
+// channels — before it drew anything. Same rules as the wave list: per user,
+// shown however old, cleared on logout (clearAllCache empties this store).
+
+const channelsKey = (userId) => `${userId}:communityChannels`;
+
+export async function cacheCommunityChannels(channels, userId) {
+  if (!userId || storage.getUser()?.id !== userId) return;
+  try {
+    await withTransaction(STORES.METADATA, 'readwrite', (store, resolve) => {
+      store.put({ key: channelsKey(userId), userId, channels, timestamp: Date.now() });
+      resolve();
+    });
+  } catch (error) {
+    console.warn('[WaveCache] Failed to cache community channels:', error);
+  }
+}
+
+export async function getCachedCommunityChannels(userId) {
+  if (!userId) return null;
+  try {
+    return await withTransaction(STORES.METADATA, 'readonly', (store, resolve) => {
+      const request = store.get(channelsKey(userId));
+      request.onsuccess = () => {
+        const result = request.result;
+        resolve(result && result.userId === userId && Array.isArray(result.channels) ? result.channels : null);
+      };
+      request.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
 // ============ Individual Wave Cache ============
 
 // Cache a wave with its pings

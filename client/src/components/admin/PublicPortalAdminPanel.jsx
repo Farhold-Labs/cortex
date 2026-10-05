@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { API_URL } from '../../config/constants.js';
 import { T } from '../../config/terminology.js';
+import { plainText } from '../../utils/plainText.js';
 
 const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [portalWaves, setPortalWaves] = useState([]);
@@ -397,7 +398,7 @@ const AttendeeList = ({ waveId, fetchAPI, showToast, rowBtnStyle }) => {
         <div key={ev.id} style={{ borderTop: '1px solid var(--border-subtle)', padding: '6px 0' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '0.75rem', flex: 1, minWidth: 0 }}>
-              {ev.eventDate || ev.event_date} — {ev.title}
+              {ev.eventDate || ev.event_date} — {plainText(ev.title)}
             </span>
             {(ev.rsvpEnabled ?? ev.rsvp_enabled) ? (
               <>
