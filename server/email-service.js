@@ -2,6 +2,7 @@
 // Supports multiple providers: SMTP, SendGrid, Mailgun
 
 import nodemailer from 'nodemailer';
+import { plainText } from './lib/plain-text.js';
 
 /**
  * EmailService - Configurable email delivery for Cortex
@@ -277,9 +278,11 @@ class EmailService {
         this.transporter.sendMail({
           from: this.fromAddress,
           to,
-          subject,
+          // Subjects and text bodies are plain text, but the titles and names
+          // interpolated into them come from storage entity-encoded (v2.107.0).
+          subject: plainText(subject),
           html,
-          text: text || this.stripHtml(html),
+          text: text ? plainText(text) : this.stripHtml(html),
         }),
         EmailService.SEND_TIMEOUT_MS,
         'SMTP send timed out'
@@ -385,7 +388,19 @@ class EmailService {
     return `<p style="margin:10px 0;color:#777777;font-size:13px;">${text}</p>`;
   }
 
+  // Decode first, then escape exactly once (v2.107.0). Most values passed in
+  // here come from storage already entity-encoded, so escaping them as-is
+  // rendered "&amp;amp;"; a raw value decodes to itself and escapes normally.
   escapeHtml(value) {
+    return plainText(String(value == null ? '' : value))
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // Secrets (verification codes, an admin-typed temporary password) are raw by
+  // definition and must reach the reader character for character — never
+  // decoded, or a password containing "&lt;" would arrive as "<".
+  escapeRaw(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -426,7 +441,7 @@ class EmailService {
     const html = this._baseLayout(`
       ${this._heading('Verification code')}
       <p style="margin:0;">${message}</p>
-      ${this._codeBlock(this.escapeHtml(code), { spaced: true })}
+      ${this._codeBlock(this.escapeRaw(code), { spaced: true })}
       ${this._muted('This code expires in 10 minutes.')}
       ${this._muted("If you didn't request it, your account may be at risk — consider changing your password.")}`,
       { footer: 'This is an automated security email.' });
@@ -438,7 +453,7 @@ class EmailService {
     const html = this._baseLayout(`
       ${this._heading('Password reset by an administrator')}
       <p style="margin:0 0 8px;">An administrator (${this.escapeHtml(adminName)}) has reset your password. Your temporary password is:</p>
-      ${this._codeBlock(this.escapeHtml(tempPassword))}
+      ${this._codeBlock(this.escapeRaw(tempPassword))}
       <p style="margin:0;"><strong>You will be asked to change this password the next time you sign in.</strong></p>`,
       { footer: 'This is an automated security email.' });
     return this.sendEmail({ to: email, subject, html });

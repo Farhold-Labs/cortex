@@ -1,4 +1,5 @@
 import React from 'react';
+import { plainText } from '../../utils/plainText.js';
 
 const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
   if (!alert) return null;
@@ -60,7 +61,7 @@ const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
           margin: '0 0 16px 0', color: 'var(--text-primary)',
           fontFamily: 'monospace', fontSize: isMobile ? '1.1rem' : '1.25rem',
         }}>
-          {alert.title}
+          {plainText(alert.title)}
         </h2>
 
         {/* Content */}

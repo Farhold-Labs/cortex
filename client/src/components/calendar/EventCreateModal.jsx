@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import { T } from '../../config/terminology.js';
+// Edit fields start from the decoded text: the stored value is entity-encoded,
+// and showing "&amp;" in the box invited people to "fix" it (v2.107.0).
+import { plainText } from '../../utils/plainText.js';
 
 const CATEGORIES = ['general','birthday','holiday','community'];
 const SCOPES = [
@@ -40,14 +43,14 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
     const end = new Date(start.getTime() + 60 * 60 * 1000);
     return { date: ymd(start), start: hhmm(start), end: hhmm(end) };
   });
-  const [title,              setTitle]              = useState(editEvent?.title              || '');
-  const [description,        setDescription]        = useState(editEvent?.description        || '');
+  const [title,              setTitle]              = useState(plainText(editEvent?.title)              || '');
+  const [description,        setDescription]        = useState(plainText(editEvent?.description)        || '');
   const [eventDate,          setEventDate]          = useState(editEvent?.eventDate || initialDate || defaults.date);
   // Only prefill when creating: an existing all-day event has no time, and
   // falling back to a default here would silently turn it into a timed one.
   const [eventTime,          setEventTime]          = useState(editEvent ? (editEvent.eventTime || '')    : defaults.start);
   const [eventEndTime,       setEventEndTime]       = useState(editEvent ? (editEvent.eventEndTime || '') : defaults.end);
-  const [location,           setLocation]           = useState(editEvent?.location           || '');
+  const [location,           setLocation]           = useState(plainText(editEvent?.location)           || '');
   const [category,           setCategory]           = useState(editEvent?.category           || 'general');
   const [scope,              setScope]              = useState(editEvent?.scope || lockedScope || 'personal');
   const [waveId,             setWaveId]             = useState(editEvent?.waveId || lockedWaveId || '');
@@ -73,7 +76,7 @@ const EventCreateModal = ({ onClose, fetchAPI, showToast, currentUser, waves = [
     eventDate !== (editEvent.eventDate || '') ||
     eventTime !== (editEvent.eventTime || '') ||
     eventEndTime !== (editEvent.eventEndTime || '') ||
-    location !== (editEvent.location || '')
+    location !== (plainText(editEvent.location) || '')
   );
   const willNotify = notifyAttendees === null ? materialChange : notifyAttendees;
 

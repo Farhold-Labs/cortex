@@ -1,5 +1,6 @@
 import React from 'react';
 import { linkSegments } from '../../utils/linkify.js';
+import { plainText } from '../../utils/plainText.js';
 
 /**
  * Plain text with its URLs made clickable (v2.93.0).
@@ -12,9 +13,13 @@ import { linkSegments } from '../../utils/linkify.js';
  * created the event and open in a new tab — without `noopener` the opened page
  * can reach back through `window.opener`. `nofollow` because a public event
  * page should not be a way to buy search ranking.
+ *
+ * The text arrives as the server stored it — entity-encoded — so it is decoded
+ * first (v2.107.0). Otherwise "&" showed as "&amp;", and a ticket link with a
+ * query string pointed at "?a=1&amp;b=2", which is a different URL.
  */
 const LinkedText = ({ text, linkColor = 'var(--accent-amber, #ffd23f)' }) => {
-  const segments = linkSegments(text);
+  const segments = linkSegments(plainText(text));
   if (!segments.length) return null;
 
   return (

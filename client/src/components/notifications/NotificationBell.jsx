@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { EMPTY } from '../../../messages.js';
+import { plainText } from '../../utils/plainText.js';
 
 const NOTIFICATION_TYPES = {
   direct_mention: { icon: '@', color: 'var(--accent-amber)', label: 'Mentioned you' },
@@ -73,15 +74,15 @@ const NotificationItem = ({ notification, onRead, onDismiss, onClick, decryptedP
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
           <span style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', fontWeight: 500 }}>
-            {notification.actorDisplayName || notification.title}
+            {plainText(notification.actorDisplayName || notification.title)}
           </span>
           <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{timeAgo(notification.createdAt)}</span>
         </div>
         <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '4px' }}>
-          {notification.body || typeConfig.label}
+          {plainText(notification.body) || typeConfig.label}
         </div>
         {(decryptedPreview || notification.preview) && (() => {
-          const preview = decryptedPreview || notification.preview;
+          const preview = decryptedPreview || plainText(notification.preview);
           if (preview === '[E2E encrypted]') {
             return (
               <div style={{
