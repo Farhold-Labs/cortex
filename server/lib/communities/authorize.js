@@ -253,7 +253,10 @@ export function effectiveCapabilities(db, actor, communityId) {
     // An exception inside an authorization check is an outage if it propagates
     // and a vulnerability if it is swallowed into an allow. Deny, loudly.
     console.error('[communities/authorize] evaluation failed:', err);
-    return deny(REASON.ACTOR_UNRESOLVED, 'evaluation error');
+    // An empty Set, never a decision object (security audit R-03, v2.107.2):
+    // every caller treats the result as a Set, and the decision object made
+    // `[...caps]` and `caps.has()` throw — a 500 instead of a clean refusal.
+    return new Set();
   }
 }
 
@@ -456,18 +459,29 @@ export function channelCapabilities(db, actor, channel) {
   const userId = resolveActor(db, actor);
   if (!userId) return new Set();
 
-  const effective = new Set(base);
-  let viewExplicitlyAllowed = false;
-
+  // Overrides from every role are pooled, then applied allows-first and
+  // denies-last, so a deny always wins (security audit R-01, v2.107.2).
+  //
+  // They used to be applied role by role — each role's deny, then its allow —
+  // in priority order, which made the answer depend on that order: a
+  // lower-priority role's allow, processed later, restored what a
+  // higher-priority role had denied, including admission to a restricted
+  // channel. Reverse the roles and the same member got nothing. Priority ranks
+  // members against each other; it was never meant to rank capabilities, and
+  // the model has always described deny as the way to take one thing away.
+  const allowed = new Set();
+  const denied = new Set();
   for (const role of db.getMemberRoles(channel.community_id, userId)) {
     const row = db.getChannelPermission(channel.id, role.id);
     if (!row) continue;
-    for (const cap of parsePermissions(row.deny)) effective.delete(cap);
-    for (const cap of parsePermissions(row.allow)) {
-      effective.add(cap);
-      if (cap === CAPABILITIES.VIEW_CHANNEL) viewExplicitlyAllowed = true;
-    }
+    for (const cap of parsePermissions(row.allow)) allowed.add(cap);
+    for (const cap of parsePermissions(row.deny)) denied.add(cap);
   }
+
+  const effective = new Set(base);
+  for (const cap of allowed) effective.add(cap);
+  for (const cap of denied) effective.delete(cap);
+  const viewExplicitlyAllowed = allowed.has(CAPABILITIES.VIEW_CHANNEL) && !denied.has(CAPABILITIES.VIEW_CHANNEL);
 
   if (channel.visibility === 'restricted'
       && !viewExplicitlyAllowed

@@ -25,6 +25,7 @@ import { CAPS as COMMUNITY_CAPS } from './lib/communities/limits.js';
 const COMMUNITY_MEMBER_CAP = COMMUNITY_CAPS.membersPerCommunity;
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import { BUILT_IN_ROLES, isCapability, unionCapabilities } from './lib/communities/capabilities.js';
+import { isReservedHandle } from './lib/reserved-handles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -4660,6 +4661,11 @@ export class DatabaseSQLite {
     const request = this.db.prepare('SELECT * FROM handle_requests WHERE id = ?').get(requestId);
     if (!request || request.status !== 'pending') {
       return { success: false, error: 'Request not found or already processed' };
+    }
+    // A request made before reserved handles existed must not slip through on
+    // approval — there is no administrator override (security audit R-04).
+    if (isReservedHandle(request.new_handle)) {
+      return { success: false, error: 'That handle is reserved' };
     }
 
     const user = this.findUserById(request.user_id);
