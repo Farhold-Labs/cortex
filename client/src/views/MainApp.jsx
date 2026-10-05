@@ -39,14 +39,16 @@ import VideoFeedView from '../components/feed/VideoFeedView.jsx';
 import CommunityPanel from '../components/communities/CommunityPanel.jsx';
 import { useVoiceCall } from '../hooks/useVoiceCall.js';
 import { initializeCustomTheme, applyCustomTheme, removeCustomTheme, getCurrentCustomTheme } from '../hooks/useTheme.js';
-import DockedCallWindow from '../components/calls/DockedCallWindow.jsx';
 import { T } from '../config/terminology.js';
 import WatchPartyPlayer from '../components/media/WatchPartyPlayer.jsx';
 import HolidayEffectsOverlay from '../components/effects/HolidayEffectsOverlay.jsx';
 
+// Loaded on demand with LiveKit — see CallModal in WaveView (v2.106.0).
+const DockedCallWindow = React.lazy(() => import('../components/calls/DockedCallWindow.jsx'));
+
 function MainApp({ sharePingId }) {
   const { user, token, logout, updateUser } = useAuth();
-  const { fetchAPI, isSlowConnection } = useAPI();
+  const { fetchAPI } = useAPI();
   const e2ee = useE2EE();
   const e2eeRef = useRef(e2ee);
   e2eeRef.current = e2ee;
@@ -421,6 +423,7 @@ function MainApp({ sharePingId }) {
   // Debounced loadWaves to prevent multiple simultaneous API calls
   const loadWavesTimerRef = useRef(null);
   const loadWavesInProgressRef = useRef(false);
+  const networkListRef = useRef(null); // which list (archived or not) has loaded from the network
 
   // Auto-select wave for popout call windows
   useEffect(() => {
@@ -450,14 +453,23 @@ function MainApp({ sharePingId }) {
     console.log('🔄 loadWaves called, fetching waves...');
     loadWavesInProgressRef.current = true;
 
-    // Low-bandwidth mode (v2.10.0): Show cached data immediately for faster perceived load
-    if (isSlowConnection) {
+    // The network request starts first; the cached list fills the screen while
+    // it is in flight.
+    let settled = false;
+    const request = fetchAPI(`/waves?archived=${showArchived}`).finally(() => { settled = true; });
+    request.catch(() => {}); // handled below; this only stops an early rejection being reported as unhandled
+
+    // Show the saved list immediately, however old (v2.106.0). This used to
+    // happen only once the app had decided the connection was slow, which on a
+    // congested network it often had not — so the list waited on the network
+    // anyway. Only before this view's first network load, though: a refresh of
+    // a live list must never flash back to an older copy.
+    if (networkListRef.current !== showArchived) {
       try {
-        const cachedWaves = await getCachedWaveList(showArchived);
-        if (cachedWaves && cachedWaves.length > 0) {
-          console.log('🔄 [Cache] Showing cached waves while fetching fresh data...');
-          setWaves(cachedWaves);
-          setApiConnected(true);
+        const cached = await getCachedWaveList(showArchived, user?.id);
+        if (cached && cached.waves.length > 0 && !settled) {
+          console.log('🔄 [Cache] Showing saved waves while fetching fresh data...');
+          setWaves(cached.waves);
         }
       } catch (cacheError) {
         console.warn('🔄 [Cache] Failed to load cached waves:', cacheError);
@@ -465,7 +477,7 @@ function MainApp({ sharePingId }) {
     }
 
     try {
-      const data = await fetchAPI(`/waves?archived=${showArchived}`);
+      const data = await request;
       console.log('🔄 loadWaves received', data.length, 'waves');
       // Log unread counts for debugging
       const wavesWithUnread = data.filter(w => w.unread_count > 0);
@@ -474,10 +486,11 @@ function MainApp({ sharePingId }) {
       }
       setWaves(data);
       setApiConnected(true);
+      networkListRef.current = showArchived;
 
       // Cache the fresh data for next time (v2.10.0)
       try {
-        cacheWaveList(data, showArchived);
+        cacheWaveList(data, showArchived, user?.id);
       } catch (cacheError) {
         console.warn('🔄 [Cache] Failed to cache waves:', cacheError);
       }
@@ -487,7 +500,7 @@ function MainApp({ sharePingId }) {
     } finally {
       loadWavesInProgressRef.current = false;
     }
-  }, [fetchAPI, showArchived, isSlowConnection]);
+  }, [fetchAPI, showArchived, user?.id]);
 
   // Community channels this person belongs to (v2.99.0). Flattened across their
   // communities, because the wave list shows them as sibling groups rather than
@@ -2289,11 +2302,13 @@ function MainApp({ sharePingId }) {
 
       {/* Docked Call Window - persists across navigation (v2.6.1) */}
       {globalVoiceCall.connectionState !== 'disconnected' && (
-        <DockedCallWindow
-          voiceCall={globalVoiceCall}
-          isMobile={isMobile}
-          user={user}
-        />
+        <React.Suspense fallback={null}>
+          <DockedCallWindow
+            voiceCall={globalVoiceCall}
+            isMobile={isMobile}
+            user={user}
+          />
+        </React.Suspense>
       )}
 
       {/* Watch Party Player Modal (v2.14.0) */}

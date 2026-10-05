@@ -203,27 +203,11 @@ export const VersionMismatchBanner = ({ serverVersion, clientVersion }) => {
             window.electronAPI.clearCacheAndReload();
             return;
           }
-          // A plain reload is served the stale cached app shell by the service
-          // worker, so users had to Ctrl+Shift+R to actually get the new build.
-          // Clear the SW caches first, then reload so it fetches fresh.
-          try {
-            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-              await new Promise((resolve) => {
-                const channel = new MessageChannel();
-                channel.port1.onmessage = () => resolve();
-                setTimeout(resolve, 1500); // safety: never hang the button
-                navigator.serviceWorker.controller.postMessage(
-                  { type: 'CLEAR_ALL_CACHES' },
-                  [channel.port2]
-                );
-              });
-            } else if ('caches' in window) {
-              const keys = await caches.keys();
-              await Promise.all(keys.map((k) => caches.delete(k)));
-            }
-          } catch (e) {
-            // fall through to reload regardless
-          }
+          // A plain reload is enough. This used to clear every service-worker
+          // cache first, from the era when the worker served a stale shell; it
+          // has fetched the shell from the network since v2.63.1, and since
+          // v2.106.0 the cache is the fallback a congested connection boots
+          // from — wiping it would leave exactly those users on a blank screen.
           window.location.reload();
         }}
         style={{

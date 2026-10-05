@@ -21,6 +21,11 @@ export function useAPI() {
   // otherwise cause every component with fetchAPI in its useEffect deps to re-fetch.
   const tokenRef = useRef(token);
   useEffect(() => { tokenRef.current = token; }, [token]);
+  // Same reasoning for the slow-connection flag (v2.106.0). In the dep array it
+  // re-ran every data-loading effect in the app each time the flag flipped —
+  // about twenty requests, fired at exactly the moment the network got worse.
+  const slowRef = useRef(isSlowConnection);
+  useEffect(() => { slowRef.current = isSlowConnection; }, [isSlowConnection]);
 
   // Memoized fetch function with bandwidth-aware mode
   const fetchAPI = useCallback(async (endpoint, options = {}) => {
@@ -33,7 +38,7 @@ export function useAPI() {
     // Note: Only apply to wave list and pings endpoints, NOT individual wave details
     // because WaveView needs pings to render content
     let finalEndpoint = endpoint;
-    if (isSlowConnection && !options.skipMinimal) {
+    if (slowRef.current && !options.skipMinimal) {
       // Check if endpoint supports minimal mode (waves endpoints)
       const supportsMinimal = endpoint.startsWith('/waves') && !endpoint.includes('minimal=');
       if (supportsMinimal) {
@@ -145,7 +150,7 @@ export function useAPI() {
       throw apiError();
     }
     return data;
-  }, [logout, triggerSessionExpiry, isSlowConnection]);
+  }, [logout, triggerSessionExpiry]);
 
   // Return both fetchAPI and connection status for components that need it
   return useMemo(() => ({
