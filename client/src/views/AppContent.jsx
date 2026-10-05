@@ -3,18 +3,25 @@ import { VERSION, API_URL } from '../config/constants.js';
 import { setTerminology } from '../config/terminology.js';
 import { storage } from '../utils/storage.js';
 import { useAuth } from '../hooks/useAPI.js';
-import LoginScreen from './LoginScreen.jsx';
 import AboutServerPage from './AboutServerPage.jsx';
 import ResetPasswordPage from './ResetPasswordPage.jsx';
 import PublicMessageView from './PublicMessageView.jsx';
-import PublicPortalView from './PublicPortalView.jsx';
-import PublicEventsView from './PublicEventsView.jsx';
 import CrossPortAuthView from './CrossPortAuthView.jsx';
 import CrossPortCallbackView from './CrossPortCallbackView.jsx';
 import AuthProvider from './AuthProvider.jsx';
 import E2EEAuthenticatedApp from './E2EEAuthenticatedApp.jsx';
 import StepUpModal from '../components/session/StepUpModal.jsx';
 import { installNativeDownloadHandler } from '../utils/nativeDownload.js';
+import PublicPortalView from './PublicPortalView.jsx';
+import PublicEventsView from './PublicEventsView.jsx';
+import { lazyComponent, BootLoading } from '../utils/lazyComponent.jsx';
+
+// A returning user never sees the login screen, so it loads only when needed
+// (v2.107.0). The public portal and event pages deliberately stay in the main
+// bundle: the server puts a readable copy of them inside #root for readers
+// without JavaScript, and React replaces it on mount — a lazy page would swap
+// that content for a placeholder while its chunk loaded (see v2.105.11).
+const LoginScreen = lazyComponent(() => import('./LoginScreen.jsx'), { fallback: BootLoading });
 
 function AppContent() {
   const { user, token, logout } = useAuth();

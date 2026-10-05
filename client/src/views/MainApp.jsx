@@ -11,16 +11,14 @@ import { startAttachmentSession, stopAttachmentSession } from '../utils/attachme
 import { updateAppBadge, subscribeToPush } from '../utils/pwa.js';
 import { setupCapacitorPushListeners } from '../utils/capacitor-push.js';
 import { updateDocumentTitle, startFaviconFlash, stopFaviconFlash } from '../utils/favicon.js';
-import { getCachedWaveList, cacheWaveList } from '../utils/waveCache.js';
+import { getCachedWaveList, cacheWaveList, getCachedCommunityChannels, cacheCommunityChannels } from '../utils/waveCache.js';
 import { NotificationSync } from '../utils/notification-sync.js';
 import BottomNav from '../components/ui/BottomNav.jsx';
 import { Toast, OfflineIndicator, VersionMismatchBanner, ScanLines, GlowText } from '../components/ui/SimpleComponents.jsx';
 import NotificationBell from '../components/notifications/NotificationBell.jsx';
 import CrawlBar from '../components/crawl/CrawlBar.jsx';
 import WaveList from '../components/waves/WaveList.jsx';
-import NewWaveModal from '../components/waves/NewWaveModal.jsx';
 import CategoryManagementModal from '../components/categories/CategoryManagementModal.jsx';
-import UserProfileModal from '../components/profile/UserProfileModal.jsx';
 import AlertDetailModal from '../components/modals/AlertDetailModal.jsx';
 import GhostProtocolModal from '../components/modals/GhostProtocolModal.jsx';
 import SearchModal from '../components/search/SearchModal.jsx';
@@ -30,18 +28,22 @@ import InstallPrompt from '../components/ui/InstallPrompt.jsx';
 import WaveView from '../components/waves/WaveView.jsx';
 import FocusView from '../components/focus/FocusView.jsx';
 import ThreadPanel from '../components/focus/ThreadPanel.jsx';
-import GroupsView from '../components/groups/GroupsView.jsx';
-import PeopleView from './PeopleView.jsx';
-import CalendarView from './CalendarView.jsx';
 import CalendarReminderAlert from '../components/calendar/CalendarReminderAlert.jsx';
-import ProfileSettings from '../components/profile/ProfileSettings.jsx';
-import VideoFeedView from '../components/feed/VideoFeedView.jsx';
-import CommunityPanel from '../components/communities/CommunityPanel.jsx';
 import { useVoiceCall } from '../hooks/useVoiceCall.js';
 import { initializeCustomTheme, applyCustomTheme, removeCustomTheme, getCurrentCustomTheme } from '../hooks/useTheme.js';
 import { T } from '../config/terminology.js';
-import WatchPartyPlayer from '../components/media/WatchPartyPlayer.jsx';
 import HolidayEffectsOverlay from '../components/effects/HolidayEffectsOverlay.jsx';
+import { lazyComponent, ViewLoading } from '../utils/lazyComponent.jsx';
+
+// Screens and modals other than the wave list load when first shown (v2.107.0).
+const PeopleView = lazyComponent(() => import('./PeopleView.jsx'), { fallback: ViewLoading });
+const CalendarView = lazyComponent(() => import('./CalendarView.jsx'), { fallback: ViewLoading });
+const ProfileSettings = lazyComponent(() => import('../components/profile/ProfileSettings.jsx'), { fallback: ViewLoading });
+const VideoFeedView = lazyComponent(() => import('../components/feed/VideoFeedView.jsx'), { fallback: ViewLoading });
+const CommunityPanel = lazyComponent(() => import('../components/communities/CommunityPanel.jsx'));
+const WatchPartyPlayer = lazyComponent(() => import('../components/media/WatchPartyPlayer.jsx'));
+const NewWaveModal = lazyComponent(() => import('../components/waves/NewWaveModal.jsx'), { renderIf: (p) => p.isOpen });
+const UserProfileModal = lazyComponent(() => import('../components/profile/UserProfileModal.jsx'), { renderIf: (p) => p.isOpen });
 
 // Loaded on demand with LiveKit — see CallModal in WaveView (v2.106.0).
 const DockedCallWindow = React.lazy(() => import('../components/calls/DockedCallWindow.jsx'));
@@ -66,11 +68,19 @@ function MainApp({ sharePingId }) {
   const [activeView, setActiveView] = useState('waves');
   // Instance feature flags (v2.65.0) — public endpoint, no auth needed. Defaults to
   // everything enabled so a fetch failure never hides working features.
-  const [instanceFeatures, setInstanceFeatures] = useState({});
+  // v2.107.0: the last flags this node sent are remembered per origin, so
+  // feature-gated parts of the app (communities, crawl bar, calendar) start
+  // without waiting a round trip for /instance-config. The network copy
+  // replaces them the moment it arrives; a flag an admin just changed is at
+  // worst one launch stale, and the server enforces every flag regardless.
+  const cachedFeatures = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('farhold_instance_features')) || null; } catch { return null; }
+  }, []);
+  const [instanceFeatures, setInstanceFeatures] = useState(() => cachedFeatures || {});
   // Feature flags arrive over the network, so for the first moment of the app's
   // life every flag reads as "not disabled". Anything that would hit a
   // feature-gated endpoint has to wait for this rather than fire and take a 403.
-  const [instanceFeaturesLoaded, setInstanceFeaturesLoaded] = useState(false);
+  const [instanceFeaturesLoaded, setInstanceFeaturesLoaded] = useState(() => !!cachedFeatures);
   const [apiConnected, setApiConnected] = useState(false);
   const [waves, setWaves] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -509,25 +519,47 @@ function MainApp({ sharePingId }) {
   const [communityChannels, setCommunityChannels] = useState([]);
   const [communityPanelFor, setCommunityPanelFor] = useState(null); // null | { communityId, focus }
 
+  // Shown from the device's copy first (v2.107.0), then refreshed below.
+  const channelsFromNetworkRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    getCachedCommunityChannels(user?.id).then(cached => {
+      if (!cancelled && cached && !channelsFromNetworkRef.current) setCommunityChannels(cached);
+    });
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
   const loadCommunityChannels = useCallback(async () => {
-    if (!instanceFeatures.communities) { setCommunityChannels([]); return; }
+    // Until the flags are known, leave whatever is on screen (the saved list).
+    if (!instanceFeaturesLoaded) return;
+    if (!instanceFeatures.communities) {
+      channelsFromNetworkRef.current = true;
+      setCommunityChannels([]);
+      cacheCommunityChannels([], user?.id);
+      return;
+    }
     try {
       const mine = await fetchAPI('/communities/mine');
+      let complete = true;
       const lists = await Promise.all((mine.communities || []).map(async c => {
         try {
           const res = await fetchAPI(`/communities/${c.id}/channels`);
           return (res.channels || []).map(ch => ({
             id: ch.id, name: ch.name, communityId: c.id, communityName: c.name,
           }));
-        } catch { return []; }
+        } catch { complete = false; return []; }
       }));
-      setCommunityChannels(lists.flat());
+      // A partial answer must not replace a whole one, on screen or in the cache.
+      if (!complete) return;
+      const channels = lists.flat();
+      channelsFromNetworkRef.current = true;
+      setCommunityChannels(channels);
+      cacheCommunityChannels(channels, user?.id);
     } catch {
-      // A node with the feature off, or a transient failure, simply shows no
-      // channel groups. It must never break the wave list.
-      setCommunityChannels([]);
+      // A transient failure keeps what is shown — the saved list, or nothing.
+      // It must never break the wave list.
     }
-  }, [fetchAPI, instanceFeatures.communities]);
+  }, [fetchAPI, instanceFeatures.communities, instanceFeaturesLoaded, user?.id]);
 
   useEffect(() => { loadCommunityChannels(); }, [loadCommunityChannels]);
 
@@ -1501,6 +1533,7 @@ function MainApp({ sharePingId }) {
       .then(data => {
         if (!data || cancelled) return;
         setInstanceFeatures(data.features || {});
+        try { localStorage.setItem('farhold_instance_features', JSON.stringify(data.features || {})); } catch { /* private mode */ }
         // v2.82.0 — instance vocabulary, cached by setTerminology so later
         // loads paint the right nouns immediately instead of swapping them.
         if (data.terminology) setTerminology(data.terminology);

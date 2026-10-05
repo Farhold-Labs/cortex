@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { plainText } from '../../utils/plainText.js';
 
 const CRAWL_SCROLL_SPEEDS = {
   slow: 60,     // seconds for full scroll - leisurely pace
@@ -339,7 +340,7 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
                 onError={(e) => { e.target.style.display = 'none'; }}
               />
             )}
-            {cfg.showLabel ? `${cfg.icon} [${alert.priority.toUpperCase()}] ${alert.title}` : alert.title}
+            {cfg.showLabel ? `${cfg.icon} [${alert.priority.toUpperCase()}] ${plainText(alert.title)}` : plainText(alert.title)}
             {alert.originNode && (
               <span style={{ fontSize: '0.7em', opacity: 0.7, marginLeft: '4px' }}>
                 (@{alert.originNode})

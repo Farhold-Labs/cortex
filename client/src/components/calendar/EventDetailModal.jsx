@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { CATEGORY_COLORS, SCOPE_LABELS, formatEventDate, formatEventTime } from './calendarUtils.js';
 import EventRosterPanel from './EventRosterPanel.jsx';
 import LinkedText from '../ui/LinkedText.jsx';
+import { plainText } from '../../utils/plainText.js';
 
 const RSVP_OPTIONS = [
   { value: 'going',     label: '✓ Going',   color: 'var(--accent-green)' },
@@ -136,7 +137,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
 
           {/* Title */}
           <h2 style={{ margin: '0 0 12px', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '1.1rem' }}>
-            {event.title}
+            {plainText(event.title)}
           </h2>
 
           {/* Date / time */}
@@ -150,7 +151,7 @@ const EventDetailModal = ({ event: initialEvent, onClose, fetchAPI, showToast, c
           {/* Location */}
           {event.location && (
             <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '12px', fontFamily: 'monospace' }}>
-              📍 {event.location}
+              📍 {plainText(event.location)}
             </div>
           )}
 

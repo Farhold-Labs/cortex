@@ -9,16 +9,11 @@ import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComp
 import { LegacyWaveNotice, PartialEncryptionBanner } from '../../../e2ee-components.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
 import Message from '../messages/Message.jsx';
-import GifSearchModal from '../search/GifSearchModal.jsx';
 import DeleteConfirmModal from './DeleteConfirmModal.jsx';
-import WaveSettingsModal from './WaveSettingsModal.jsx';
 import ReportModal from '../reports/ReportModal.jsx';
 // BurstModal removed in v2.38.0 — replaced by ThreadPanel
 import InviteToWaveModal from './InviteToWaveModal.jsx';
 import InviteFederatedModal from './InviteFederatedModal.jsx';
-import MediaRecorder from '../media/MediaRecorder.jsx';
-import CameraCapture from '../media/CameraCapture.jsx';
-import PlexBrowserModal from '../media/PlexBrowserModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import WaveContextBar from './WaveContextBar.jsx';
@@ -30,6 +25,14 @@ import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
 import { useIsCongested } from '../../hooks/useNetworkStatus.js';
+import { lazyComponent } from '../../utils/lazyComponent.jsx';
+
+// Tools opened from a wave load when first used (v2.107.0).
+const WaveSettingsModal = lazyComponent(() => import('./WaveSettingsModal.jsx'), { renderIf: (p) => p.isOpen });
+const MediaRecorder = lazyComponent(() => import('../media/MediaRecorder.jsx'));
+const CameraCapture = lazyComponent(() => import('../media/CameraCapture.jsx'));
+const PlexBrowserModal = lazyComponent(() => import('../media/PlexBrowserModal.jsx'));
+const GifSearchModal = lazyComponent(() => import('../search/GifSearchModal.jsx'));
 
 // LiveKit (~130 KB compressed) arrives with the call UI, not with the app: it
 // was preloaded on every launch, ahead of the text people opened the app for,

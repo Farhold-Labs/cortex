@@ -9,8 +9,11 @@ import { registerAttachments } from '../../utils/attachments.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
-import GifSearchModal from '../search/GifSearchModal.jsx';
 import { T } from '../../config/terminology.js';
+import { lazyComponent } from '../../utils/lazyComponent.jsx';
+
+// Loaded when the GIF picker first opens (v2.107.0).
+const GifSearchModal = lazyComponent(() => import('../search/GifSearchModal.jsx'));
 
 const FocusView = ({
   wave,

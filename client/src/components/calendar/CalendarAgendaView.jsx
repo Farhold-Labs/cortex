@@ -1,5 +1,6 @@
 import React from 'react';
 import { CATEGORY_COLORS, MONTH_NAMES, formatEventTime } from './calendarUtils.js';
+import { plainText } from '../../utils/plainText.js';
 
 const CalendarAgendaView = ({ events, onSelectEvent }) => {
   if (events.length === 0) {
@@ -60,11 +61,11 @@ const CalendarAgendaView = ({ events, onSelectEvent }) => {
               {/* Event details */}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace', marginBottom: '2px' }}>
-                  {ev.title}
+                  {plainText(ev.title)}
                 </div>
                 <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                   <span>{formatEventTime(ev)}</span>
-                  {ev.location && <span>· {ev.location}</span>}
+                  {ev.location && <span>· {plainText(ev.location)}</span>}
                   {ev.rsvpEnabled && ev.rsvpCounts && (
                     <span style={{ color: 'var(--accent-green)' }}>
                       {ev.rsvpCounts.going} going

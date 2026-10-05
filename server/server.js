@@ -38,6 +38,7 @@ import { getCurrentHoliday } from './holidays.js';
 // comes from the modular subpaths, so these imports are the whole migration.
 import { initializeApp as initializeFirebaseApp, getApps as getFirebaseApps, cert as firebaseCert } from 'firebase-admin/app';
 import { getMessaging as getFirebaseMessaging } from 'firebase-admin/messaging';
+import { plainText } from './lib/plain-text.js';
 import { canAccessMedia, validMediaTarget } from './lib/media-access.js';
 import { HlsSessions, proxyMedia, upstreamUrl } from './lib/media-proxy.js';
 
@@ -25866,6 +25867,11 @@ async function sendPushNotification(userId, payload) {
 
   const subscriptions = pushSubs.getSubscriptions(userId);
   if (subscriptions.length === 0) return;
+
+  // A notification's title and body are plain text, but the wave titles, event
+  // titles and previews in them come from storage entity-encoded — phones
+  // showed "Rehearsal &amp; notes" (v2.107.0).
+  payload = { ...payload, title: plainText(payload.title), body: plainText(payload.body), message: plainText(payload.message) };
 
   // Include suppressWhileFocused in push payload so the service worker can
   // respect the user's preference when the app is visible. Default true

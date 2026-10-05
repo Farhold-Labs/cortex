@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { formatError } from '../../../messages.js';
+import { plainText } from '../../utils/plainText.js';
 
 const EventsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [events, setEvents] = useState([]);
@@ -186,7 +187,7 @@ const EventsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
                           }}>
-                            {event.title}
+                            {plainText(event.title)}
                           </span>
                         </div>
                         <div style={{ display: 'flex', gap: '8px', fontSize: '0.7rem', color: 'var(--text-dim)', flexWrap: 'wrap' }}>
