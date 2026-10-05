@@ -1,6 +1,5 @@
 import { mediaPlaybackUrl } from '../../utils/media.js';
 import React, { useState, useRef, useEffect } from 'react';
-import Hls from 'hls.js';
 import { API_URL } from '../../config/constants.js';
 import { storage } from '../../utils/storage.js';
 
@@ -59,9 +58,16 @@ const PlexEmbed = ({
     };
   }, []);
 
-  // Initialize HLS player when we have an HLS stream URL
+  // Initialize HLS player when we have an HLS stream URL.
+  // hls.js is fetched here, when a stream actually starts (v2.106.0): it was
+  // over a third of the app's main bundle, downloaded and parsed on every
+  // launch so that the rare Plex/Jellyfin stream could start a moment sooner.
   useEffect(() => {
-    if (playing && streamFormat === 'hls' && streamUrl && videoRef.current) {
+    if (!(playing && streamFormat === 'hls' && streamUrl && videoRef.current)) return;
+    let cancelled = false;
+
+    import('hls.js').then(({ default: Hls }) => {
+      if (cancelled || !videoRef.current) return;
       if (Hls.isSupported()) {
         // Clean up any existing HLS instance
         if (hlsRef.current) {
@@ -109,7 +115,11 @@ const PlexEmbed = ({
       } else {
         setVideoError('HLS playback not supported in this browser.');
       }
-    }
+    }).catch(() => {
+      if (!cancelled) setVideoError('Could not load the video player. Check your connection and try again.');
+    });
+
+    return () => { cancelled = true; };
   }, [playing, streamFormat, streamUrl]);
 
   // Fetch stream URL from server
