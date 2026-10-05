@@ -16,10 +16,17 @@ import { WS_URL } from '../config/constants.js';
 // typing indicators, no version banner — until the socket finally collapses.
 //
 // So: a pong that does not arrive within PONG_TIMEOUT_MS means the socket is
-// dead, whatever it claims. Detection drops from minutes to ~40s at worst, and
+// dead, whatever it claims. Detection drops from minutes to ~20s at worst, and
 // on resume it is immediate, because visibilitychange probes rather than
 // waiting for an interval the browser was throttling anyway.
-const PING_INTERVAL_MS = 30000;
+//
+// v2.107.1: the interval went from 30s to 10s, taking worst-case detection of
+// a link that goes silent with the app open from ~40s to ~20s (measured ~35s
+// at 30s). Each exchange is ~0.3 KB on the wire including TLS and TCP, so this
+// costs ~70 KB an hour more than 30s did — and only while the app is open,
+// since a backgrounded webview's timers are throttled. The pong deadline is
+// unchanged, so slow links are no likelier to be dropped by mistake.
+const PING_INTERVAL_MS = 10000;
 const PONG_TIMEOUT_MS = 10000;
 const RECONNECT_DELAY_MS = 3000;
 
