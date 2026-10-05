@@ -5,6 +5,27 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.107.0] - 2026-10-05
+
+### Fixed
+
+- **Text containing `&`, quotes or `<` showed its HTML escapes.** PMP's events page read "Hard Transitions **&amp;** Timing". The server sanitizes plain-text input on the way in (`sanitizeInput`), which strips tags *and* entity-encodes, and that encoded form is what every API returns. React escapes text itself, so it displayed the entities literally. The stored form is right for the HTML places this text ends up, so it stays; the fix is to decode wherever the text leaves for something that isn't HTML.
+  - **In the app:** a `plainText()` helper (`client/src/utils/plainText.js`) at every place event, reminder and alert text renders — calendar list, grid and detail, the timeline event card, the wave's upcoming-events bar, reminders, the public events pages, the crawl bar, alert details, admin lists — plus notification titles, bodies and previews. `LinkedText` decodes before finding links, which also fixes ticket links: `?a=1&amp;b=2` was a different URL from the one the organiser pasted.
+  - **The edit form** starts from the decoded text. It showed `&amp;` in the box, which invited people to "fix" it.
+  - **Email:** subjects and plain-text bodies are decoded, so the RSVP confirmation, follow confirmation, reminder and follower-digest emails no longer say "&amp;". `escapeHtml()` in the email service now decodes and then escapes exactly once; it had been escaping already-escaped values into `&amp;amp;`. Verification codes and admin-typed temporary passwords use a separate raw escaper and are never decoded.
+  - **Push notifications:** titles and bodies are decoded at the single send point.
+  - Real data affected at release: PMP's event title, two descriptions, a crawl-bar alert and a queued digest item; farhold's one event location and three notification previews.
+  - Decoding is one pass and only ever feeds React text, input values, plain-text email and push — never `dangerouslySetInnerHTML`. Message bodies are HTML and do not go through it. Client and server copies are tested against the same cases, including that `decode(sanitizeInput(x))` returns exactly what a person typed (`tests/plain-text.test.cjs`).
+
+### Changed
+
+- **Communities appear immediately.** The COMMUNITIES section waited for three round trips in a row — instance config, `/communities/mine`, then each community's channels — before drawing anything. The channel list is now kept per user beside the wave list (same rules: shown however old, cleared on logout), and a partial answer from the network never replaces a complete one. Verified on dev with the network cut off entirely: the section drew both communities and their channels from the device.
+- **Instance feature flags are remembered per node**, so everything gated on them (communities, crawl bar, calendar) starts without waiting for `/instance-config`. The network copy replaces them as soon as it arrives, and the server enforces every flag regardless.
+- **Screens other than the wave list load when first opened:** Settings (with the theme editor and the Plex/Jellyfin managers), People and crews, Calendar, the video feed, the community panel, the watch-party player, and the new-wave, profile, wave-settings, media-recorder, camera, Plex-browser and GIF-picker modals, plus the login screen (which a returning user never sees). A small `lazyComponent()` helper gives each its own loading boundary, and modals that are always mounted fetch nothing until they open. The service worker precaches every chunk, so after the first launch opening one is a cache read.
+  - The public `/events` and `/portal` pages deliberately stay in the main bundle: the server puts a readable copy of them inside `#root` for readers without JavaScript, and a lazy page would replace that with a placeholder while its chunk loaded (v2.105.11).
+  - **Main bundle: 0.90 MB → 0.57 MB raw, 172 KB → 125 KB brotli** — down from 1.63 MB / 330 KB before v2.106.0. A cold launch now downloads 164 KB, against 476 KB two releases ago.
+  - Verified on dev: no screen chunk loads at start-up; Calendar, People and Settings each fetch theirs when opened; no errors.
+
 ## [2.106.0] - 2026-10-05
 
 Starting the app on a congested mobile network. Reported from the Android app on a busy cell on 2026-10-04: the production log shows that launch's start-up requests spread over about **20 seconds** on cellular, against **2 seconds** for the same requests on wifi a few minutes later.

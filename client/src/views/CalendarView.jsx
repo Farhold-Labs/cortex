@@ -5,6 +5,7 @@ import EventDetailModal from '../components/calendar/EventDetailModal.jsx';
 import EventCreateModal from '../components/calendar/EventCreateModal.jsx';
 import { MONTH_NAMES, toLocalDateStr } from '../components/calendar/calendarUtils.js';
 import { T } from '../config/terminology.js';
+import { plainText } from '../utils/plainText.js';
 
 const CalendarView = ({ fetchAPI, showToast, currentUser, isMobile, waves = [] }) => {
   const today        = new Date();
@@ -58,7 +59,7 @@ const CalendarView = ({ fetchAPI, showToast, currentUser, isMobile, waves = [] }
   };
 
   const handleDeleteEvent = async (event) => {
-    if (!window.confirm(`Delete "${event.title}"?`)) return;
+    if (!window.confirm(`Delete "${plainText(event.title)}"?`)) return;
     try {
       await fetchAPI(`/events/${event.id}`, { method: 'DELETE' });
       showToast('Event deleted', 'success');
@@ -164,9 +165,9 @@ const CalendarView = ({ fetchAPI, showToast, currentUser, isMobile, waves = [] }
                             : 'var(--accent-teal)',
                 }} />
                 <div>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>{ev.title}</div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>{plainText(ev.title)}</div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'monospace' }}>
-                    {ev.eventTime || 'All day'}{ev.location ? ` · ${ev.location}` : ''}
+                    {ev.eventTime || 'All day'}{ev.location ? ` · ${plainText(ev.location)}` : ''}
                   </div>
                 </div>
               </button>
