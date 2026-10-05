@@ -14,7 +14,6 @@ import DeleteConfirmModal from './DeleteConfirmModal.jsx';
 import WaveSettingsModal from './WaveSettingsModal.jsx';
 import ReportModal from '../reports/ReportModal.jsx';
 // BurstModal removed in v2.38.0 — replaced by ThreadPanel
-import CallModal from '../calls/CallModal.jsx';
 import InviteToWaveModal from './InviteToWaveModal.jsx';
 import InviteFederatedModal from './InviteFederatedModal.jsx';
 import MediaRecorder from '../media/MediaRecorder.jsx';
@@ -30,6 +29,12 @@ import { registerAttachments } from '../../utils/attachments.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
+import { useIsCongested } from '../../hooks/useNetworkStatus.js';
+
+// LiveKit (~130 KB compressed) arrives with the call UI, not with the app: it
+// was preloaded on every launch, ahead of the text people opened the app for,
+// for a feature most sessions never use (v2.106.0).
+const CallModal = React.lazy(() => import('../calls/CallModal.jsx'));
 
 const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove }) => {
   // E2EE context
@@ -37,6 +42,21 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   // Voice call hook (v2.4.0 - LiveKit)
   const voiceCall = useVoiceCall(wave?.id);
+  // Calls are held back on a slow connection (v2.106.0): LiveKit and its media
+  // would compete with the text for the little bandwidth there is, and a call on
+  // such a link fails anyway. A call already in progress is never cut off.
+  const congested = useIsCongested();
+  const callsHeldBack = congested && voiceCall.connectionState === 'disconnected';
+  const openCallModal = () => {
+    if (callsHeldBack) {
+      showToast('Calls are unavailable on a slow connection. Text still works.', 'error');
+      return;
+    }
+    setShowCallModal(true);
+    if (voiceCall.isDocked) {
+      voiceCall.hideDock(); // Hide dock when opening modal
+    }
+  };
 
   const [waveData, setWaveData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1797,17 +1817,15 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                   {/* Voice/Video Call */}
                   <div
                     onClick={() => {
-                      setShowCallModal(true);
                       setShowWaveMenu(false);
-                      if (voiceCall.isDocked) {
-                        voiceCall.hideDock(); // Hide dock when opening modal
-                      }
+                      openCallModal();
                     }}
+                    title={callsHeldBack ? 'Unavailable on a slow connection' : undefined}
                     style={{
                       padding: '10px 14px',
                       cursor: 'pointer',
                       fontSize: '0.85rem',
-                      color: 'var(--accent-green)',
+                      color: callsHeldBack ? 'var(--text-muted)' : 'var(--accent-green)',
                       background: 'transparent',
                       display: 'flex',
                       alignItems: 'center',
@@ -1817,7 +1835,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     <span>📞</span>
-                    <span>Voice/Video Call</span>
+                    <span>{callsHeldBack ? 'Call (slow connection)' : 'Voice/Video Call'}</span>
                   </div>
 
                   {/* Mark All Read */}
@@ -2031,12 +2049,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           {/* Call indicator badge (when call is active in THIS wave) */}
           {voiceCall.callActive && voiceCall.serverParticipantCount > 0 && voiceCall.activeCallWaveId === wave.id && (
             <div
-              onClick={() => {
-                setShowCallModal(true);
-                if (voiceCall.isDocked) {
-                  voiceCall.hideDock(); // Hide dock when opening modal
-                }
-              }}
+              onClick={openCallModal}
               style={{
                 padding: '4px 10px',
                 background: 'var(--accent-green-bg)',
@@ -2780,6 +2793,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         />
       )}
 
+      {showCallModal && (
+      <React.Suspense fallback={null}>
       <CallModal
         isOpen={showCallModal}
         onClose={() => {
@@ -2794,6 +2809,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         user={currentUser}
         isMobile={isMobile}
       />
+      </React.Suspense>
+      )}
 
       <InviteToWaveModal
         isOpen={showInviteModal}

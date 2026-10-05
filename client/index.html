@@ -949,6 +949,40 @@
       </div>
       <!-- server-fallback:end -->
     </div>
+    <script>
+      // A way out of the loading screen (v2.106.0). If the app has not replaced
+      // the loader after 20 seconds, say so and offer two things a person can do.
+      // The native app has no reload button of its own, and until now the only
+      // escape from a wedged start was clearing the app's storage — which also
+      // signs you out and forgets the encryption unlock. Resetting here clears
+      // only the service worker and its caches, never the login.
+      setTimeout(function () {
+        var loader = document.getElementById('initial-loader');
+        if (!loader || document.getElementById('il-help')) return;
+        var help = document.createElement('div');
+        help.id = 'il-help';
+        help.style.cssText = 'margin-top:12px;text-align:center;color:var(--text-dim,#7a8a7a);font-size:0.75rem;letter-spacing:0.08em;line-height:1.6;padding:0 16px';
+        help.innerHTML = 'STILL CONNECTING — THE NETWORK MAY BE SLOW<br>' +
+          '<button id="il-retry" style="margin:10px 6px 0;padding:8px 16px;background:transparent;border:1px solid var(--accent-amber,#ffd23f);color:var(--accent-amber,#ffd23f);font-family:inherit;cursor:pointer">RETRY</button>' +
+          '<button id="il-reset" style="margin:10px 6px 0;padding:8px 16px;background:transparent;border:1px solid var(--border-primary,#3a4a3a);color:var(--text-dim,#7a8a7a);font-family:inherit;cursor:pointer">RESET APP CACHE</button>';
+        loader.appendChild(help);
+        document.getElementById('il-retry').onclick = function () { location.reload(); };
+        document.getElementById('il-reset').onclick = function () {
+          var jobs = [];
+          if (navigator.serviceWorker) {
+            jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
+              return Promise.all(regs.map(function (r) { return r.unregister(); }));
+            }));
+          }
+          if (window.caches) {
+            jobs.push(caches.keys().then(function (keys) {
+              return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+            }));
+          }
+          Promise.all(jobs).catch(function () {}).then(function () { location.reload(); });
+        };
+      }, 20000);
+    </script>
     <script type="module" src="/capacitor-boot.js"></script>
     <script type="module" src="/main.jsx"></script>
   </body>

@@ -1,75 +1,27 @@
 // Cortex Service Worker
-// Includes: Push notifications, offline caching, low-bandwidth API caching,
+// Includes: Push notifications, offline caching,
 //           pre-caching of hashed build assets at install time (v2.13.0),
-//           stale-while-revalidate app shell for instant returning-user loads (v2.57.2)
-// NOTE: the cache-name versions below are rewritten to the current app version
+//           a deadline on the app shell so a congested network boots from cache (v2.106.0)
+// NOTE: the cache-name version below is rewritten to the current app version
 // at build time by scripts/inject-sw-assets.mjs (dev keeps the fallback value).
 const CACHE_NAME = 'cortex-v2.59.1';
-const API_CACHE_NAME = 'cortex-api-v2.59.1';
-const API_CACHE_MAX_AGE = 30000; // 30 seconds for API cache
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
 ];
 
+// How long a navigation waits for the network before booting the cached shell.
+// On a healthy connection the shell arrives well inside this and the app always
+// boots current; on a congested one (v2.106.0) the old network-only wait was
+// the black screen people saw, so past this deadline the cached copy wins and
+// the network response is still collected in the background.
+const NAV_TIMEOUT_MS = 2000;
+
 // Injected at build time by scripts/inject-sw-assets.mjs —
 // contains all hashed JS/CSS filenames from the Vite manifest.
 // __PRECACHE_ASSETS__
 const PRECACHE_ASSETS = [];
-
-// Stale-while-revalidate helper for API requests (v2.10.0)
-// Returns cached response immediately, then updates cache in background
-async function staleWhileRevalidate(request, cacheName, maxAge) {
-  const cache = await caches.open(cacheName);
-  const cachedResponse = await cache.match(request);
-
-  // Always fetch fresh data in background
-  const fetchPromise = fetch(request)
-    .then((networkResponse) => {
-      if (networkResponse.ok) {
-        // Store response with timestamp
-        const responseToCache = networkResponse.clone();
-        const headers = new Headers(responseToCache.headers);
-        headers.set('x-sw-cached-at', Date.now().toString());
-
-        // We can't modify response headers directly, so store the timestamp separately
-        cache.put(request, networkResponse.clone());
-        cache.put(request.url + '__timestamp', new Response(Date.now().toString()));
-      }
-      return networkResponse;
-    })
-    .catch((error) => {
-      console.warn('[SW] Network fetch failed for:', request.url, error);
-      return cachedResponse || new Response(JSON.stringify({ error: 'Offline' }), {
-        status: 503,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    });
-
-  // If we have a cached response, check if it's still valid
-  if (cachedResponse) {
-    try {
-      const timestampResponse = await cache.match(request.url + '__timestamp');
-      if (timestampResponse) {
-        const timestamp = parseInt(await timestampResponse.text());
-        const age = Date.now() - timestamp;
-
-        if (age < maxAge) {
-          console.log('[SW] Serving from cache (age:', Math.round(age/1000), 's):', request.url);
-          // Return cached response, but still update in background
-          fetchPromise; // Don't await, let it update in background
-          return cachedResponse;
-        }
-      }
-    } catch (e) {
-      // Timestamp check failed, fall through to network
-    }
-  }
-
-  // No valid cache, wait for network
-  return fetchPromise;
-}
 
 // A response is "poison" for an asset request when the server answered with
 // HTML instead of the asset — e.g. an SPA fallback returning 200 index.html
@@ -84,6 +36,97 @@ function isHtmlForAsset(request, response) {
   return type.includes('text/html');
 }
 
+// ============ App shell ============
+// The v2.63.1 incident was a cached index.html pointing at bundles a deploy had
+// deleted. The rule that prevents it now: a shell is only ever SERVED from cache
+// when every asset it references is in the same cache, and only ever STORED
+// once those assets have been fetched and validated. A cached shell therefore
+// always boots, however old it is.
+
+// The hashed files a shell needs to boot: entry script, modulepreloads, CSS.
+function shellAssets(html) {
+  return [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]);
+}
+
+async function shellIsComplete(cache, html) {
+  for (const asset of shellAssets(html)) {
+    const hit = await cache.match(asset);
+    if (!hit || isHtmlForAsset(new Request(asset), hit)) return false;
+  }
+  return true;
+}
+
+// Returns the stored HTML, or null when an asset could not be fetched (the
+// previous shell then stays in place, which is the point).
+async function storeShell(cache, key, response) {
+  const html = await response.clone().text();
+  for (const asset of shellAssets(html)) {
+    if (await cache.match(asset)) continue;
+    const request = new Request(asset);
+    const assetResponse = await fetch(request);
+    if (!assetResponse.ok || isHtmlForAsset(request, assetResponse)) return null;
+    await cache.put(asset, assetResponse);
+  }
+  await cache.put(key, response);
+  return html;
+}
+
+async function cachedShellFor(cache, request) {
+  for (const key of [request, '/index.html', '/']) {
+    const hit = await cache.match(key);
+    if (!hit) continue;
+    const html = await hit.text();
+    if (await shellIsComplete(cache, html)) return html;
+  }
+  return null;
+}
+
+// Serving from cache is marked in the page itself, so the app knows to treat
+// the connection as slow. If the server has moved on meanwhile, the WebSocket's
+// serverVersion raises the existing update banner, and because the new shell is
+// stored in the background, a reload — or simply the next launch — boots it.
+function shellResponse(html, how) {
+  return new Response(html.replace('<head>', `<head><meta name="cortex-boot" content="${how}">`), {
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' },
+  });
+}
+
+async function handleNavigation(event) {
+  const { request } = event;
+  const cachePromise = caches.open(CACHE_NAME);
+
+  const network = fetch(request);
+  // Store whatever the network eventually returns, even if a cached shell was
+  // served first. waitUntil must be called synchronously during dispatch — a
+  // call made once the response has been served throws — hence up here.
+  event.waitUntil(
+    network
+      .then(async (response) => {
+        if (!response || !response.ok) return;
+        const copy = response.clone(); // before anything awaits: the page may consume the body next
+        await storeShell(await cachePromise, request, copy);
+      })
+      .catch((err) => console.warn('[SW] Could not store app shell:', err.message))
+  );
+
+  const cache = await cachePromise;
+  const cachedHtml = await cachedShellFor(cache, request);
+  if (!cachedHtml) {
+    // First visit, or nothing that would boot: the network is the only option.
+    try { return await network; } catch { return Response.error(); }
+  }
+
+  const deadline = new Promise((resolve) => setTimeout(() => resolve('timeout'), NAV_TIMEOUT_MS));
+  try {
+    const winner = await Promise.race([network, deadline]);
+    if (winner === 'timeout') return shellResponse(cachedHtml, 'cache-slow');
+    if (winner.ok) return winner;
+    return shellResponse(cachedHtml, 'cache-error'); // e.g. a 5xx mid-deploy
+  } catch {
+    return shellResponse(cachedHtml, 'cache-offline');
+  }
+}
+
 // Install: pre-cache static shell + all hashed build assets.
 // Each asset is fetched and validated individually (instead of cache.addAll,
 // which happily caches a 200 HTML fallback) — a poisoned or failed asset
@@ -94,7 +137,12 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) =>
       Promise.all(allAssets.map(async (asset) => {
-        const request = new Request(asset, { cache: 'no-cache' });
+        // Hashed assets are immutable, so the browser's HTTP cache may supply
+        // them (v2.106.0); the page usually fetched them moments ago. Forcing
+        // revalidation cost a round trip each, on exactly the connections where
+        // an install is slowest. The shell and manifest still revalidate.
+        const hashed = asset.startsWith('/assets/');
+        const request = new Request(asset, { cache: hashed ? 'default' : 'no-cache' });
         const response = await fetch(request);
         if (!response.ok) throw new Error(`[SW] Pre-cache failed: ${asset} → ${response.status}`);
         if (isHtmlForAsset(request, response)) throw new Error(`[SW] Pre-cache got HTML for asset: ${asset}`);
@@ -130,8 +178,9 @@ self.addEventListener('activate', (event) => {
         cacheNames
           .filter((name) => {
             // Keep current caches
-            if (name === CACHE_NAME || name === API_CACHE_NAME) return false;
-            // Delete old farhold/cortex caches
+            if (name === CACHE_NAME) return false;
+            // Delete old farhold/cortex caches — including the cortex-api-*
+            // wave-list cache retired in v2.106.0 (it was not per-user).
             return name.startsWith('farhold-') || name.startsWith('cortex-');
           })
           .map((name) => {
@@ -159,53 +208,26 @@ self.addEventListener('fetch', (event) => {
   // Skip chrome-extension and other non-http(s) requests
   if (!url.protocol.startsWith('http')) return;
 
-  // API requests: Low-bandwidth mode caching (v2.10.0)
-  // Use stale-while-revalidate for wave list to enable faster loads
-  if (url.pathname.startsWith('/api/')) {
-    // Wave list endpoint: Use stale-while-revalidate for faster perceived load
-    // This returns cached data immediately while fetching fresh data in background
-    if (url.pathname === '/api/waves' || url.pathname.match(/^\/api\/waves\?/)) {
-      event.respondWith(staleWhileRevalidate(request, API_CACHE_NAME, API_CACHE_MAX_AGE));
-      return;
-    }
-
-    // All other API requests: Network only (real-time data needs to be fresh)
-    return;
-  }
+  // API requests: network only. The wave list used to be cached here, keyed by
+  // URL alone — so after one person logged out, the next to log in on the same
+  // browser could be served the previous person's waves. The app now keeps its
+  // own per-user copy (src/utils/waveCache.js), which logout clears (v2.106.0).
+  if (url.pathname.startsWith('/api/')) return;
 
   // Media files: Skip caching (206 Partial Content can't be cached)
   if (url.pathname.startsWith('/uploads/media/')) {
     return;
   }
 
-  // Navigation requests (HTML): Network-first (v2.63.1)
-  // ALWAYS boot from the current shell when online. The previous cache-first
-  // strategy served a stale index.html after a deploy — which references the
-  // old hashed bundle that the deploy just deleted → 404 on the main bundle and
-  // a broken app until a manual reload/cache-clear (especially painful in the
-  // native app, which can't just refresh). index.html is small and served
-  // no-cache, so a network round-trip here is cheap. Fall back to the cached
-  // shell only when the network fails (offline).
+  // Navigation requests (HTML): network with a deadline (v2.106.0).
+  // v2.63.1 made this network-first with no limit, to stop stale shells that
+  // pointed at deleted bundles. That fixed the stale shell but meant a slow
+  // network — not a failed one — held the app on a black screen for as long as
+  // the request took. Now a healthy connection still always boots current, a
+  // congested one boots the cached shell after NAV_TIMEOUT_MS, and a cached
+  // shell is only used when its bundles are cached too (see handleNavigation).
   if (request.mode === 'navigate') {
-    event.respondWith((async () => {
-      const cache = await caches.open(CACHE_NAME);
-      const cachedShell = async () =>
-        (await cache.match(request)) ||
-        (await cache.match('/index.html')) ||
-        (await cache.match('/'));
-      try {
-        const response = await fetch(request);
-        if (response && response.ok) {
-          cache.put(request, response.clone());
-          return response;
-        }
-        // Server returned non-OK (e.g. 5xx): prefer a working cached shell.
-        return (await cachedShell()) || response;
-      } catch {
-        // Offline: serve the cached shell.
-        return (await cachedShell()) || Response.error();
-      }
-    })());
+    event.respondWith(handleNavigation(event));
     return;
   }
 
