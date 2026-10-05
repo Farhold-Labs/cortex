@@ -5,6 +5,47 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.106.0] - 2026-10-05
+
+Starting the app on a congested mobile network. Reported from the Android app on a busy cell on 2026-10-04: the production log shows that launch's start-up requests spread over about **20 seconds** on cellular, against **2 seconds** for the same requests on wifi a few minutes later.
+
+Measured on dev through a throttling proxy (every byte, including service-worker and WebSocket traffic, shaped to a fixed RTT and a shared bandwidth cap), returning user, median of three launches:
+
+| Link | First paint (before → after) | Wave list (before → after) |
+|---|---|---|
+| 2000 ms RTT, 300 kbit/s | 6.8 s → **2.2 s** | 11.9 s → **2.9 s** |
+| 800 ms RTT, 1 Mbit/s | 2.8 s → **2.2 s** | 4.8 s → **2.9 s** |
+| No network at all | blank until the request fails | wave list from cache in **3.3 s** |
+
+What a launch has to download when nothing is cached (first install, or the first launch after a deploy) fell from **476 KB to 211 KB** brotli: the main bundle went from 1.63 MB to 0.90 MB raw (330 KB → 172 KB brotli), and LiveKit (106 KB) is no longer preloaded.
+
+HTTP/1.1 against HTTP/2 was also measured, because production nginx serves HTTP/1.1: no difference on this model (4.66 s vs 4.76 s to the wave list at 800 ms RTT). The start-up path is a chain, not a fan-out, so connection parallelism was not the bottleneck.
+
+### Changed
+
+- **The Android app now uses the service worker, so it has a cached copy of itself.** Registration was skipped in native apps on the belief that Capacitor could not run one, so the app had **no cached shell at all**: every launch waited on the network for `index.html` before it could paint anything. Some phones had a worker anyway, left over from before that guard existed, which is why the problem was uneven between devices — production's log shows one phone fetching `/sw.js` and two that never did. Capacitor injects its bridge at document start on current WebViews, so a page served from the cache still gets native push and the back button. Electron is unchanged.
+- **A navigation now waits at most 2 seconds for the network, then boots the cached shell.** v2.63.1 made the shell network-first with no limit, to stop stale shells that pointed at bundles a deploy had deleted. That fixed the stale shell, but meant a *slow* network, as opposed to a failed one, held the app on a blank screen for as long as the request took. The rule that keeps v2.63.1 fixed: a cached shell is only **served** when every bundle it references is in the same cache, and only **stored** once those bundles have been fetched and validated, so a cached shell always boots however old it is. The network response is still collected in the background, so the next launch is current, and the existing update banner appears when the server is newer.
+- **Returning users render immediately from their cached session.** The start-up identity check, and the token rotation behind it, could hold the loading screen for up to 25 seconds before showing waves the device already had. It still runs, in the background: every request still carries the token and is refused if the session is gone, and a 401 still signs out.
+- **The wave list is shown from the device's saved copy on every launch, however old it is.** It used to be shown only once the app had decided the connection was slow, which on a congested cell it usually had not.
+- **LiveKit loads with the call UI, not with the app.** It was preloaded on every launch (~130 KB compressed, three times the size of React) ahead of the text people opened the app for. Dead call components in `CortexApp.jsx` imported it and pinned it to the entry bundle; `CallModal` / `DockedCallWindow` are now lazy.
+- **hls.js loads when a Plex/Jellyfin stream starts.** It was **38%** of the main bundle — more than the whole wave UI — downloaded and parsed on every launch for a feature most sessions never touch. A failed load now says so instead of leaving a black video.
+- **Admin panels load when the admin section is opened.** All 16 were imported up front by Settings, about a tenth of the bundle, fetched by every user though only staff can see them. `CortexApp.jsx` had `React.lazy` versions of some of them that were never used.
+- **`CortexApp.jsx` is down from ~3,000 lines to 61.** Everything but the service-worker registration and the root component was a stale second copy of something extracted to `src/` long ago — RichEmbed, the crawl bar, the notification bell, the GIF picker, the install prompt, the call UI — unreachable from the export. Tree-shaking already kept most of it out of the bundle (LiveKit's import was the exception); the risk was a fix landing in the dead copy and changing nothing, the same drift trap as the three message-processing copies.
+- **New calls are held back while the connection is congested.** The wave menu shows *Call (slow connection)* and explains why instead of opening. A call already in progress is never cut off. This uses measured evidence only — round-trip time, the cached-shell boot, being offline, a 2G link — not Chrome's downlink estimate, which read 1.55 Mb/s on an unthrottled desktop connection against the 1.5 threshold and withheld calls there in testing. Verified both ways: offered at 50 ms RTT, held back at 2000 ms; and on a healthy link opening a call fetches `CallModal` and LiveKit on demand and renders *Start a call*.
+- **Slow-connection detection actually works on Android.** It measured real latency only when the Network Information API was missing, and Android always has it — on a congested cell the API kept reporting `4g` while requests took seconds. The measured round-trip now counts everywhere, as does the service worker having had to boot from cache. The hook is also one shared monitor; every `useAPI()` caller used to run its own copy.
+- **The loading screen offers a way out after 20 seconds:** *Retry*, and *Reset app cache*, which clears the service worker and its caches but never the login or the encryption unlock. The native app had no other escape short of clearing its storage.
+- The service worker's install no longer forces revalidation of hashed bundles. They are immutable and the page usually fetched them moments earlier, so the browser cache may supply them; `no-cache` cost a round trip per file on exactly the connections where an install is slowest. The shell and manifest still revalidate.
+- The update banner's *Refresh* is now a plain reload. It used to wipe every service-worker cache first, from the era when the worker served a stale shell; it would now delete exactly the fallback a congested connection boots from.
+
+### Verified unchanged
+
+- **WebSocket recovery**, tested before and after through the same proxy: a link that goes silent for 45 s is detected by the heartbeat in ~35 s (30 s interval plus 10 s pong deadline) and the ping posted during the outage appears **0.6 s** after the link returns; a hard drop of every connection recovers and shows the missed ping in **3.7 s**; 120 s at 2.5 s RTT and 150 kbit/s with a competing download produced **no** false reconnects and delivered a new ping in 11.7 s. Missed pings are re-fetched on reconnect.
+
+### Fixed
+
+- **[SECURITY] The cached wave list was not per-user.** The service worker cached `/api/waves` by URL alone for 30 seconds, and the app's own IndexedDB copy was keyed `list` — neither knew whose list it was, and logout cleared neither. On a shared browser, the next person to sign in could be shown the previous account's wave titles until the network answered. The service-worker cache is retired, the IndexedDB copy is keyed by user id, and every path that ends a session clears it. Old unkeyed entries are deleted on first run, and a response that lands after logout is refused rather than writing the list back. Verified in the running app: the store held `<userId>:list` while signed in and was empty after *Logout*.
+- **`fetchAPI` was rebuilt whenever the slow-connection flag flipped**, which re-ran every data-loading effect in the app — about twenty requests, fired at exactly the moment the network got worse.
+
 ## [2.105.11] - 2026-09-29
 
 ### Fixed

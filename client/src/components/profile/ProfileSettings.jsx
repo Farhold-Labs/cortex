@@ -43,26 +43,29 @@ const PrefLabel = ({ prefKey, overrides, onReset, children }) => {
 };
 
 
-// Admin panel imports
-import UserManagementPanel from '../admin/UserManagementPanel.jsx';
-import AdminReportsPanel from '../admin/AdminReportsPanel.jsx';
-import ActivityLogPanel from '../admin/ActivityLogPanel.jsx';
-import CrawlBarAdminPanel from '../admin/CrawlBarAdminPanel.jsx';
-import InstanceConfigAdminPanel from '../admin/InstanceConfigAdminPanel.jsx';
-import InvitesAdminPanel from '../admin/InvitesAdminPanel.jsx';
-import AlertsAdminPanel from '../admin/AlertsAdminPanel.jsx';
-import AlertSubscriptionsPanel from '../admin/AlertSubscriptionsPanel.jsx';
-import EventsAdminPanel from '../admin/EventsAdminPanel.jsx';
-import FederationAdminPanel from '../admin/FederationAdminPanel.jsx';
-import HandleRequestsList from '../admin/HandleRequestsList.jsx';
-import BotsAdminPanel from '../admin/BotsAdminPanel.jsx';
-import SupportTicketsAdminPanel from '../admin/SupportTicketsAdminPanel.jsx';
-import PublicPortalAdminPanel from '../admin/PublicPortalAdminPanel.jsx';
-import PrivacyDashboard from '../admin/PrivacyDashboard.jsx';
-import ModerationAppealsPanel from '../admin/ModerationAppealsPanel.jsx';
 import ThemeCustomizationModal from '../settings/ThemeCustomizationModal.jsx';
 import JellyfinConnectionManager from '../media/JellyfinConnectionManager.jsx';
 import PlexConnectionManager from '../media/PlexConnectionManager.jsx';
+
+// Admin panels load when the admin section is used, not with the app (v2.106.0).
+// They were about a tenth of the main bundle, downloaded on every launch by
+// every user, though only moderators and admins can ever see them.
+const UserManagementPanel = React.lazy(() => import('../admin/UserManagementPanel.jsx'));
+const AdminReportsPanel = React.lazy(() => import('../admin/AdminReportsPanel.jsx'));
+const ActivityLogPanel = React.lazy(() => import('../admin/ActivityLogPanel.jsx'));
+const CrawlBarAdminPanel = React.lazy(() => import('../admin/CrawlBarAdminPanel.jsx'));
+const InstanceConfigAdminPanel = React.lazy(() => import('../admin/InstanceConfigAdminPanel.jsx'));
+const InvitesAdminPanel = React.lazy(() => import('../admin/InvitesAdminPanel.jsx'));
+const AlertsAdminPanel = React.lazy(() => import('../admin/AlertsAdminPanel.jsx'));
+const AlertSubscriptionsPanel = React.lazy(() => import('../admin/AlertSubscriptionsPanel.jsx'));
+const EventsAdminPanel = React.lazy(() => import('../admin/EventsAdminPanel.jsx'));
+const FederationAdminPanel = React.lazy(() => import('../admin/FederationAdminPanel.jsx'));
+const HandleRequestsList = React.lazy(() => import('../admin/HandleRequestsList.jsx'));
+const BotsAdminPanel = React.lazy(() => import('../admin/BotsAdminPanel.jsx'));
+const SupportTicketsAdminPanel = React.lazy(() => import('../admin/SupportTicketsAdminPanel.jsx'));
+const PublicPortalAdminPanel = React.lazy(() => import('../admin/PublicPortalAdminPanel.jsx'));
+const PrivacyDashboard = React.lazy(() => import('../admin/PrivacyDashboard.jsx'));
+const ModerationAppealsPanel = React.lazy(() => import('../admin/ModerationAppealsPanel.jsx'));
 
 const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, federationRequestsRefresh, onNotifPrefsChange }) => {
   const [displayName, setDisplayName] = useState(user?.displayName || '');
@@ -2321,6 +2324,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
       {/* Admin Panel (visible to moderator+) */}
       {canAccess(user, 'moderator') && (
         <CollapsibleSection title="⚙️ ADMIN PANEL" isOpen={openSection === 'admin'} onToggle={() => toggleSection('admin')} isMobile={isMobile} accentColor="var(--accent-amber)" titleColor="var(--accent-amber)">
+          <React.Suspense fallback={<div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', padding: '8px 0' }}>Loading admin tools…</div>}>
           {/* MODERATION SECTION - Available to moderator+ */}
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -2384,6 +2388,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
               <PrivacyDashboard fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'privacy'} onToggle={() => toggleAdminSection('privacy')} />
             </div>
           )}
+          </React.Suspense>
         </CollapsibleSection>
       )}
 
