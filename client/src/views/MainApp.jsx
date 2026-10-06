@@ -705,6 +705,15 @@ function MainApp({ sharePingId }) {
       console.log('🔌 [WS] Received message:', data.type, data);
     }
 
+    // Live broadcasts (v2.109.0): the wave's live bar listens for these.
+    if (data.type === 'broadcast_started' || data.type === 'broadcast_ended') {
+      window.dispatchEvent(new CustomEvent('cortex:broadcast', { detail: data }));
+      if (data.type === 'broadcast_started' && data.broadcast?.createdBy !== user?.id) {
+        showToastMsg(`🔴 Live now: ${data.broadcast?.title || 'a broadcast'}`, 'success');
+      }
+      return;
+    }
+
     // Read server feature flags on connect
     if (data.type === 'auth_success') {
       setForceWaveEncryption(!!data.forceWaveEncryption);

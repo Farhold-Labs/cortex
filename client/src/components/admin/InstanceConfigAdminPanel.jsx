@@ -40,6 +40,10 @@ const FEATURES = [
   // mean to rather than discovering it has arrived.
   { key: 'communities', label: 'COMMUNITIES', defaultOff: true,
     hint: 'Groups of channels that hold waves, with their own membership and roles. Off by default. Anyone can create one once enabled.' },
+  // Defaults OFF too (v2.109.0): every viewer costs LiveKit minutes, and a
+  // public watch link is an internet-facing surface.
+  { key: 'broadcasts', label: 'LIVE BROADCASTS', defaultOff: true,
+    hint: 'Lets members broadcast a camera to a wave — one performer, many viewers, full screen. Public watch links also need Public Portal. Needs LiveKit; each viewer uses LiveKit minutes. Off by default.' },
 ];
 
 // Notification defaults. `always | app_closed | never` for the per-type ones, matching

@@ -38,6 +38,8 @@ const GifSearchModal = lazyComponent(() => import('../search/GifSearchModal.jsx'
 // was preloaded on every launch, ahead of the text people opened the app for,
 // for a feature most sessions never use (v2.106.0).
 const CallModal = React.lazy(() => import('../calls/CallModal.jsx'));
+import LiveBroadcastBar from '../broadcast/LiveBroadcastBar.jsx';
+const GoLiveModal = lazyComponent(() => import('../broadcast/GoLiveModal.jsx'));
 
 const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove }) => {
   // E2EE context
@@ -113,6 +115,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [decryptingWave, setDecryptingWave] = useState(false); // Wave decryption in progress
   const [showWaveMenu, setShowWaveMenu] = useState(false); // Wave header actions menu
   const [showCallModal, setShowCallModal] = useState(false); // Voice/Video call modal
+  const [showGoLive, setShowGoLive] = useState(false); // live broadcast (v2.109.0)
+  // Opt-in instance feature; the flags are cached per node since v2.107.0.
+  const broadcastsEnabled = (() => {
+    try { return JSON.parse(localStorage.getItem('farhold_instance_features') || '{}').broadcasts === true; } catch { return false; }
+  })();
   const [showMediaRecorder, setShowMediaRecorder] = useState(null); // 'audio' | 'video' | null (v2.7.0)
   const [uploadingMedia, setUploadingMedia] = useState(false); // Media upload in progress
   const [mediaUploadStatus, setMediaUploadStatus] = useState(''); // Status message during upload
@@ -1841,6 +1848,27 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     <span>{callsHeldBack ? 'Call (slow connection)' : 'Voice/Video Call'}</span>
                   </div>
 
+                  {/* Go live (v2.109.0) — held back on a congested link like calls */}
+                  {broadcastsEnabled && canPostHere && (
+                    <div
+                      onClick={() => {
+                        setShowWaveMenu(false);
+                        if (callsHeldBack) { showToast('Broadcasting needs a steadier connection than this one.', 'error'); return; }
+                        setShowGoLive(true);
+                      }}
+                      style={{
+                        padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem',
+                        color: callsHeldBack ? 'var(--text-muted)' : '#ff6b6b', background: 'transparent',
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>●</span>
+                      <span>Go live</span>
+                    </div>
+                  )}
+
                   {/* Mark All Read */}
                   {allPings.some(m => m.is_unread && m.author_id !== currentUser.id) && (
                     <div
@@ -2401,6 +2429,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         </div>
       )}
 
+      <LiveBroadcastBar waveId={wave?.id} fetchAPI={fetchAPI} currentUserId={currentUser?.id} />
+
       {/* Pinned pings + upcoming events (v2.74.0). Deliberately OUTSIDE the
           message scroller below: as strips inside it they sat above the oldest
           loaded ping, so in a wave with thousands of messages you could never
@@ -2794,6 +2824,10 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           showToast={showToast}
           isMobile={isMobile}
         />
+      )}
+
+      {showGoLive && (
+        <GoLiveModal wave={wave} fetchAPI={fetchAPI} showToast={showToast} onClose={() => setShowGoLive(false)} />
       )}
 
       {showCallModal && (

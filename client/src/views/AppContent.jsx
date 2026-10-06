@@ -22,6 +22,9 @@ import { lazyComponent, BootLoading } from '../utils/lazyComponent.jsx';
 // without JavaScript, and React replaces it on mount — a lazy page would swap
 // that content for a placeholder while its chunk loaded (see v2.105.11).
 const LoginScreen = lazyComponent(() => import('./LoginScreen.jsx'), { fallback: BootLoading });
+// Live broadcasts (v2.109.0) bring LiveKit with them, so they load on demand.
+const BroadcastPlayer = lazyComponent(() => import('../components/broadcast/BroadcastPlayer.jsx'), { fallback: BootLoading });
+const BroadcastStudio = lazyComponent(() => import('../components/broadcast/BroadcastStudio.jsx'), { fallback: BootLoading });
 
 function AppContent() {
   const { user, token, logout } = useAuth();
@@ -186,6 +189,12 @@ function AppContent() {
   }, []);
 
   // Public routes (accessible without login)
+  // A public watch link needs no account (v2.109.0).
+  const liveMatch = currentPath.match(/^\/live\/([A-Za-z0-9_-]{16,64})\/?$/);
+  if (liveMatch) {
+    return <BroadcastPlayer publicToken={liveMatch[1]} />;
+  }
+
   if (currentPath === '/cross-port-auth') {
     return <CrossPortAuthView />;
   }
@@ -247,6 +256,13 @@ function AppContent() {
   if (!user) {
     return <LoginScreen onAbout={() => navigate('/about')} />;
   }
+
+  // Watching as a member, or broadcasting (v2.109.0). Full-page, outside the
+  // app shell: a performance should fill the screen, not sit in a panel.
+  const watchMatch = currentPath.match(/^\/watch\/([0-9a-f-]{36})\/?$/);
+  if (watchMatch) return <BroadcastPlayer broadcastId={watchMatch[1]} />;
+  const studioMatch = currentPath.match(/^\/broadcast\/([0-9a-f-]{36})\/?$/);
+  if (studioMatch) return <BroadcastStudio broadcastId={studioMatch[1]} />;
 
   // User is authenticated - wrap with E2EE flow
   return (
