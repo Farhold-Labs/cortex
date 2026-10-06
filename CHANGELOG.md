@@ -27,6 +27,13 @@ Closes the last three open items in the Communities security register — **002*
 - **Step-up for people from other servers (CORTEX-COMM-021).** Step-up compares a password, and a cross-port account has none on the guest node — so a remote member could never pass it, and everything behind it (offering or deleting a Community they own) was out of reach. They now confirm at their **home node**: the same handshake as sign-in, run for a different purpose. The home node re-checks the password and says so in the signed exchange, and only then does the guest issue the ordinary short-lived step-up proof. Refused if the password check is missing or stale, if the request's purpose was stripped on the way, if another session tries to collect it, or if anyone tries to use a step-up request to sign in.
   - The proof normally lives in memory only; for this one flow it crosses the return reload through `sessionStorage` (this tab, read once and deleted at once).
 
+### Fixed
+
+- **A picture sent with a caption didn't show in an encrypted wave — it appeared as a bare `/uploads/…` path.** Reported on production. The server never sees an encrypted message, so the client embeds uploaded images itself after decrypting and rendering markdown. Since v2.64.0 markdown has rendered line breaks as `<br>` *before* that pass, and the composer puts an upload on its own line after any caption already typed; the image pattern refused a path preceded by `>` (to stay out of tags), so every captioned picture was left as text. A picture sent on its own still worked, which is why it looked intermittent. The production log shows the signature: the picture uploaded and bound at 18:53, never requested as an image by any device, and someone opening the bare path by hand two minutes later (`//uploads/…` → 404).
+  - The pass is now `embedUploadedImages()` (`client/src/utils/embed.js`): a path is embedded at the start, after whitespace, or right after a tag, and never inside an attribute, a longer path, a URL or a word. The old pattern also matched a path *inside* a full URL, which this closes too.
+  - `tests/e2ee-image-embed.test.cjs` runs the real `renderMarkdown` and then the pass: captioned pictures, the shapes that already worked, the cases that must be left alone, idempotence. The captioned cases fail against the old pattern. Verified in a real browser on dev: caption typed, picture uploaded, sent in an encrypted wave — it renders and loads.
+  - Existing captioned pictures are fixed retroactively: the stored message never changed, only how it is displayed.
+
 ### Fixed — found driving the cross-port flow in real browsers
 
 These predate this release; together they meant **a new person could not get from a cross-port sign-in to a working session at all**.
