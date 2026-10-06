@@ -323,7 +323,7 @@ test('CORTEX-COMM-014: a private Community does not announce itself', { timeout:
     };
 
     await makeUser('nodeadmin');
-    const owner = await makeUser('owner');
+    const owner = await makeUser('founder'); // 'owner' is a reserved handle since v2.107.2 (R-04)
     const member = await makeUser('member');
     const outsider = await makeUser('outsider');
 

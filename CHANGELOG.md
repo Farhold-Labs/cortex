@@ -5,6 +5,17 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.107.2] - 2026-10-05
+
+### Security
+
+Four findings from a Codex security audit (`docs/SECURITY-AUDIT-STATE.md`, now committed with a resolution section). All re-verified against current code before fixing; every regression test below was run against the pre-fix code and failed there.
+
+- **[SECURITY] R-01 — conflicting channel role overrides could undo a deny (Medium).** A member holding two roles — one denying `channel.view` (or an action), one allowing it — got whichever answer the role order happened to produce: overrides were applied role by role, so the lower-priority allow, processed last, restored what the higher-priority role denied, including admission to a restricted channel. Reverse the roles and the same member got nothing. Overrides from all roles are now pooled and applied allows-first, denies-last: **a deny always wins**, independent of order, as the model has always described it. Wave content was never exposed by this — waves keep their own authorization.
+- **[SECURITY] R-02 — a failed attachment binding left a private wave's file public (Medium).** Two halves. The server caught a failed binding write and reported the upload successful, leaving the file readable by anyone with the URL; it now deletes the file and fails the upload, for a named private wave and for an upload still awaiting its wave (which otherwise had no ownership row, so it could never be bound later). The client marked a file as filed *before* asking and never read the answer, so a 429 from the rate limiter or a 500 was taken as success and never retried; it now remembers a file only after a final answer and retries 401, 408, 429, 5xx and network errors.
+- **R-03 — a database error inside the community permission check caused a 500 (Low).** `effectiveCapabilities` returned a decision object instead of an empty `Set` on error. It never granted anything, but two `server.js` callers spread or `.has()` the result and threw. It now returns an empty `Set`.
+- **R-04 — reserved handles (Low).** Anyone could register `admin`, `support` or `root` — no privileges, but it reads as staff to everyone else. Eighteen handles are now reserved (exact, case-insensitive; `admiral` and `helpful` remain ordinary): refused at signup, at handle-change request, and at approval, with no administrator override. No existing account on either production node used one.
+
 ## [2.107.1] - 2026-10-05
 
 ### Changed
