@@ -12,6 +12,24 @@ let expiresAt = 0;
 let prompt = null;      // set by the modal host
 let pending = null;     // single-flight, same reasoning as token refresh
 
+// The one exception to "memory only" (v2.108.0, CORTEX-COMM-021): an account
+// from another server confirms itself at its home node, which means leaving
+// this page and coming back with a full reload — and memory does not survive
+// that. The callback page leaves the proof in sessionStorage (this tab only)
+// and it is read once, here, and deleted at once.
+export const STEP_UP_HANDOFF_KEY = 'cortex_step_up_handoff';
+try {
+  const raw = typeof sessionStorage !== 'undefined' && sessionStorage.getItem(STEP_UP_HANDOFF_KEY);
+  if (raw) {
+    sessionStorage.removeItem(STEP_UP_HANDOFF_KEY);
+    const handoff = JSON.parse(raw);
+    if (handoff?.token && handoff.expiresAt > Date.now()) {
+      stepUpToken = handoff.token;
+      expiresAt = handoff.expiresAt;
+    }
+  }
+} catch { /* nothing handed over */ }
+
 export function setStepUpPrompt(fn) {
   prompt = fn;
 }

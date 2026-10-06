@@ -5,6 +5,53 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.108.0] - 2026-10-05
+
+Closes the last three open items in the Communities security register — **002**, **016** and **021** — leaving only the deliberate and informational entries (020, 022, 023). **Database migration:** one new table and four new columns; take the verified backup first.
+
+### Security
+
+- **[SECURITY] CORTEX-COMM-002 — a cross-port sign-in now finishes in the browser that started it, with the code issued for it.** Two gaps remained after the v2.103.2 and v2.105.3 fixes:
+  - *Login fixation.* Nothing tied a pending sign-in to a browser. An attacker could start a sign-in on a guest node, approve it at their own home node with their own account, and send the resulting callback link to a victim, whose browser completed it and was signed in **as the attacker** — so whatever the victim then wrote went into the attacker's account. Initiate now sets a random secret in an HttpOnly, SameSite=Strict cookie scoped to `/api/cross-port` and stores only its SHA-256; completing the sign-in requires the same browser to present it.
+  - *Code injection.* The home node never checked that a code belonged to the request being completed, so a code approved for one sign-in could finish another. The guest now sends the request id and nonce with the exchange, and the home node refuses — without spending the code — unless they match.
+  - *Deny was an open redirect.* `/api/cross-port/deny` built its redirect from a browser-supplied `callbackUrl`, the shape fixed for approve in v2.103.2; and the approval page fell back to the link's own `callback` parameter. Both now use only the peer's registered address.
+  - **Every node must run this version for cross-port sign-in between them**: an older guest does not send the request binding, and a newer home node refuses without it. A sign-in pending during the upgrade (five-minute lifetime) is refused, not grandfathered.
+- **[SECURITY] CORTEX-COMM-016 — a Community change and its audit record commit together.** All 30 mutation sites ran the change and the audit insert as separate statements, so an audit failure (a full disk, a locked database) left the change standing with no record of who made it. Each now runs both in one SQLite transaction. Invite redemption is atomic end to end: a failure after claiming the invite used to spend a single-use link and leave the person outside.
+
+### Added
+
+- **Handing a Community over (CORTEX-COMM-021).** An owner had no way to transfer: `community.transfer` existed and nothing used it, the owner role cannot be granted at your own rank, and the last owner may not leave — their only exit was deleting their account, which suspends the Community.
+  - An owner **offers** ownership to an active member in good standing (step-up required); the member **accepts or declines**. Ownership carries obligations, so it is never pushed onto anyone. One offer at a time, lapsing after seven days; the giver or another owner can withdraw it.
+  - Acceptance re-checks everything and, in one transaction, makes the recipient an owner and the giver an admin, who can then leave. Every step is audited and both people are notified.
+  - *Hand over* sits beside each member in Community settings, with the pending offer and a *Withdraw* button; the recipient gets a floating card with *Accept*, *Decline* and *Later*.
+- **Step-up for people from other servers (CORTEX-COMM-021).** Step-up compares a password, and a cross-port account has none on the guest node — so a remote member could never pass it, and everything behind it (offering or deleting a Community they own) was out of reach. They now confirm at their **home node**: the same handshake as sign-in, run for a different purpose. The home node re-checks the password and says so in the signed exchange, and only then does the guest issue the ordinary short-lived step-up proof. Refused if the password check is missing or stale, if the request's purpose was stripped on the way, if another session tries to collect it, or if anyone tries to use a step-up request to sign in.
+  - The proof normally lives in memory only; for this one flow it crosses the return reload through `sessionStorage` (this tab, read once and deleted at once).
+
+### Fixed
+
+- **A picture sent with a caption didn't show in an encrypted wave — it appeared as a bare `/uploads/…` path.** Reported on production. The server never sees an encrypted message, so the client embeds uploaded images itself after decrypting and rendering markdown. Since v2.64.0 markdown has rendered line breaks as `<br>` *before* that pass, and the composer puts an upload on its own line after any caption already typed; the image pattern refused a path preceded by `>` (to stay out of tags), so every captioned picture was left as text. A picture sent on its own still worked, which is why it looked intermittent. The production log shows the signature: the picture uploaded and bound at 18:53, never requested as an image by any device, and someone opening the bare path by hand two minutes later (`//uploads/…` → 404).
+  - The pass is now `embedUploadedImages()` (`client/src/utils/embed.js`): a path is embedded at the start, after whitespace, or right after a tag, and never inside an attribute, a longer path, a URL or a word. The old pattern also matched a path *inside* a full URL, which this closes too.
+  - `tests/e2ee-image-embed.test.cjs` runs the real `renderMarkdown` and then the pass: captioned pictures, the shapes that already worked, the cases that must be left alone, idempotence. The captioned cases fail against the old pattern. Verified in a real browser on dev: caption typed, picture uploaded, sent in an encrypted wave — it renders and loads.
+  - Existing captioned pictures are fixed retroactively: the stored message never changed, only how it is displayed.
+
+### Fixed — found driving the cross-port flow in real browsers
+
+These predate this release; together they meant **a new person could not get from a cross-port sign-in to a working session at all**.
+
+- **The home server's sign-in page rejected every correct password** with "Invalid handle or password". It checked `login()` for `{ user }`, which it has never returned (`{ success }`), so anyone not already signed in at home had to reload to continue. Two-step accounts now get an explicit message instead of the same false error.
+- **A new cross-port account was stuck on a blank screen forever.** Encryption setup derives keys from the login password, and a cross-port account has none on the guest node, so it fell into a branch the code itself marked "shouldn't get here" — a bare spinner (the spinner ignores its message). The setup dialog meant for this case was imported and never rendered, and had itself lost its passphrase field while still demanding an 8-character passphrase. It is now shown whenever setup has no password to work from: an account from another server chooses a passphrase (twice); a local account re-enters its login password, which is what later unlocks check against. It stays open through the recovery-key step.
+- **A cross-port session ended after an hour.** The callback page stored the access token and dropped the refresh token that has made these sessions renewable since v2.100.0.
+- **`/api/auth/me` omitted `isCrossPort` / `homeNode`**, so the app forgot an account was remote as soon as it re-read the profile — which is how it chooses between asking for a password and confirming at the home node.
+
+Verified end to end in two real browsers across dev (guest) and QA (home): sign-in via the home server; encryption setup for a brand-new remote account (two passphrase fields, recovery key, into the app, refresh token stored); *Hand over* → step-up dialog offering "Confirm at qa.farhold.com" → QA asks for the password, refuses a wrong one and lets the person retry → back on dev with no second prompt → offer pending → the recipient's card → *Accept* → recipient owner, giver admin.
+
+### Verified
+
+- 016: a test faults the audit insert per action; an update, a role creation, an invite redemption and a leave each roll back, with a success control — all four fail against the pre-fix server.
+- 002: six new cases (wrong request, missing request, another browser, another browser's cookie, the right browser, deny's redirect) — all fail against the pre-fix server. The two-node federation test now keeps a cookie jar per node, like a browser, and its real handshakes pass.
+- 021: twelve end-to-end transfer cases, and a real two-node step-up exercising every refusal above before succeeding and deleting the member's own Community.
+- 436/436 tests.
+
 ## [2.107.2] - 2026-10-05
 
 ### Security

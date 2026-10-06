@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { storage } from '../utils/storage.js';
 import { useAuth } from '../hooks/useAPI.js';
 import { useE2EE } from '../../e2ee-context.jsx';
 import { E2EESetupModal, PassphraseUnlockModal } from '../../e2ee-components.jsx';
@@ -92,6 +93,14 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
   const [autoUnlockAttempted, setAutoUnlockAttempted] = useState(false);
   const [autoUnlockFailed, setAutoUnlockFailed] = useState(false);
   const [passwordMismatch, setPasswordMismatch] = useState(false); // True if auto-unlock failed due to wrong password
+  // Encryption has to be set up and there is no login password to derive it
+  // from (v2.108.0). That is every account arriving from another server — it
+  // has no password here — and anyone who reloaded before auto-setup ran.
+  // They were shown a bare spinner forever: the passphrase dialog for exactly
+  // this case existed, imported and never rendered. Once open it stays open
+  // until it finishes, because its last step (the recovery key) comes AFTER
+  // setup succeeds, when needsSetup has already gone false.
+  const [manualSetup, setManualSetup] = useState(false);
 
   // Check E2EE status on mount
   useEffect(() => {
@@ -149,6 +158,10 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
     }
   }, [needsSetup, isSettingUp, getPendingPassword, clearPendingPassword, setupE2EE]);
 
+  useEffect(() => {
+    if (needsSetup && !isSettingUp && !getPendingPassword()) setManualSetup(true);
+  }, [needsSetup, isSettingUp, getPendingPassword]);
+
   // Handle logout (also clears E2EE state)
   const handleLogout = () => {
     clearPendingPassword();
@@ -178,6 +191,17 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
           Log Out
         </button>
       </div>
+    );
+  }
+
+  if (manualSetup) {
+    return (
+      <E2EESetupModal
+        onSetup={(passphrase, createRecoveryKey, rememberDuration) => setupE2EE(passphrase, createRecoveryKey, rememberDuration)}
+        onSkip={handleLogout}
+        isLoading={false}
+        mode={(() => { const u = storage.getUser(); return (u?.isCrossPort || u?.is_cross_port) ? 'new-passphrase' : 'login-password'; })()}
+      />
     );
   }
 

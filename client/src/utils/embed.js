@@ -184,3 +184,28 @@ export function mediaEmbedHtml(url) {
   }
   return `<img src="${url}" alt="GIF" style="max-width: 100%; height: auto;" loading="eager" class="message-media" />`;
 }
+
+/**
+ * Turn bare uploaded-image paths in rendered (decrypted) message HTML into
+ * <img> tags (v2.108.0).
+ *
+ * In an end-to-end encrypted wave the server never sees the message, so it
+ * cannot embed uploads the way it does elsewhere; the client does it here,
+ * after markdown has rendered the text. The path must stand on its own: at the
+ * start, after whitespace, or right after a tag. It must not be part of an
+ * attribute value (`src="/uploads/…"`), a longer path or URL, or a word.
+ *
+ * The earlier pattern refused a path preceded by `>`, to stay out of tags.
+ * But markdown (v2.64.0) renders line breaks as `<br>` BEFORE this pass runs —
+ * and the composer puts an uploaded image on its own line after any caption —
+ * so every picture sent with text above it arrived as a bare path that could
+ * not be opened. A `>` that ends a tag is exactly where a new line begins; it
+ * is the characters INSIDE a tag's attributes that must be excluded, and those
+ * are always preceded by a quote or `=`.
+ */
+export const UPLOADED_IMAGE_PATH = /(?<![\w'"=/.:%-])(\/uploads\/messages\/[^\s<"'>]+\.(?:webp|jpg|jpeg|png|gif|svg))(?![\w/'"])/gi;
+
+export function embedUploadedImages(html) {
+  return String(html).replace(UPLOADED_IMAGE_PATH, (match) =>
+    `<img src="${match}" alt="Uploaded image" style="max-width:200px;max-height:150px;border-radius:4px;cursor:pointer;object-fit:cover;display:block;border:1px solid #3a4a3a;" class="zoomable-image" />`);
+}
