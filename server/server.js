@@ -15018,21 +15018,23 @@ app.post('/api/cross-port/session', async (req, res) => {
       // invitation stays pending for when it is switched back on. Checked here
       // rather than by the middleware because this is a cross-port login, not a
       // request to /api/communities.
-      const bound = isFeatureEnabled('communities') ? db.bindRemoteInvitations({
-        userId: stubUser.id,
-        remoteHandle: exchangeData.handle,
-        // Same rule as above: an invitation addressed into H's namespace may
-        // only be bound by H. Taking this from the response would let M redeem
-        // an invitation written for somebody on another server.
-        nodeName: homeNode,
-      }) : [];
-      for (const communityId of bound) {
-        db.logCommunityAudit(communityId, {
-          actorId: stubUser.id, action: 'member.join_remote',
-          targetType: 'user', targetId: stubUser.id,
-          metadata: { homeNode },
+      if (isFeatureEnabled('communities')) inCommunityTransaction(() => {
+        const bound = db.bindRemoteInvitations({
+          userId: stubUser.id,
+          remoteHandle: exchangeData.handle,
+          // Same rule as above: an invitation addressed into H's namespace may
+          // only be bound by H. Taking this from the response would let M redeem
+          // an invitation written for somebody on another server.
+          nodeName: homeNode,
         });
-      }
+        for (const communityId of bound) {
+          db.logCommunityAudit(communityId, {
+            actorId: stubUser.id, action: 'member.join_remote',
+            targetType: 'user', targetId: stubUser.id,
+            metadata: { homeNode },
+          });
+        }
+      });
     } catch (err) {
       // A failure here must not cost them the login they have just completed.
       console.error('Cross-port community binding failed:', err);
@@ -20689,10 +20691,12 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   // LISTED and nothing else — participants, privacy and keys are exactly as
   // createWave left them.
   if (targetChannel) {
-    db.setWaveChannel(wave.id, targetChannel.id);
-    db.logCommunityAudit(targetChannel.community_id, {
-      actorId: req.user.userId, action: 'wave.create_in_channel',
-      targetType: 'wave', targetId: wave.id,
+    inCommunityTransaction(() => {
+      db.setWaveChannel(wave.id, targetChannel.id);
+      db.logCommunityAudit(targetChannel.community_id, {
+        actorId: req.user.userId, action: 'wave.create_in_channel',
+        targetType: 'wave', targetId: wave.id,
+      });
     });
     wave.communityId = targetChannel.community_id;
     wave.channelId = targetChannel.id;
@@ -23670,6 +23674,21 @@ function communitySlug(value) {
 // Anyone may create a Community. That is deliberate: node-level channels are
 // admin-only, so Community creation is the relief valve that stops every shared
 // space needing an administrator's attention.
+/**
+ * A Community change and the audit record that describes it commit together,
+ * or neither does (CORTEX-COMM-016, closed v2.107.2).
+ *
+ * They were separate statements: if the audit insert failed — a full disk, a
+ * locked database — the change stood with no record of who made it, which is
+ * exactly the gap an audit log exists to close. better-sqlite3 nests
+ * transactions as savepoints, so the database methods called inside keep their
+ * own transactions. Only database work belongs in here: broadcasts, federation
+ * and the response stay outside, after the commit.
+ */
+function inCommunityTransaction(fn) {
+  return db.db.transaction(fn)();
+}
+
 app.post('/api/communities', authenticateToken, apiLimiter, (req, res) => {
   const name = boundedString(req.body.name, COMMUNITY_LIMITS.name);
   if (!name) return res.status(400).json({ error: 'Name is required' });
@@ -23702,13 +23721,16 @@ app.post('/api/communities', authenticateToken, apiLimiter, (req, res) => {
   const createDesc = boundedOptional(req.body.description, COMMUNITY_LIMITS.description);
   if (!createDesc.ok) return res.status(400).json({ error: 'Description is too long' });
 
-  const community = db.createCommunity({
-    name, slug, visibility,
-    description: createDesc.value,
-    homeNode: FEDERATION_NODE_NAME || null,
-    createdBy: req.user.userId,
+  const community = inCommunityTransaction(() => {
+    const community = db.createCommunity({
+      name, slug, visibility,
+      description: createDesc.value,
+      homeNode: FEDERATION_NODE_NAME || null,
+      createdBy: req.user.userId,
+    });
+    db.logCommunityAudit(community.id, { actorId: req.user.userId, action: 'community.create' });
+    return community;
   });
-  db.logCommunityAudit(community.id, { actorId: req.user.userId, action: 'community.create' });
   res.status(201).json({ community });
 });
 
@@ -23778,10 +23800,13 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
   }
 
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
-  const community = db.updateCommunity(req.params.id, fields);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'community.update',
-    metadata: { fields: Object.keys(fields) },
+  const community = inCommunityTransaction(() => {
+    const community = db.updateCommunity(req.params.id, fields);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'community.update',
+      metadata: { fields: Object.keys(fields) },
+    });
+    return community;
   });
   res.json({ community });
 });
@@ -23789,8 +23814,10 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
 // Step-up re-auth: this disposes of a shared space and everyone's place in it.
 app.delete('/api/communities/:id', authenticateToken, requireStepUp, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.DELETE_COMMUNITY)) return;
-  db.deleteCommunity(req.params.id);
-  db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'community.delete' });
+  inCommunityTransaction(() => {
+    db.deleteCommunity(req.params.id);
+    db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'community.delete' });
+  });
   res.json({ success: true });
 });
 
@@ -23834,14 +23861,16 @@ app.post('/api/communities/:id/members', authenticateToken, apiLimiter, (req, re
   if (!requireRoomFor(res, db, 'member', req.params.id)) return;
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const membershipId = db.addCommunityMember(req.params.id, user.id, {
-    state: 'active', invitedBy: req.user.userId,
-  });
-  const memberRole = db.getCommunityRole(req.params.id, 'member');
-  if (memberRole) db.grantCommunityRole(membershipId, memberRole.id, { grantedBy: req.user.userId });
+  inCommunityTransaction(() => {
+    const membershipId = db.addCommunityMember(req.params.id, user.id, {
+      state: 'active', invitedBy: req.user.userId,
+    });
+    const memberRole = db.getCommunityRole(req.params.id, 'member');
+    if (memberRole) db.grantCommunityRole(membershipId, memberRole.id, { grantedBy: req.user.userId });
 
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.add', targetType: 'user', targetId: user.id,
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.add', targetType: 'user', targetId: user.id,
+    });
   });
   res.status(201).json({ membership: db.getCommunityMembership(req.params.id, user.id) });
 });
@@ -23861,9 +23890,11 @@ app.delete('/api/communities/:id/members/:userId', authenticateToken, (req, res)
     return res.status(409).json({ error: 'A community must keep at least one owner' });
   }
 
-  db.setCommunityMemberState(req.params.id, req.params.userId, 'removed');
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.remove', targetType: 'user', targetId: req.params.userId,
+  inCommunityTransaction(() => {
+    db.setCommunityMemberState(req.params.id, req.params.userId, 'removed');
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.remove', targetType: 'user', targetId: req.params.userId,
+    });
   });
   res.json({ success: true });
 });
@@ -23875,15 +23906,18 @@ app.post('/api/communities/:id/leave', authenticateToken, (req, res) => {
   const membership = db.getCommunityMembership(req.params.id, req.user.userId);
   if (!membership || membership.state !== 'active') return res.status(404).json({ error: 'Not a member' });
 
-  const left = db.leaveCommunity(req.params.id, req.user.userId, {
-    wouldOrphan: communityAuthz.wouldLeaveNoOwner,
+  const left = inCommunityTransaction(() => {
+    const ok = db.leaveCommunity(req.params.id, req.user.userId, {
+      wouldOrphan: communityAuthz.wouldLeaveNoOwner,
+    });
+    if (ok) db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'member.leave' });
+    return ok;
   });
   if (!left) {
     return res.status(409).json({
       error: 'Transfer ownership or appoint another owner before leaving',
     });
   }
-  db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'member.leave' });
   res.json({ success: true });
 });
 
@@ -23903,23 +23937,27 @@ app.post('/api/communities/:id/bans', authenticateToken, apiLimiter, (req, res) 
   const banExpiry = normalizedExpiry(req.body.expiresAt);
   if (!banExpiry.ok) return res.status(400).json({ error: 'That expiry is not a future date I can read' });
 
-  db.banFromCommunity(req.params.id, targetId, {
-    reason: banReason.value,
-    bannedBy: req.user.userId,
-    expiresAt: banExpiry.value,
-  });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.ban', targetType: 'user', targetId,
+  inCommunityTransaction(() => {
+    db.banFromCommunity(req.params.id, targetId, {
+      reason: banReason.value,
+      bannedBy: req.user.userId,
+      expiresAt: banExpiry.value,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.ban', targetType: 'user', targetId,
+    });
   });
   res.status(201).json({ success: true });
 });
 
 app.delete('/api/communities/:id/bans/:userId', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.BAN_MEMBER)) return;
-  db.db.prepare('DELETE FROM community_bans WHERE community_id = ? AND user_id = ?')
-    .run(req.params.id, req.params.userId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.unban', targetType: 'user', targetId: req.params.userId,
+  inCommunityTransaction(() => {
+    db.db.prepare('DELETE FROM community_bans WHERE community_id = ? AND user_id = ?')
+      .run(req.params.id, req.params.userId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.unban', targetType: 'user', targetId: req.params.userId,
+    });
   });
   res.json({ success: true });
 });
@@ -23947,9 +23985,12 @@ app.post('/api/communities/:id/roles', authenticateToken, apiLimiter, (req, res)
   if (!requireRoomFor(res, db, 'role', req.params.id)) return;
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const role = db.createCommunityRole(req.params.id, { name, priority, permissions });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.create', targetType: 'role', targetId: role.id,
+  const role = inCommunityTransaction(() => {
+    const role = db.createCommunityRole(req.params.id, { name, priority, permissions });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.create', targetType: 'role', targetId: role.id,
+    });
+    return role;
   });
   res.status(201).json({ role });
 });
@@ -23990,13 +24031,16 @@ app.patch('/api/communities/:id/roles/:roleId', authenticateToken, apiLimiter, (
   });
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
 
-  const updated = db.updateCommunityRole(req.params.roleId, {
-    name: nextName,
-    priority: req.body.priority !== undefined ? req.body.priority : undefined,
-    permissions: next || undefined,
-  });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.update', targetType: 'role', targetId: req.params.roleId,
+  const updated = inCommunityTransaction(() => {
+    const updated = db.updateCommunityRole(req.params.roleId, {
+      name: nextName,
+      priority: req.body.priority !== undefined ? req.body.priority : undefined,
+      permissions: next || undefined,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.update', targetType: 'role', targetId: req.params.roleId,
+    });
+    return updated;
   });
   res.json({ role: updated });
 });
@@ -24009,12 +24053,16 @@ app.delete('/api/communities/:id/roles/:roleId', authenticateToken, (req, res) =
   const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role, {});
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
 
-  if (!db.deleteCommunityRole(req.params.roleId)) {
+  const deleted = inCommunityTransaction(() => {
+    if (!db.deleteCommunityRole(req.params.roleId)) return false;
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.delete', targetType: 'role', targetId: req.params.roleId,
+    });
+    return true;
+  });
+  if (!deleted) {
     return res.status(409).json({ error: 'Built-in roles cannot be deleted' });
   }
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.delete', targetType: 'role', targetId: req.params.roleId,
-  });
   res.json({ success: true });
 });
 
@@ -24033,10 +24081,12 @@ app.put('/api/communities/:id/members/:userId/roles/:roleId', authenticateToken,
   const membership = db.getCommunityMembership(req.params.id, req.params.userId);
   if (!membership) return res.status(404).json({ error: 'Not a member' });
 
-  db.grantCommunityRole(membership.id, role.id, { grantedBy: req.user.userId });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.grant', targetType: 'user', targetId: req.params.userId,
-    metadata: { role: role.name },
+  inCommunityTransaction(() => {
+    db.grantCommunityRole(membership.id, role.id, { grantedBy: req.user.userId });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.grant', targetType: 'user', targetId: req.params.userId,
+      metadata: { role: role.name },
+    });
   });
   res.json({ roles: db.getMemberRoles(req.params.id, req.params.userId) });
 });
@@ -24058,9 +24108,11 @@ app.delete('/api/communities/:id/members/:userId/roles/:roleId', authenticateTok
     return res.status(409).json({ error: 'A community must keep at least one owner' });
   }
 
-  db.revokeCommunityRole(membership.id, req.params.roleId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.revoke', targetType: 'user', targetId: req.params.userId,
+  inCommunityTransaction(() => {
+    db.revokeCommunityRole(membership.id, req.params.roleId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.revoke', targetType: 'user', targetId: req.params.userId,
+    });
   });
   res.json({ roles: db.getMemberRoles(req.params.id, req.params.userId) });
 });
@@ -24107,16 +24159,19 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
     const chDesc = boundedOptional(req.body.description, COMMUNITY_LIMITS.description);
     if (!chDesc.ok) return res.status(400).json({ error: 'Description is too long' });
 
-    const channel = db.createChannel({
-      communityId: req.params.id, name, slug,
-      description: chDesc.value,
-      type: ['text', 'announcement'].includes(req.body.type) ? req.body.type : 'text',
-      visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
-      sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
-      createdBy: req.user.userId,
-    });
-    db.logCommunityAudit(req.params.id, {
-      actorId: req.user.userId, action: 'channel.create', targetType: 'channel', targetId: channel.id,
+    const channel = inCommunityTransaction(() => {
+      const channel = db.createChannel({
+        communityId: req.params.id, name, slug,
+        description: chDesc.value,
+        type: ['text', 'announcement'].includes(req.body.type) ? req.body.type : 'text',
+        visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
+        sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
+        createdBy: req.user.userId,
+      });
+      db.logCommunityAudit(req.params.id, {
+        actorId: req.user.userId, action: 'channel.create', targetType: 'channel', targetId: channel.id,
+      });
+      return channel;
     });
     res.status(201).json({ channel });
   } catch (err) {
@@ -24144,15 +24199,18 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
   if (['members', 'restricted'].includes(req.body.visibility)) fields.visibility = req.body.visibility;
   if (Number.isInteger(req.body.sortOrder)) fields.sort_order = req.body.sortOrder;
 
-  const channel = db.updateChannel(req.params.channelId, fields);
-  // Recorded (CORTEX-COMM-016). Changing a channel's visibility is a security
-  // operation — it decides who may see a staff channel — and it was the one
-  // that left no trace at all. `changed` names the fields, not the values: an
-  // audit row is read by more people than the thing it describes.
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'channel.update',
-    targetType: 'channel', targetId: req.params.channelId,
-    metadata: { changed: Object.keys(fields) },
+  const channel = inCommunityTransaction(() => {
+    const channel = db.updateChannel(req.params.channelId, fields);
+    // Recorded (CORTEX-COMM-016). Changing a channel's visibility is a security
+    // operation — it decides who may see a staff channel — and it was the one
+    // that left no trace at all. `changed` names the fields, not the values: an
+    // audit row is read by more people than the thing it describes.
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.update',
+      targetType: 'channel', targetId: req.params.channelId,
+      metadata: { changed: Object.keys(fields) },
+    });
+    return channel;
   });
   res.json({ channel });
 });
@@ -24163,9 +24221,11 @@ app.delete('/api/communities/:id/channels/:channelId', authenticateToken, (req, 
 
   // Waves inside fall back to uncontained. Deleting a container must never
   // delete the conversations in it.
-  db.deleteChannel(req.params.channelId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'channel.delete', targetType: 'channel', targetId: req.params.channelId,
+  inCommunityTransaction(() => {
+    db.deleteChannel(req.params.channelId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.delete', targetType: 'channel', targetId: req.params.channelId,
+    });
   });
   res.json({ success: true });
 });
@@ -24203,11 +24263,14 @@ app.put('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateTo
 
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const saved = db.setChannelPermission(req.params.channelId, req.params.roleId, { allow, deny });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'channel.permission_set',
-    targetType: 'channel', targetId: req.params.channelId,
-    metadata: { role: role.name, allow, deny },
+  const saved = inCommunityTransaction(() => {
+    const saved = db.setChannelPermission(req.params.channelId, req.params.roleId, { allow, deny });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.permission_set',
+      targetType: 'channel', targetId: req.params.channelId,
+      metadata: { role: role.name, allow, deny },
+    });
+    return saved;
   });
   res.json({ permission: saved });
 });
@@ -24215,10 +24278,12 @@ app.put('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateTo
 app.delete('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS,
     { resource: { type: 'channel', id: req.params.channelId } })) return;
-  db.clearChannelPermission(req.params.channelId, req.params.roleId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'channel.permission_cleared',
-    targetType: 'channel', targetId: req.params.channelId,
+  inCommunityTransaction(() => {
+    db.clearChannelPermission(req.params.channelId, req.params.roleId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.permission_cleared',
+      targetType: 'channel', targetId: req.params.channelId,
+    });
   });
   res.json({ success: true });
 });
@@ -24248,9 +24313,12 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
     return res.status(403).json({ error: 'You cannot file into that channel' });
   }
 
-  const updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'wave.file', targetType: 'wave', targetId: req.params.waveId,
+  const updated = inCommunityTransaction(() => {
+    const updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'wave.file', targetType: 'wave', targetId: req.params.waveId,
+    });
+    return updated;
   });
   res.json({ wave: updated });
 });
@@ -24274,9 +24342,12 @@ app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticat
   if (!canManageWave(wave, req.user.userId)) {
     return res.status(403).json({ error: 'You cannot move that wave' });
   }
-  const updated = db.setWaveChannel(req.params.waveId, null);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'wave.unfile', targetType: 'wave', targetId: req.params.waveId,
+  const updated = inCommunityTransaction(() => {
+    const updated = db.setWaveChannel(req.params.waveId, null);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'wave.unfile', targetType: 'wave', targetId: req.params.waveId,
+    });
+    return updated;
   });
   res.json({ wave: updated });
 });
@@ -24328,13 +24399,16 @@ app.post('/api/communities/:id/members/remote', authenticateToken, apiLimiter, (
   if (!requireRoomFor(res, db, 'remoteInvitation', req.params.id)) return;
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const invitation = db.createRemoteInvitation({
-    communityId: req.params.id, handle, nodeName,
-    roleId: role ? role.id : null, invitedBy: req.user.userId,
-  });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.invite_remote',
-    targetType: 'address', targetId: `${handle}@${nodeName}`,
+  const invitation = inCommunityTransaction(() => {
+    const invitation = db.createRemoteInvitation({
+      communityId: req.params.id, handle, nodeName,
+      roleId: role ? role.id : null, invitedBy: req.user.userId,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.invite_remote',
+      targetType: 'address', targetId: `${handle}@${nodeName}`,
+    });
+    return invitation;
   });
   res.status(201).json({ invitation });
 });
@@ -24349,12 +24423,14 @@ app.delete('/api/communities/:id/members/remote/:invitationId', authenticateToke
   const row = db.db.prepare('SELECT community_id FROM community_remote_invitations WHERE id = ?')
     .get(req.params.invitationId);
   if (!row || row.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
-  db.revokeRemoteInvitation(req.params.invitationId);
-  // CORTEX-COMM-016: withdrawing a way in is as much a security operation as
-  // granting one, and left no record.
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'remote_invite.revoke',
-    targetType: 'remote_invitation', targetId: req.params.invitationId,
+  inCommunityTransaction(() => {
+    db.revokeRemoteInvitation(req.params.invitationId);
+    // CORTEX-COMM-016: withdrawing a way in is as much a security operation as
+    // granting one, and left no record.
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'remote_invite.revoke',
+      targetType: 'remote_invitation', targetId: req.params.invitationId,
+    });
   });
   res.json({ success: true });
 });
@@ -24388,12 +24464,15 @@ app.post('/api/communities/:id/invites', authenticateToken, apiLimiter, (req, re
   const inviteExpiry = normalizedExpiry(req.body.expiresAt);
   if (!inviteExpiry.ok) return res.status(400).json({ error: 'That expiry is not a future date I can read' });
 
-  const { id, token } = db.createCommunityInvite({
-    communityId: req.params.id, createdBy: req.user.userId,
-    roleId: role ? role.id : null, maxUses: uses.value, expiresAt: inviteExpiry.value,
-  });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'invite.create', targetType: 'invite', targetId: id,
+  const { id, token } = inCommunityTransaction(() => {
+    const created = db.createCommunityInvite({
+      communityId: req.params.id, createdBy: req.user.userId,
+      roleId: role ? role.id : null, maxUses: uses.value, expiresAt: inviteExpiry.value,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'invite.create', targetType: 'invite', targetId: created.id,
+    });
+    return created;
   });
   // The only time the token is ever readable. Only its hash is stored.
   res.status(201).json({ invite: { id, token } });
@@ -24408,10 +24487,12 @@ app.delete('/api/communities/:id/invites/:inviteId', authenticateToken, (req, re
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
   const invite = db.db.prepare('SELECT community_id FROM community_invites WHERE id = ?').get(req.params.inviteId);
   if (!invite || invite.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
-  db.revokeCommunityInvite(req.params.inviteId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'invite.revoke',
-    targetType: 'invite', targetId: req.params.inviteId,
+  inCommunityTransaction(() => {
+    db.revokeCommunityInvite(req.params.inviteId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'invite.revoke',
+      targetType: 'invite', targetId: req.params.inviteId,
+    });
   });
   res.json({ success: true });
 });
@@ -24444,14 +24525,16 @@ app.post('/api/communities/:id/join', authenticateToken, apiLimiter, (req, res) 
   if (!requireRoomFor(res, db, 'member', community.id)) return;
   if (!chargeCommunityMutation(req, res, community.id)) return;
 
-  const membershipId = db.addCommunityMember(community.id, req.user.userId, { state: 'active' });
-  const memberRole = db.getCommunityRole(community.id, 'member');
-  if (memberRole) db.grantCommunityRole(membershipId, memberRole.id);
+  inCommunityTransaction(() => {
+    const membershipId = db.addCommunityMember(community.id, req.user.userId, { state: 'active' });
+    const memberRole = db.getCommunityRole(community.id, 'member');
+    if (memberRole) db.grantCommunityRole(membershipId, memberRole.id);
 
-  db.logCommunityAudit(community.id, {
-    actorId: req.user.userId, action: 'member.join_open',
-    targetType: 'user', targetId: req.user.userId,
-    metadata: { visibility: community.visibility },
+    db.logCommunityAudit(community.id, {
+      actorId: req.user.userId, action: 'member.join_open',
+      targetType: 'user', targetId: req.user.userId,
+      metadata: { visibility: community.visibility },
+    });
   });
   res.json({ community });
 });
@@ -24484,29 +24567,34 @@ app.post('/api/communities/join', authenticateToken, loginLimiter, (req, res) =>
 
   // Atomic. The guard is in the UPDATE's WHERE clause, so concurrent redeemers
   // of a single-use invite cannot both win (threat model I-2).
-  if (!db.claimCommunityInviteUse(invite.id)) {
-    return res.status(404).json({ error: 'That invite is not valid' });
-  }
+  // The claim, the membership, its role and the audit row commit together
+  // (CORTEX-COMM-016): a failure after the claim used to spend a single-use
+  // invite and leave the person outside.
+  const redeemed = inCommunityTransaction(() => {
+    if (!db.claimCommunityInviteUse(invite.id)) return false;
 
-  const membershipId = db.addCommunityMember(invite.community_id, req.user.userId, {
-    state: 'active', invitedBy: invite.created_by,
+    const membershipId = db.addCommunityMember(invite.community_id, req.user.userId, {
+      state: 'active', invitedBy: invite.created_by,
+    });
+    const role = invite.role_id
+      ? db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(invite.role_id)
+      : db.getCommunityRole(invite.community_id, 'member');
+
+    // Re-checked at redemption, not only at minting: the role may have been
+    // edited into something administrative since the invite was created.
+    if (role && communityAuthz.canInviteConferRole(role).allowed) {
+      db.grantCommunityRole(membershipId, role.id, { grantedBy: invite.created_by });
+    } else {
+      const fallback = db.getCommunityRole(invite.community_id, 'member');
+      if (fallback) db.grantCommunityRole(membershipId, fallback.id, { grantedBy: invite.created_by });
+    }
+
+    db.logCommunityAudit(invite.community_id, {
+      actorId: req.user.userId, action: 'invite.redeem', targetType: 'invite', targetId: invite.id,
+    });
+    return true;
   });
-  const role = invite.role_id
-    ? db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(invite.role_id)
-    : db.getCommunityRole(invite.community_id, 'member');
-
-  // Re-checked at redemption, not only at minting: the role may have been
-  // edited into something administrative since the invite was created.
-  if (role && communityAuthz.canInviteConferRole(role).allowed) {
-    db.grantCommunityRole(membershipId, role.id, { grantedBy: invite.created_by });
-  } else {
-    const fallback = db.getCommunityRole(invite.community_id, 'member');
-    if (fallback) db.grantCommunityRole(membershipId, fallback.id, { grantedBy: invite.created_by });
-  }
-
-  db.logCommunityAudit(invite.community_id, {
-    actorId: req.user.userId, action: 'invite.redeem', targetType: 'invite', targetId: invite.id,
-  });
+  if (!redeemed) return res.status(404).json({ error: 'That invite is not valid' });
   res.json({ community: db.getCommunityById(invite.community_id) });
 });
 
@@ -24551,11 +24639,13 @@ app.post('/api/admin/communities/:id/suspend', authenticateToken, (req, res, nex
   const suspend = req.body.suspended !== false;
   // Suspension freezes a Community for everyone including its owner, and is
   // reversible — the memberships, roles and channels are all left intact.
-  db.updateCommunity(req.params.id, { status: suspend ? 'suspended' : 'active' });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId,
-    action: suspend ? 'community.suspend_by_node_admin' : 'community.unsuspend_by_node_admin',
-    metadata: { reason: req.body.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
+  inCommunityTransaction(() => {
+    db.updateCommunity(req.params.id, { status: suspend ? 'suspended' : 'active' });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId,
+      action: suspend ? 'community.suspend_by_node_admin' : 'community.unsuspend_by_node_admin',
+      metadata: { reason: req.body.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
+    });
   });
   db.logActivity(req.user.userId, suspend ? 'community_suspended' : 'community_unsuspended',
                  'community', req.params.id, {});
@@ -24573,14 +24663,15 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
   // (CORTEX-COMM-016). A node admin closing somebody else's Community is the
   // single most consequential action available here, and it was the one that
   // only appeared in a general-purpose activity feed.
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'community.closed_by_node_admin',
-    metadata: { reason: req.body?.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
-  });
-
   // Soft delete, and the waves inside are detached rather than destroyed — a
   // node admin closing a Community must not take conversations with it.
-  db.deleteCommunity(req.params.id);
+  inCommunityTransaction(() => {
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'community.closed_by_node_admin',
+      metadata: { reason: req.body?.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
+    });
+    db.deleteCommunity(req.params.id);
+  });
   db.logActivity(req.user.userId, 'community_deleted', 'community', req.params.id, {});
   res.json({ success: true });
 });
