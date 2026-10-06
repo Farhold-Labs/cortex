@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { storage } from '../utils/storage.js';
 import { API_URL } from '../config/constants.js';
 import { useAuth } from '../hooks/useAPI.js';
 import { useWindowSize } from '../hooks/useWindowSize.js';
@@ -69,8 +70,18 @@ const CrossPortAuthView = () => {
     setLoginError('');
     try {
       const result = await login(handle, password);
-      if (result?.user) { setUser(result.user); setPhase('approve'); }
-      else setLoginError('Invalid handle or password.');
+      // login() reports { success } and keeps the user in storage; it never
+      // returned { user }. Checking for one rejected every correct password
+      // with "Invalid handle or password" — anyone not already signed in here
+      // had to reload the page to get through (found v2.108.0).
+      if (result?.success) {
+        setUser(storage.getUser());
+        setPhase('approve');
+      } else if (result?.mfaRequired) {
+        setLoginError('This account uses two-step sign-in. Sign in to this server in another tab first, then reload this page.');
+      } else {
+        setLoginError('Invalid handle or password.');
+      }
     } catch (err) {
       setLoginError(err.message || 'Login failed.');
     } finally {
