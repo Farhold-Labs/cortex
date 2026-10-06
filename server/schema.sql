@@ -1037,7 +1037,7 @@ CREATE TABLE IF NOT EXISTS cross_port_requests (
           status      TEXT NOT NULL DEFAULT 'pending',
           created_at  TEXT NOT NULL,
           expires_at  TEXT NOT NULL
-        );
+        , browser_binding TEXT);
 CREATE INDEX IF NOT EXISTS idx_cp_requests_nonce ON cross_port_requests(nonce);
 
 CREATE TABLE IF NOT EXISTS cross_port_codes (

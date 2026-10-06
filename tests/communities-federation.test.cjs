@@ -122,12 +122,28 @@ test('Communities across two federated nodes', async (t) => {
     const A = await buildNode(nodeA, portA, nodeB, portB);
     const B = await buildNode(nodeB, portB, nodeA, portA);
 
+    // One browser per node: cookies a node sets come back on later requests to
+    // it, as they would. The cross-port sign-in depends on this since v2.107.2 —
+    // it must finish in the browser that started it (CORTEX-COMM-002).
+    const jars = new Map();
     const call = async (node, method, urlPath, { token, body } = {}) => {
+      const jar = jars.get(node.url) || new Map();
+      jars.set(node.url, jar);
+      const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
       const res = await fetch(node.url + urlPath, {
         method,
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
         ...(body !== undefined && method !== 'GET' ? { body: JSON.stringify(body) } : {}),
       });
+      for (const set of res.headers.getSetCookie?.() || []) {
+        const [pair, ...attrs] = set.split(';');
+        const [k, ...v] = pair.trim().split('=');
+        if (attrs.some(a => /^\s*max-age=0\s*$/i.test(a))) jar.delete(k); else jar.set(k, v.join('='));
+      }
       let json = null;
       try { json = await res.json(); } catch { /* no body */ }
       return { status: res.status, body: json };

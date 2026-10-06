@@ -14643,6 +14643,38 @@ app.delete('/api/incoming-webhooks/:id', authenticateToken, (req, res) => {
 
 // ============ Cross-Port Authentication Routes (v2.56.0) ============
 
+// CORTEX-COMM-002 (closed v2.107.2) — a sign-in finishes in the browser that
+// started it, with the code that was issued for it.
+//
+// Two gaps remained after the redirect and exchange fixes:
+//
+//  1. Nothing tied a pending request to a browser. An attacker could start a
+//     sign-in on this node, approve it at their own home node with their own
+//     account, and send the resulting callback link to a victim: the victim's
+//     browser completed it and was signed in here AS THE ATTACKER — and
+//     whatever they then wrote went into the attacker's account. Initiate now
+//     sets a random secret in an HttpOnly cookie and stores only its hash;
+//     /session refuses unless the same browser presents it.
+//
+//  2. The home node never checked that a code belonged to the request being
+//     completed. A code approved for one sign-in could finish another. The
+//     exchange now carries the request id and nonce, and the home node
+//     refuses unless they are the ones the code was issued for.
+const CROSS_PORT_COOKIE = 'cortex_xport';
+const CROSS_PORT_COOKIE_TTL_S = 5 * 60; // the request's own lifetime
+
+const sha256Hex = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+function sameSecret(a, b) {
+  const x = Buffer.from(String(a || ''));
+  const y = Buffer.from(String(b || ''));
+  return x.length > 0 && x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+function setCrossPortCookie(req, res, value, maxAge) {
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.append('Set-Cookie',
+    `${CROSS_PORT_COOKIE}=${encodeURIComponent(value)}; HttpOnly; SameSite=Strict; Path=/api/cross-port; Max-Age=${maxAge}${secure ? '; Secure' : ''}`);
+}
+
 // POST /api/cross-port/initiate — Guest Server (B): start the cross-port login flow
 // Creates a pending request and returns the redirect URL for the home server
 app.post('/api/cross-port/initiate', async (req, res) => {
@@ -14669,7 +14701,9 @@ app.post('/api/cross-port/initiate', async (req, res) => {
     const nonce = crypto.randomBytes(32).toString('hex');
     const guestBaseUrl = getAppBaseUrl();
 
-    db.createCrossPortRequest({ id, guestNode: FEDERATION_NODE_NAME, guestBaseUrl, nonce });
+    const browserSecret = crypto.randomBytes(32).toString('hex');
+    db.createCrossPortRequest({ id, guestNode: FEDERATION_NODE_NAME, guestBaseUrl, nonce, browserBinding: sha256Hex(browserSecret) });
+    setCrossPortCookie(req, res, browserSecret, CROSS_PORT_COOKIE_TTL_S);
 
     const redirectUrl = `${homeUrl.origin}/cross-port-auth?` +
       `from=${encodeURIComponent(FEDERATION_NODE_NAME)}` +
@@ -14798,13 +14832,20 @@ app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
 // POST /api/cross-port/deny — Home Server (A): user denies the request
 app.post('/api/cross-port/deny', authenticateToken, (req, res) => {
   try {
-    const { guestNode, callbackUrl, nonce } = req.body;
+    const { guestNode, nonce } = req.body;
     db.logActivity(req.user.userId, 'cross_port_denied', 'federation', guestNode || 'unknown', {});
-    if (callbackUrl) {
-      const safeCallback = new URL(sanitizeInput(callbackUrl));
-      safeCallback.searchParams.set('error', 'denied');
-      safeCallback.searchParams.set('state', nonce || '');
-      return res.json({ callbackUrl: safeCallback.toString() });
+    // Same rule as approve (CORTEX-COMM-002): the way back is derived from the
+    // peer record, never taken from the request. This route still used the
+    // browser-supplied callbackUrl, which made "deny" an open redirect to
+    // anywhere an attacker cared to name.
+    const node = guestNode ? db.getFederationNodeByName(sanitizeInput(guestNode)) : null;
+    if (node && node.status === 'active') {
+      try {
+        const safeCallback = new URL('/cross-port/callback', new URL(node.baseUrl).origin);
+        safeCallback.searchParams.set('error', 'denied');
+        safeCallback.searchParams.set('state', nonce || '');
+        return res.json({ callbackUrl: safeCallback.toString() });
+      } catch { /* no usable address on record — fall through */ }
     }
     res.json({ ok: true });
   } catch (err) {
@@ -14846,6 +14887,15 @@ app.post('/api/federation/cross-port/exchange', createFederationAuthMiddleware([
     // else, should fail loudly rather than be quietly ignored.
     if (sanitizeInput(guestNode) !== callerNode) {
       return res.status(403).json({ error: 'Auth code not issued for this server' });
+    }
+    // And the code belongs to the REQUEST being completed (CORTEX-COMM-002,
+    // v2.107.2). The guest sends the request it is finishing; a code approved
+    // for one sign-in cannot finish another. Refused without spending the
+    // code, like the checks above.
+    const { requestId, nonce } = req.body;
+    if (!requestId || !nonce || !sameSecret(requestId, record.request_id) || !sameSecret(nonce, record.nonce)) {
+      console.warn(`[cross-port] ${callerNode} presented a code for a different sign-in request`);
+      return res.status(403).json({ error: 'Auth code not issued for this sign-in' });
     }
 
     db.markCrossPortCodeUsed(code);
@@ -14931,6 +14981,14 @@ app.post('/api/cross-port/session', async (req, res) => {
     if (request.status !== 'pending') return res.status(400).json({ error: 'Request already completed' });
     if (new Date(request.expires_at) < new Date()) return res.status(410).json({ error: 'Request expired' });
 
+    // The browser finishing this sign-in must be the one that started it
+    // (CORTEX-COMM-002). A request with no binding predates v2.107.2 and has
+    // at most five minutes to live; it is refused rather than grandfathered.
+    const browserSecret = readCookie(req, CROSS_PORT_COOKIE);
+    if (!request.browser_binding || !browserSecret || !sameSecret(sha256Hex(browserSecret), request.browser_binding)) {
+      return res.status(400).json({ error: 'This sign-in was started in a different browser. Please start again from this one.' });
+    }
+
     // Look up home node
     let homeUrl;
     try { homeUrl = new URL(homeServerUrl.startsWith('http') ? homeServerUrl : `https://${homeServerUrl}`); }
@@ -14945,7 +15003,10 @@ app.post('/api/cross-port/session', async (req, res) => {
     if (!identity) return res.status(500).json({ error: 'Server identity not configured' });
 
     const exchangeUrl = `${homeUrl.origin}/api/federation/cross-port/exchange`;
-    const body = JSON.stringify({ code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME });
+    const body = JSON.stringify({
+      code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME,
+      requestId: request.id, nonce: request.nonce,
+    });
     const headers = createHttpSignatureFromString('POST', exchangeUrl, body, identity.privateKey, FEDERATION_NODE_NAME);
 
     const exchangeRes = await fetch(exchangeUrl, { method: 'POST', headers, body });
@@ -14990,6 +15051,7 @@ app.post('/api/cross-port/session', async (req, res) => {
     if (!stubUser) return res.status(500).json({ error: 'Failed to create local user' });
 
     db.updateCrossPortRequestStatus(request.id, 'completed');
+    setCrossPortCookie(req, res, '', 0); // spent: clear it
 
     // Ordinary rotating credentials (v2.100.0), not the 24-hour dead end this
     // used to mint. Hand-rolling the token here also bypassed

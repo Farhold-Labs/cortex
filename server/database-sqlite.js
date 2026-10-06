@@ -3315,6 +3315,16 @@ export class DatabaseSQLite {
       console.log('✅ users.cross_port_verified_at added');
     }
 
+    // v2.107.2 — CORTEX-COMM-002: a pending cross-port sign-in is bound to the
+    // browser that started it. Only a hash of the browser's secret is stored;
+    // the secret itself lives in an HttpOnly cookie on that browser.
+    const crossPortRequestCols = this.db.prepare(`PRAGMA table_info(cross_port_requests)`).all();
+    if (crossPortRequestCols.length && !crossPortRequestCols.some(c => c.name === 'browser_binding')) {
+      console.log('📝 Adding cross_port_requests.browser_binding (v2.107.2)...');
+      this.db.exec(`ALTER TABLE cross_port_requests ADD COLUMN browser_binding TEXT;`);
+      console.log('✅ cross_port_requests.browser_binding added');
+    }
+
     // v2.104.0 — CORTEX-COMM-009: which conversation an uploaded file belongs to.
     //
     // Uploads were authenticated when created and then served by a plain static
@@ -11835,13 +11845,13 @@ export class DatabaseSQLite {
 
   // ============ Cross-Port Authentication Methods (v2.56.0) ============
 
-  createCrossPortRequest({ id, guestNode, guestBaseUrl, nonce }) {
+  createCrossPortRequest({ id, guestNode, guestBaseUrl, nonce, browserBinding = null }) {
     const now = new Date().toISOString();
     const expires = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     this.db.prepare(`
-      INSERT INTO cross_port_requests (id, guest_node, guest_base_url, nonce, status, created_at, expires_at)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?)
-    `).run(id, guestNode, guestBaseUrl, nonce, now, expires);
+      INSERT INTO cross_port_requests (id, guest_node, guest_base_url, nonce, status, created_at, expires_at, browser_binding)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+    `).run(id, guestNode, guestBaseUrl, nonce, now, expires, browserBinding);
   }
 
   getCrossPortRequest(id) {
