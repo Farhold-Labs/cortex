@@ -349,6 +349,13 @@ const EventDetail = ({ slug, eventId, onBack, navigate }) => {
           margin: '0 0 10px', color: 'var(--accent-amber, #ffd23f)',
           fontSize: isMobile ? '1.4rem' : '1.8rem', fontFamily: 'monospace', lineHeight: 1.2,
         }}>{plainText(ev.title)}</h1>
+        {ev.liveUrl && (
+          <a href={ev.liveUrl} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '10px 18px',
+            background: '#e0242b', color: '#fff', textDecoration: 'none', fontFamily: 'monospace',
+            fontWeight: 'bold', letterSpacing: '0.08em', borderRadius: 4,
+          }}>● WATCH LIVE NOW</a>
+        )}
 
         {past && (
           <div style={{ color: 'var(--text-muted, #6a806a)', fontSize: '0.75rem', marginBottom: 10 }}>
@@ -476,6 +483,7 @@ const EventList = ({ slug, onOpen, navigate }) => {
               color: 'var(--text-primary, #d8e8d8)', fontSize: isMobile ? '1rem' : '1.1rem',
               marginBottom: 4, wordBreak: 'break-word',
             }}>{plainText(ev.title)}</div>
+            {ev.liveUrl && <a href={ev.liveUrl} onClick={(e) => e.stopPropagation()} style={{ display: 'inline-block', marginTop: 4, color: '#ff6b6b', fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 'bold', textDecoration: 'none' }}>● LIVE NOW — WATCH</a>}
             {ev.location && (
               <div style={{ color: 'var(--text-dim, #8aa08a)', fontSize: '0.8rem', marginBottom: 4 }}>
                 {plainText(ev.location)}
@@ -550,6 +558,7 @@ const EventIndex = ({ navigate }) => {
                   color: 'var(--text-primary, #d8e8d8)', fontSize: isMobile ? '0.95rem' : '1.05rem',
                   marginBottom: 3, wordBreak: 'break-word',
                 }}>{plainText(ev.title)}</div>
+                {ev.liveUrl && <a href={ev.liveUrl} onClick={(e) => e.stopPropagation()} style={{ display: 'inline-block', marginTop: 4, color: '#ff6b6b', fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 'bold', textDecoration: 'none' }}>● LIVE NOW — WATCH</a>}
                 <div style={{ color: 'var(--text-muted, #6a806a)', fontSize: '0.72rem', fontFamily: 'monospace' }}>
                   {ev.scope === 'server' ? 'Server-wide' : ev.source}
                   {ev.location ? ` · ${plainText(ev.location)}` : ''}

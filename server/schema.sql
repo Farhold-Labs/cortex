@@ -1476,6 +1476,22 @@ CREATE INDEX IF NOT EXISTS idx_ownership_transfers_community
 CREATE INDEX IF NOT EXISTS idx_ownership_transfers_to
           ON community_ownership_transfers(to_user_id, state);
 
+CREATE TABLE IF NOT EXISTS broadcasts (
+          id             TEXT PRIMARY KEY,
+          wave_id        TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          event_id       TEXT REFERENCES events(id) ON DELETE SET NULL,
+          title          TEXT NOT NULL,
+          created_by     TEXT REFERENCES users(id) ON DELETE SET NULL,
+          state          TEXT NOT NULL DEFAULT 'live' CHECK(state IN ('live','ended')),
+          room_name      TEXT NOT NULL UNIQUE,
+          public_token   TEXT UNIQUE,
+          viewer_cap     INTEGER NOT NULL DEFAULT 100,
+          started_at     TEXT NOT NULL,
+          ended_at       TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_broadcasts_wave ON broadcasts(wave_id, state);
+CREATE INDEX IF NOT EXISTS idx_broadcasts_event ON broadcasts(event_id, state);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
