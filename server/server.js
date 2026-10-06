@@ -5473,7 +5473,10 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 app.get('/api/auth/me', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility });
+  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility,
+    // The client decides how to ask for step-up by these (v2.108.0): an account
+    // from another server confirms at its home node, not with a password here.
+    isCrossPort: !!(user.is_cross_port || user.isCrossPort), homeNode: user.home_node || user.homeNode || null });
 });
 
 app.post('/api/auth/logout', authenticateToken, (req, res) => {
@@ -14643,6 +14646,38 @@ app.delete('/api/incoming-webhooks/:id', authenticateToken, (req, res) => {
 
 // ============ Cross-Port Authentication Routes (v2.56.0) ============
 
+// CORTEX-COMM-002 (closed v2.108.0) — a sign-in finishes in the browser that
+// started it, with the code that was issued for it.
+//
+// Two gaps remained after the redirect and exchange fixes:
+//
+//  1. Nothing tied a pending request to a browser. An attacker could start a
+//     sign-in on this node, approve it at their own home node with their own
+//     account, and send the resulting callback link to a victim: the victim's
+//     browser completed it and was signed in here AS THE ATTACKER — and
+//     whatever they then wrote went into the attacker's account. Initiate now
+//     sets a random secret in an HttpOnly cookie and stores only its hash;
+//     /session refuses unless the same browser presents it.
+//
+//  2. The home node never checked that a code belonged to the request being
+//     completed. A code approved for one sign-in could finish another. The
+//     exchange now carries the request id and nonce, and the home node
+//     refuses unless they are the ones the code was issued for.
+const CROSS_PORT_COOKIE = 'cortex_xport';
+const CROSS_PORT_COOKIE_TTL_S = 5 * 60; // the request's own lifetime
+
+const sha256Hex = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+function sameSecret(a, b) {
+  const x = Buffer.from(String(a || ''));
+  const y = Buffer.from(String(b || ''));
+  return x.length > 0 && x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+function setCrossPortCookie(req, res, value, maxAge) {
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.append('Set-Cookie',
+    `${CROSS_PORT_COOKIE}=${encodeURIComponent(value)}; HttpOnly; SameSite=Strict; Path=/api/cross-port; Max-Age=${maxAge}${secure ? '; Secure' : ''}`);
+}
+
 // POST /api/cross-port/initiate — Guest Server (B): start the cross-port login flow
 // Creates a pending request and returns the redirect URL for the home server
 app.post('/api/cross-port/initiate', async (req, res) => {
@@ -14669,7 +14704,9 @@ app.post('/api/cross-port/initiate', async (req, res) => {
     const nonce = crypto.randomBytes(32).toString('hex');
     const guestBaseUrl = getAppBaseUrl();
 
-    db.createCrossPortRequest({ id, guestNode: FEDERATION_NODE_NAME, guestBaseUrl, nonce });
+    const browserSecret = crypto.randomBytes(32).toString('hex');
+    db.createCrossPortRequest({ id, guestNode: FEDERATION_NODE_NAME, guestBaseUrl, nonce, browserBinding: sha256Hex(browserSecret) });
+    setCrossPortCookie(req, res, browserSecret, CROSS_PORT_COOKIE_TTL_S);
 
     const redirectUrl = `${homeUrl.origin}/cross-port-auth?` +
       `from=${encodeURIComponent(FEDERATION_NODE_NAME)}` +
@@ -14714,11 +14751,11 @@ app.get('/api/cross-port/request-info', (req, res) => {
 
 // POST /api/cross-port/approve — Home Server (A): authenticated user approves the request
 // Creates a short-lived auth code and returns the callback URL
-app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
+app.post('/api/cross-port/approve', loginLimiter, authenticateToken, async (req, res) => {
   try {
     if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
 
-    const { guestNode, callbackUrl, nonce, requestId } = req.body;
+    const { guestNode, callbackUrl, nonce, requestId, purpose, password } = req.body;
     // `callbackUrl` is no longer required: it is derived from the peer record
     // below and ignored if supplied (CORTEX-COMM-002). Demanding a field we
     // deliberately disregard would only mislead whoever writes the next client.
@@ -14737,8 +14774,24 @@ app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.is_cross_port) return res.status(403).json({ error: 'Cross-port users cannot grant cross-port access' });
 
+    // A step-up (CORTEX-COMM-021) is the guest asking "is this really them,
+    // right now?" — a session here is not an answer to that, any more than it
+    // is at home, so the password is checked again. The code records that it
+    // was, and the guest refuses a step-up without it, so a request whose
+    // purpose was stripped on the way here simply fails.
+    let reauthenticatedAt = null;
+    if (purpose === 'step_up') {
+      if (!password) return res.status(400).json({ error: 'Your password is required to confirm it is you' });
+      const ok = await bcrypt.compare(String(password), user.passwordHash || user.password_hash || '');
+      if (!ok) {
+        db.logActivity(user.id, 'step_up_failed', 'user', user.id, { via: 'cross_port', guestNode });
+        return res.status(401).json({ error: 'Incorrect password' });
+      }
+      reauthenticatedAt = new Date().toISOString();
+    }
+
     const code = crypto.randomBytes(32).toString('hex');
-    db.createCrossPortCode({ code, userId: user.id, guestNode: sanitizeInput(guestNode), requestId, nonce });
+    db.createCrossPortCode({ code, userId: user.id, guestNode: sanitizeInput(guestNode), requestId, nonce, reauthenticatedAt });
 
     // CORTEX-COMM-002 — the code goes where the PEER lives, not where the
     // request asks it to go.
@@ -14798,13 +14851,20 @@ app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
 // POST /api/cross-port/deny — Home Server (A): user denies the request
 app.post('/api/cross-port/deny', authenticateToken, (req, res) => {
   try {
-    const { guestNode, callbackUrl, nonce } = req.body;
+    const { guestNode, nonce } = req.body;
     db.logActivity(req.user.userId, 'cross_port_denied', 'federation', guestNode || 'unknown', {});
-    if (callbackUrl) {
-      const safeCallback = new URL(sanitizeInput(callbackUrl));
-      safeCallback.searchParams.set('error', 'denied');
-      safeCallback.searchParams.set('state', nonce || '');
-      return res.json({ callbackUrl: safeCallback.toString() });
+    // Same rule as approve (CORTEX-COMM-002): the way back is derived from the
+    // peer record, never taken from the request. This route still used the
+    // browser-supplied callbackUrl, which made "deny" an open redirect to
+    // anywhere an attacker cared to name.
+    const node = guestNode ? db.getFederationNodeByName(sanitizeInput(guestNode)) : null;
+    if (node && node.status === 'active') {
+      try {
+        const safeCallback = new URL('/cross-port/callback', new URL(node.baseUrl).origin);
+        safeCallback.searchParams.set('error', 'denied');
+        safeCallback.searchParams.set('state', nonce || '');
+        return res.json({ callbackUrl: safeCallback.toString() });
+      } catch { /* no usable address on record — fall through */ }
     }
     res.json({ ok: true });
   } catch (err) {
@@ -14847,6 +14907,15 @@ app.post('/api/federation/cross-port/exchange', createFederationAuthMiddleware([
     if (sanitizeInput(guestNode) !== callerNode) {
       return res.status(403).json({ error: 'Auth code not issued for this server' });
     }
+    // And the code belongs to the REQUEST being completed (CORTEX-COMM-002,
+    // v2.108.0). The guest sends the request it is finishing; a code approved
+    // for one sign-in cannot finish another. Refused without spending the
+    // code, like the checks above.
+    const { requestId, nonce } = req.body;
+    if (!requestId || !nonce || !sameSecret(requestId, record.request_id) || !sameSecret(nonce, record.nonce)) {
+      console.warn(`[cross-port] ${callerNode} presented a code for a different sign-in request`);
+      return res.status(403).json({ error: 'Auth code not issued for this sign-in' });
+    }
 
     db.markCrossPortCodeUsed(code);
 
@@ -14861,6 +14930,8 @@ app.post('/api/federation/cross-port/exchange', createFederationAuthMiddleware([
       avatar: user.avatar || null,
       avatarUrl: user.avatarUrl || user.avatar_url || null,
       homeNode: identity?.nodeName || FEDERATION_NODE_NAME,
+      // Set only when the password was re-checked at approval (a step-up).
+      reauthenticatedAt: record.reauthenticated_at || null,
     });
   } catch (err) {
     console.error('Cross-port exchange error:', err);
@@ -14916,6 +14987,114 @@ app.post('/api/federation/cross-port/verify', createFederationAuthMiddleware(['a
   }
 });
 
+// ===== Step-up for cross-port users (v2.108.0, CORTEX-COMM-021) =====
+//
+// Step-up compares a password, and a cross-port account has none here — its
+// password lives at its home node. So a remote member could never pass step-up,
+// and every action behind it (offering a Community, deleting one) was out of
+// their reach even in a Community they own.
+//
+// The answer is the same handshake as sign-in, run for a different purpose:
+// the home node re-checks the password and says so in the signed exchange, and
+// only then does this node issue the same short-lived step-up proof a local
+// password would have earned. The request is tied to the session that asked
+// and to the browser that started it, exactly like a sign-in.
+
+app.post('/api/cross-port/step-up/initiate', authenticateToken, (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled on this server' });
+    const user = db.findUserById(req.user.userId);
+    if (!user || !(user.is_cross_port || user.isCrossPort) || !(user.home_node || user.homeNode)) {
+      return res.status(400).json({ error: 'Only accounts from another server confirm it this way' });
+    }
+    const homeNode = user.home_node || user.homeNode;
+    const node = db.getFederationNodeByName(homeNode);
+    if (!node || node.status !== 'active') return res.status(403).json({ error: `${homeNode} is not a trusted server` });
+
+    let homeOrigin;
+    try { homeOrigin = new URL(node.baseUrl).origin; } catch { return res.status(500).json({ error: 'That server has no usable address' }); }
+
+    const id = crypto.randomUUID();
+    const nonce = crypto.randomBytes(32).toString('hex');
+    const browserSecret = crypto.randomBytes(32).toString('hex');
+    const guestBaseUrl = getAppBaseUrl();
+    db.createCrossPortRequest({
+      id, guestNode: FEDERATION_NODE_NAME, guestBaseUrl, nonce,
+      browserBinding: sha256Hex(browserSecret), purpose: 'step_up', userId: user.id,
+    });
+    setCrossPortCookie(req, res, browserSecret, CROSS_PORT_COOKIE_TTL_S);
+
+    const redirectUrl = `${homeOrigin}/cross-port-auth?` +
+      `from=${encodeURIComponent(FEDERATION_NODE_NAME)}` +
+      `&from_url=${encodeURIComponent(guestBaseUrl)}` +
+      `&request_id=${encodeURIComponent(id)}` +
+      `&nonce=${encodeURIComponent(nonce)}` +
+      `&purpose=step_up` +
+      `&callback=${encodeURIComponent(`${guestBaseUrl}/cross-port/callback`)}`;
+    res.json({ redirectUrl, homeServerUrl: homeOrigin });
+  } catch (err) {
+    console.error('Cross-port step-up initiate error:', err);
+    res.status(500).json({ error: 'Could not start the confirmation' });
+  }
+});
+
+app.post('/api/cross-port/step-up/complete', authenticateToken, async (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
+    const { code, state } = req.body || {};
+    if (!code || !state) return res.status(400).json({ error: 'code and state required' });
+
+    const request = db.getCrossPortRequestByNonce(sanitizeInput(state));
+    // Only a step-up request, only for the session that started it.
+    if (!request || request.purpose !== 'step_up' || request.user_id !== req.user.userId) {
+      return res.status(400).json({ error: 'Invalid state — no matching confirmation' });
+    }
+    if (request.status !== 'pending') return res.status(400).json({ error: 'That confirmation was already used' });
+    if (new Date(request.expires_at) < new Date()) return res.status(410).json({ error: 'That confirmation expired — please try again' });
+    const browserSecret = readCookie(req, CROSS_PORT_COOKIE);
+    if (!request.browser_binding || !browserSecret || !sameSecret(sha256Hex(browserSecret), request.browser_binding)) {
+      return res.status(400).json({ error: 'This confirmation was started in a different browser.' });
+    }
+
+    const user = db.findUserById(req.user.userId);
+    const homeNode = user?.home_node || user?.homeNode;
+    const homeUserId = user?.home_user_id || user?.homeUserId;
+    const node = homeNode ? db.getFederationNodeByName(homeNode) : null;
+    if (!node || node.status !== 'active') return res.status(403).json({ error: 'Home server is not trusted' });
+    const identity = db.getServerIdentity();
+    if (!identity) return res.status(500).json({ error: 'Server identity not configured' });
+
+    const exchangeUrl = `${new URL(node.baseUrl).origin}/api/federation/cross-port/exchange`;
+    const body = JSON.stringify({ code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME, requestId: request.id, nonce: request.nonce });
+    const headers = createHttpSignatureFromString('POST', exchangeUrl, body, identity.privateKey, FEDERATION_NODE_NAME);
+    const exchangeRes = await fetch(exchangeUrl, { method: 'POST', headers, body });
+    const data = await exchangeRes.json().catch(() => ({}));
+    if (!exchangeRes.ok) return res.status(400).json({ error: data.error || 'Your home server did not confirm it' });
+
+    // The home node must speak for THIS account, and must say it re-checked
+    // the password — recently, and after this request was made.
+    if ((data.homeNode && data.homeNode !== homeNode) || data.userId !== homeUserId) {
+      console.warn(`[cross-port] step-up for ${req.user.userId} answered with someone else's identity`);
+      db.updateCrossPortRequestStatus(request.id, 'rejected');
+      return res.status(403).json({ error: 'Your home server confirmed a different account' });
+    }
+    const at = data.reauthenticatedAt ? new Date(data.reauthenticatedAt) : null;
+    if (!at || Number.isNaN(at.getTime()) || at < new Date(request.created_at) || Date.now() - at.getTime() > 5 * 60 * 1000) {
+      return res.status(401).json({ error: 'Your home server did not re-check your password' });
+    }
+
+    db.updateCrossPortRequestStatus(request.id, 'completed');
+    setCrossPortCookie(req, res, '', 0);
+    const policy = getSecurityPolicy();
+    const stepUpToken = jwt.sign({ userId: req.user.userId, purpose: 'step-up' }, JWT_SECRET, { expiresIn: `${policy.stepUpMinutes}m` });
+    db.logActivity(req.user.userId, 'step_up', 'user', req.user.userId, { ...getRequestMeta(req), via: 'cross_port', homeNode });
+    res.json({ stepUpToken, expiresInMinutes: policy.stepUpMinutes });
+  } catch (err) {
+    console.error('Cross-port step-up complete error:', err);
+    res.status(500).json({ error: 'Could not complete the confirmation' });
+  }
+});
+
 // POST /api/cross-port/session — Guest Server (B): create a local session for the cross-port user
 // Called by the client after receiving the auth code in the callback URL
 app.post('/api/cross-port/session', async (req, res) => {
@@ -14930,6 +15109,17 @@ app.post('/api/cross-port/session', async (req, res) => {
     if (!request) return res.status(400).json({ error: 'Invalid state — no matching pending request' });
     if (request.status !== 'pending') return res.status(400).json({ error: 'Request already completed' });
     if (new Date(request.expires_at) < new Date()) return res.status(410).json({ error: 'Request expired' });
+    // A step-up request confirms someone already signed in; it never signs
+    // anyone in (CORTEX-COMM-021).
+    if ((request.purpose || 'login') !== 'login') return res.status(400).json({ error: 'Invalid state — no matching pending request' });
+
+    // The browser finishing this sign-in must be the one that started it
+    // (CORTEX-COMM-002). A request with no binding predates v2.108.0 and has
+    // at most five minutes to live; it is refused rather than grandfathered.
+    const browserSecret = readCookie(req, CROSS_PORT_COOKIE);
+    if (!request.browser_binding || !browserSecret || !sameSecret(sha256Hex(browserSecret), request.browser_binding)) {
+      return res.status(400).json({ error: 'This sign-in was started in a different browser. Please start again from this one.' });
+    }
 
     // Look up home node
     let homeUrl;
@@ -14945,7 +15135,10 @@ app.post('/api/cross-port/session', async (req, res) => {
     if (!identity) return res.status(500).json({ error: 'Server identity not configured' });
 
     const exchangeUrl = `${homeUrl.origin}/api/federation/cross-port/exchange`;
-    const body = JSON.stringify({ code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME });
+    const body = JSON.stringify({
+      code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME,
+      requestId: request.id, nonce: request.nonce,
+    });
     const headers = createHttpSignatureFromString('POST', exchangeUrl, body, identity.privateKey, FEDERATION_NODE_NAME);
 
     const exchangeRes = await fetch(exchangeUrl, { method: 'POST', headers, body });
@@ -14990,6 +15183,7 @@ app.post('/api/cross-port/session', async (req, res) => {
     if (!stubUser) return res.status(500).json({ error: 'Failed to create local user' });
 
     db.updateCrossPortRequestStatus(request.id, 'completed');
+    setCrossPortCookie(req, res, '', 0); // spent: clear it
 
     // Ordinary rotating credentials (v2.100.0), not the 24-hour dead end this
     // used to mint. Hand-rolling the token here also bypassed
@@ -15018,21 +15212,23 @@ app.post('/api/cross-port/session', async (req, res) => {
       // invitation stays pending for when it is switched back on. Checked here
       // rather than by the middleware because this is a cross-port login, not a
       // request to /api/communities.
-      const bound = isFeatureEnabled('communities') ? db.bindRemoteInvitations({
-        userId: stubUser.id,
-        remoteHandle: exchangeData.handle,
-        // Same rule as above: an invitation addressed into H's namespace may
-        // only be bound by H. Taking this from the response would let M redeem
-        // an invitation written for somebody on another server.
-        nodeName: homeNode,
-      }) : [];
-      for (const communityId of bound) {
-        db.logCommunityAudit(communityId, {
-          actorId: stubUser.id, action: 'member.join_remote',
-          targetType: 'user', targetId: stubUser.id,
-          metadata: { homeNode },
+      if (isFeatureEnabled('communities')) inCommunityTransaction(() => {
+        const bound = db.bindRemoteInvitations({
+          userId: stubUser.id,
+          remoteHandle: exchangeData.handle,
+          // Same rule as above: an invitation addressed into H's namespace may
+          // only be bound by H. Taking this from the response would let M redeem
+          // an invitation written for somebody on another server.
+          nodeName: homeNode,
         });
-      }
+        for (const communityId of bound) {
+          db.logCommunityAudit(communityId, {
+            actorId: stubUser.id, action: 'member.join_remote',
+            targetType: 'user', targetId: stubUser.id,
+            metadata: { homeNode },
+          });
+        }
+      });
     } catch (err) {
       // A failure here must not cost them the login they have just completed.
       console.error('Cross-port community binding failed:', err);
@@ -20689,10 +20885,12 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   // LISTED and nothing else — participants, privacy and keys are exactly as
   // createWave left them.
   if (targetChannel) {
-    db.setWaveChannel(wave.id, targetChannel.id);
-    db.logCommunityAudit(targetChannel.community_id, {
-      actorId: req.user.userId, action: 'wave.create_in_channel',
-      targetType: 'wave', targetId: wave.id,
+    inCommunityTransaction(() => {
+      db.setWaveChannel(wave.id, targetChannel.id);
+      db.logCommunityAudit(targetChannel.community_id, {
+        actorId: req.user.userId, action: 'wave.create_in_channel',
+        targetType: 'wave', targetId: wave.id,
+      });
     });
     wave.communityId = targetChannel.community_id;
     wave.channelId = targetChannel.id;
@@ -23670,6 +23868,21 @@ function communitySlug(value) {
 // Anyone may create a Community. That is deliberate: node-level channels are
 // admin-only, so Community creation is the relief valve that stops every shared
 // space needing an administrator's attention.
+/**
+ * A Community change and the audit record that describes it commit together,
+ * or neither does (CORTEX-COMM-016, closed v2.108.0).
+ *
+ * They were separate statements: if the audit insert failed — a full disk, a
+ * locked database — the change stood with no record of who made it, which is
+ * exactly the gap an audit log exists to close. better-sqlite3 nests
+ * transactions as savepoints, so the database methods called inside keep their
+ * own transactions. Only database work belongs in here: broadcasts, federation
+ * and the response stay outside, after the commit.
+ */
+function inCommunityTransaction(fn) {
+  return db.db.transaction(fn)();
+}
+
 app.post('/api/communities', authenticateToken, apiLimiter, (req, res) => {
   const name = boundedString(req.body.name, COMMUNITY_LIMITS.name);
   if (!name) return res.status(400).json({ error: 'Name is required' });
@@ -23702,13 +23915,16 @@ app.post('/api/communities', authenticateToken, apiLimiter, (req, res) => {
   const createDesc = boundedOptional(req.body.description, COMMUNITY_LIMITS.description);
   if (!createDesc.ok) return res.status(400).json({ error: 'Description is too long' });
 
-  const community = db.createCommunity({
-    name, slug, visibility,
-    description: createDesc.value,
-    homeNode: FEDERATION_NODE_NAME || null,
-    createdBy: req.user.userId,
+  const community = inCommunityTransaction(() => {
+    const community = db.createCommunity({
+      name, slug, visibility,
+      description: createDesc.value,
+      homeNode: FEDERATION_NODE_NAME || null,
+      createdBy: req.user.userId,
+    });
+    db.logCommunityAudit(community.id, { actorId: req.user.userId, action: 'community.create' });
+    return community;
   });
-  db.logCommunityAudit(community.id, { actorId: req.user.userId, action: 'community.create' });
   res.status(201).json({ community });
 });
 
@@ -23720,6 +23936,17 @@ app.get('/api/communities', authenticateToken, apiLimiter, (req, res) => {
 });
 
 // The rail.
+// Ownership offers addressed to me (v2.108.0, CORTEX-COMM-021). Registered
+// before /api/communities/:id, which would otherwise read the path as an id.
+app.get('/api/communities/ownership-offers', authenticateToken, (req, res) => {
+  const offers = db.getOwnershipOffersFor(req.user.userId).map(o => ({
+    id: o.id, communityId: o.community_id, communityName: o.community_name,
+    from: { id: o.from_user_id, handle: o.from_handle, displayName: o.from_display_name || o.from_handle },
+    createdAt: o.created_at, expiresAt: o.expires_at,
+  }));
+  res.json({ offers });
+});
+
 app.get('/api/communities/mine', authenticateToken, (req, res) => {
   res.json({ communities: db.listUserCommunities(req.user.userId) });
 });
@@ -23778,10 +24005,13 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
   }
 
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
-  const community = db.updateCommunity(req.params.id, fields);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'community.update',
-    metadata: { fields: Object.keys(fields) },
+  const community = inCommunityTransaction(() => {
+    const community = db.updateCommunity(req.params.id, fields);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'community.update',
+      metadata: { fields: Object.keys(fields) },
+    });
+    return community;
   });
   res.json({ community });
 });
@@ -23789,8 +24019,10 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
 // Step-up re-auth: this disposes of a shared space and everyone's place in it.
 app.delete('/api/communities/:id', authenticateToken, requireStepUp, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.DELETE_COMMUNITY)) return;
-  db.deleteCommunity(req.params.id);
-  db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'community.delete' });
+  inCommunityTransaction(() => {
+    db.deleteCommunity(req.params.id);
+    db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'community.delete' });
+  });
   res.json({ success: true });
 });
 
@@ -23834,14 +24066,16 @@ app.post('/api/communities/:id/members', authenticateToken, apiLimiter, (req, re
   if (!requireRoomFor(res, db, 'member', req.params.id)) return;
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const membershipId = db.addCommunityMember(req.params.id, user.id, {
-    state: 'active', invitedBy: req.user.userId,
-  });
-  const memberRole = db.getCommunityRole(req.params.id, 'member');
-  if (memberRole) db.grantCommunityRole(membershipId, memberRole.id, { grantedBy: req.user.userId });
+  inCommunityTransaction(() => {
+    const membershipId = db.addCommunityMember(req.params.id, user.id, {
+      state: 'active', invitedBy: req.user.userId,
+    });
+    const memberRole = db.getCommunityRole(req.params.id, 'member');
+    if (memberRole) db.grantCommunityRole(membershipId, memberRole.id, { grantedBy: req.user.userId });
 
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.add', targetType: 'user', targetId: user.id,
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.add', targetType: 'user', targetId: user.id,
+    });
   });
   res.status(201).json({ membership: db.getCommunityMembership(req.params.id, user.id) });
 });
@@ -23861,9 +24095,11 @@ app.delete('/api/communities/:id/members/:userId', authenticateToken, (req, res)
     return res.status(409).json({ error: 'A community must keep at least one owner' });
   }
 
-  db.setCommunityMemberState(req.params.id, req.params.userId, 'removed');
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.remove', targetType: 'user', targetId: req.params.userId,
+  inCommunityTransaction(() => {
+    db.setCommunityMemberState(req.params.id, req.params.userId, 'removed');
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.remove', targetType: 'user', targetId: req.params.userId,
+    });
   });
   res.json({ success: true });
 });
@@ -23871,19 +24107,173 @@ app.delete('/api/communities/:id/members/:userId', authenticateToken, (req, res)
 // Leaving is not being removed, so it needs no capability — but it must not
 // strand the Community without an owner, and that check runs inside the same
 // transaction as the write.
+// ----- Ownership transfer (v2.108.0, CORTEX-COMM-021) -----
+//
+// An owner could not hand a Community over at all: `community.transfer` existed
+// as a capability that nothing consumed, granting the owner role is refused at
+// your own priority, and the last owner cannot leave. Their only way out was
+// deleting their account, which suspends the Community.
+//
+// The model: an owner OFFERS, the recipient ACCEPTS. Ownership carries
+// obligations, so it is never pushed onto anybody. On acceptance the recipient
+// becomes an owner and the giver steps down to admin, in one transaction. One
+// offer at a time per Community; it lapses after seven days. Offering requires
+// step-up re-authentication — it begins giving away a shared space.
+
+function communityTransferView(t) {
+  return t && {
+    id: t.id, communityId: t.community_id, fromUserId: t.from_user_id, toUserId: t.to_user_id,
+    state: t.state, createdAt: t.created_at, expiresAt: t.expires_at, resolvedAt: t.resolved_at,
+  };
+}
+
+function notifyCommunityTransfer(userId, actorId, title, body) {
+  try {
+    if (!shouldCreateNotification(userId, 'system', null)) return;
+    const notification = db.createNotification({ userId, type: 'system', actorId, title, body });
+    if (!notification) return;
+    db.markNotificationPushSent(notification.id);
+    sendPushNotification(userId, { type: 'system', title, body, url: '/' });
+  } catch (err) {
+    // Telling them is a courtesy; the offer stands either way and is listed
+    // in the app.
+    console.error('[communities] transfer notification failed:', err.message);
+  }
+}
+
+const communityName = (id) => db.getCommunityById(id)?.name || 'a community';
+const activeIn = (communityId, userId) =>
+  communityAuthz.effectiveCapabilities(db, { kind: 'user', userId }, communityId).size > 0;
+const isOwnerOf = (communityId, userId) =>
+  db.getMemberRoles(communityId, userId).some(r => r.name === 'owner');
+
+app.post('/api/communities/:id/transfer', authenticateToken, apiLimiter, requireStepUp, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.TRANSFER_OWNER)) return;
+  const toUserId = typeof req.body?.toUserId === 'string' ? req.body.toUserId : '';
+  if (!toUserId) return res.status(400).json({ error: 'toUserId is required' });
+  if (toUserId === req.user.userId) return res.status(400).json({ error: 'You already own this community' });
+
+  // Someone who could act here right now: an active member, not banned, and —
+  // if they are from another node — still in good standing there.
+  if (!activeIn(req.params.id, toUserId)) {
+    return res.status(404).json({ error: 'That person is not an active member of this community' });
+  }
+  if (isOwnerOf(req.params.id, toUserId)) return res.status(409).json({ error: 'They are already an owner' });
+  if (db.getPendingOwnershipTransfer(req.params.id)) {
+    return res.status(409).json({ error: 'A handover is already waiting for an answer. Cancel it first.' });
+  }
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
+
+  const transfer = inCommunityTransaction(() => {
+    const t = db.createOwnershipTransfer({ communityId: req.params.id, fromUserId: req.user.userId, toUserId });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'ownership.offer', targetType: 'user', targetId: toUserId,
+    });
+    return t;
+  });
+  const from = db.findUserById(req.user.userId);
+  notifyCommunityTransfer(toUserId, req.user.userId,
+    `${from?.displayName || from?.handle || 'Someone'} wants to hand ${communityName(req.params.id)} over to you`,
+    'Open Communities to accept or decline. The offer lapses in 7 days.');
+  res.status(201).json({ transfer: communityTransferView(transfer) });
+});
+
+app.get('/api/communities/:id/transfer', authenticateToken, (req, res) => {
+  const t = db.getPendingOwnershipTransfer(req.params.id);
+  // Visible to the two people involved and to anyone who could make an offer.
+  const mayView = t && (t.from_user_id === req.user.userId || t.to_user_id === req.user.userId ||
+    communityAuthz.effectiveCapabilities(db, communityActor(req), req.params.id).has(CommunityCaps.TRANSFER_OWNER));
+  res.json({ transfer: mayView ? communityTransferView(t) : null });
+});
+
+app.post('/api/communities/:id/transfer/:transferId/accept', authenticateToken, apiLimiter, (req, res) => {
+  const t = db.getOwnershipTransfer(req.params.transferId);
+  if (!t || t.community_id !== req.params.id || t.to_user_id !== req.user.userId) {
+    return res.status(404).json({ error: 'No such offer' });
+  }
+  // Everything that made the offer valid is re-checked now: a week is long
+  // enough for the giver to have lost ownership, or the recipient their place.
+  const community = db.getCommunityById(req.params.id);
+  if (!community || community.status !== 'active') return res.status(409).json({ error: 'That community is not active' });
+  if (!activeIn(req.params.id, req.user.userId)) return res.status(409).json({ error: 'You are no longer an active member' });
+  const giverCaps = communityAuthz.effectiveCapabilities(db, { kind: 'user', userId: t.from_user_id }, req.params.id);
+  if (!giverCaps.has(CommunityCaps.TRANSFER_OWNER)) {
+    db.resolveOwnershipTransfer(t.id, 'cancelled');
+    return res.status(409).json({ error: 'The person who offered it is no longer an owner' });
+  }
+
+  const result = inCommunityTransaction(() => {
+    const r = db.completeOwnershipTransfer(t.id);
+    if (r.ok) {
+      db.logCommunityAudit(req.params.id, {
+        actorId: req.user.userId, action: 'ownership.accept', targetType: 'user', targetId: t.from_user_id,
+      });
+    }
+    return r;
+  });
+  if (!result.ok) return res.status(409).json({ error: 'That offer is no longer open', reason: result.reason });
+
+  const me = db.findUserById(req.user.userId);
+  notifyCommunityTransfer(t.from_user_id, req.user.userId,
+    `${me?.displayName || me?.handle || 'They'} accepted ${communityName(req.params.id)}`,
+    'They are now an owner. You remain an admin, and can leave whenever you like.');
+  res.json({ transfer: communityTransferView(result.transfer), roles: db.getMemberRoles(req.params.id, req.user.userId) });
+});
+
+app.post('/api/communities/:id/transfer/:transferId/decline', authenticateToken, (req, res) => {
+  const t = db.getOwnershipTransfer(req.params.transferId);
+  if (!t || t.community_id !== req.params.id || t.to_user_id !== req.user.userId) {
+    return res.status(404).json({ error: 'No such offer' });
+  }
+  const declined = inCommunityTransaction(() => {
+    if (!db.resolveOwnershipTransfer(t.id, 'declined')) return false;
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'ownership.decline', targetType: 'user', targetId: t.from_user_id,
+    });
+    return true;
+  });
+  if (!declined) return res.status(409).json({ error: 'That offer is no longer open' });
+  const me = db.findUserById(req.user.userId);
+  notifyCommunityTransfer(t.from_user_id, req.user.userId,
+    `${me?.displayName || me?.handle || 'They'} declined ${communityName(req.params.id)}`, 'You are still its owner.');
+  res.json({ success: true });
+});
+
+app.delete('/api/communities/:id/transfer/:transferId', authenticateToken, (req, res) => {
+  const t = db.getOwnershipTransfer(req.params.transferId);
+  if (!t || t.community_id !== req.params.id) return res.status(404).json({ error: 'No such offer' });
+  // The giver, or any other owner, may withdraw it.
+  if (t.from_user_id !== req.user.userId &&
+      !requireCommunityCapability(req, res, req.params.id, CommunityCaps.TRANSFER_OWNER)) return;
+  const cancelled = inCommunityTransaction(() => {
+    if (!db.resolveOwnershipTransfer(t.id, 'cancelled')) return false;
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'ownership.cancel', targetType: 'user', targetId: t.to_user_id,
+    });
+    return true;
+  });
+  if (!cancelled) return res.status(409).json({ error: 'That offer is no longer open' });
+  notifyCommunityTransfer(t.to_user_id, req.user.userId,
+    `The offer of ${communityName(req.params.id)} was withdrawn`, 'Nothing has changed for you.');
+  res.json({ success: true });
+});
+
 app.post('/api/communities/:id/leave', authenticateToken, (req, res) => {
   const membership = db.getCommunityMembership(req.params.id, req.user.userId);
   if (!membership || membership.state !== 'active') return res.status(404).json({ error: 'Not a member' });
 
-  const left = db.leaveCommunity(req.params.id, req.user.userId, {
-    wouldOrphan: communityAuthz.wouldLeaveNoOwner,
+  const left = inCommunityTransaction(() => {
+    const ok = db.leaveCommunity(req.params.id, req.user.userId, {
+      wouldOrphan: communityAuthz.wouldLeaveNoOwner,
+    });
+    if (ok) db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'member.leave' });
+    return ok;
   });
   if (!left) {
     return res.status(409).json({
       error: 'Transfer ownership or appoint another owner before leaving',
     });
   }
-  db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'member.leave' });
   res.json({ success: true });
 });
 
@@ -23903,23 +24293,27 @@ app.post('/api/communities/:id/bans', authenticateToken, apiLimiter, (req, res) 
   const banExpiry = normalizedExpiry(req.body.expiresAt);
   if (!banExpiry.ok) return res.status(400).json({ error: 'That expiry is not a future date I can read' });
 
-  db.banFromCommunity(req.params.id, targetId, {
-    reason: banReason.value,
-    bannedBy: req.user.userId,
-    expiresAt: banExpiry.value,
-  });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.ban', targetType: 'user', targetId,
+  inCommunityTransaction(() => {
+    db.banFromCommunity(req.params.id, targetId, {
+      reason: banReason.value,
+      bannedBy: req.user.userId,
+      expiresAt: banExpiry.value,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.ban', targetType: 'user', targetId,
+    });
   });
   res.status(201).json({ success: true });
 });
 
 app.delete('/api/communities/:id/bans/:userId', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.BAN_MEMBER)) return;
-  db.db.prepare('DELETE FROM community_bans WHERE community_id = ? AND user_id = ?')
-    .run(req.params.id, req.params.userId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.unban', targetType: 'user', targetId: req.params.userId,
+  inCommunityTransaction(() => {
+    db.db.prepare('DELETE FROM community_bans WHERE community_id = ? AND user_id = ?')
+      .run(req.params.id, req.params.userId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.unban', targetType: 'user', targetId: req.params.userId,
+    });
   });
   res.json({ success: true });
 });
@@ -23947,9 +24341,12 @@ app.post('/api/communities/:id/roles', authenticateToken, apiLimiter, (req, res)
   if (!requireRoomFor(res, db, 'role', req.params.id)) return;
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const role = db.createCommunityRole(req.params.id, { name, priority, permissions });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.create', targetType: 'role', targetId: role.id,
+  const role = inCommunityTransaction(() => {
+    const role = db.createCommunityRole(req.params.id, { name, priority, permissions });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.create', targetType: 'role', targetId: role.id,
+    });
+    return role;
   });
   res.status(201).json({ role });
 });
@@ -23990,13 +24387,16 @@ app.patch('/api/communities/:id/roles/:roleId', authenticateToken, apiLimiter, (
   });
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
 
-  const updated = db.updateCommunityRole(req.params.roleId, {
-    name: nextName,
-    priority: req.body.priority !== undefined ? req.body.priority : undefined,
-    permissions: next || undefined,
-  });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.update', targetType: 'role', targetId: req.params.roleId,
+  const updated = inCommunityTransaction(() => {
+    const updated = db.updateCommunityRole(req.params.roleId, {
+      name: nextName,
+      priority: req.body.priority !== undefined ? req.body.priority : undefined,
+      permissions: next || undefined,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.update', targetType: 'role', targetId: req.params.roleId,
+    });
+    return updated;
   });
   res.json({ role: updated });
 });
@@ -24009,12 +24409,16 @@ app.delete('/api/communities/:id/roles/:roleId', authenticateToken, (req, res) =
   const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role, {});
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
 
-  if (!db.deleteCommunityRole(req.params.roleId)) {
+  const deleted = inCommunityTransaction(() => {
+    if (!db.deleteCommunityRole(req.params.roleId)) return false;
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.delete', targetType: 'role', targetId: req.params.roleId,
+    });
+    return true;
+  });
+  if (!deleted) {
     return res.status(409).json({ error: 'Built-in roles cannot be deleted' });
   }
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.delete', targetType: 'role', targetId: req.params.roleId,
-  });
   res.json({ success: true });
 });
 
@@ -24033,10 +24437,12 @@ app.put('/api/communities/:id/members/:userId/roles/:roleId', authenticateToken,
   const membership = db.getCommunityMembership(req.params.id, req.params.userId);
   if (!membership) return res.status(404).json({ error: 'Not a member' });
 
-  db.grantCommunityRole(membership.id, role.id, { grantedBy: req.user.userId });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.grant', targetType: 'user', targetId: req.params.userId,
-    metadata: { role: role.name },
+  inCommunityTransaction(() => {
+    db.grantCommunityRole(membership.id, role.id, { grantedBy: req.user.userId });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.grant', targetType: 'user', targetId: req.params.userId,
+      metadata: { role: role.name },
+    });
   });
   res.json({ roles: db.getMemberRoles(req.params.id, req.params.userId) });
 });
@@ -24058,9 +24464,11 @@ app.delete('/api/communities/:id/members/:userId/roles/:roleId', authenticateTok
     return res.status(409).json({ error: 'A community must keep at least one owner' });
   }
 
-  db.revokeCommunityRole(membership.id, req.params.roleId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'role.revoke', targetType: 'user', targetId: req.params.userId,
+  inCommunityTransaction(() => {
+    db.revokeCommunityRole(membership.id, req.params.roleId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'role.revoke', targetType: 'user', targetId: req.params.userId,
+    });
   });
   res.json({ roles: db.getMemberRoles(req.params.id, req.params.userId) });
 });
@@ -24107,16 +24515,19 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
     const chDesc = boundedOptional(req.body.description, COMMUNITY_LIMITS.description);
     if (!chDesc.ok) return res.status(400).json({ error: 'Description is too long' });
 
-    const channel = db.createChannel({
-      communityId: req.params.id, name, slug,
-      description: chDesc.value,
-      type: ['text', 'announcement'].includes(req.body.type) ? req.body.type : 'text',
-      visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
-      sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
-      createdBy: req.user.userId,
-    });
-    db.logCommunityAudit(req.params.id, {
-      actorId: req.user.userId, action: 'channel.create', targetType: 'channel', targetId: channel.id,
+    const channel = inCommunityTransaction(() => {
+      const channel = db.createChannel({
+        communityId: req.params.id, name, slug,
+        description: chDesc.value,
+        type: ['text', 'announcement'].includes(req.body.type) ? req.body.type : 'text',
+        visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
+        sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
+        createdBy: req.user.userId,
+      });
+      db.logCommunityAudit(req.params.id, {
+        actorId: req.user.userId, action: 'channel.create', targetType: 'channel', targetId: channel.id,
+      });
+      return channel;
     });
     res.status(201).json({ channel });
   } catch (err) {
@@ -24144,15 +24555,18 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
   if (['members', 'restricted'].includes(req.body.visibility)) fields.visibility = req.body.visibility;
   if (Number.isInteger(req.body.sortOrder)) fields.sort_order = req.body.sortOrder;
 
-  const channel = db.updateChannel(req.params.channelId, fields);
-  // Recorded (CORTEX-COMM-016). Changing a channel's visibility is a security
-  // operation — it decides who may see a staff channel — and it was the one
-  // that left no trace at all. `changed` names the fields, not the values: an
-  // audit row is read by more people than the thing it describes.
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'channel.update',
-    targetType: 'channel', targetId: req.params.channelId,
-    metadata: { changed: Object.keys(fields) },
+  const channel = inCommunityTransaction(() => {
+    const channel = db.updateChannel(req.params.channelId, fields);
+    // Recorded (CORTEX-COMM-016). Changing a channel's visibility is a security
+    // operation — it decides who may see a staff channel — and it was the one
+    // that left no trace at all. `changed` names the fields, not the values: an
+    // audit row is read by more people than the thing it describes.
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.update',
+      targetType: 'channel', targetId: req.params.channelId,
+      metadata: { changed: Object.keys(fields) },
+    });
+    return channel;
   });
   res.json({ channel });
 });
@@ -24163,9 +24577,11 @@ app.delete('/api/communities/:id/channels/:channelId', authenticateToken, (req, 
 
   // Waves inside fall back to uncontained. Deleting a container must never
   // delete the conversations in it.
-  db.deleteChannel(req.params.channelId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'channel.delete', targetType: 'channel', targetId: req.params.channelId,
+  inCommunityTransaction(() => {
+    db.deleteChannel(req.params.channelId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.delete', targetType: 'channel', targetId: req.params.channelId,
+    });
   });
   res.json({ success: true });
 });
@@ -24203,11 +24619,14 @@ app.put('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateTo
 
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const saved = db.setChannelPermission(req.params.channelId, req.params.roleId, { allow, deny });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'channel.permission_set',
-    targetType: 'channel', targetId: req.params.channelId,
-    metadata: { role: role.name, allow, deny },
+  const saved = inCommunityTransaction(() => {
+    const saved = db.setChannelPermission(req.params.channelId, req.params.roleId, { allow, deny });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.permission_set',
+      targetType: 'channel', targetId: req.params.channelId,
+      metadata: { role: role.name, allow, deny },
+    });
+    return saved;
   });
   res.json({ permission: saved });
 });
@@ -24215,10 +24634,12 @@ app.put('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateTo
 app.delete('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS,
     { resource: { type: 'channel', id: req.params.channelId } })) return;
-  db.clearChannelPermission(req.params.channelId, req.params.roleId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'channel.permission_cleared',
-    targetType: 'channel', targetId: req.params.channelId,
+  inCommunityTransaction(() => {
+    db.clearChannelPermission(req.params.channelId, req.params.roleId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.permission_cleared',
+      targetType: 'channel', targetId: req.params.channelId,
+    });
   });
   res.json({ success: true });
 });
@@ -24248,9 +24669,12 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
     return res.status(403).json({ error: 'You cannot file into that channel' });
   }
 
-  const updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'wave.file', targetType: 'wave', targetId: req.params.waveId,
+  const updated = inCommunityTransaction(() => {
+    const updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'wave.file', targetType: 'wave', targetId: req.params.waveId,
+    });
+    return updated;
   });
   res.json({ wave: updated });
 });
@@ -24274,9 +24698,12 @@ app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticat
   if (!canManageWave(wave, req.user.userId)) {
     return res.status(403).json({ error: 'You cannot move that wave' });
   }
-  const updated = db.setWaveChannel(req.params.waveId, null);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'wave.unfile', targetType: 'wave', targetId: req.params.waveId,
+  const updated = inCommunityTransaction(() => {
+    const updated = db.setWaveChannel(req.params.waveId, null);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'wave.unfile', targetType: 'wave', targetId: req.params.waveId,
+    });
+    return updated;
   });
   res.json({ wave: updated });
 });
@@ -24328,13 +24755,16 @@ app.post('/api/communities/:id/members/remote', authenticateToken, apiLimiter, (
   if (!requireRoomFor(res, db, 'remoteInvitation', req.params.id)) return;
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
-  const invitation = db.createRemoteInvitation({
-    communityId: req.params.id, handle, nodeName,
-    roleId: role ? role.id : null, invitedBy: req.user.userId,
-  });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'member.invite_remote',
-    targetType: 'address', targetId: `${handle}@${nodeName}`,
+  const invitation = inCommunityTransaction(() => {
+    const invitation = db.createRemoteInvitation({
+      communityId: req.params.id, handle, nodeName,
+      roleId: role ? role.id : null, invitedBy: req.user.userId,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'member.invite_remote',
+      targetType: 'address', targetId: `${handle}@${nodeName}`,
+    });
+    return invitation;
   });
   res.status(201).json({ invitation });
 });
@@ -24349,12 +24779,14 @@ app.delete('/api/communities/:id/members/remote/:invitationId', authenticateToke
   const row = db.db.prepare('SELECT community_id FROM community_remote_invitations WHERE id = ?')
     .get(req.params.invitationId);
   if (!row || row.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
-  db.revokeRemoteInvitation(req.params.invitationId);
-  // CORTEX-COMM-016: withdrawing a way in is as much a security operation as
-  // granting one, and left no record.
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'remote_invite.revoke',
-    targetType: 'remote_invitation', targetId: req.params.invitationId,
+  inCommunityTransaction(() => {
+    db.revokeRemoteInvitation(req.params.invitationId);
+    // CORTEX-COMM-016: withdrawing a way in is as much a security operation as
+    // granting one, and left no record.
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'remote_invite.revoke',
+      targetType: 'remote_invitation', targetId: req.params.invitationId,
+    });
   });
   res.json({ success: true });
 });
@@ -24388,12 +24820,15 @@ app.post('/api/communities/:id/invites', authenticateToken, apiLimiter, (req, re
   const inviteExpiry = normalizedExpiry(req.body.expiresAt);
   if (!inviteExpiry.ok) return res.status(400).json({ error: 'That expiry is not a future date I can read' });
 
-  const { id, token } = db.createCommunityInvite({
-    communityId: req.params.id, createdBy: req.user.userId,
-    roleId: role ? role.id : null, maxUses: uses.value, expiresAt: inviteExpiry.value,
-  });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'invite.create', targetType: 'invite', targetId: id,
+  const { id, token } = inCommunityTransaction(() => {
+    const created = db.createCommunityInvite({
+      communityId: req.params.id, createdBy: req.user.userId,
+      roleId: role ? role.id : null, maxUses: uses.value, expiresAt: inviteExpiry.value,
+    });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'invite.create', targetType: 'invite', targetId: created.id,
+    });
+    return created;
   });
   // The only time the token is ever readable. Only its hash is stored.
   res.status(201).json({ invite: { id, token } });
@@ -24408,10 +24843,12 @@ app.delete('/api/communities/:id/invites/:inviteId', authenticateToken, (req, re
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.INVITE_MEMBER)) return;
   const invite = db.db.prepare('SELECT community_id FROM community_invites WHERE id = ?').get(req.params.inviteId);
   if (!invite || invite.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
-  db.revokeCommunityInvite(req.params.inviteId);
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'invite.revoke',
-    targetType: 'invite', targetId: req.params.inviteId,
+  inCommunityTransaction(() => {
+    db.revokeCommunityInvite(req.params.inviteId);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'invite.revoke',
+      targetType: 'invite', targetId: req.params.inviteId,
+    });
   });
   res.json({ success: true });
 });
@@ -24444,14 +24881,16 @@ app.post('/api/communities/:id/join', authenticateToken, apiLimiter, (req, res) 
   if (!requireRoomFor(res, db, 'member', community.id)) return;
   if (!chargeCommunityMutation(req, res, community.id)) return;
 
-  const membershipId = db.addCommunityMember(community.id, req.user.userId, { state: 'active' });
-  const memberRole = db.getCommunityRole(community.id, 'member');
-  if (memberRole) db.grantCommunityRole(membershipId, memberRole.id);
+  inCommunityTransaction(() => {
+    const membershipId = db.addCommunityMember(community.id, req.user.userId, { state: 'active' });
+    const memberRole = db.getCommunityRole(community.id, 'member');
+    if (memberRole) db.grantCommunityRole(membershipId, memberRole.id);
 
-  db.logCommunityAudit(community.id, {
-    actorId: req.user.userId, action: 'member.join_open',
-    targetType: 'user', targetId: req.user.userId,
-    metadata: { visibility: community.visibility },
+    db.logCommunityAudit(community.id, {
+      actorId: req.user.userId, action: 'member.join_open',
+      targetType: 'user', targetId: req.user.userId,
+      metadata: { visibility: community.visibility },
+    });
   });
   res.json({ community });
 });
@@ -24484,29 +24923,34 @@ app.post('/api/communities/join', authenticateToken, loginLimiter, (req, res) =>
 
   // Atomic. The guard is in the UPDATE's WHERE clause, so concurrent redeemers
   // of a single-use invite cannot both win (threat model I-2).
-  if (!db.claimCommunityInviteUse(invite.id)) {
-    return res.status(404).json({ error: 'That invite is not valid' });
-  }
+  // The claim, the membership, its role and the audit row commit together
+  // (CORTEX-COMM-016): a failure after the claim used to spend a single-use
+  // invite and leave the person outside.
+  const redeemed = inCommunityTransaction(() => {
+    if (!db.claimCommunityInviteUse(invite.id)) return false;
 
-  const membershipId = db.addCommunityMember(invite.community_id, req.user.userId, {
-    state: 'active', invitedBy: invite.created_by,
+    const membershipId = db.addCommunityMember(invite.community_id, req.user.userId, {
+      state: 'active', invitedBy: invite.created_by,
+    });
+    const role = invite.role_id
+      ? db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(invite.role_id)
+      : db.getCommunityRole(invite.community_id, 'member');
+
+    // Re-checked at redemption, not only at minting: the role may have been
+    // edited into something administrative since the invite was created.
+    if (role && communityAuthz.canInviteConferRole(role).allowed) {
+      db.grantCommunityRole(membershipId, role.id, { grantedBy: invite.created_by });
+    } else {
+      const fallback = db.getCommunityRole(invite.community_id, 'member');
+      if (fallback) db.grantCommunityRole(membershipId, fallback.id, { grantedBy: invite.created_by });
+    }
+
+    db.logCommunityAudit(invite.community_id, {
+      actorId: req.user.userId, action: 'invite.redeem', targetType: 'invite', targetId: invite.id,
+    });
+    return true;
   });
-  const role = invite.role_id
-    ? db.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(invite.role_id)
-    : db.getCommunityRole(invite.community_id, 'member');
-
-  // Re-checked at redemption, not only at minting: the role may have been
-  // edited into something administrative since the invite was created.
-  if (role && communityAuthz.canInviteConferRole(role).allowed) {
-    db.grantCommunityRole(membershipId, role.id, { grantedBy: invite.created_by });
-  } else {
-    const fallback = db.getCommunityRole(invite.community_id, 'member');
-    if (fallback) db.grantCommunityRole(membershipId, fallback.id, { grantedBy: invite.created_by });
-  }
-
-  db.logCommunityAudit(invite.community_id, {
-    actorId: req.user.userId, action: 'invite.redeem', targetType: 'invite', targetId: invite.id,
-  });
+  if (!redeemed) return res.status(404).json({ error: 'That invite is not valid' });
   res.json({ community: db.getCommunityById(invite.community_id) });
 });
 
@@ -24551,11 +24995,13 @@ app.post('/api/admin/communities/:id/suspend', authenticateToken, (req, res, nex
   const suspend = req.body.suspended !== false;
   // Suspension freezes a Community for everyone including its owner, and is
   // reversible — the memberships, roles and channels are all left intact.
-  db.updateCommunity(req.params.id, { status: suspend ? 'suspended' : 'active' });
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId,
-    action: suspend ? 'community.suspend_by_node_admin' : 'community.unsuspend_by_node_admin',
-    metadata: { reason: req.body.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
+  inCommunityTransaction(() => {
+    db.updateCommunity(req.params.id, { status: suspend ? 'suspended' : 'active' });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId,
+      action: suspend ? 'community.suspend_by_node_admin' : 'community.unsuspend_by_node_admin',
+      metadata: { reason: req.body.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
+    });
   });
   db.logActivity(req.user.userId, suspend ? 'community_suspended' : 'community_unsuspended',
                  'community', req.params.id, {});
@@ -24573,14 +25019,15 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
   // (CORTEX-COMM-016). A node admin closing somebody else's Community is the
   // single most consequential action available here, and it was the one that
   // only appeared in a general-purpose activity feed.
-  db.logCommunityAudit(req.params.id, {
-    actorId: req.user.userId, action: 'community.closed_by_node_admin',
-    metadata: { reason: req.body?.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
-  });
-
   // Soft delete, and the waves inside are detached rather than destroyed — a
   // node admin closing a Community must not take conversations with it.
-  db.deleteCommunity(req.params.id);
+  inCommunityTransaction(() => {
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'community.closed_by_node_admin',
+      metadata: { reason: req.body?.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
+    });
+    db.deleteCommunity(req.params.id);
+  });
   db.logActivity(req.user.userId, 'community_deleted', 'community', req.params.id, {});
   res.json({ success: true });
 });
