@@ -3315,6 +3315,65 @@ export class DatabaseSQLite {
       console.log('✅ users.cross_port_verified_at added');
     }
 
+    // v2.108.0 — CORTEX-COMM-021: handing over a Community.
+    //
+    // An offer, then an acceptance — never a silent transfer: ownership carries
+    // obligations, and pushing it onto somebody unasked is a way to dump a
+    // liability on them. Both users CASCADE: an offer from or to an account
+    // that no longer exists means nothing.
+    const transfersExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='community_ownership_transfers'`
+    ).get();
+    if (!transfersExist) {
+      console.log('📝 Creating community_ownership_transfers (v2.108.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS community_ownership_transfers (
+          id            TEXT PRIMARY KEY,
+          community_id  TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          from_user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          to_user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          state         TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(state IN ('pending','accepted','declined','cancelled','expired')),
+          created_at    TEXT NOT NULL,
+          expires_at    TEXT NOT NULL,
+          resolved_at   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_ownership_transfers_community
+          ON community_ownership_transfers(community_id, state);
+        CREATE INDEX IF NOT EXISTS idx_ownership_transfers_to
+          ON community_ownership_transfers(to_user_id, state);
+      `);
+      console.log('✅ community_ownership_transfers created');
+    }
+
+    // v2.108.0 — CORTEX-COMM-002: a pending cross-port sign-in is bound to the
+    // browser that started it. Only a hash of the browser's secret is stored;
+    // the secret itself lives in an HttpOnly cookie on that browser.
+    const crossPortRequestCols = this.db.prepare(`PRAGMA table_info(cross_port_requests)`).all();
+    if (crossPortRequestCols.length && !crossPortRequestCols.some(c => c.name === 'browser_binding')) {
+      console.log('📝 Adding cross_port_requests.browser_binding (v2.108.0)...');
+      this.db.exec(`ALTER TABLE cross_port_requests ADD COLUMN browser_binding TEXT;`);
+      console.log('✅ cross_port_requests.browser_binding added');
+    }
+
+    // v2.108.0 — CORTEX-COMM-021: step-up re-authentication for cross-port
+    // users, who have no password here. A request records what it is FOR and,
+    // for a step-up, whose session asked; the home node records on the code
+    // that it re-checked the password, which is what makes it a step-up.
+    const crossPortReqCols2 = this.db.prepare(`PRAGMA table_info(cross_port_requests)`).all();
+    if (crossPortReqCols2.length && !crossPortReqCols2.some(c => c.name === 'purpose')) {
+      console.log('📝 Adding cross_port_requests.purpose/user_id (v2.108.0)...');
+      this.db.exec(`
+        ALTER TABLE cross_port_requests ADD COLUMN purpose TEXT NOT NULL DEFAULT 'login';
+        ALTER TABLE cross_port_requests ADD COLUMN user_id TEXT;
+      `);
+    }
+    const crossPortCodeCols = this.db.prepare(`PRAGMA table_info(cross_port_codes)`).all();
+    if (crossPortCodeCols.length && !crossPortCodeCols.some(c => c.name === 'reauthenticated_at')) {
+      console.log('📝 Adding cross_port_codes.reauthenticated_at (v2.108.0)...');
+      this.db.exec(`ALTER TABLE cross_port_codes ADD COLUMN reauthenticated_at TEXT;`);
+    }
+
     // v2.104.0 — CORTEX-COMM-009: which conversation an uploaded file belongs to.
     //
     // Uploads were authenticated when created and then served by a plain static
@@ -11835,13 +11894,13 @@ export class DatabaseSQLite {
 
   // ============ Cross-Port Authentication Methods (v2.56.0) ============
 
-  createCrossPortRequest({ id, guestNode, guestBaseUrl, nonce }) {
+  createCrossPortRequest({ id, guestNode, guestBaseUrl, nonce, browserBinding = null, purpose = 'login', userId = null }) {
     const now = new Date().toISOString();
     const expires = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     this.db.prepare(`
-      INSERT INTO cross_port_requests (id, guest_node, guest_base_url, nonce, status, created_at, expires_at)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?)
-    `).run(id, guestNode, guestBaseUrl, nonce, now, expires);
+      INSERT INTO cross_port_requests (id, guest_node, guest_base_url, nonce, status, created_at, expires_at, browser_binding, purpose, user_id)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+    `).run(id, guestNode, guestBaseUrl, nonce, now, expires, browserBinding, purpose, userId);
   }
 
   getCrossPortRequest(id) {
@@ -11856,13 +11915,13 @@ export class DatabaseSQLite {
     this.db.prepare(`UPDATE cross_port_requests SET status = ? WHERE id = ?`).run(status, id);
   }
 
-  createCrossPortCode({ code, userId, guestNode, requestId, nonce }) {
+  createCrossPortCode({ code, userId, guestNode, requestId, nonce, reauthenticatedAt = null }) {
     const now = new Date().toISOString();
     const expires = new Date(Date.now() + 60 * 1000).toISOString();
     this.db.prepare(`
-      INSERT INTO cross_port_codes (code, user_id, guest_node, request_id, nonce, created_at, expires_at, used)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-    `).run(code, userId, guestNode, requestId, nonce, now, expires);
+      INSERT INTO cross_port_codes (code, user_id, guest_node, request_id, nonce, created_at, expires_at, used, reauthenticated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `).run(code, userId, guestNode, requestId, nonce, now, expires, reauthenticatedAt);
   }
 
   getCrossPortCode(code) {
@@ -14679,6 +14738,86 @@ export class DatabaseSQLite {
     });
     tx();
     return bound;
+  }
+
+  // ----- Ownership transfer (v2.108.0, CORTEX-COMM-021) -----
+
+  /** The live offer for a Community, expiring a stale one on the way. */
+  getPendingOwnershipTransfer(communityId) {
+    const row = this.db.prepare(
+      `SELECT * FROM community_ownership_transfers WHERE community_id = ? AND state = 'pending' ORDER BY created_at DESC LIMIT 1`
+    ).get(communityId);
+    if (row && new Date(row.expires_at) <= new Date()) {
+      this.db.prepare(`UPDATE community_ownership_transfers SET state = 'expired', resolved_at = ? WHERE id = ?`)
+        .run(new Date().toISOString(), row.id);
+      return null;
+    }
+    return row || null;
+  }
+
+  getOwnershipTransfer(id) {
+    return this.db.prepare('SELECT * FROM community_ownership_transfers WHERE id = ?').get(id) || null;
+  }
+
+  /** Pending offers addressed to this user, across Communities. */
+  getOwnershipOffersFor(userId) {
+    const now = new Date().toISOString();
+    return this.db.prepare(`
+      SELECT t.*, c.name AS community_name, u.handle AS from_handle, u.display_name AS from_display_name
+      FROM community_ownership_transfers t
+      JOIN communities c ON c.id = t.community_id
+      JOIN users u ON u.id = t.from_user_id
+      WHERE t.to_user_id = ? AND t.state = 'pending' AND t.expires_at > ? AND c.status = 'active'
+      ORDER BY t.created_at DESC
+    `).all(userId, now);
+  }
+
+  createOwnershipTransfer({ communityId, fromUserId, toUserId, ttlMs = 7 * 24 * 60 * 60 * 1000 }) {
+    const id = uuidv4();
+    const now = new Date();
+    this.db.prepare(`
+      INSERT INTO community_ownership_transfers (id, community_id, from_user_id, to_user_id, state, created_at, expires_at)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?)
+    `).run(id, communityId, fromUserId, toUserId, now.toISOString(), new Date(now.getTime() + ttlMs).toISOString());
+    return this.getOwnershipTransfer(id);
+  }
+
+  /** Close an offer without a handover. Only a pending one moves. */
+  resolveOwnershipTransfer(id, state) {
+    const result = this.db.prepare(
+      `UPDATE community_ownership_transfers SET state = ?, resolved_at = ? WHERE id = ? AND state = 'pending'`
+    ).run(state, new Date().toISOString(), id);
+    return result.changes === 1;
+  }
+
+  /**
+   * The handover itself: the recipient becomes an owner, the giver steps down
+   * to admin, and the offer closes — all or nothing. The caller has re-checked
+   * eligibility; this re-checks only what a concurrent request could change,
+   * inside the same transaction as the writes.
+   */
+  completeOwnershipTransfer(id) {
+    const tx = this.db.transaction(() => {
+      const t = this.getOwnershipTransfer(id);
+      if (!t || t.state !== 'pending' || new Date(t.expires_at) <= new Date()) return { ok: false, reason: 'not_pending' };
+      const ownerRole = this.getCommunityRole(t.community_id, 'owner');
+      const adminRole = this.getCommunityRole(t.community_id, 'admin');
+      const from = this.getCommunityMembership(t.community_id, t.from_user_id);
+      const to = this.getCommunityMembership(t.community_id, t.to_user_id);
+      if (!ownerRole || !from || from.state !== 'active' || !to || to.state !== 'active') return { ok: false, reason: 'ineligible' };
+      const fromIsOwner = this.db.prepare(
+        'SELECT 1 FROM community_membership_roles WHERE membership_id = ? AND role_id = ?'
+      ).get(from.id, ownerRole.id);
+      if (!fromIsOwner) return { ok: false, reason: 'no_longer_owner' };
+
+      this.grantCommunityRole(to.id, ownerRole.id, { grantedBy: t.from_user_id });
+      if (adminRole) this.grantCommunityRole(from.id, adminRole.id, { grantedBy: t.from_user_id });
+      this.revokeCommunityRole(from.id, ownerRole.id);
+      this.db.prepare(`UPDATE community_ownership_transfers SET state = 'accepted', resolved_at = ? WHERE id = ?`)
+        .run(new Date().toISOString(), id);
+      return { ok: true, transfer: this.getOwnershipTransfer(id) };
+    });
+    return tx();
   }
 
   // ----- Audit -----

@@ -40,6 +40,37 @@ const StepUpModal = () => {
     resolve?.(token);
   }, []);
 
+  // An account from another server has no password here (CORTEX-COMM-021): it
+  // confirms at its home node instead, and comes back with the proof.
+  const me = storage.getUser();
+  const remoteHome = (me?.isCrossPort || me?.is_cross_port) ? (me.homeNode || me.home_node) : null;
+
+  const confirmRemote = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/cross-port/step-up/initiate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${storage.getToken()}` },
+        credentials: 'same-origin',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Could not reach your home server');
+        setBusy(false);
+        return;
+      }
+      sessionStorage.setItem('crossPortHomeUrl', data.homeServerUrl);
+      sessionStorage.setItem('crossPortPurpose', 'step_up');
+      sessionStorage.setItem('crossPortReturnTo', window.location.pathname + window.location.search);
+      window.location.href = data.redirectUrl;
+    } catch {
+      setError('Network error — please try again');
+      setBusy(false);
+    }
+  };
+
   const submit = async (e) => {
     e?.preventDefault();
     if (!password || busy) return;
@@ -102,6 +133,13 @@ const StepUpModal = () => {
           {reason || 'This action needs your password, even though you are already signed in.'}
         </p>
 
+        {remoteHome ? (
+          <p style={{ color: 'var(--text-dim, #8aa08a)', fontSize: '0.78rem', lineHeight: 1.5, margin: '0 0 4px' }}>
+            Your account lives on <strong style={{ color: 'var(--text-primary, #d8e8d8)' }}>{remoteHome}</strong>, so
+            you confirm with your password there. You will come straight back — then repeat what you were doing.
+          </p>
+        ) : (<>
+
         <input
           ref={inputRef}
           type="password"
@@ -116,6 +154,8 @@ const StepUpModal = () => {
             color: 'var(--text-primary, #d8e8d8)', fontFamily: 'monospace', fontSize: '0.9rem',
           }}
         />
+
+        </>)}
 
         {error && (
           <div role="alert" style={{ color: 'var(--accent-orange, #ff6b35)', fontSize: '0.75rem', marginTop: 8 }}>
@@ -136,6 +176,24 @@ const StepUpModal = () => {
           >
             Cancel
           </button>
+          {remoteHome ? (
+          <button
+            type="button"
+            onClick={confirmRemote}
+            disabled={busy}
+            style={{
+              padding: '9px 16px', minHeight: 38,
+              background: 'var(--accent-amber, #ffd23f)20',
+              border: '1px solid var(--accent-amber, #ffd23f)',
+              color: 'var(--accent-amber, #ffd23f)',
+              cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1,
+              fontFamily: 'monospace', fontSize: '0.75rem',
+              letterSpacing: '0.06em', textTransform: 'uppercase',
+            }}
+          >
+            {busy ? 'Opening…' : `Confirm at ${remoteHome}`}
+          </button>
+          ) : (
           <button
             type="submit"
             disabled={!password || busy}
@@ -152,6 +210,7 @@ const StepUpModal = () => {
           >
             {busy ? 'Checking…' : 'Confirm'}
           </button>
+          )}
         </div>
       </form>
     </div>

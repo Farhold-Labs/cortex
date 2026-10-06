@@ -18,8 +18,9 @@ discriminate rather than pass for an unrelated reason.
 Three community tests registered a user with the handle `owner` and were
 updated to `founder` — the rule doing its job, not a regression.
 
-Not addressed here, unchanged from the report below: prior findings **002**,
-**016** and **021**, and the remaining audit scope listed at the end.
+Prior findings **002**, **016** and **021** — listed below as still open —
+were **closed in v2.108.0**; see `docs/communities/01-threat-model.md` §11 and
+the CHANGELOG. The remaining audit scope listed at the end is unchanged.
 
 ## Verified state
 

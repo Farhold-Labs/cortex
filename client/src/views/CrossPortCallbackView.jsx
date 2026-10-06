@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { API_URL } from '../config/constants.js';
 import { LoadingSpinner } from '../components/ui/SimpleComponents.jsx';
+import { STEP_UP_HANDOFF_KEY } from '../utils/stepUp.js';
 
 const params = new URLSearchParams(window.location.search);
 const code = params.get('code') || '';
@@ -11,15 +12,52 @@ const CrossPortCallbackView = ({ onLogin }) => {
   const [status, setStatus] = useState(errorParam ? 'error' : 'loading');
   const [errorMsg, setErrorMsg] = useState(errorParam === 'denied' ? 'The request was denied on the home server.' : errorParam || '');
   const ran = useRef(false);
+  const [returnTo, setReturnTo] = useState(null);  // set for a step-up, so an error can lead back
 
   useEffect(() => {
     if (ran.current) return;
     ran.current = true;
-    if (errorParam) { setStatus('error'); return; }
-    if (!code || !state) { setErrorMsg('Missing code or state in callback URL.'); setStatus('error'); return; }
-
+    // Read and clear the flow markers FIRST, whatever happens next: a step-up
+    // marker left behind by a cancelled confirmation would send the next real
+    // sign-in down the step-up path.
     const homeServerUrl = sessionStorage.getItem('crossPortHomeUrl') || '';
     sessionStorage.removeItem('crossPortHomeUrl');
+    const purpose = sessionStorage.getItem('crossPortPurpose');
+    sessionStorage.removeItem('crossPortPurpose');
+    const stepUpReturn = sessionStorage.getItem('crossPortReturnTo') || '/';
+    sessionStorage.removeItem('crossPortReturnTo');
+    if (purpose === 'step_up') setReturnTo(stepUpReturn);
+
+    if (errorParam) {
+      if (purpose === 'step_up') setErrorMsg('The confirmation was cancelled on your home server. Nothing was changed.');
+      setStatus('error');
+      return;
+    }
+    if (!code || !state) { setErrorMsg('Missing code or state in callback URL.'); setStatus('error'); return; }
+
+    // A step-up confirmation (v2.108.0, CORTEX-COMM-021): this person is
+    // already signed in here and confirmed at their home node. Collect the
+    // proof, hand it across the reload, and go back where they were.
+    if (purpose === 'step_up') {
+      fetch(`${API_URL}/cross-port/step-up/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('farhold_token')}` },
+        credentials: 'same-origin',
+        body: JSON.stringify({ code, state }),
+      })
+        .then(async r => ({ ok: r.ok, data: await r.json() }))
+        .then(({ ok, data }) => {
+          if (!ok || !data.stepUpToken) throw new Error(data.error || 'Your home server did not confirm it');
+          sessionStorage.setItem(STEP_UP_HANDOFF_KEY, JSON.stringify({
+            token: data.stepUpToken,
+            expiresAt: Date.now() + Math.max(0, (data.expiresInMinutes || 15) * 60 * 1000 - 5000),
+          }));
+          setStatus('confirmed');
+          setTimeout(() => window.location.replace(/^\/(?![\/\\])/.test(stepUpReturn) ? stepUpReturn : '/'), 1200);
+        })
+        .catch(err => { setErrorMsg(err.message || 'Could not confirm it is you.'); setStatus('error'); });
+      return;
+    }
 
     fetch(`${API_URL}/cross-port/session`, {
       method: 'POST',
@@ -65,6 +103,16 @@ const CrossPortCallbackView = ({ onLogin }) => {
     </div>
   );
 
+  if (status === 'confirmed') return (
+    <div style={containerStyle}>
+      <div style={cardStyle}>
+        <div style={{ color: '#0ead69', fontSize: '0.8rem', marginBottom: 20 }}>○ CORTEX / CROSS-PORT AUTH</div>
+        <p style={{ color: '#0ead69', marginBottom: 8 }}>✓ Confirmed by your home server</p>
+        <p style={{ color: '#4a7a4a', fontSize: '0.85rem' }}>Taking you back — repeat what you were doing to finish it.</p>
+      </div>
+    </div>
+  );
+
   if (status === 'success') return (
     <div style={containerStyle}>
       <div style={cardStyle}>
@@ -80,7 +128,7 @@ const CrossPortCallbackView = ({ onLogin }) => {
       <div style={cardStyle}>
         <div style={{ color: '#0ead69', fontSize: '0.8rem', marginBottom: 20 }}>○ CORTEX / CROSS-PORT AUTH</div>
         <p style={{ color: '#ff6b35', marginBottom: 16 }}>{errorMsg || 'An error occurred during sign-in.'}</p>
-        <a href="/" style={{ color: '#ffd23f', fontSize: '0.85rem' }}>← Back to Cortex</a>
+        <a href={returnTo && /^\/(?![\/\\])/.test(returnTo) ? returnTo : '/'} style={{ color: '#ffd23f', fontSize: '0.85rem' }}>← Back to Cortex</a>
       </div>
     </div>
   );

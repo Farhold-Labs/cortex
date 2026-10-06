@@ -10,6 +10,9 @@ const guestFromUrl = params.get('from_url') || '';
 const requestId = params.get('request_id') || '';
 const nonce = params.get('nonce') || '';
 const callbackUrl = params.get('callback') || '';
+// 'step_up': the guest server is asking this person to confirm it is really
+// them (CORTEX-COMM-021), so approval needs their password, not just a session.
+const isStepUp = params.get('purpose') === 'step_up';
 
 const inputStyle = {
   width: '100%', padding: '10px 12px', background: '#0a140a',
@@ -38,6 +41,8 @@ const CrossPortAuthView = () => {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [confirmError, setConfirmError] = useState('');
 
   const [user, setUser] = useState(() => {
     try {
@@ -74,15 +79,26 @@ const CrossPortAuthView = () => {
   };
 
   const handleApprove = async () => {
+    if (isStepUp && !confirmPassword) { setConfirmError('Enter your password to confirm it is you.'); return; }
     setPhase('working');
     try {
       const token = localStorage.getItem('farhold_token');
       const res = await fetch(`${API_URL}/cross-port/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ guestNode, callbackUrl, nonce, requestId }),
+        body: JSON.stringify({
+          guestNode, callbackUrl, nonce, requestId,
+          ...(isStepUp ? { purpose: 'step_up', password: confirmPassword } : {}),
+        }),
       });
       const data = await res.json();
+      if (isStepUp && res.status === 401) {
+        // A wrong password: let them try again rather than ending the flow.
+        setConfirmPassword('');
+        setConfirmError(data.error || 'Incorrect password');
+        setPhase('approve');
+        return;
+      }
       if (!res.ok) throw new Error(data.error || 'Approval failed');
       window.location.href = data.callbackUrl;
     } catch (err) {
@@ -103,14 +119,11 @@ const CrossPortAuthView = () => {
       const data = await res.json();
       if (data.callbackUrl) { window.location.href = data.callbackUrl; return; }
     } catch { /* ignore */ }
-    if (callbackUrl) {
-      const url = new URL(callbackUrl);
-      url.searchParams.set('error', 'denied');
-      window.location.href = url.toString();
-    } else {
-      setPhase('done');
-      setErrorMsg('Request denied.');
-    }
+    // No fallback to the `callback` in this page's URL: that came from
+    // whoever built the link, and following it made "deny" an open redirect
+    // (CORTEX-COMM-002). The server derives the way back from its peer record.
+    setPhase('done');
+    setErrorMsg('Request denied. You can close this page.');
   };
 
   const containerStyle = {
@@ -174,7 +187,7 @@ const CrossPortAuthView = () => {
     <div style={containerStyle}>
       <div style={cardStyle}>
         <div style={{ color: '#0ead69', fontSize: '0.8rem', marginBottom: 4 }}>○ CORTEX / CROSS-PORT AUTH</div>
-        <h2 style={{ color: '#ffd23f', margin: '0 0 16px', fontSize: '1.1rem' }}>Access Request</h2>
+        <h2 style={{ color: '#ffd23f', margin: '0 0 16px', fontSize: '1.1rem' }}>{isStepUp ? 'Confirm It’s You' : 'Access Request'}</h2>
 
         <div style={{ padding: '16px', background: '#050805', border: '1px solid #1e3a1e', marginBottom: 24 }}>
           <div style={{ color: '#4a7a4a', fontSize: '0.7rem', marginBottom: 8 }}>REQUESTING SERVER</div>
@@ -185,13 +198,34 @@ const CrossPortAuthView = () => {
         <p style={{ color: '#7aad7a', fontSize: '0.85rem', margin: '0 0 8px' }}>
           Signed in as <strong style={{ color: '#e8f5e8' }}>@{user?.handle}</strong>
         </p>
-        <p style={{ color: '#7aad7a', fontSize: '0.85rem', margin: '0 0 24px' }}>
-          Approving grants <strong style={{ color: '#e8f5e8' }}>{guestNode}</strong> a 24-hour session
-          using your identity. You can revoke it by changing your password.
-        </p>
+        {isStepUp ? (
+          <div style={{ margin: '0 0 24px' }}>
+            <p style={{ color: '#7aad7a', fontSize: '0.85rem', margin: '0 0 12px' }}>
+              You are signed in to <strong style={{ color: '#e8f5e8' }}>{guestNode}</strong> and started
+              something there that needs your password. Enter it here to confirm it is you — your password
+              stays on this server.
+            </p>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={e => { setConfirmPassword(e.target.value); setConfirmError(''); }}
+              onKeyDown={e => { if (e.key === 'Enter') handleApprove(); }}
+              placeholder="Your password"
+              autoComplete="current-password"
+              autoFocus
+              style={inputStyle}
+            />
+            {confirmError && <div role="alert" style={{ color: '#ff6b35', fontSize: '0.8rem', marginTop: 8 }}>{confirmError}</div>}
+          </div>
+        ) : (
+          <p style={{ color: '#7aad7a', fontSize: '0.85rem', margin: '0 0 24px' }}>
+            Approving grants <strong style={{ color: '#e8f5e8' }}>{guestNode}</strong> a session
+            using your identity. You can revoke it by changing your password.
+          </p>
+        )}
 
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <button onClick={handleApprove} style={btnStyle('primary')}>Approve</button>
+          <button onClick={handleApprove} style={btnStyle('primary')}>{isStepUp ? 'Confirm' : 'Approve'}</button>
           <button onClick={handleDeny} style={btnStyle('danger')}>Deny</button>
         </div>
       </div>

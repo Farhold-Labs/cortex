@@ -81,7 +81,7 @@ test('CORTEX-COMM-002: a code is redeemable only by the peer it was issued to', 
     const seed = new DatabaseSQLite({ dbPath });
     seed.createUser({
       id: 'alice', handle: 'alice', email: 'alice@example.test',
-      passwordHash: 'x', displayName: 'Alice',
+      passwordHash: require(path.join(root, 'server/node_modules/bcryptjs')).hashSync('Alice-pass-123', 4), displayName: 'Alice',
     });
     const now = new Date().toISOString();
     for (const node of ['honest.guest', 'hostile.peer']) {
@@ -131,7 +131,7 @@ test('CORTEX-COMM-002: a code is redeemable only by the peer it was issued to', 
                      VALUES (?, 'alice', 'honest.guest', ?, ?, ?, ?, 0)`)
         .run(code, requestId, nonce, new Date().toISOString(), future);
       db.db.close();
-      return code;
+      return { code, requestId, nonce };
     };
 
     const codeIsSpent = (code) => {
@@ -156,8 +156,8 @@ test('CORTEX-COMM-002: a code is redeemable only by the peer it was issued to', 
     await t.test('the guest it was issued to redeems it normally', async () => {
       // The control, and it runs first: if this ever fails, the fix has broken
       // cross-port login rather than hardened it.
-      const code = mintCode();
-      const res = await exchange('honest.guest', { code, guestNode: 'honest.guest' });
+      const { code, requestId, nonce } = mintCode();
+      const res = await exchange('honest.guest', { code, guestNode: 'honest.guest', requestId, nonce });
       assert.equal(res.status, 200, JSON.stringify(res.body));
       assert.equal(res.body.handle, 'alice');
       assert.equal(res.body.userId, 'alice');
@@ -165,31 +165,111 @@ test('CORTEX-COMM-002: a code is redeemable only by the peer it was issued to', 
     });
 
     await t.test('a different peer cannot redeem it by naming the honest guest', async () => {
-      const code = mintCode();
-      const res = await exchange('hostile.peer', { code, guestNode: 'honest.guest' });
+      const { code, requestId, nonce } = mintCode();
+      const res = await exchange('hostile.peer', { code, guestNode: 'honest.guest', requestId, nonce });
       assert.equal(res.status, 403, 'the signature says who is asking; the body is just a claim');
       assert.equal(codeIsSpent(code), false,
         'and the refusal must not burn the code — that alone would deny the honest guest their login');
 
       // The honest guest's own exchange still works afterwards.
-      const ok = await exchange('honest.guest', { code, guestNode: 'honest.guest' });
+      const ok = await exchange('honest.guest', { code, guestNode: 'honest.guest', requestId, nonce });
       assert.equal(ok.status, 200);
     });
 
     await t.test('a peer cannot redeem its own way in by naming itself', async () => {
       // The code was never issued to them, so claiming their real identity
       // fails too — there is no phrasing that works.
-      const code = mintCode();
-      const res = await exchange('hostile.peer', { code, guestNode: 'hostile.peer' });
+      const { code, requestId, nonce } = mintCode();
+      const res = await exchange('hostile.peer', { code, guestNode: 'hostile.peer', requestId, nonce });
       assert.equal(res.status, 403);
       assert.equal(codeIsSpent(code), false);
     });
 
     await t.test('a body that disagrees with the signature is refused', async () => {
-      const code = mintCode();
-      const res = await exchange('honest.guest', { code, guestNode: 'hostile.peer' });
+      const { code, requestId, nonce } = mintCode();
+      const res = await exchange('honest.guest', { code, guestNode: 'hostile.peer', requestId, nonce });
       assert.equal(res.status, 403, 'the two must agree, so a caller that drifts fails loudly');
       assert.equal(codeIsSpent(code), false);
+    });
+
+    // ----- v2.108.0: the code belongs to one sign-in request -----
+
+    await t.test('a code cannot finish a different sign-in request', async () => {
+      const mine = mintCode();
+      const other = mintCode();
+      const res = await exchange('honest.guest', { code: mine.code, guestNode: 'honest.guest', requestId: other.requestId, nonce: other.nonce });
+      assert.equal(res.status, 403, JSON.stringify(res.body));
+      assert.match(res.body.error, /sign-in/);
+      assert.equal(codeIsSpent(mine.code), false, 'refused without spending it');
+    });
+
+    await t.test('an exchange that names no request is refused', async () => {
+      const { code } = mintCode();
+      const res = await exchange('honest.guest', { code, guestNode: 'honest.guest' });
+      assert.equal(res.status, 403);
+      assert.equal(codeIsSpent(code), false);
+    });
+
+    // ----- v2.108.0: the sign-in finishes in the browser that started it -----
+
+    const initiate = async () => {
+      const res = await fetch(`http://${host}/api/cross-port/initiate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ homeServerUrl: 'https://honest.guest' }),
+      });
+      assert.equal(res.status, 200);
+      const setCookie = res.headers.getSetCookie?.()[0] || res.headers.get('set-cookie') || '';
+      assert.match(setCookie, /^cortex_xport=/, 'initiate binds the browser');
+      assert.match(setCookie, /HttpOnly/i);
+      assert.match(setCookie, /SameSite=Strict/i);
+      assert.match(setCookie, /Path=\/api\/cross-port/i);
+      const { redirectUrl } = await res.json();
+      return { cookie: setCookie.split(';')[0], state: new URL(redirectUrl).searchParams.get('nonce') };
+    };
+    const finish = (state, cookie) => fetch(`http://${host}/api/cross-port/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+      body: JSON.stringify({ code: 'any-code', state, homeServerUrl: 'https://honest.guest' }),
+    }).then(async r => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+
+    await t.test('a callback link opened in another browser is refused', async () => {
+      const { state } = await initiate();
+      const res = await finish(state, null);
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /different browser/);
+    });
+
+    await t.test('another browser\'s cookie does not unlock it either', async () => {
+      const victim = await initiate();
+      const attacker = await initiate();
+      const res = await finish(victim.state, attacker.cookie);
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /different browser/);
+    });
+
+    await t.test('the browser that started it gets past the binding', async () => {
+      // honest.guest is not really running, so the exchange itself fails —
+      // what matters is that it is reached: the binding let this browser through.
+      const { state, cookie } = await initiate();
+      const res = await finish(state, cookie);
+      assert.doesNotMatch(String(res.body.error || ''), /different browser/, JSON.stringify(res.body));
+    });
+
+    await t.test('deny returns to the peer\'s registered address, never a supplied one', async () => {
+      const login = await (await fetch(`http://${host}/api/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handle: 'alice', password: 'Alice-pass-123' }),
+      })).json();
+      assert.ok(login.token, 'fixture login');
+      const res = await fetch(`http://${host}/api/cross-port/deny`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.token}` },
+        body: JSON.stringify({ guestNode: 'honest.guest', callbackUrl: 'https://evil.example/steal', nonce: 'n1' }),
+      });
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(new URL(body.callbackUrl).origin, 'https://honest.guest', 'not the attacker-supplied origin');
+      assert.equal(new URL(body.callbackUrl).searchParams.get('error'), 'denied');
     });
   } finally {
     if (child) child.kill('SIGKILL');
