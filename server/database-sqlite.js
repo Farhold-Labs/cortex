@@ -3315,7 +3315,7 @@ export class DatabaseSQLite {
       console.log('✅ users.cross_port_verified_at added');
     }
 
-    // v2.107.2 — CORTEX-COMM-021: handing over a Community.
+    // v2.108.0 — CORTEX-COMM-021: handing over a Community.
     //
     // An offer, then an acceptance — never a silent transfer: ownership carries
     // obligations, and pushing it onto somebody unasked is a way to dump a
@@ -3325,7 +3325,7 @@ export class DatabaseSQLite {
       `SELECT name FROM sqlite_master WHERE type='table' AND name='community_ownership_transfers'`
     ).get();
     if (!transfersExist) {
-      console.log('📝 Creating community_ownership_transfers (v2.107.2)...');
+      console.log('📝 Creating community_ownership_transfers (v2.108.0)...');
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS community_ownership_transfers (
           id            TEXT PRIMARY KEY,
@@ -3346,14 +3346,32 @@ export class DatabaseSQLite {
       console.log('✅ community_ownership_transfers created');
     }
 
-    // v2.107.2 — CORTEX-COMM-002: a pending cross-port sign-in is bound to the
+    // v2.108.0 — CORTEX-COMM-002: a pending cross-port sign-in is bound to the
     // browser that started it. Only a hash of the browser's secret is stored;
     // the secret itself lives in an HttpOnly cookie on that browser.
     const crossPortRequestCols = this.db.prepare(`PRAGMA table_info(cross_port_requests)`).all();
     if (crossPortRequestCols.length && !crossPortRequestCols.some(c => c.name === 'browser_binding')) {
-      console.log('📝 Adding cross_port_requests.browser_binding (v2.107.2)...');
+      console.log('📝 Adding cross_port_requests.browser_binding (v2.108.0)...');
       this.db.exec(`ALTER TABLE cross_port_requests ADD COLUMN browser_binding TEXT;`);
       console.log('✅ cross_port_requests.browser_binding added');
+    }
+
+    // v2.108.0 — CORTEX-COMM-021: step-up re-authentication for cross-port
+    // users, who have no password here. A request records what it is FOR and,
+    // for a step-up, whose session asked; the home node records on the code
+    // that it re-checked the password, which is what makes it a step-up.
+    const crossPortReqCols2 = this.db.prepare(`PRAGMA table_info(cross_port_requests)`).all();
+    if (crossPortReqCols2.length && !crossPortReqCols2.some(c => c.name === 'purpose')) {
+      console.log('📝 Adding cross_port_requests.purpose/user_id (v2.108.0)...');
+      this.db.exec(`
+        ALTER TABLE cross_port_requests ADD COLUMN purpose TEXT NOT NULL DEFAULT 'login';
+        ALTER TABLE cross_port_requests ADD COLUMN user_id TEXT;
+      `);
+    }
+    const crossPortCodeCols = this.db.prepare(`PRAGMA table_info(cross_port_codes)`).all();
+    if (crossPortCodeCols.length && !crossPortCodeCols.some(c => c.name === 'reauthenticated_at')) {
+      console.log('📝 Adding cross_port_codes.reauthenticated_at (v2.108.0)...');
+      this.db.exec(`ALTER TABLE cross_port_codes ADD COLUMN reauthenticated_at TEXT;`);
     }
 
     // v2.104.0 — CORTEX-COMM-009: which conversation an uploaded file belongs to.
@@ -11876,13 +11894,13 @@ export class DatabaseSQLite {
 
   // ============ Cross-Port Authentication Methods (v2.56.0) ============
 
-  createCrossPortRequest({ id, guestNode, guestBaseUrl, nonce, browserBinding = null }) {
+  createCrossPortRequest({ id, guestNode, guestBaseUrl, nonce, browserBinding = null, purpose = 'login', userId = null }) {
     const now = new Date().toISOString();
     const expires = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     this.db.prepare(`
-      INSERT INTO cross_port_requests (id, guest_node, guest_base_url, nonce, status, created_at, expires_at, browser_binding)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
-    `).run(id, guestNode, guestBaseUrl, nonce, now, expires, browserBinding);
+      INSERT INTO cross_port_requests (id, guest_node, guest_base_url, nonce, status, created_at, expires_at, browser_binding, purpose, user_id)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+    `).run(id, guestNode, guestBaseUrl, nonce, now, expires, browserBinding, purpose, userId);
   }
 
   getCrossPortRequest(id) {
@@ -11897,13 +11915,13 @@ export class DatabaseSQLite {
     this.db.prepare(`UPDATE cross_port_requests SET status = ? WHERE id = ?`).run(status, id);
   }
 
-  createCrossPortCode({ code, userId, guestNode, requestId, nonce }) {
+  createCrossPortCode({ code, userId, guestNode, requestId, nonce, reauthenticatedAt = null }) {
     const now = new Date().toISOString();
     const expires = new Date(Date.now() + 60 * 1000).toISOString();
     this.db.prepare(`
-      INSERT INTO cross_port_codes (code, user_id, guest_node, request_id, nonce, created_at, expires_at, used)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-    `).run(code, userId, guestNode, requestId, nonce, now, expires);
+      INSERT INTO cross_port_codes (code, user_id, guest_node, request_id, nonce, created_at, expires_at, used, reauthenticated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `).run(code, userId, guestNode, requestId, nonce, now, expires, reauthenticatedAt);
   }
 
   getCrossPortCode(code) {
@@ -14722,7 +14740,7 @@ export class DatabaseSQLite {
     return bound;
   }
 
-  // ----- Ownership transfer (v2.107.2, CORTEX-COMM-021) -----
+  // ----- Ownership transfer (v2.108.0, CORTEX-COMM-021) -----
 
   /** The live offer for a Community, expiring a stale one on the way. */
   getPendingOwnershipTransfer(communityId) {

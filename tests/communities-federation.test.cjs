@@ -123,10 +123,10 @@ test('Communities across two federated nodes', async (t) => {
     const B = await buildNode(nodeB, portB, nodeA, portA);
 
     // One browser per node: cookies a node sets come back on later requests to
-    // it, as they would. The cross-port sign-in depends on this since v2.107.2 —
+    // it, as they would. The cross-port sign-in depends on this since v2.108.0 —
     // it must finish in the browser that started it (CORTEX-COMM-002).
     const jars = new Map();
-    const call = async (node, method, urlPath, { token, body } = {}) => {
+    const call = async (node, method, urlPath, { token, body, stepUp } = {}) => {
       const jar = jars.get(node.url) || new Map();
       jars.set(node.url, jar);
       const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
@@ -135,6 +135,7 @@ test('Communities across two federated nodes', async (t) => {
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(stepUp ? { 'X-Step-Up-Token': stepUp } : {}),
           ...(cookie ? { Cookie: cookie } : {}),
         },
         ...(body !== undefined && method !== 'GET' ? { body: JSON.stringify(body) } : {}),
@@ -514,6 +515,65 @@ test('Communities across two federated nodes', async (t) => {
       assert.equal(after.authed, false, 'a revoked token must not open a socket');
 
       aliceOnB = await signInCrossPort();
+    });
+
+    await t.test('CORTEX-COMM-021: a remote member passes step-up through her home node', async () => {
+      const onB = await signInCrossPort();
+      const own = await call(B, 'POST', '/api/communities', {
+        token: onB.token, body: { name: 'Alice Owns This', slug: 'alice-owns-this', visibility: 'public' },
+      });
+      assert.equal(own.status, 201, JSON.stringify(own.body));
+
+      const blocked = await call(B, 'DELETE', `/api/communities/${own.body.community.id}`, { token: onB.token });
+      assert.equal(blocked.status, 401);
+      assert.equal(blocked.body.code, 'STEP_UP_REQUIRED');
+      const local = await call(B, 'POST', '/api/auth/step-up', { token: onB.token, body: { password } });
+      assert.equal(local.status, 401, 'she has no password on this node — the reason this was stuck');
+
+      const attempt = async (approveExtra) => {
+        const init = await call(B, 'POST', '/api/cross-port/step-up/initiate', { token: onB.token });
+        assert.equal(init.status, 200, JSON.stringify(init.body));
+        const redirect = new URL(init.body.redirectUrl);
+        assert.equal(redirect.searchParams.get('purpose'), 'step_up');
+        const state = redirect.searchParams.get('nonce');
+        const approve = await call(A, 'POST', '/api/cross-port/approve', {
+          token: alice.token,
+          body: { guestNode: nodeB, nonce: state, requestId: redirect.searchParams.get('request_id'), ...approveExtra },
+        });
+        const code = approve.status === 200 ? new URL(approve.body.callbackUrl).searchParams.get('code') : null;
+        return { approve, code, state };
+      };
+
+      let r = await attempt({ purpose: 'step_up' });
+      assert.equal(r.approve.status, 400, 'no password, no confirmation');
+      r = await attempt({ purpose: 'step_up', password: 'not-her-password' });
+      assert.equal(r.approve.status, 401);
+
+      // Purpose stripped on the way to the home node: it approves like a
+      // sign-in, without re-checking the password — and the guest refuses.
+      r = await attempt({});
+      assert.equal(r.approve.status, 200);
+      const stripped = await call(B, 'POST', '/api/cross-port/step-up/complete', { token: onB.token, body: { code: r.code, state: r.state } });
+      assert.equal(stripped.status, 401, JSON.stringify(stripped.body));
+
+      // A step-up request is never a way to sign in.
+      r = await attempt({ purpose: 'step_up', password });
+      const asLogin = await call(B, 'POST', '/api/cross-port/session', { body: { code: r.code, state: r.state, homeServerUrl: A.url } });
+      assert.equal(asLogin.status, 400);
+
+      // Nor can someone else's session collect it.
+      r = await attempt({ purpose: 'step_up', password });
+      const other = await call(B, 'POST', '/api/cross-port/step-up/complete', { token: bob.token, body: { code: r.code, state: r.state } });
+      assert.equal(other.status, 400);
+
+      // The real thing.
+      r = await attempt({ purpose: 'step_up', password });
+      const done = await call(B, 'POST', '/api/cross-port/step-up/complete', { token: onB.token, body: { code: r.code, state: r.state } });
+      assert.equal(done.status, 200, JSON.stringify(done.body));
+      assert.ok(done.body.stepUpToken);
+
+      const deleted = await call(B, 'DELETE', `/api/communities/${own.body.community.id}`, { token: onB.token, stepUp: done.body.stepUpToken });
+      assert.equal(deleted.status, 200, `the step-up proof works for her own Community: ${JSON.stringify(deleted.body)}`);
     });
 
     await t.test('CORTEX-COMM-001: a peer cannot claim another peer\'s identities', async () => {

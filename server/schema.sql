@@ -1037,7 +1037,7 @@ CREATE TABLE IF NOT EXISTS cross_port_requests (
           status      TEXT NOT NULL DEFAULT 'pending',
           created_at  TEXT NOT NULL,
           expires_at  TEXT NOT NULL
-        , browser_binding TEXT);
+        , browser_binding TEXT, purpose TEXT NOT NULL DEFAULT 'login', user_id TEXT);
 CREATE INDEX IF NOT EXISTS idx_cp_requests_nonce ON cross_port_requests(nonce);
 
 CREATE TABLE IF NOT EXISTS cross_port_codes (
@@ -1049,7 +1049,7 @@ CREATE TABLE IF NOT EXISTS cross_port_codes (
           created_at  TEXT NOT NULL,
           expires_at  TEXT NOT NULL,
           used        INTEGER NOT NULL DEFAULT 0
-        );
+        , reauthenticated_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_cp_codes_code ON cross_port_codes(code);
 
 CREATE TABLE IF NOT EXISTS portal_waves (

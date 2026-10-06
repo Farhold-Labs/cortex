@@ -14643,7 +14643,7 @@ app.delete('/api/incoming-webhooks/:id', authenticateToken, (req, res) => {
 
 // ============ Cross-Port Authentication Routes (v2.56.0) ============
 
-// CORTEX-COMM-002 (closed v2.107.2) — a sign-in finishes in the browser that
+// CORTEX-COMM-002 (closed v2.108.0) — a sign-in finishes in the browser that
 // started it, with the code that was issued for it.
 //
 // Two gaps remained after the redirect and exchange fixes:
@@ -14748,11 +14748,11 @@ app.get('/api/cross-port/request-info', (req, res) => {
 
 // POST /api/cross-port/approve — Home Server (A): authenticated user approves the request
 // Creates a short-lived auth code and returns the callback URL
-app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
+app.post('/api/cross-port/approve', loginLimiter, authenticateToken, async (req, res) => {
   try {
     if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
 
-    const { guestNode, callbackUrl, nonce, requestId } = req.body;
+    const { guestNode, callbackUrl, nonce, requestId, purpose, password } = req.body;
     // `callbackUrl` is no longer required: it is derived from the peer record
     // below and ignored if supplied (CORTEX-COMM-002). Demanding a field we
     // deliberately disregard would only mislead whoever writes the next client.
@@ -14771,8 +14771,24 @@ app.post('/api/cross-port/approve', authenticateToken, (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.is_cross_port) return res.status(403).json({ error: 'Cross-port users cannot grant cross-port access' });
 
+    // A step-up (CORTEX-COMM-021) is the guest asking "is this really them,
+    // right now?" — a session here is not an answer to that, any more than it
+    // is at home, so the password is checked again. The code records that it
+    // was, and the guest refuses a step-up without it, so a request whose
+    // purpose was stripped on the way here simply fails.
+    let reauthenticatedAt = null;
+    if (purpose === 'step_up') {
+      if (!password) return res.status(400).json({ error: 'Your password is required to confirm it is you' });
+      const ok = await bcrypt.compare(String(password), user.passwordHash || user.password_hash || '');
+      if (!ok) {
+        db.logActivity(user.id, 'step_up_failed', 'user', user.id, { via: 'cross_port', guestNode });
+        return res.status(401).json({ error: 'Incorrect password' });
+      }
+      reauthenticatedAt = new Date().toISOString();
+    }
+
     const code = crypto.randomBytes(32).toString('hex');
-    db.createCrossPortCode({ code, userId: user.id, guestNode: sanitizeInput(guestNode), requestId, nonce });
+    db.createCrossPortCode({ code, userId: user.id, guestNode: sanitizeInput(guestNode), requestId, nonce, reauthenticatedAt });
 
     // CORTEX-COMM-002 — the code goes where the PEER lives, not where the
     // request asks it to go.
@@ -14889,7 +14905,7 @@ app.post('/api/federation/cross-port/exchange', createFederationAuthMiddleware([
       return res.status(403).json({ error: 'Auth code not issued for this server' });
     }
     // And the code belongs to the REQUEST being completed (CORTEX-COMM-002,
-    // v2.107.2). The guest sends the request it is finishing; a code approved
+    // v2.108.0). The guest sends the request it is finishing; a code approved
     // for one sign-in cannot finish another. Refused without spending the
     // code, like the checks above.
     const { requestId, nonce } = req.body;
@@ -14911,6 +14927,8 @@ app.post('/api/federation/cross-port/exchange', createFederationAuthMiddleware([
       avatar: user.avatar || null,
       avatarUrl: user.avatarUrl || user.avatar_url || null,
       homeNode: identity?.nodeName || FEDERATION_NODE_NAME,
+      // Set only when the password was re-checked at approval (a step-up).
+      reauthenticatedAt: record.reauthenticated_at || null,
     });
   } catch (err) {
     console.error('Cross-port exchange error:', err);
@@ -14966,6 +14984,114 @@ app.post('/api/federation/cross-port/verify', createFederationAuthMiddleware(['a
   }
 });
 
+// ===== Step-up for cross-port users (v2.108.0, CORTEX-COMM-021) =====
+//
+// Step-up compares a password, and a cross-port account has none here — its
+// password lives at its home node. So a remote member could never pass step-up,
+// and every action behind it (offering a Community, deleting one) was out of
+// their reach even in a Community they own.
+//
+// The answer is the same handshake as sign-in, run for a different purpose:
+// the home node re-checks the password and says so in the signed exchange, and
+// only then does this node issue the same short-lived step-up proof a local
+// password would have earned. The request is tied to the session that asked
+// and to the browser that started it, exactly like a sign-in.
+
+app.post('/api/cross-port/step-up/initiate', authenticateToken, (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled on this server' });
+    const user = db.findUserById(req.user.userId);
+    if (!user || !(user.is_cross_port || user.isCrossPort) || !(user.home_node || user.homeNode)) {
+      return res.status(400).json({ error: 'Only accounts from another server confirm it this way' });
+    }
+    const homeNode = user.home_node || user.homeNode;
+    const node = db.getFederationNodeByName(homeNode);
+    if (!node || node.status !== 'active') return res.status(403).json({ error: `${homeNode} is not a trusted server` });
+
+    let homeOrigin;
+    try { homeOrigin = new URL(node.baseUrl).origin; } catch { return res.status(500).json({ error: 'That server has no usable address' }); }
+
+    const id = crypto.randomUUID();
+    const nonce = crypto.randomBytes(32).toString('hex');
+    const browserSecret = crypto.randomBytes(32).toString('hex');
+    const guestBaseUrl = getAppBaseUrl();
+    db.createCrossPortRequest({
+      id, guestNode: FEDERATION_NODE_NAME, guestBaseUrl, nonce,
+      browserBinding: sha256Hex(browserSecret), purpose: 'step_up', userId: user.id,
+    });
+    setCrossPortCookie(req, res, browserSecret, CROSS_PORT_COOKIE_TTL_S);
+
+    const redirectUrl = `${homeOrigin}/cross-port-auth?` +
+      `from=${encodeURIComponent(FEDERATION_NODE_NAME)}` +
+      `&from_url=${encodeURIComponent(guestBaseUrl)}` +
+      `&request_id=${encodeURIComponent(id)}` +
+      `&nonce=${encodeURIComponent(nonce)}` +
+      `&purpose=step_up` +
+      `&callback=${encodeURIComponent(`${guestBaseUrl}/cross-port/callback`)}`;
+    res.json({ redirectUrl, homeServerUrl: homeOrigin });
+  } catch (err) {
+    console.error('Cross-port step-up initiate error:', err);
+    res.status(500).json({ error: 'Could not start the confirmation' });
+  }
+});
+
+app.post('/api/cross-port/step-up/complete', authenticateToken, async (req, res) => {
+  try {
+    if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
+    const { code, state } = req.body || {};
+    if (!code || !state) return res.status(400).json({ error: 'code and state required' });
+
+    const request = db.getCrossPortRequestByNonce(sanitizeInput(state));
+    // Only a step-up request, only for the session that started it.
+    if (!request || request.purpose !== 'step_up' || request.user_id !== req.user.userId) {
+      return res.status(400).json({ error: 'Invalid state — no matching confirmation' });
+    }
+    if (request.status !== 'pending') return res.status(400).json({ error: 'That confirmation was already used' });
+    if (new Date(request.expires_at) < new Date()) return res.status(410).json({ error: 'That confirmation expired — please try again' });
+    const browserSecret = readCookie(req, CROSS_PORT_COOKIE);
+    if (!request.browser_binding || !browserSecret || !sameSecret(sha256Hex(browserSecret), request.browser_binding)) {
+      return res.status(400).json({ error: 'This confirmation was started in a different browser.' });
+    }
+
+    const user = db.findUserById(req.user.userId);
+    const homeNode = user?.home_node || user?.homeNode;
+    const homeUserId = user?.home_user_id || user?.homeUserId;
+    const node = homeNode ? db.getFederationNodeByName(homeNode) : null;
+    if (!node || node.status !== 'active') return res.status(403).json({ error: 'Home server is not trusted' });
+    const identity = db.getServerIdentity();
+    if (!identity) return res.status(500).json({ error: 'Server identity not configured' });
+
+    const exchangeUrl = `${new URL(node.baseUrl).origin}/api/federation/cross-port/exchange`;
+    const body = JSON.stringify({ code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME, requestId: request.id, nonce: request.nonce });
+    const headers = createHttpSignatureFromString('POST', exchangeUrl, body, identity.privateKey, FEDERATION_NODE_NAME);
+    const exchangeRes = await fetch(exchangeUrl, { method: 'POST', headers, body });
+    const data = await exchangeRes.json().catch(() => ({}));
+    if (!exchangeRes.ok) return res.status(400).json({ error: data.error || 'Your home server did not confirm it' });
+
+    // The home node must speak for THIS account, and must say it re-checked
+    // the password — recently, and after this request was made.
+    if ((data.homeNode && data.homeNode !== homeNode) || data.userId !== homeUserId) {
+      console.warn(`[cross-port] step-up for ${req.user.userId} answered with someone else's identity`);
+      db.updateCrossPortRequestStatus(request.id, 'rejected');
+      return res.status(403).json({ error: 'Your home server confirmed a different account' });
+    }
+    const at = data.reauthenticatedAt ? new Date(data.reauthenticatedAt) : null;
+    if (!at || Number.isNaN(at.getTime()) || at < new Date(request.created_at) || Date.now() - at.getTime() > 5 * 60 * 1000) {
+      return res.status(401).json({ error: 'Your home server did not re-check your password' });
+    }
+
+    db.updateCrossPortRequestStatus(request.id, 'completed');
+    setCrossPortCookie(req, res, '', 0);
+    const policy = getSecurityPolicy();
+    const stepUpToken = jwt.sign({ userId: req.user.userId, purpose: 'step-up' }, JWT_SECRET, { expiresIn: `${policy.stepUpMinutes}m` });
+    db.logActivity(req.user.userId, 'step_up', 'user', req.user.userId, { ...getRequestMeta(req), via: 'cross_port', homeNode });
+    res.json({ stepUpToken, expiresInMinutes: policy.stepUpMinutes });
+  } catch (err) {
+    console.error('Cross-port step-up complete error:', err);
+    res.status(500).json({ error: 'Could not complete the confirmation' });
+  }
+});
+
 // POST /api/cross-port/session — Guest Server (B): create a local session for the cross-port user
 // Called by the client after receiving the auth code in the callback URL
 app.post('/api/cross-port/session', async (req, res) => {
@@ -14980,9 +15106,12 @@ app.post('/api/cross-port/session', async (req, res) => {
     if (!request) return res.status(400).json({ error: 'Invalid state — no matching pending request' });
     if (request.status !== 'pending') return res.status(400).json({ error: 'Request already completed' });
     if (new Date(request.expires_at) < new Date()) return res.status(410).json({ error: 'Request expired' });
+    // A step-up request confirms someone already signed in; it never signs
+    // anyone in (CORTEX-COMM-021).
+    if ((request.purpose || 'login') !== 'login') return res.status(400).json({ error: 'Invalid state — no matching pending request' });
 
     // The browser finishing this sign-in must be the one that started it
-    // (CORTEX-COMM-002). A request with no binding predates v2.107.2 and has
+    // (CORTEX-COMM-002). A request with no binding predates v2.108.0 and has
     // at most five minutes to live; it is refused rather than grandfathered.
     const browserSecret = readCookie(req, CROSS_PORT_COOKIE);
     if (!request.browser_binding || !browserSecret || !sameSecret(sha256Hex(browserSecret), request.browser_binding)) {
@@ -23738,7 +23867,7 @@ function communitySlug(value) {
 // space needing an administrator's attention.
 /**
  * A Community change and the audit record that describes it commit together,
- * or neither does (CORTEX-COMM-016, closed v2.107.2).
+ * or neither does (CORTEX-COMM-016, closed v2.108.0).
  *
  * They were separate statements: if the audit insert failed — a full disk, a
  * locked database — the change stood with no record of who made it, which is
@@ -23804,7 +23933,7 @@ app.get('/api/communities', authenticateToken, apiLimiter, (req, res) => {
 });
 
 // The rail.
-// Ownership offers addressed to me (v2.107.2, CORTEX-COMM-021). Registered
+// Ownership offers addressed to me (v2.108.0, CORTEX-COMM-021). Registered
 // before /api/communities/:id, which would otherwise read the path as an id.
 app.get('/api/communities/ownership-offers', authenticateToken, (req, res) => {
   const offers = db.getOwnershipOffersFor(req.user.userId).map(o => ({
@@ -23975,7 +24104,7 @@ app.delete('/api/communities/:id/members/:userId', authenticateToken, (req, res)
 // Leaving is not being removed, so it needs no capability — but it must not
 // strand the Community without an owner, and that check runs inside the same
 // transaction as the write.
-// ----- Ownership transfer (v2.107.2, CORTEX-COMM-021) -----
+// ----- Ownership transfer (v2.108.0, CORTEX-COMM-021) -----
 //
 // An owner could not hand a Community over at all: `community.transfer` existed
 // as a capability that nothing consumed, granting the owner role is refused at

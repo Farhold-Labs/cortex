@@ -1,7 +1,7 @@
 'use strict';
 
 // CORTEX-COMM-016 — a Community change and its audit record commit together
-// (closed v2.107.2).
+// (closed v2.108.0).
 //
 // A disposable server whose audit insert can be made to fail for chosen
 // actions, by writing them to a flag file while the test runs. For each

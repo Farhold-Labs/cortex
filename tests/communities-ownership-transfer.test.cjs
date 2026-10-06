@@ -1,6 +1,6 @@
 'use strict';
 
-// CORTEX-COMM-021 — handing a Community over (v2.107.2).
+// CORTEX-COMM-021 — handing a Community over (v2.108.0).
 //
 // Before this, an owner could not transfer at all: the capability existed and
 // nothing consumed it, granting the owner role is refused at your own priority,

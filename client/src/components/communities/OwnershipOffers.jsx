@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { plainText } from '../../utils/plainText.js';
 
 /**
- * Offers to take over a Community, waiting for an answer (v2.107.2,
+ * Offers to take over a Community, waiting for an answer (v2.108.0,
  * CORTEX-COMM-021).
  *
  * Ownership is never pushed onto anyone — an owner offers, and the recipient

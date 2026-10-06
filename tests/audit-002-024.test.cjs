@@ -192,7 +192,7 @@ test('CORTEX-COMM-002: a code is redeemable only by the peer it was issued to', 
       assert.equal(codeIsSpent(code), false);
     });
 
-    // ----- v2.107.2: the code belongs to one sign-in request -----
+    // ----- v2.108.0: the code belongs to one sign-in request -----
 
     await t.test('a code cannot finish a different sign-in request', async () => {
       const mine = mintCode();
@@ -210,7 +210,7 @@ test('CORTEX-COMM-002: a code is redeemable only by the peer it was issued to', 
       assert.equal(codeIsSpent(code), false);
     });
 
-    // ----- v2.107.2: the sign-in finishes in the browser that started it -----
+    // ----- v2.108.0: the sign-in finishes in the browser that started it -----
 
     const initiate = async () => {
       const res = await fetch(`http://${host}/api/cross-port/initiate`, {

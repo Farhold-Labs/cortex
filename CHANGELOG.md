@@ -5,6 +5,35 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.108.0] - 2026-10-05
+
+Closes the last three open items in the Communities security register — **002**, **016** and **021** — leaving only the deliberate and informational entries (020, 022, 023). **Database migration:** one new table and four new columns; take the verified backup first.
+
+### Security
+
+- **[SECURITY] CORTEX-COMM-002 — a cross-port sign-in now finishes in the browser that started it, with the code issued for it.** Two gaps remained after the v2.103.2 and v2.105.3 fixes:
+  - *Login fixation.* Nothing tied a pending sign-in to a browser. An attacker could start a sign-in on a guest node, approve it at their own home node with their own account, and send the resulting callback link to a victim, whose browser completed it and was signed in **as the attacker** — so whatever the victim then wrote went into the attacker's account. Initiate now sets a random secret in an HttpOnly, SameSite=Strict cookie scoped to `/api/cross-port` and stores only its SHA-256; completing the sign-in requires the same browser to present it.
+  - *Code injection.* The home node never checked that a code belonged to the request being completed, so a code approved for one sign-in could finish another. The guest now sends the request id and nonce with the exchange, and the home node refuses — without spending the code — unless they match.
+  - *Deny was an open redirect.* `/api/cross-port/deny` built its redirect from a browser-supplied `callbackUrl`, the shape fixed for approve in v2.103.2; and the approval page fell back to the link's own `callback` parameter. Both now use only the peer's registered address.
+  - **Every node must run this version for cross-port sign-in between them**: an older guest does not send the request binding, and a newer home node refuses without it. A sign-in pending during the upgrade (five-minute lifetime) is refused, not grandfathered.
+- **[SECURITY] CORTEX-COMM-016 — a Community change and its audit record commit together.** All 30 mutation sites ran the change and the audit insert as separate statements, so an audit failure (a full disk, a locked database) left the change standing with no record of who made it. Each now runs both in one SQLite transaction. Invite redemption is atomic end to end: a failure after claiming the invite used to spend a single-use link and leave the person outside.
+
+### Added
+
+- **Handing a Community over (CORTEX-COMM-021).** An owner had no way to transfer: `community.transfer` existed and nothing used it, the owner role cannot be granted at your own rank, and the last owner may not leave — their only exit was deleting their account, which suspends the Community.
+  - An owner **offers** ownership to an active member in good standing (step-up required); the member **accepts or declines**. Ownership carries obligations, so it is never pushed onto anyone. One offer at a time, lapsing after seven days; the giver or another owner can withdraw it.
+  - Acceptance re-checks everything and, in one transaction, makes the recipient an owner and the giver an admin, who can then leave. Every step is audited and both people are notified.
+  - *Hand over* sits beside each member in Community settings, with the pending offer and a *Withdraw* button; the recipient gets a floating card with *Accept*, *Decline* and *Later*.
+- **Step-up for people from other servers (CORTEX-COMM-021).** Step-up compares a password, and a cross-port account has none on the guest node — so a remote member could never pass it, and everything behind it (offering or deleting a Community they own) was out of reach. They now confirm at their **home node**: the same handshake as sign-in, run for a different purpose. The home node re-checks the password and says so in the signed exchange, and only then does the guest issue the ordinary short-lived step-up proof. Refused if the password check is missing or stale, if the request's purpose was stripped on the way, if another session tries to collect it, or if anyone tries to use a step-up request to sign in.
+  - The proof normally lives in memory only; for this one flow it crosses the return reload through `sessionStorage` (this tab, read once and deleted at once).
+
+### Verified
+
+- 016: a test faults the audit insert per action; an update, a role creation, an invite redemption and a leave each roll back, with a success control — all four fail against the pre-fix server.
+- 002: six new cases (wrong request, missing request, another browser, another browser's cookie, the right browser, deny's redirect) — all fail against the pre-fix server. The two-node federation test now keeps a cookie jar per node, like a browser, and its real handshakes pass.
+- 021: twelve end-to-end transfer cases, and a real two-node step-up exercising every refusal above before succeeding and deleting the member's own Community.
+- 436/436 tests.
+
 ## [2.107.2] - 2026-10-05
 
 ### Security

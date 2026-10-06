@@ -26,7 +26,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
   const [renaming, setRenaming] = useState(null);      // channel id being renamed
   const [renameTo, setRenameTo] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
-  // Handing the Community over (v2.107.2, CORTEX-COMM-021).
+  // Handing the Community over (v2.108.0, CORTEX-COMM-021).
   const [transfer, setTransfer] = useState(null);       // the pending offer, if any
   const [confirmHandover, setConfirmHandover] = useState(null); // member being offered it
   const myId = storage.getUser()?.id;
