@@ -9,7 +9,15 @@ import { T } from './src/config/terminology.js';
 
 // ============ E2EE Setup Modal ============
 // Shown to new users or users who haven't set up E2EE
-export function E2EESetupModal({ onSetup, onSkip, isLoading }) {
+// `mode` (v2.108.0): this dialog had lost its passphrase field when encryption
+// moved to reusing the login password, yet still demanded an 8-character
+// passphrase — so it could never succeed, and it was never shown. It is now
+// shown whenever setup has no password to work from:
+//   'login-password' — a local account; re-enter the login password, which is
+//                      what later unlocks are checked against.
+//   'new-passphrase' — an account from another server, which has no password
+//                      here; choose a passphrase (twice).
+export function E2EESetupModal({ onSetup, onSkip, isLoading, mode = 'login-password' }) {
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [error, setError] = useState(null);
@@ -26,10 +34,10 @@ export function E2EESetupModal({ onSetup, onSkip, isLoading }) {
     if (step === 1) {
       // Validate passphrase
       if (passphrase.length < 8) {
-        setError('Passphrase must be at least 8 characters');
+        setError(mode === 'new-passphrase' ? 'Passphrase must be at least 8 characters' : 'Enter your login password');
         return;
       }
-      if (passphrase !== confirmPassphrase) {
+      if (mode === 'new-passphrase' && passphrase !== confirmPassphrase) {
         setError('Passphrases do not match');
         return;
       }
@@ -145,8 +153,9 @@ export function E2EESetupModal({ onSetup, onSkip, isLoading }) {
         {step === 1 ? (
           <>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px', fontSize: '14px' }}>
-              End-to-end encryption protects your messages. Your login password is used to secure your encryption keys,
-              so there's no separate passphrase to remember.
+              {mode === 'new-passphrase'
+                ? 'End-to-end encryption protects your messages. Your account comes from another server, so it has no password here — choose a passphrase to secure your encryption keys. You will need it when you sign in on a new device.'
+                : 'End-to-end encryption protects your messages. Your login password secures your encryption keys, so there is no separate passphrase to remember — enter it once to set this up.'}
             </p>
 
             <div style={{ backgroundColor: 'var(--overlay-teal)', padding: '12px', borderRadius: '4px', marginBottom: '16px', border: '1px solid var(--accent-teal)' }}>
@@ -156,6 +165,25 @@ export function E2EESetupModal({ onSetup, onSkip, isLoading }) {
             </div>
 
             <form onSubmit={handleSubmit}>
+              <input
+                type="password"
+                value={passphrase}
+                onChange={(e) => { setPassphrase(e.target.value); setError(null); }}
+                placeholder={mode === 'new-passphrase' ? 'Choose a passphrase (8+ characters)' : 'Your login password'}
+                autoComplete={mode === 'new-passphrase' ? 'new-password' : 'current-password'}
+                autoFocus
+                style={{ ...inputStyle, marginBottom: '10px' }}
+              />
+              {mode === 'new-passphrase' && (
+                <input
+                  type="password"
+                  value={confirmPassphrase}
+                  onChange={(e) => { setConfirmPassphrase(e.target.value); setError(null); }}
+                  placeholder="Confirm passphrase"
+                  autoComplete="new-password"
+                  style={{ ...inputStyle, marginBottom: '16px' }}
+                />
+              )}
               {/* Remember duration selector */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '8px' }}>
