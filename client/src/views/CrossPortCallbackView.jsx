@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { API_URL } from '../config/constants.js';
 import { LoadingSpinner } from '../components/ui/SimpleComponents.jsx';
 import { STEP_UP_HANDOFF_KEY } from '../utils/stepUp.js';
+import { storage } from '../utils/storage.js';
 
 const params = new URLSearchParams(window.location.search);
 const code = params.get('code') || '';
@@ -67,8 +68,13 @@ const CrossPortCallbackView = ({ onLogin }) => {
       .then(r => r.json())
       .then(data => {
         if (!data.token) throw new Error(data.error || 'Session exchange failed');
-        localStorage.setItem('farhold_token', data.token);
-        localStorage.setItem('farhold_user', JSON.stringify(data.user));
+        storage.setToken(data.token);
+        storage.setUser(data.user);
+        // The refresh token is what makes a cross-port session renewable
+        // (v2.100.0). Only the access token was kept, so the session quietly
+        // ended with it, after an hour (found v2.108.0).
+        if (data.refreshToken) storage.setRefreshToken(data.refreshToken);
+        if (data.sessionExpiresAt) storage.setSessionExpiresAt(data.sessionExpiresAt);
         setStatus('success');
         setTimeout(() => {
           onLogin(data.token, data.user);

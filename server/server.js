@@ -5473,7 +5473,10 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 app.get('/api/auth/me', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility });
+  res.json({ id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {}, accountStatus: user.accountStatus || 'active', birthday: user.birthday, birthdayVisibility: user.birthdayVisibility,
+    // The client decides how to ask for step-up by these (v2.108.0): an account
+    // from another server confirms at its home node, not with a password here.
+    isCrossPort: !!(user.is_cross_port || user.isCrossPort), homeNode: user.home_node || user.homeNode || null });
 });
 
 app.post('/api/auth/logout', authenticateToken, (req, res) => {

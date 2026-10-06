@@ -27,6 +27,17 @@ Closes the last three open items in the Communities security register — **002*
 - **Step-up for people from other servers (CORTEX-COMM-021).** Step-up compares a password, and a cross-port account has none on the guest node — so a remote member could never pass it, and everything behind it (offering or deleting a Community they own) was out of reach. They now confirm at their **home node**: the same handshake as sign-in, run for a different purpose. The home node re-checks the password and says so in the signed exchange, and only then does the guest issue the ordinary short-lived step-up proof. Refused if the password check is missing or stale, if the request's purpose was stripped on the way, if another session tries to collect it, or if anyone tries to use a step-up request to sign in.
   - The proof normally lives in memory only; for this one flow it crosses the return reload through `sessionStorage` (this tab, read once and deleted at once).
 
+### Fixed — found driving the cross-port flow in real browsers
+
+These predate this release; together they meant **a new person could not get from a cross-port sign-in to a working session at all**.
+
+- **The home server's sign-in page rejected every correct password** with "Invalid handle or password". It checked `login()` for `{ user }`, which it has never returned (`{ success }`), so anyone not already signed in at home had to reload to continue. Two-step accounts now get an explicit message instead of the same false error.
+- **A new cross-port account was stuck on a blank screen forever.** Encryption setup derives keys from the login password, and a cross-port account has none on the guest node, so it fell into a branch the code itself marked "shouldn't get here" — a bare spinner (the spinner ignores its message). The setup dialog meant for this case was imported and never rendered, and had itself lost its passphrase field while still demanding an 8-character passphrase. It is now shown whenever setup has no password to work from: an account from another server chooses a passphrase (twice); a local account re-enters its login password, which is what later unlocks check against. It stays open through the recovery-key step.
+- **A cross-port session ended after an hour.** The callback page stored the access token and dropped the refresh token that has made these sessions renewable since v2.100.0.
+- **`/api/auth/me` omitted `isCrossPort` / `homeNode`**, so the app forgot an account was remote as soon as it re-read the profile — which is how it chooses between asking for a password and confirming at the home node.
+
+Verified end to end in two real browsers across dev (guest) and QA (home): sign-in via the home server; encryption setup for a brand-new remote account (two passphrase fields, recovery key, into the app, refresh token stored); *Hand over* → step-up dialog offering "Confirm at qa.farhold.com" → QA asks for the password, refuses a wrong one and lets the person retry → back on dev with no second prompt → offer pending → the recipient's card → *Accept* → recipient owner, giver admin.
+
 ### Verified
 
 - 016: a test faults the audit insert per action; an update, a role creation, an invite redemption and a leave each roll back, with a success control — all four fail against the pre-fix server.
