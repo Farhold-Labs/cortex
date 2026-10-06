@@ -3315,6 +3315,40 @@ export class DatabaseSQLite {
       console.log('✅ users.cross_port_verified_at added');
     }
 
+    // v2.109.0 — live broadcasts: one performer, many viewers, over LiveKit.
+    //
+    // A broadcast belongs to a wave (its members may watch) and may carry a
+    // PUBLIC link for an audience without accounts. The link is a random token,
+    // kept as-is because it is public by design — it is shown on the published
+    // event page. Turning it off, or ending the broadcast, deletes it, so a link
+    // that has been passed around stops working rather than lingering. Each broadcast has
+    // its own LiveKit room — never the wave's call room — so a call and a
+    // broadcast in the same wave cannot mix.
+    const broadcastsExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='broadcasts'`
+    ).get();
+    if (!broadcastsExist) {
+      console.log('📝 Creating broadcasts (v2.109.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS broadcasts (
+          id             TEXT PRIMARY KEY,
+          wave_id        TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          event_id       TEXT REFERENCES events(id) ON DELETE SET NULL,
+          title          TEXT NOT NULL,
+          created_by     TEXT REFERENCES users(id) ON DELETE SET NULL,
+          state          TEXT NOT NULL DEFAULT 'live' CHECK(state IN ('live','ended')),
+          room_name      TEXT NOT NULL UNIQUE,
+          public_token   TEXT UNIQUE,
+          viewer_cap     INTEGER NOT NULL DEFAULT 100,
+          started_at     TEXT NOT NULL,
+          ended_at       TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_broadcasts_wave ON broadcasts(wave_id, state);
+        CREATE INDEX IF NOT EXISTS idx_broadcasts_event ON broadcasts(event_id, state);
+      `);
+      console.log('✅ broadcasts created');
+    }
+
     // v2.108.0 — CORTEX-COMM-021: handing over a Community.
     //
     // An offer, then an acceptance — never a silent transfer: ownership carries
@@ -14738,6 +14772,45 @@ export class DatabaseSQLite {
     });
     tx();
     return bound;
+  }
+
+  // ----- Live broadcasts (v2.109.0) -----
+
+  createBroadcast({ waveId, eventId = null, title, createdBy, viewerCap = 100 }) {
+    const id = uuidv4();
+    this.db.prepare(`
+      INSERT INTO broadcasts (id, wave_id, event_id, title, created_by, state, room_name, viewer_cap, started_at)
+      VALUES (?, ?, ?, ?, ?, 'live', ?, ?, ?)
+    `).run(id, waveId, eventId, title, createdBy, `broadcast-${id}`, viewerCap, new Date().toISOString());
+    return this.getBroadcast(id);
+  }
+
+  getBroadcast(id) {
+    return this.db.prepare('SELECT * FROM broadcasts WHERE id = ?').get(id) || null;
+  }
+
+  getLiveBroadcastForWave(waveId) {
+    return this.db.prepare(`SELECT * FROM broadcasts WHERE wave_id = ? AND state = 'live' ORDER BY started_at DESC LIMIT 1`).get(waveId) || null;
+  }
+
+  getLiveBroadcastForEvent(eventId) {
+    return this.db.prepare(`SELECT * FROM broadcasts WHERE event_id = ? AND state = 'live' ORDER BY started_at DESC LIMIT 1`).get(eventId) || null;
+  }
+
+  getBroadcastByPublicToken(token) {
+    if (!token) return null;
+    return this.db.prepare(`SELECT * FROM broadcasts WHERE public_token = ? AND state = 'live'`).get(token) || null;
+  }
+
+  setBroadcastPublicToken(id, token) {
+    this.db.prepare('UPDATE broadcasts SET public_token = ? WHERE id = ?').run(token, id);
+    return this.getBroadcast(id);
+  }
+
+  endBroadcast(id) {
+    const r = this.db.prepare(`UPDATE broadcasts SET state = 'ended', ended_at = ?, public_token = NULL WHERE id = ? AND state = 'live'`)
+      .run(new Date().toISOString(), id);
+    return r.changes === 1;
   }
 
   // ----- Ownership transfer (v2.108.0, CORTEX-COMM-021) -----

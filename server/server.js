@@ -7863,7 +7863,9 @@ const INSTANCE_FEATURES = ['videoFeed', 'crawlBar', 'calendar', 'publicPortal', 
 // `communities` joins this list rather than the one above: it is a whole new
 // social surface, and a node that upgrades must not wake up hosting one. An
 // operator turns it on when they mean to.
-const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents', 'communities'];
+// `broadcasts` (v2.109.0) likewise: every viewer is billed LiveKit minutes, and
+// a public watch link is an internet-facing surface.
+const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents', 'communities', 'broadcasts'];
 const ALL_INSTANCE_FEATURES = [...INSTANCE_FEATURES, ...INSTANCE_OPT_IN_FEATURES];
 
 // Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
@@ -15480,6 +15482,13 @@ const publicEvent = (e) => ({
   // occurrence — so adding "next Tuesday" to a calendar adds next Tuesday, not
   // the date the series happens to be anchored on.
   googleCalendarUrl: buildGoogleCalendarUrl(e),
+  // v2.109.0 — a live broadcast for this event with its public link open. Gone
+  // the moment the link is withdrawn or the broadcast ends.
+  liveUrl: (() => {
+    if (!isFeatureEnabled('broadcasts')) return null;
+    const live = db.getLiveBroadcastForEvent ? db.getLiveBroadcastForEvent(e.id) : null;
+    return live && live.public_token ? `/live/${live.public_token}` : null;
+  })(),
 });
 
 // A recurring event has one database row and many occurrences. `?date=` picks
@@ -20623,6 +20632,231 @@ app.get('/api/waves/:id/messages', authenticateToken, (req, res) => {
     hasMore,
     total: totalMessages,
   });
+});
+
+// ============ LIVE BROADCASTS (v2.109.0) ============
+//
+// One performer, many viewers. A call makes everyone a participant with a
+// camera tile; a broadcast gives the performer the only publishing token and
+// every viewer a hidden, subscribe-only one, in a room of its own. Viewers
+// watch on a dedicated page whose video can go truly full screen.
+//
+// Members of the wave watch while signed in. The performer can also open a
+// PUBLIC link for an audience without accounts: it can be withdrawn at any
+// time, ends with the broadcast, is rate-limited per address, and every
+// broadcast has a viewer cap, because LiveKit bills per participant-minute and
+// a link that leaks must not be able to run up an unbounded bill.
+//
+// Opt-in instance feature (`broadcasts`): it costs money per viewer and adds a
+// public surface, so a node that upgrades must not wake up offering it.
+
+const BROADCAST_TITLE_MAX = 120;
+const BROADCAST_DEFAULT_CAP = parseInt(process.env.BROADCAST_VIEWER_CAP, 10) || 100;
+
+const broadcastViewerLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts to join — please wait a moment' },
+});
+
+function livekitReady(res) {
+  if (LIVEKIT_URL && LIVEKIT_API_KEY && LIVEKIT_API_SECRET) return true;
+  res.status(503).json({ error: 'Live video is not configured on this server' });
+  return false;
+}
+
+function broadcastView(b, { includePublic = false } = {}) {
+  if (!b) return null;
+  return {
+    id: b.id, waveId: b.wave_id, eventId: b.event_id, title: b.title, createdBy: b.created_by,
+    state: b.state, startedAt: b.started_at, endedAt: b.ended_at, viewerCap: b.viewer_cap,
+    publicLink: includePublic && b.public_token ? `${getAppBaseUrl()}/live/${b.public_token}` : null,
+    publicEnabled: !!b.public_token,
+  };
+}
+
+/** May this person run the broadcast: the one who started it, or wave staff. */
+function canControlBroadcast(b, userId) {
+  if (!b) return false;
+  if (b.created_by === userId) return true;
+  return canManageWave(db.getWave(b.wave_id), userId);
+}
+
+async function broadcastToken(b, { identity, name, publisher }) {
+  const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
+    identity, name, ttl: publisher ? '8h' : '6h',
+  });
+  at.addGrant({
+    roomJoin: true,
+    room: b.room_name,
+    canPublish: !!publisher,
+    canSubscribe: true,
+    canPublishData: false,
+    // Viewers are invisible to each other and to the performer's participant
+    // list — an audience, not a meeting.
+    hidden: !publisher,
+  });
+  return at.toJwt();
+}
+
+/** How many people are in the room now. Fails open (null) if LiveKit is unreachable. */
+async function broadcastAudienceSize(b) {
+  if (!livekitRoomService) return null;
+  try {
+    const people = await livekitRoomService.listParticipants(b.room_name);
+    return people.length;
+  } catch {
+    return 0; // the room does not exist yet: nobody has joined
+  }
+}
+
+async function viewerTokenOrRefuse(b, res, { identity, name }) {
+  const inRoom = await broadcastAudienceSize(b);
+  // The cap counts the performer too; it is a cost ceiling, not a guest list.
+  if (inRoom !== null && inRoom >= b.viewer_cap + 1) {
+    res.status(429).json({ error: 'This broadcast is full right now. Please try again shortly.', code: 'BROADCAST_FULL' });
+    return null;
+  }
+  return broadcastToken(b, { identity, name, publisher: false });
+}
+
+app.post('/api/waves/:waveId/broadcasts', authenticateToken, apiLimiter, async (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  if (!livekitReady(res)) return;
+  const wave = db.getWave(req.params.waveId);
+  if (!wave || !canAccessWaveFromCache(wave.id, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
+  if (!canPostToWave(wave, req.user.userId)) return res.status(403).json({ error: 'You cannot post in this wave' });
+
+  const title = sanitizeInput(String(req.body?.title || '')).slice(0, BROADCAST_TITLE_MAX).trim();
+  if (!title) return res.status(400).json({ error: 'Give the broadcast a title' });
+
+  let eventId = null;
+  if (req.body?.eventId) {
+    const event = db.getEvent ? db.getEvent(sanitizeInput(req.body.eventId)) : null;
+    if (!event || event.waveId !== wave.id) return res.status(400).json({ error: 'That event does not belong to this wave' });
+    eventId = event.id;
+  }
+  if (db.getLiveBroadcastForWave(wave.id)) {
+    return res.status(409).json({ error: 'This wave is already live. End that broadcast first.' });
+  }
+
+  const b = db.createBroadcast({ waveId: wave.id, eventId, title, createdBy: req.user.userId, viewerCap: BROADCAST_DEFAULT_CAP });
+  if (req.body?.public === true && isFeatureEnabled('publicPortal')) {
+    db.setBroadcastPublicToken(b.id, crypto.randomBytes(18).toString('base64url'));
+  }
+  const fresh = db.getBroadcast(b.id);
+  db.logActivity(req.user.userId, 'broadcast_started', 'wave', wave.id, { broadcastId: b.id, public: !!fresh.public_token });
+
+  const me = db.findUserById(req.user.userId);
+  broadcastToWaveWithPush(wave.id, { type: 'broadcast_started', broadcast: broadcastView(fresh) }, {
+    type: 'broadcast', waveId: wave.id,
+    title: `🔴 Live now: ${title}`,
+    body: `${me?.displayName || me?.handle || 'Someone'} is broadcasting in ${wave.title || 'a wave'}`,
+    url: `/watch/${fresh.id}`,
+  }, null, req.user.userId);
+
+  const token = await broadcastToken(fresh, { identity: req.user.userId, name: me?.displayName || me?.handle || 'Performer', publisher: true });
+  res.status(201).json({ broadcast: broadcastView(fresh, { includePublic: true }), token, url: LIVEKIT_URL });
+});
+
+app.get('/api/waves/:waveId/broadcast', authenticateToken, (req, res) => {
+  if (!isFeatureEnabled('broadcasts')) return res.json({ broadcast: null });
+  if (!canAccessWaveFromCache(req.params.waveId, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
+  const b = db.getLiveBroadcastForWave(req.params.waveId);
+  res.json({ broadcast: broadcastView(b, { includePublic: canControlBroadcast(b, req.user.userId) }) });
+});
+
+app.get('/api/broadcasts/:id', authenticateToken, (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  const b = db.getBroadcast(req.params.id);
+  if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
+  res.json({
+    broadcast: broadcastView(b, { includePublic: canControlBroadcast(b, req.user.userId) }),
+    canControl: canControlBroadcast(b, req.user.userId),
+    isPerformer: b.created_by === req.user.userId,
+  });
+});
+
+// Join: the performer gets the publishing token; every other member a viewer one.
+app.post('/api/broadcasts/:id/token', authenticateToken, apiLimiter, async (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  if (!livekitReady(res)) return;
+  const b = db.getBroadcast(req.params.id);
+  if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
+  if (b.state !== 'live') return res.status(410).json({ error: 'This broadcast has ended', code: 'BROADCAST_ENDED' });
+  const me = db.findUserById(req.user.userId);
+  const name = me?.displayName || me?.handle || 'Viewer';
+  if (b.created_by === req.user.userId) {
+    return res.json({ token: await broadcastToken(b, { identity: req.user.userId, name, publisher: true }), url: LIVEKIT_URL, role: 'performer' });
+  }
+  // A member may watch from several devices; the identity must differ per
+  // join or LiveKit would disconnect the first one.
+  const token = await viewerTokenOrRefuse(b, res, { identity: `${req.user.userId}:${crypto.randomBytes(4).toString('hex')}`, name });
+  if (token) res.json({ token, url: LIVEKIT_URL, role: 'viewer' });
+});
+
+// How many are watching — for the performer's screen. Hidden viewers do not
+// appear in a LiveKit room's own participant list, so the server asks.
+app.get('/api/broadcasts/:id/audience', authenticateToken, async (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  const b = db.getBroadcast(req.params.id);
+  if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
+  if (!canControlBroadcast(b, req.user.userId)) return res.status(403).json({ error: 'Only the performer or wave staff can see this' });
+  const inRoom = await broadcastAudienceSize(b);
+  res.json({ viewers: inRoom === null ? null : Math.max(0, inRoom - 1), cap: b.viewer_cap });
+});
+
+// Open or withdraw the public link. Re-opening mints a NEW link: a withdrawn
+// one never comes back to life.
+app.post('/api/broadcasts/:id/public-link', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  const b = db.getBroadcast(req.params.id);
+  if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
+  if (!canControlBroadcast(b, req.user.userId)) return res.status(403).json({ error: 'Only the performer or wave staff can change this' });
+  if (b.state !== 'live') return res.status(410).json({ error: 'This broadcast has ended' });
+  const enable = req.body?.enabled === true;
+  if (enable && !isFeatureEnabled('publicPortal')) {
+    return res.status(403).json({ error: 'Public pages are switched off on this server', code: 'FEATURE_DISABLED', feature: 'publicPortal' });
+  }
+  const updated = db.setBroadcastPublicToken(b.id, enable ? crypto.randomBytes(18).toString('base64url') : null);
+  db.logActivity(req.user.userId, enable ? 'broadcast_public_on' : 'broadcast_public_off', 'wave', b.wave_id, { broadcastId: b.id });
+  res.json({ broadcast: broadcastView(updated, { includePublic: true }) });
+});
+
+app.post('/api/broadcasts/:id/end', authenticateToken, async (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  const b = db.getBroadcast(req.params.id);
+  if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
+  if (!canControlBroadcast(b, req.user.userId)) return res.status(403).json({ error: 'Only the performer or wave staff can end this' });
+  if (!db.endBroadcast(b.id)) return res.status(409).json({ error: 'This broadcast has already ended' });
+  // Close the room so every viewer — including anyone on a public link —
+  // is disconnected now, not whenever their token lapses.
+  if (livekitRoomService) livekitRoomService.deleteRoom(b.room_name).catch(() => {});
+  db.logActivity(req.user.userId, 'broadcast_ended', 'wave', b.wave_id, { broadcastId: b.id });
+  broadcastToWave(b.wave_id, { type: 'broadcast_ended', broadcastId: b.id, waveId: b.wave_id });
+  res.json({ broadcast: broadcastView(db.getBroadcast(b.id)) });
+});
+
+// ----- Public viewing (no account) -----
+
+app.get('/api/public/broadcasts/:token', (req, res) => {
+  if (!isFeatureEnabled('broadcasts') || !isFeatureEnabled('publicPortal')) return res.status(404).json({ error: 'Not found' });
+  const b = db.getBroadcastByPublicToken(String(req.params.token || ''));
+  // One answer for "never existed", "withdrawn" and "ended": the difference
+  // would tell someone holding a guessed link how close they are.
+  if (!b) return res.status(404).json({ error: 'This broadcast is not available' });
+  res.json({ broadcast: { title: b.title, state: b.state, startedAt: b.started_at, instanceName: db.getInstanceConfig?.()?.branding?.instanceName || null } });
+});
+
+app.post('/api/public/broadcasts/:token/token', broadcastViewerLimiter, async (req, res) => {
+  if (!isFeatureEnabled('broadcasts') || !isFeatureEnabled('publicPortal')) return res.status(404).json({ error: 'Not found' });
+  if (!LIVEKIT_URL || !LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) return res.status(503).json({ error: 'Live video is not configured on this server' });
+  const b = db.getBroadcastByPublicToken(String(req.params.token || ''));
+  if (!b) return res.status(404).json({ error: 'This broadcast is not available' });
+  const token = await viewerTokenOrRefuse(b, res, { identity: `guest:${crypto.randomBytes(8).toString('hex')}`, name: 'Guest' });
+  if (token) res.json({ token, url: LIVEKIT_URL, role: 'viewer' });
 });
 
 // ============ LIVEKIT VOICE CALLS (v2.4.0) ============
