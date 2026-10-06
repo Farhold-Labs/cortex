@@ -1460,6 +1460,22 @@ CREATE TABLE IF NOT EXISTS attachments (
         );
 CREATE INDEX IF NOT EXISTS idx_attachments_wave ON attachments(wave_id);
 
+CREATE TABLE IF NOT EXISTS community_ownership_transfers (
+          id            TEXT PRIMARY KEY,
+          community_id  TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          from_user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          to_user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          state         TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(state IN ('pending','accepted','declined','cancelled','expired')),
+          created_at    TEXT NOT NULL,
+          expires_at    TEXT NOT NULL,
+          resolved_at   TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_ownership_transfers_community
+          ON community_ownership_transfers(community_id, state);
+CREATE INDEX IF NOT EXISTS idx_ownership_transfers_to
+          ON community_ownership_transfers(to_user_id, state);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);

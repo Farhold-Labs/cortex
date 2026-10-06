@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { T } from '../../config/terminology.js';
+import { storage } from '../../utils/storage.js';
 
 /**
  * Community settings: channels, members and invites (v2.99.0, Phase 6).
@@ -25,6 +26,10 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
   const [renaming, setRenaming] = useState(null);      // channel id being renamed
   const [renameTo, setRenameTo] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
+  // Handing the Community over (v2.107.2, CORTEX-COMM-021).
+  const [transfer, setTransfer] = useState(null);       // the pending offer, if any
+  const [confirmHandover, setConfirmHandover] = useState(null); // member being offered it
+  const myId = storage.getUser()?.id;
 
   const load = useCallback(async () => {
     if (can('channel.view')) {
@@ -41,6 +46,12 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
         // were the whole list would be a quietly wrong answer.
         setMemberTotal(typeof m.total === 'number' ? m.total : (m.members || []).length);
       } catch { /* the panel is still useful without it */ }
+    }
+    if (can('community.transfer')) {
+      try {
+        const t = await fetchAPI(`/communities/${community.id}/transfer`);
+        setTransfer(t.transfer || null);
+      } catch { /* ditto */ }
     }
     if (can('member.invite')) {
       try {
@@ -176,6 +187,33 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
       await fetchAPI(`/communities/${community.id}/invites/${id}`, { method: 'DELETE' });
       load();
     } catch { showToast('Could not revoke that invite', 'error'); }
+  };
+
+  const offerHandover = async (member) => {
+    try {
+      // Step-up re-authentication is requested by fetchAPI if the server asks.
+      const res = await fetchAPI(`/communities/${community.id}/transfer`, {
+        method: 'POST', body: { toUserId: member.userId },
+        stepUpReason: `Confirm it is you before offering ${community.name} to someone else.`,
+      });
+      setTransfer(res.transfer);
+      setConfirmHandover(null);
+      showToast(`Offered to ${member.displayName || member.handle}. Nothing changes until they accept.`, 'success');
+    } catch (err) {
+      showToast(err.message || 'Could not make the offer', 'error');
+    }
+  };
+
+  const withdrawHandover = async () => {
+    if (!transfer) return;
+    try {
+      await fetchAPI(`/communities/${community.id}/transfer/${transfer.id}`, { method: 'DELETE' });
+      setTransfer(null);
+      showToast('Offer withdrawn', 'success');
+    } catch (err) {
+      showToast(err.message || 'Could not withdraw the offer', 'error');
+      load();
+    }
   };
 
   const box = {
@@ -353,19 +391,52 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
           <div style={label}>
             MEMBERS ({memberTotal > members.length ? `${members.length} of ${memberTotal}` : members.length})
           </div>
-          {members.map(m => (
-            <div key={m.userId} style={{ fontSize: '0.78rem', padding: '0.2rem 0' }}>
-              {m.displayName || m.handle}
-              {m.isCrossPort && (
-                <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginLeft: 6 }}>
-                  · from {m.homeNode}
-                </span>
-              )}
-              <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginLeft: 6 }}>
-                {m.roles.map(r => r.name).join(', ')}
-              </span>
+          {transfer && (
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: '0.3rem 0 0.5rem', lineHeight: 1.4 }}>
+              Handover offered to {members.find(m => m.userId === transfer.toUserId)?.displayName || 'a member'} —
+              waiting for them to accept (lapses {new Date(transfer.expiresAt).toLocaleDateString()}).
+              <button onClick={withdrawHandover} style={{ ...action, marginTop: 0, marginLeft: 6 }}>Withdraw</button>
             </div>
-          ))}
+          )}
+          {members.map(m => {
+            const isOwner = m.roles.some(r => r.name === 'owner');
+            const mayOffer = can('community.transfer') && !transfer && m.userId !== myId && !isOwner;
+            return (
+            <div key={m.userId} style={{ fontSize: '0.78rem', padding: '0.2rem 0' }}>
+              {confirmHandover === m.userId ? (
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.25rem', lineHeight: 1.4 }}>
+                    Offer {community.name} to {m.displayName || m.handle}? If they accept they become its owner and
+                    you stay on as an admin. Nothing changes until they say yes.
+                  </div>
+                  <button onClick={() => offerHandover(m)} style={{ ...action, marginTop: 0, color: 'var(--accent-amber)' }}>
+                    Yes, offer it
+                  </button>
+                  <button onClick={() => setConfirmHandover(null)} style={{ ...action, marginTop: 0 }}>Cancel</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ minWidth: 0 }}>
+                    {m.displayName || m.handle}
+                    {m.isCrossPort && (
+                      <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginLeft: 6 }}>
+                        · from {m.homeNode}
+                      </span>
+                    )}
+                    <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginLeft: 6 }}>
+                      {m.roles.map(r => r.name).join(', ')}
+                    </span>
+                  </span>
+                  {mayOffer && (
+                    <button onClick={() => setConfirmHandover(m.userId)} style={{ ...action, marginTop: 0, flexShrink: 0 }}>
+                      Hand over
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            );
+          })}
         </div>
       )}
     </div>

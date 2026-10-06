@@ -41,6 +41,7 @@ const CalendarView = lazyComponent(() => import('./CalendarView.jsx'), { fallbac
 const ProfileSettings = lazyComponent(() => import('../components/profile/ProfileSettings.jsx'), { fallback: ViewLoading });
 const VideoFeedView = lazyComponent(() => import('../components/feed/VideoFeedView.jsx'), { fallback: ViewLoading });
 const CommunityPanel = lazyComponent(() => import('../components/communities/CommunityPanel.jsx'));
+const OwnershipOffers = lazyComponent(() => import('../components/communities/OwnershipOffers.jsx'));
 const WatchPartyPlayer = lazyComponent(() => import('../components/media/WatchPartyPlayer.jsx'));
 const NewWaveModal = lazyComponent(() => import('../components/waves/NewWaveModal.jsx'), { renderIf: (p) => p.isOpen });
 const UserProfileModal = lazyComponent(() => import('../components/profile/UserProfileModal.jsx'), { renderIf: (p) => p.isOpen });
@@ -2206,6 +2207,11 @@ function MainApp({ sharePingId }) {
           onSelectMessage={handleSearchResultClick}
           isMobile={isMobile}
         />
+      )}
+
+      {instanceFeaturesLoaded && instanceFeatures.communities && (
+        <OwnershipOffers fetchAPI={fetchAPI} showToast={showToastMsg} isMobile={isMobile}
+          onChanged={() => { loadCommunityChannels(); loadWaves(); }} />
       )}
 
       {communityPanelFor && (

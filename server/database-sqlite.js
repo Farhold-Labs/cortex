@@ -3315,6 +3315,37 @@ export class DatabaseSQLite {
       console.log('✅ users.cross_port_verified_at added');
     }
 
+    // v2.107.2 — CORTEX-COMM-021: handing over a Community.
+    //
+    // An offer, then an acceptance — never a silent transfer: ownership carries
+    // obligations, and pushing it onto somebody unasked is a way to dump a
+    // liability on them. Both users CASCADE: an offer from or to an account
+    // that no longer exists means nothing.
+    const transfersExist = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='community_ownership_transfers'`
+    ).get();
+    if (!transfersExist) {
+      console.log('📝 Creating community_ownership_transfers (v2.107.2)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS community_ownership_transfers (
+          id            TEXT PRIMARY KEY,
+          community_id  TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          from_user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          to_user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          state         TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(state IN ('pending','accepted','declined','cancelled','expired')),
+          created_at    TEXT NOT NULL,
+          expires_at    TEXT NOT NULL,
+          resolved_at   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_ownership_transfers_community
+          ON community_ownership_transfers(community_id, state);
+        CREATE INDEX IF NOT EXISTS idx_ownership_transfers_to
+          ON community_ownership_transfers(to_user_id, state);
+      `);
+      console.log('✅ community_ownership_transfers created');
+    }
+
     // v2.107.2 — CORTEX-COMM-002: a pending cross-port sign-in is bound to the
     // browser that started it. Only a hash of the browser's secret is stored;
     // the secret itself lives in an HttpOnly cookie on that browser.
@@ -14689,6 +14720,86 @@ export class DatabaseSQLite {
     });
     tx();
     return bound;
+  }
+
+  // ----- Ownership transfer (v2.107.2, CORTEX-COMM-021) -----
+
+  /** The live offer for a Community, expiring a stale one on the way. */
+  getPendingOwnershipTransfer(communityId) {
+    const row = this.db.prepare(
+      `SELECT * FROM community_ownership_transfers WHERE community_id = ? AND state = 'pending' ORDER BY created_at DESC LIMIT 1`
+    ).get(communityId);
+    if (row && new Date(row.expires_at) <= new Date()) {
+      this.db.prepare(`UPDATE community_ownership_transfers SET state = 'expired', resolved_at = ? WHERE id = ?`)
+        .run(new Date().toISOString(), row.id);
+      return null;
+    }
+    return row || null;
+  }
+
+  getOwnershipTransfer(id) {
+    return this.db.prepare('SELECT * FROM community_ownership_transfers WHERE id = ?').get(id) || null;
+  }
+
+  /** Pending offers addressed to this user, across Communities. */
+  getOwnershipOffersFor(userId) {
+    const now = new Date().toISOString();
+    return this.db.prepare(`
+      SELECT t.*, c.name AS community_name, u.handle AS from_handle, u.display_name AS from_display_name
+      FROM community_ownership_transfers t
+      JOIN communities c ON c.id = t.community_id
+      JOIN users u ON u.id = t.from_user_id
+      WHERE t.to_user_id = ? AND t.state = 'pending' AND t.expires_at > ? AND c.status = 'active'
+      ORDER BY t.created_at DESC
+    `).all(userId, now);
+  }
+
+  createOwnershipTransfer({ communityId, fromUserId, toUserId, ttlMs = 7 * 24 * 60 * 60 * 1000 }) {
+    const id = uuidv4();
+    const now = new Date();
+    this.db.prepare(`
+      INSERT INTO community_ownership_transfers (id, community_id, from_user_id, to_user_id, state, created_at, expires_at)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?)
+    `).run(id, communityId, fromUserId, toUserId, now.toISOString(), new Date(now.getTime() + ttlMs).toISOString());
+    return this.getOwnershipTransfer(id);
+  }
+
+  /** Close an offer without a handover. Only a pending one moves. */
+  resolveOwnershipTransfer(id, state) {
+    const result = this.db.prepare(
+      `UPDATE community_ownership_transfers SET state = ?, resolved_at = ? WHERE id = ? AND state = 'pending'`
+    ).run(state, new Date().toISOString(), id);
+    return result.changes === 1;
+  }
+
+  /**
+   * The handover itself: the recipient becomes an owner, the giver steps down
+   * to admin, and the offer closes — all or nothing. The caller has re-checked
+   * eligibility; this re-checks only what a concurrent request could change,
+   * inside the same transaction as the writes.
+   */
+  completeOwnershipTransfer(id) {
+    const tx = this.db.transaction(() => {
+      const t = this.getOwnershipTransfer(id);
+      if (!t || t.state !== 'pending' || new Date(t.expires_at) <= new Date()) return { ok: false, reason: 'not_pending' };
+      const ownerRole = this.getCommunityRole(t.community_id, 'owner');
+      const adminRole = this.getCommunityRole(t.community_id, 'admin');
+      const from = this.getCommunityMembership(t.community_id, t.from_user_id);
+      const to = this.getCommunityMembership(t.community_id, t.to_user_id);
+      if (!ownerRole || !from || from.state !== 'active' || !to || to.state !== 'active') return { ok: false, reason: 'ineligible' };
+      const fromIsOwner = this.db.prepare(
+        'SELECT 1 FROM community_membership_roles WHERE membership_id = ? AND role_id = ?'
+      ).get(from.id, ownerRole.id);
+      if (!fromIsOwner) return { ok: false, reason: 'no_longer_owner' };
+
+      this.grantCommunityRole(to.id, ownerRole.id, { grantedBy: t.from_user_id });
+      if (adminRole) this.grantCommunityRole(from.id, adminRole.id, { grantedBy: t.from_user_id });
+      this.revokeCommunityRole(from.id, ownerRole.id);
+      this.db.prepare(`UPDATE community_ownership_transfers SET state = 'accepted', resolved_at = ? WHERE id = ?`)
+        .run(new Date().toISOString(), id);
+      return { ok: true, transfer: this.getOwnershipTransfer(id) };
+    });
+    return tx();
   }
 
   // ----- Audit -----

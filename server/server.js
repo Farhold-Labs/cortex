@@ -23804,6 +23804,17 @@ app.get('/api/communities', authenticateToken, apiLimiter, (req, res) => {
 });
 
 // The rail.
+// Ownership offers addressed to me (v2.107.2, CORTEX-COMM-021). Registered
+// before /api/communities/:id, which would otherwise read the path as an id.
+app.get('/api/communities/ownership-offers', authenticateToken, (req, res) => {
+  const offers = db.getOwnershipOffersFor(req.user.userId).map(o => ({
+    id: o.id, communityId: o.community_id, communityName: o.community_name,
+    from: { id: o.from_user_id, handle: o.from_handle, displayName: o.from_display_name || o.from_handle },
+    createdAt: o.created_at, expiresAt: o.expires_at,
+  }));
+  res.json({ offers });
+});
+
 app.get('/api/communities/mine', authenticateToken, (req, res) => {
   res.json({ communities: db.listUserCommunities(req.user.userId) });
 });
@@ -23964,6 +23975,157 @@ app.delete('/api/communities/:id/members/:userId', authenticateToken, (req, res)
 // Leaving is not being removed, so it needs no capability — but it must not
 // strand the Community without an owner, and that check runs inside the same
 // transaction as the write.
+// ----- Ownership transfer (v2.107.2, CORTEX-COMM-021) -----
+//
+// An owner could not hand a Community over at all: `community.transfer` existed
+// as a capability that nothing consumed, granting the owner role is refused at
+// your own priority, and the last owner cannot leave. Their only way out was
+// deleting their account, which suspends the Community.
+//
+// The model: an owner OFFERS, the recipient ACCEPTS. Ownership carries
+// obligations, so it is never pushed onto anybody. On acceptance the recipient
+// becomes an owner and the giver steps down to admin, in one transaction. One
+// offer at a time per Community; it lapses after seven days. Offering requires
+// step-up re-authentication — it begins giving away a shared space.
+
+function communityTransferView(t) {
+  return t && {
+    id: t.id, communityId: t.community_id, fromUserId: t.from_user_id, toUserId: t.to_user_id,
+    state: t.state, createdAt: t.created_at, expiresAt: t.expires_at, resolvedAt: t.resolved_at,
+  };
+}
+
+function notifyCommunityTransfer(userId, actorId, title, body) {
+  try {
+    if (!shouldCreateNotification(userId, 'system', null)) return;
+    const notification = db.createNotification({ userId, type: 'system', actorId, title, body });
+    if (!notification) return;
+    db.markNotificationPushSent(notification.id);
+    sendPushNotification(userId, { type: 'system', title, body, url: '/' });
+  } catch (err) {
+    // Telling them is a courtesy; the offer stands either way and is listed
+    // in the app.
+    console.error('[communities] transfer notification failed:', err.message);
+  }
+}
+
+const communityName = (id) => db.getCommunityById(id)?.name || 'a community';
+const activeIn = (communityId, userId) =>
+  communityAuthz.effectiveCapabilities(db, { kind: 'user', userId }, communityId).size > 0;
+const isOwnerOf = (communityId, userId) =>
+  db.getMemberRoles(communityId, userId).some(r => r.name === 'owner');
+
+app.post('/api/communities/:id/transfer', authenticateToken, apiLimiter, requireStepUp, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.TRANSFER_OWNER)) return;
+  const toUserId = typeof req.body?.toUserId === 'string' ? req.body.toUserId : '';
+  if (!toUserId) return res.status(400).json({ error: 'toUserId is required' });
+  if (toUserId === req.user.userId) return res.status(400).json({ error: 'You already own this community' });
+
+  // Someone who could act here right now: an active member, not banned, and —
+  // if they are from another node — still in good standing there.
+  if (!activeIn(req.params.id, toUserId)) {
+    return res.status(404).json({ error: 'That person is not an active member of this community' });
+  }
+  if (isOwnerOf(req.params.id, toUserId)) return res.status(409).json({ error: 'They are already an owner' });
+  if (db.getPendingOwnershipTransfer(req.params.id)) {
+    return res.status(409).json({ error: 'A handover is already waiting for an answer. Cancel it first.' });
+  }
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
+
+  const transfer = inCommunityTransaction(() => {
+    const t = db.createOwnershipTransfer({ communityId: req.params.id, fromUserId: req.user.userId, toUserId });
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'ownership.offer', targetType: 'user', targetId: toUserId,
+    });
+    return t;
+  });
+  const from = db.findUserById(req.user.userId);
+  notifyCommunityTransfer(toUserId, req.user.userId,
+    `${from?.displayName || from?.handle || 'Someone'} wants to hand ${communityName(req.params.id)} over to you`,
+    'Open Communities to accept or decline. The offer lapses in 7 days.');
+  res.status(201).json({ transfer: communityTransferView(transfer) });
+});
+
+app.get('/api/communities/:id/transfer', authenticateToken, (req, res) => {
+  const t = db.getPendingOwnershipTransfer(req.params.id);
+  // Visible to the two people involved and to anyone who could make an offer.
+  const mayView = t && (t.from_user_id === req.user.userId || t.to_user_id === req.user.userId ||
+    communityAuthz.effectiveCapabilities(db, communityActor(req), req.params.id).has(CommunityCaps.TRANSFER_OWNER));
+  res.json({ transfer: mayView ? communityTransferView(t) : null });
+});
+
+app.post('/api/communities/:id/transfer/:transferId/accept', authenticateToken, apiLimiter, (req, res) => {
+  const t = db.getOwnershipTransfer(req.params.transferId);
+  if (!t || t.community_id !== req.params.id || t.to_user_id !== req.user.userId) {
+    return res.status(404).json({ error: 'No such offer' });
+  }
+  // Everything that made the offer valid is re-checked now: a week is long
+  // enough for the giver to have lost ownership, or the recipient their place.
+  const community = db.getCommunityById(req.params.id);
+  if (!community || community.status !== 'active') return res.status(409).json({ error: 'That community is not active' });
+  if (!activeIn(req.params.id, req.user.userId)) return res.status(409).json({ error: 'You are no longer an active member' });
+  const giverCaps = communityAuthz.effectiveCapabilities(db, { kind: 'user', userId: t.from_user_id }, req.params.id);
+  if (!giverCaps.has(CommunityCaps.TRANSFER_OWNER)) {
+    db.resolveOwnershipTransfer(t.id, 'cancelled');
+    return res.status(409).json({ error: 'The person who offered it is no longer an owner' });
+  }
+
+  const result = inCommunityTransaction(() => {
+    const r = db.completeOwnershipTransfer(t.id);
+    if (r.ok) {
+      db.logCommunityAudit(req.params.id, {
+        actorId: req.user.userId, action: 'ownership.accept', targetType: 'user', targetId: t.from_user_id,
+      });
+    }
+    return r;
+  });
+  if (!result.ok) return res.status(409).json({ error: 'That offer is no longer open', reason: result.reason });
+
+  const me = db.findUserById(req.user.userId);
+  notifyCommunityTransfer(t.from_user_id, req.user.userId,
+    `${me?.displayName || me?.handle || 'They'} accepted ${communityName(req.params.id)}`,
+    'They are now an owner. You remain an admin, and can leave whenever you like.');
+  res.json({ transfer: communityTransferView(result.transfer), roles: db.getMemberRoles(req.params.id, req.user.userId) });
+});
+
+app.post('/api/communities/:id/transfer/:transferId/decline', authenticateToken, (req, res) => {
+  const t = db.getOwnershipTransfer(req.params.transferId);
+  if (!t || t.community_id !== req.params.id || t.to_user_id !== req.user.userId) {
+    return res.status(404).json({ error: 'No such offer' });
+  }
+  const declined = inCommunityTransaction(() => {
+    if (!db.resolveOwnershipTransfer(t.id, 'declined')) return false;
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'ownership.decline', targetType: 'user', targetId: t.from_user_id,
+    });
+    return true;
+  });
+  if (!declined) return res.status(409).json({ error: 'That offer is no longer open' });
+  const me = db.findUserById(req.user.userId);
+  notifyCommunityTransfer(t.from_user_id, req.user.userId,
+    `${me?.displayName || me?.handle || 'They'} declined ${communityName(req.params.id)}`, 'You are still its owner.');
+  res.json({ success: true });
+});
+
+app.delete('/api/communities/:id/transfer/:transferId', authenticateToken, (req, res) => {
+  const t = db.getOwnershipTransfer(req.params.transferId);
+  if (!t || t.community_id !== req.params.id) return res.status(404).json({ error: 'No such offer' });
+  // The giver, or any other owner, may withdraw it.
+  if (t.from_user_id !== req.user.userId &&
+      !requireCommunityCapability(req, res, req.params.id, CommunityCaps.TRANSFER_OWNER)) return;
+  const cancelled = inCommunityTransaction(() => {
+    if (!db.resolveOwnershipTransfer(t.id, 'cancelled')) return false;
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'ownership.cancel', targetType: 'user', targetId: t.to_user_id,
+    });
+    return true;
+  });
+  if (!cancelled) return res.status(409).json({ error: 'That offer is no longer open' });
+  notifyCommunityTransfer(t.to_user_id, req.user.userId,
+    `The offer of ${communityName(req.params.id)} was withdrawn`, 'Nothing has changed for you.');
+  res.json({ success: true });
+});
+
 app.post('/api/communities/:id/leave', authenticateToken, (req, res) => {
   const membership = db.getCommunityMembership(req.params.id, req.user.userId);
   if (!membership || membership.state !== 'active') return res.status(404).json({ error: 'Not a member' });
