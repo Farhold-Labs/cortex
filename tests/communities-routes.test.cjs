@@ -98,7 +98,7 @@ test('Communities API', async (t) => {
 
     // First registered user becomes the node admin; keep them out of the way.
     await makeUser('nodeadmin');
-    const owner = await makeUser('owner');
+    const owner = await makeUser('founder'); // 'owner' is a reserved handle since v2.107.2 (R-04)
     const admin = await makeUser('adminuser');
     const mod = await makeUser('moduser');
     const member = await makeUser('memberuser');

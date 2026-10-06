@@ -39,6 +39,7 @@ import { getCurrentHoliday } from './holidays.js';
 import { initializeApp as initializeFirebaseApp, getApps as getFirebaseApps, cert as firebaseCert } from 'firebase-admin/app';
 import { getMessaging as getFirebaseMessaging } from 'firebase-admin/messaging';
 import { plainText } from './lib/plain-text.js';
+import { isReservedHandle } from './lib/reserved-handles.js';
 import { canAccessMedia, validMediaTarget } from './lib/media-access.js';
 import { HlsSessions, proxyMedia, upstreamUrl } from './lib/media-proxy.js';
 
@@ -2442,6 +2443,9 @@ class Database {
     const request = this.handleRequests.requests.find(r => r.id === requestId);
     if (!request || request.status !== 'pending') {
       return { success: false, error: 'Request not found or already processed' };
+    }
+    if (isReservedHandle(request.newHandle)) {
+      return { success: false, error: 'That handle is reserved' };
     }
     
     const user = this.findUserById(request.userId);
@@ -5036,23 +5040,33 @@ app.use('/uploads', (req, res, next) => {
  * already written; what they do not get is somebody else's conversation
  * vouching for it.
  */
-function bindUploadToWave(storageKey, waveId, userId) {
+async function bindUploadToWave(storageKey, waveId, userId) {
+  // Record ownership even with no wave named. An upload composed before its
+  // conversation exists — or in an encrypted wave, where the client files it
+  // after the fact — still needs a row saying who uploaded it, because that
+  // is what /api/attachments/bind checks later. No wave means no restriction
+  // yet, only a claim of authorship.
+  let target = waveId || null;
+  if (target && !canAccessWaveFromCache(target, userId)) {
+    console.warn(`[attachments] ${userId} uploaded against wave ${target} they are not in — left unbound`);
+    target = null;
+  }
   try {
-    // Record ownership even with no wave named. An upload composed before its
-    // conversation exists — or in an encrypted wave, where the client files it
-    // after the fact — still needs a row saying who uploaded it, because that
-    // is what /api/attachments/bind checks later. No wave means no restriction
-    // yet, only a claim of authorship.
-    let target = waveId || null;
-    if (target && !canAccessWaveFromCache(target, userId)) {
-      console.warn(`[attachments] ${userId} uploaded against wave ${target} they are not in — left unbound`);
-      target = null;
-    }
     db.bindAttachment({ path: storageKey, waveId: target, uploadedBy: userId });
   } catch (err) {
-    // An upload that stored successfully must not fail because the binding
-    // did; it simply stays public, which is the pre-v2.104.0 behaviour.
-    console.error('[attachments] could not bind upload:', err.message);
+    // Fail closed (security audit R-02, v2.107.2). This used to log and carry
+    // on, leaving the file public: an upload meant for a private wave was
+    // readable by anyone with the URL, and one awaiting its wave had no
+    // ownership row, so the later /api/attachments/bind answered "unknown"
+    // and the file stayed public for good. A stored file nobody can secure is
+    // removed and the upload reported as failed — the person simply retries.
+    console.error('[attachments] could not bind upload — removing it:', err.message);
+    try { await storage.delete(storageKey); } catch (delErr) {
+      console.error('[attachments] could not remove unbound upload:', storageKey, delErr.message);
+    }
+    const failure = new Error('Upload could not be secured');
+    failure.uploadNotSecured = true;
+    throw failure;
   }
 }
 
@@ -5294,6 +5308,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     }
     if (!/^[a-zA-Z0-9_]{3,20}$/.test(handle)) {
       return res.status(400).json({ error: 'Handle must be 3-20 characters, letters/numbers/underscores only' });
+    }
+    // Names that read as staff or as mention-everyone keywords (security audit
+    // R-04, v2.107.2). No override: see server/lib/reserved-handles.js.
+    if (isReservedHandle(handle)) {
+      return res.status(400).json({ error: 'That handle is reserved. Please choose another.' });
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Invalid email format' });
@@ -7428,7 +7447,7 @@ app.post('/api/uploads', authenticateToken, (req, res, next) => {
 
     // Upload to storage (local or S3)
     const imageUrl = await storage.upload(processedBuffer, storageKey, contentType);
-    bindUploadToWave(storageKey, req.body?.waveId, user.id);
+    await bindUploadToWave(storageKey, req.body?.waveId, user.id);
     console.log(`📷 Image uploaded by ${user.handle}: ${imageUrl}`);
 
     res.json({ success: true, url: imageUrl });
@@ -7469,7 +7488,7 @@ app.post('/api/uploads/file', authenticateToken, (req, res, next) => {
 
     // Upload to storage (local or S3)
     const fileUrl = await storage.upload(req.file.buffer, storageKey, req.file.mimetype);
-    bindUploadToWave(storageKey, req.body?.waveId, user.id);
+    await bindUploadToWave(storageKey, req.body?.waveId, user.id);
     console.log(`📎 File uploaded by ${user.handle}: ${safeName} (${req.file.size} bytes)`);
 
     res.json({
@@ -7606,7 +7625,7 @@ app.post('/api/uploads/media', authenticateToken, (req, res, next) => {
     const mediaUrl = await storage.upload(req.file.buffer, storageKey, req.file.mimetype);
     // Profile videos belong to no conversation and pass no waveId, so they
     // stay public — which is what a profile video is for.
-    bindUploadToWave(storageKey, req.body?.waveId, req.user.userId);
+    await bindUploadToWave(storageKey, req.body?.waveId, req.user.userId);
 
     console.log(`🎬 Audio uploaded by ${user.handle}: ${mediaUrl} (${Math.round(req.file.size / 1024)}KB)`);
 
@@ -7795,6 +7814,9 @@ app.post('/api/profile/handle-request', authenticateToken, (req, res) => {
   const newHandle = sanitizeInput(req.body.newHandle);
   if (!newHandle || !/^[a-zA-Z0-9_]{3,20}$/.test(newHandle)) {
     return res.status(400).json({ error: 'Handle must be 3-20 characters, letters/numbers/underscores only' });
+  }
+  if (isReservedHandle(newHandle)) {
+    return res.status(400).json({ error: 'That handle is reserved. Please choose another.' });
   }
 
   const result = db.requestHandleChange(req.user.userId, newHandle);

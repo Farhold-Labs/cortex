@@ -26,7 +26,7 @@ const password = 'Review123!';
 const jwtSecret = 'isolated-attachment-test-signing-key';
 
 /** Stand up a throwaway Cortex with three users, a private wave and a public one. */
-async function startServer(temp, { disableGate = false } = {}) {
+async function startServer(temp, { disableGate = false, breakBinding = false } = {}) {
   const serverDir = path.join(temp, 'server');
   fs.mkdirSync(serverDir, { recursive: true });
   for (const name of fs.readdirSync(path.join(root, 'server'))) {
@@ -56,6 +56,13 @@ async function startServer(temp, { disableGate = false } = {}) {
     const gate = source.match(/\n    if \(attachment && attachment\.wave_id\) \{[\s\S]*?\n    \}\n/);
     assert.ok(gate, 'could not find the attachment gate to disable');
     source = source.replace(gate[0], '\n');
+  }
+  if (breakBinding) {
+    // Security audit R-02: the binding write fails (a full disk, a locked
+    // database) after the file has already been stored.
+    const write = '    db.bindAttachment({ path: storageKey, waveId: target, uploadedBy: userId });';
+    assert.ok(source.includes(write), 'could not find the upload binding write');
+    source = source.replace(write, "    throw new Error('SQLITE_FULL: database or disk is full');");
   }
   source += "\nserver.on('listening', () => console.log('ATTACH_TEST_PORT=' + server.address().port));\n";
   fs.writeFileSync(path.join(serverDir, 'server.js'), source);
@@ -249,6 +256,38 @@ test('without the gate the same request succeeds — the check is what refuses i
     assert.equal(await res.text(), 'attachment body');
   } finally {
     if (srv?.child) srv.child.kill('SIGKILL');
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('R-02: an upload whose binding fails is refused and removed, not left public', { timeout: 90000 }, async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-attach-r02-'));
+  let srv;
+  try {
+    srv = await startServer(temp, { breakBinding: true });
+    const { base, tokens, privateWave, serverDir } = srv;
+    const uploadsDir = path.join(serverDir, 'uploads', 'files');
+    const before = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir).length : 0;
+
+    for (const waveId of [privateWave.id, null]) {
+      const form = new FormData();
+      form.append('file', new Blob(['secret body'], { type: 'text/plain' }), 'secret.txt');
+      if (waveId) form.append('waveId', waveId);
+      const res = await fetch(`${base}/api/uploads/file`, {
+        method: 'POST', headers: { Authorization: `Bearer ${tokens.owner}` }, body: form,
+      });
+      const data = await res.json();
+      assert.equal(res.status, 500, `the upload must fail, not report success (${waveId ? 'private wave' : 'no wave yet'}): ${JSON.stringify(data)}`);
+      assert.ok(!data.url, 'no URL handed out for a file nobody can secure');
+    }
+
+    // The directory exists, so the files really were written here before being
+    // removed — this is not an empty folder compared with itself.
+    assert.ok(fs.existsSync(uploadsDir), `uploads were stored under ${uploadsDir}`);
+    const after = fs.readdirSync(uploadsDir).length;
+    assert.equal(after, before, 'the stored files were removed, not left behind publicly readable');
+  } finally {
+    srv?.child.kill('SIGKILL');
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
