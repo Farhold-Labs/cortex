@@ -1,7 +1,7 @@
 import { sanitizeMessageHtml } from '../../utils/html.js';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { API_URL, BASE_URL } from '../../config/constants.js';
-import { detectEmbedUrls, EMBED_PLATFORMS } from '../../utils/embed.js';
+import { detectEmbedUrls, EMBED_PLATFORMS, embedUploadedImages } from '../../utils/embed.js';
 import { renderMarkdown } from '../../utils/markdown.js';
 import JellyfinEmbed from '../media/JellyfinEmbed.jsx';
 import PlexEmbed from '../media/PlexEmbed.jsx';
@@ -503,10 +503,8 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
     // Embed bare /uploads/messages/ paths as <img> tags.
     // Server does this via detectAndEmbedMedia, but E2EE waves store encrypted content,
     // so decrypted messages arrive as plain text URLs instead of pre-processed HTML.
-    result = result.replace(
-      /(?<!['">/])(\/uploads\/messages\/[^\s<"'>]+\.(?:webp|jpg|jpeg|png|gif|svg))(?!['">/])/gi,
-      (match) => `<img src="${match}" alt="Uploaded image" style="max-width:200px;max-height:150px;border-radius:4px;cursor:pointer;object-fit:cover;display:block;border:1px solid #3a4a3a;" class="zoomable-image" />`
-    );
+    // Including a picture on its own line after a caption — see embedUploadedImages.
+    result = embedUploadedImages(result);
 
     // Convert raw [file:name:size]/path markers to styled download cards.
     // Same situation as images — E2EE decrypted messages carry the unprocessed marker.
