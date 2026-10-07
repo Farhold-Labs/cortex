@@ -5,6 +5,12 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`tools/backup-release-db.sh` could back up the wrong file and still say "verified".** It took the first `data/*.db` in alphabetical order. Dev and QA both carry a stale, unused `data/cortex.db`, which sorts before the live `farhold.db`, so on those two boxes the release backups were copies of that file. On QA, the "v2.109.0 backup" was its January `cortex.db`; on dev it was an empty file that still printed "verified". farhold, PMP and port1 have only `farhold.db` and were never affected. The script now backs up `data/farhold.db` — the file the server opens — or `DB_FILE` if set. It also **fails if the snapshot has no `users` table**, since a clean integrity check on an empty or foreign file proves nothing. The v2.110.0 backups for dev and QA were taken by hand from `farhold.db` and verified (dev 8 users / 612 pings; QA 11 users / 390 pings).
+
 ## [2.110.0] - 2026-10-06
 
 Live broadcasts can now be **recorded**. LiveKit Egress writes each recording straight into an S3-compatible bucket (Backblaze B2 in production), and members of the wave watch it afterwards from a recording page. **Database migration:** seven new columns on `broadcasts`, one new table and one trigger — take the verified backup first.

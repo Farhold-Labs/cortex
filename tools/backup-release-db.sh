@@ -36,8 +36,11 @@ SERVER_DIR="${SERVER_DIR:-$HOME/cortex/server}"
 [ -d "$SERVER_DIR" ] || { echo "no server directory at $SERVER_DIR" >&2; exit 1; }
 cd "$SERVER_DIR" || exit 1
 
-DB=$(ls -1 data/*.db 2>/dev/null | head -1)
-[ -z "$DB" ] || [ ! -f "$DB" ] && { echo "no database found under $SERVER_DIR/data" >&2; exit 1; }
+# The file the server actually opens (database-sqlite.js: data/farhold.db).
+# Never "the first *.db": dev and QA carry a stale, unused data/cortex.db that
+# sorts first, and backing that up "verified" an empty file on 2.109.0/2.110.0.
+DB="${DB_FILE:-data/farhold.db}"
+[ -f "$DB" ] || { echo "no database at $SERVER_DIR/$DB (set DB_FILE to override)" >&2; exit 1; }
 
 mkdir -p "$BACKUP_DIR" || exit 1
 TS=$(date +%Y%m%d-%H%M%S)
@@ -78,8 +81,10 @@ const counts = ["users", "waves", "pings"].map(t => {
 }).join(" ");
 b.close();
 console.log(`  integrity=${ok}  ${counts}`);
-if (ok !== "ok") process.exit(1);
-' "$OUT" || { echo "BACKUP FAILED ITS INTEGRITY CHECK — not usable, removing" >&2; rm -f "$OUT"; exit 1; }
+// A snapshot with no users table is not a Cortex database, whatever its
+// integrity says — fail rather than print "verified".
+if (ok !== "ok" || counts.includes("users=?")) process.exit(1);
+' "$OUT" || { echo "BACKUP FAILED VERIFICATION (integrity, or not a Cortex database) — not usable, removing" >&2; rm -f "$OUT"; exit 1; }
 
 # Opening the backup to verify it creates WAL sidecars. A completed .backup() is
 # a self-contained database, so they are litter — and litter this very toolchain
