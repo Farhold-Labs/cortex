@@ -13,12 +13,16 @@ const GoLiveModal = ({ wave, fetchAPI, showToast, onClose }) => {
   const [events, setEvents] = useState([]);
   const [eventId, setEventId] = useState('');
   const [isPublic, setIsPublic] = useState(false);
+  const [canRecord, setCanRecord] = useState(false);
+  const [record, setRecord] = useState(true);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     fetchAPI(`/events/wave/${wave.id}?upcoming=1&limit=10`)
       .then(d => setEvents(d.events || []))
       .catch(() => {});
+    // Recording is offered only where the server has storage set up for it.
+    fetchAPI('/broadcast-capabilities').then(d => setCanRecord(!!d.recording)).catch(() => {});
   }, [wave.id, fetchAPI]);
 
   const start = async () => {
@@ -27,7 +31,7 @@ const GoLiveModal = ({ wave, fetchAPI, showToast, onClose }) => {
     try {
       const d = await fetchAPI(`/waves/${wave.id}/broadcasts`, {
         method: 'POST',
-        body: { title: title.trim(), eventId: eventId || undefined, public: isPublic },
+        body: { title: title.trim(), eventId: eventId || undefined, public: isPublic, record: canRecord && record },
       });
       window.location.href = `/broadcast/${d.broadcast.id}`;
     } catch (err) {
@@ -73,6 +77,13 @@ const GoLiveModal = ({ wave, fetchAPI, showToast, onClose }) => {
           <input type="checkbox" checked={isPublic} onChange={e => setIsPublic(e.target.checked)} style={{ marginTop: 2 }} />
           <span>Also open a public link, so people without an account can watch{eventId ? ' — shown on the event’s public page' : ''}. You can turn it off at any time.</span>
         </label>
+
+        {canRecord && (
+          <label style={{ ...label, display: 'flex', gap: 8, alignItems: 'flex-start', color: 'var(--text-secondary)', fontSize: '0.8rem', letterSpacing: 0, lineHeight: 1.4 }}>
+            <input type="checkbox" checked={record} onChange={e => setRecord(e.target.checked)} style={{ marginTop: 2 }} />
+            <span>Record it. Members of this wave can watch the recording afterwards; it is posted to the wave when it is ready.</span>
+          </label>
+        )}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
           <button onClick={onClose} style={{ padding: '9px 16px', background: 'transparent', border: '1px solid var(--border-primary)', color: 'var(--text-dim)', fontFamily: 'monospace', cursor: 'pointer' }}>CANCEL</button>
