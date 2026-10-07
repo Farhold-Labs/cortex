@@ -33,6 +33,7 @@ const BroadcastStudio = ({ broadcastId }) => {
   const [viewers, setViewers] = useState(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [canRecord, setCanRecord] = useState(false);
 
   const api = useCallback(async (path, opts = {}) => {
     const res = await fetch(`${API_URL}${path}`, {
@@ -85,6 +86,11 @@ const BroadcastStudio = ({ broadcastId }) => {
         await publish(room, { music: true, face: 'environment' });
         if (cancelled) { room.disconnect(); return; }
         setStatus('live');
+        // v2.110.0 — start recording now the camera is up, so the file does
+        // not open on black. Idempotent: reopening the studio after a dropped
+        // connection leaves a running recording alone.
+        api('/broadcast-capabilities').then(d => { if (!cancelled) setCanRecord(!!d.recording); }).catch(() => {});
+        if (info.broadcast.record) startRecording();
         try { wakeLockRef.current = await navigator.wakeLock?.request('screen'); } catch { /* not supported */ }
       } catch (err) {
         if (!cancelled) { setStatus('error'); setError(err.name === 'NotAllowedError' ? 'Camera or microphone permission was refused.' : (err.message || 'Could not start')); }
@@ -128,6 +134,11 @@ const BroadcastStudio = ({ broadcastId }) => {
     } catch (err) { setError(err.message); }
   };
 
+  const startRecording = async () => {
+    try { const d = await api(`/broadcasts/${encodeURIComponent(broadcastId)}/recording/start`, { method: 'POST' }); setBroadcast(d.broadcast); }
+    catch (err) { setError(err.message); }
+  };
+
   const setPublic = async (enabled) => {
     try { const d = await api(`/broadcasts/${encodeURIComponent(broadcastId)}/public-link`, { method: 'POST', body: { enabled } }); setBroadcast(d.broadcast); }
     catch (err) { setError(err.message); }
@@ -166,6 +177,9 @@ const BroadcastStudio = ({ broadcastId }) => {
           {status === 'live' ? '● LIVE' : 'STARTING…'}
         </span>
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{plainText(broadcast?.title || '')}</span>
+        {broadcast?.recordingStatus === 'recording' && (
+          <span title="This broadcast is being recorded" style={{ color: '#ff4d4d', fontSize: '0.75rem', fontWeight: 'bold', letterSpacing: '0.08em' }}>● REC</span>
+        )}
         {viewers !== null && <span style={{ fontSize: '0.8rem', color: '#ccc' }}>👁 {viewers}</span>}
       </div>
 
@@ -194,6 +208,11 @@ const BroadcastStudio = ({ broadcastId }) => {
             </>
           ) : (
             <button onClick={() => setPublic(true)} style={btn()}>🌐 OPEN A PUBLIC LINK</button>
+          )}
+          {canRecord && status === 'live' && broadcast && ['none', 'failed'].includes(broadcast.recordingStatus) && (
+            <button onClick={startRecording} style={btn()}>
+              {broadcast.recordingStatus === 'failed' ? '● RECORDING FAILED — RETRY' : '● START RECORDING'}
+            </button>
           )}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>

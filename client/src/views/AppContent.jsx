@@ -25,6 +25,7 @@ const LoginScreen = lazyComponent(() => import('./LoginScreen.jsx'), { fallback:
 // Live broadcasts (v2.109.0) bring LiveKit with them, so they load on demand.
 const BroadcastPlayer = lazyComponent(() => import('../components/broadcast/BroadcastPlayer.jsx'), { fallback: BootLoading });
 const BroadcastStudio = lazyComponent(() => import('../components/broadcast/BroadcastStudio.jsx'), { fallback: BootLoading });
+const RecordingPlayer = lazyComponent(() => import('../components/broadcast/RecordingPlayer.jsx'), { fallback: BootLoading });
 
 function AppContent() {
   const { user, token, logout } = useAuth();
@@ -263,6 +264,8 @@ function AppContent() {
   if (watchMatch) return <BroadcastPlayer broadcastId={watchMatch[1]} />;
   const studioMatch = currentPath.match(/^\/broadcast\/([0-9a-f-]{36})\/?$/);
   if (studioMatch) return <BroadcastStudio broadcastId={studioMatch[1]} />;
+  const recordingMatch = currentPath.match(/^\/recording\/([0-9a-f-]{36})\/?$/);
+  if (recordingMatch) return <RecordingPlayer broadcastId={recordingMatch[1]} />;
 
   // User is authenticated - wrap with E2EE flow
   return (
