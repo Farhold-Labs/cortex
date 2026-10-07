@@ -4470,3 +4470,26 @@ For more information, see:
 ## Scoped external media sharing
 
 See [Scoped Jellyfin/Plex media sharing](MEDIA-SECURITY.md) for the grant API, item authorization, proxied playback/HLS, revocation, and legacy-link migration.
+
+## Live broadcasts (v2.109.0) and recording (v2.110.0)
+
+Opt-in instance feature `broadcasts` (403 `FEATURE_DISABLED` when off). Needs LiveKit; public links also need `publicPortal`; recording also needs the `RECORDING_S3_*` settings.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/broadcast-capabilities` | any signed-in user | `{ recording }` — whether recording can be offered |
+| POST | `/api/waves/:waveId/broadcasts` | may post in the wave | `{ title, eventId?, public?, record? }` → 201 `{ broadcast, token, url }` (publisher token). 409 if the wave is already live |
+| GET | `/api/waves/:waveId/broadcast` | wave member | the wave's live broadcast, or `null` |
+| GET | `/api/broadcasts/:id` | wave member | `{ broadcast, canControl, isPerformer }` |
+| POST | `/api/broadcasts/:id/token` | wave member | performer → publisher token; others → hidden subscribe-only token. 429 `BROADCAST_FULL` at the viewer cap, 410 when ended |
+| GET | `/api/broadcasts/:id/audience` | performer / wave staff | `{ viewers, cap }` |
+| POST | `/api/broadcasts/:id/public-link` | performer / wave staff | `{ enabled }`; re-enabling mints a new link |
+| POST | `/api/broadcasts/:id/end` | performer / wave staff | stops any recording, closes the room |
+| POST | `/api/broadcasts/:id/recording/start` | performer / wave staff | idempotent; 503 `RECORDING_UNAVAILABLE`, 502 `RECORDING_START_FAILED` |
+| GET | `/api/broadcasts/:id/recording` | wave member | `{ status, durationMs, size, streamUrl, canDelete }`; `status` is `none` · `recording` · `processing` · `ready` · `failed` · `deleted`; `streamUrl` only when ready, valid 4 h |
+| GET | `/api/recordings/:id/stream?t=` | holder of a stream URL who is still a wave member | MP4, single byte `Range` supported |
+| DELETE | `/api/broadcasts/:id/recording` | performer / wave staff | removes the file from the bucket |
+| GET | `/api/public/broadcasts/:token` | anyone | title and state of a live public broadcast |
+| POST | `/api/public/broadcasts/:token/token` | anyone (rate-limited) | hidden viewer token |
+
+WebSocket events: `broadcast_started`, `broadcast_ended`, `broadcast_recording` (`{ broadcastId, waveId, status }`). When a recording is ready, it is also posted to the wave as an ordinary ping.

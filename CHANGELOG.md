@@ -5,6 +5,60 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.110.0] - 2026-10-06
+
+Live broadcasts can now be **recorded**. LiveKit Egress writes each recording straight into an S3-compatible bucket (Backblaze B2 in production), and members of the wave watch it afterwards from a recording page. **Database migration:** seven new columns on `broadcasts`, one new table and one trigger — take the verified backup first.
+
+### Added
+
+- **Record a broadcast.** *Go live* has a **Record it** box, ticked by default, wherever the server has storage configured; where it doesn't, the box is not offered and nothing else changes.
+  - Recording starts when the studio's camera is actually publishing, not when the broadcast is created, so the file doesn't open on several seconds of black while the performer gets ready. Reopening the studio after a dropped connection leaves a running recording alone. Starting is atomic, so a retry or a second tab cannot start two recordings.
+  - The studio shows **● REC** while recording. If recording wasn't ticked, or failed to start, a *Start recording* / *Retry* button appears.
+  - **Ending the broadcast stops the recording first**, then closes the room, so the file ends where the performer pressed End. A sweep notices when LiveKit has finished writing the file, about 5 s later on the live test, and then **posts "🎬 Recording of … is ready to watch" with a link to the wave**.
+  - **`/recording/:id`** plays it with the browser's own controls (seek, full screen, picture-in-picture), with a duration and, for the performer or wave staff, *Delete recording*. While the file is still being finished, the page says so and checks again by itself.
+- New settings `RECORDING_S3_ENDPOINT`, `_REGION`, `_BUCKET`, `_ACCESS_KEY` and `_SECRET_KEY`. Recording is offered only when all five are set *and* LiveKit is configured. Files are stored at `<node name>/broadcasts/<id>.mp4`, so several nodes can share one bucket.
+
+### Design notes
+
+- **Room composite, not participant egress.** A participant egress follows one connection and ends when it drops, so a performer whose phone hopped from wifi to mobile data mid-show would lose the rest of the recording. A room composite records the room for as long as it exists, and only the performer can publish into a broadcast room, so it records exactly the show. Viewers are hidden and never appear in it.
+- **The bucket stays private; viewing goes through Cortex.** `GET /api/broadcasts/:id/recording` checks wave membership and returns a four-hour stream URL. A `<video>` element cannot send an Authorization header, so that URL carries its own token. The token deliberately has no `userId` claim, so it can never pass as a login (tested). `GET /api/recordings/:id/stream` checks the token *and* wave membership again on **every request**, so someone removed from the wave loses a link they already hold (tested). It also proxies single byte ranges so the player can seek, and the storage keys never reach a browser.
+- **The server writes the "ready" ping in plaintext even in an encrypted wave**, like an event card, because it has no wave key. It contains only the broadcast title and a link, both of which the server already holds.
+- **Deleting a wave deletes its recordings' files too, without guessing.** The broadcast rows cascade away, but files in the bucket can't. A trigger on `broadcasts` queues the file key of any row deleted for any reason into `recording_deletions`, and a ten-minute sweep deletes exactly those files. A first draft instead deleted files with no matching row; that was rejected because a wiped or restored database would then erase every recording on the node — the same "rows existing ≠ rows readable" lesson as v2.105.5.
+
+### Verified
+
+- **Against real LiveKit Cloud and the real B2 bucket, from PMP:** headless Chrome published a fake camera and microphone into a throwaway room; Cortex's recorder started a room-composite egress, stopped it after about 30 s, and settled it as **27.5 s, 3,996,214 bytes, `video/mp4`, `Content-Disposition: inline`**. A range read returned a valid `ftyp` header, and the test file was then deleted. An earlier attempt with nobody in the room ended "Start signal not received" — a room composite waits for a publisher — which is why recording starts from the studio after publishing.
+- `tests/broadcast-recording.test.cjs` (13 cases) runs the server against a local fake of LiveKit's Twirp API and of path-style S3. It covers:
+  - capability reporting, and that asking to record doesn't start anything before the camera is up;
+  - who may start a recording, and that starting twice gives one egress, with the key in this node's prefix;
+  - stop on end, then settle, then the ping posted to the wave;
+  - full and ranged streaming;
+  - the stream token refused as a login, refused for another recording, and refused when a session token is used in its place;
+  - outsiders refused, and a removed member's held link going dead;
+  - deletion from the bucket;
+  - the trigger queuing the key when the wave is deleted.
+- Dev, which has no bucket: `GET /api/broadcast-capabilities` → `{"recording":false}`.
+- 464/464 tests.
+
+## [2.109.0] - 2026-10-06
+
+*(This entry was added in v2.110.0; the release itself shipped without one.)*
+
+Stream a performance to a wave, full screen. **Database migration:** new `broadcasts` table.
+
+### Added
+
+- **Go live** from a wave's ⋮ menu: give it a title, optionally attach one of the wave's events, and optionally open a public link. Members are notified (`broadcast_started`, with push), and the wave shows a **● LIVE — Watch** bar.
+- **One performer, many hidden viewers**, in a LiveKit room of the broadcast's own (`broadcast-<id>`), never the wave's call room. The performer holds the only publishing token; viewers get subscribe-only, `hidden` tokens, so they appear in no participant list and can't be seen or heard. The issued tokens' grants *are* the access control, and the tests decode them.
+- **The studio (`/broadcast/:id`):** camera preview, mic and camera switches, front/back camera, a live viewer count, the public link, and End broadcast. **Music mode** is on by default: browsers tune microphones for speech (echo cancellation, noise suppression, automatic gain), and those treat sustained notes and applause as noise. It turns them off and publishes high-quality stereo. Closing the page doesn't end the broadcast, so a dropped connection is recoverable.
+- **Watching (`/watch/:id`, public `/live/:token`):** the real Fullscreen API on the whole player, falling back to the `<video>` element on iOS Safari, with landscape lock on phones, tap for sound and fading controls.
+- **Public link:** no account needed. It can be withdrawn at any time; re-opening it mints a *new* link; it dies with the broadcast; it requires the Public Portal; and it is rate-limited per address. Each broadcast has a viewer cap (`BROADCAST_VIEWER_CAP`, default 100), because LiveKit bills per participant-minute and a leaked link must not run up an unbounded bill. Event pages show **Watch live now** while it is open.
+- **Off by default.** This is an opt-in instance feature (`broadcasts`), because it costs money per viewer and adds a public surface. LiveKit loads on demand.
+
+### Verified
+
+- 11 server tests; end to end on dev with real LiveKit in two browsers (publish, guest watches, sound, true full screen, audience count, end → link 404). 451/451 tests.
+
 ## [2.108.0] - 2026-10-05
 
 Closes the last three open items in the Communities security register — **002**, **016** and **021** — leaving only the deliberate and informational entries (020, 022, 023). **Database migration:** one new table and four new columns; take the verified backup first.

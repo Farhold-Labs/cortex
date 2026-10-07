@@ -1488,9 +1488,16 @@ CREATE TABLE IF NOT EXISTS broadcasts (
           viewer_cap     INTEGER NOT NULL DEFAULT 100,
           started_at     TEXT NOT NULL,
           ended_at       TEXT
-        );
+        , record INTEGER NOT NULL DEFAULT 0, egress_id TEXT, recording_status TEXT NOT NULL DEFAULT 'none'
+          CHECK(recording_status IN ('none','recording','processing','ready','failed','deleted')), recording_key TEXT, recording_duration_ms INTEGER, recording_size INTEGER, recording_ping_id TEXT);
 CREATE INDEX IF NOT EXISTS idx_broadcasts_wave ON broadcasts(wave_id, state);
 CREATE INDEX IF NOT EXISTS idx_broadcasts_event ON broadcasts(event_id, state);
+CREATE INDEX IF NOT EXISTS idx_broadcasts_recording ON broadcasts(recording_status);
+
+CREATE TABLE IF NOT EXISTS recording_deletions (
+          recording_key TEXT PRIMARY KEY,
+          queued_at     TEXT NOT NULL
+        );
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
@@ -1505,3 +1512,10 @@ CREATE TRIGGER IF NOT EXISTS pings_fts_update AFTER UPDATE ON pings BEGIN
     INSERT INTO pings_fts(pings_fts, rowid, id, content) VALUES ('delete', OLD.rowid, OLD.id, OLD.content);
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
 END;
+
+CREATE TRIGGER IF NOT EXISTS trg_broadcasts_recording_cleanup
+        AFTER DELETE ON broadcasts
+        WHEN OLD.recording_key IS NOT NULL
+        BEGIN
+          INSERT OR IGNORE INTO recording_deletions (recording_key, queued_at) VALUES (OLD.recording_key, datetime('now'));
+        END;
