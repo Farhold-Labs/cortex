@@ -3349,6 +3349,48 @@ export class DatabaseSQLite {
       console.log('✅ broadcasts created');
     }
 
+    // v2.110.0 — recording a broadcast. LiveKit Egress writes the file straight
+    // to object storage; these columns follow it from "recording" through
+    // "processing" (the broadcast ended, the file is still being finalised) to
+    // "ready", "failed" or "deleted". `recording_key` is the object's key in
+    // the bucket — never a URL, since the bucket is private and every viewing
+    // goes through Cortex's own access check.
+    const broadcastCols = this.db.prepare('PRAGMA table_info(broadcasts)').all().map(c => c.name);
+    if (!broadcastCols.includes('recording_status')) {
+      console.log('📝 Adding broadcast recording columns (v2.110.0)...');
+      this.db.exec(`
+        ALTER TABLE broadcasts ADD COLUMN record INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE broadcasts ADD COLUMN egress_id TEXT;
+        ALTER TABLE broadcasts ADD COLUMN recording_status TEXT NOT NULL DEFAULT 'none'
+          CHECK(recording_status IN ('none','recording','processing','ready','failed','deleted'));
+        ALTER TABLE broadcasts ADD COLUMN recording_key TEXT;
+        ALTER TABLE broadcasts ADD COLUMN recording_duration_ms INTEGER;
+        ALTER TABLE broadcasts ADD COLUMN recording_size INTEGER;
+        ALTER TABLE broadcasts ADD COLUMN recording_ping_id TEXT;
+        CREATE INDEX IF NOT EXISTS idx_broadcasts_recording ON broadcasts(recording_status);
+      `);
+      console.log('✅ broadcast recording columns added');
+    }
+
+    // A broadcast row can vanish without the routes seeing it — deleting a
+    // wave cascades to its broadcasts — but its recording stays in the bucket.
+    // The trigger queues the key so the server can delete the file too.
+    if (!this.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='recording_deletions'`).get()) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS recording_deletions (
+          recording_key TEXT PRIMARY KEY,
+          queued_at     TEXT NOT NULL
+        );
+        CREATE TRIGGER IF NOT EXISTS trg_broadcasts_recording_cleanup
+        AFTER DELETE ON broadcasts
+        WHEN OLD.recording_key IS NOT NULL
+        BEGIN
+          INSERT OR IGNORE INTO recording_deletions (recording_key, queued_at) VALUES (OLD.recording_key, datetime('now'));
+        END;
+      `);
+      console.log('✅ recording_deletions queue created');
+    }
+
     // v2.108.0 — CORTEX-COMM-021: handing over a Community.
     //
     // An offer, then an acceptance — never a silent transfer: ownership carries
@@ -14776,13 +14818,47 @@ export class DatabaseSQLite {
 
   // ----- Live broadcasts (v2.109.0) -----
 
-  createBroadcast({ waveId, eventId = null, title, createdBy, viewerCap = 100 }) {
+  createBroadcast({ waveId, eventId = null, title, createdBy, viewerCap = 100, record = false }) {
     const id = uuidv4();
     this.db.prepare(`
-      INSERT INTO broadcasts (id, wave_id, event_id, title, created_by, state, room_name, viewer_cap, started_at)
-      VALUES (?, ?, ?, ?, ?, 'live', ?, ?, ?)
-    `).run(id, waveId, eventId, title, createdBy, `broadcast-${id}`, viewerCap, new Date().toISOString());
+      INSERT INTO broadcasts (id, wave_id, event_id, title, created_by, state, room_name, viewer_cap, started_at, record)
+      VALUES (?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)
+    `).run(id, waveId, eventId, title, createdBy, `broadcast-${id}`, viewerCap, new Date().toISOString(), record ? 1 : 0);
     return this.getBroadcast(id);
+  }
+
+  /**
+   * Claim the right to start a broadcast's recording. Atomic, so two studio
+   * tabs (or a retry) cannot start two egresses for one broadcast.
+   */
+  claimBroadcastRecording(id, key) {
+    const r = this.db.prepare(`
+      UPDATE broadcasts SET record = 1, recording_status = 'recording', recording_key = ?, egress_id = NULL
+      WHERE id = ? AND state = 'live' AND recording_status IN ('none','failed')
+    `).run(key, id);
+    return r.changes === 1;
+  }
+
+  setBroadcastRecording(id, fields) {
+    const allowed = ['egress_id', 'recording_status', 'recording_key', 'recording_duration_ms', 'recording_size', 'recording_ping_id'];
+    const keys = Object.keys(fields).filter(k => allowed.includes(k));
+    if (!keys.length) return this.getBroadcast(id);
+    this.db.prepare(`UPDATE broadcasts SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...keys.map(k => fields[k]), id);
+    return this.getBroadcast(id);
+  }
+
+  getQueuedRecordingDeletions() {
+    return this.db.prepare('SELECT recording_key FROM recording_deletions ORDER BY queued_at LIMIT 100').all().map(r => r.recording_key);
+  }
+
+  clearQueuedRecordingDeletion(key) {
+    this.db.prepare('DELETE FROM recording_deletions WHERE recording_key = ?').run(key);
+  }
+
+  /** Recordings still in flight: running, or ended and waiting for the file. */
+  getUnsettledBroadcastRecordings() {
+    return this.db.prepare(`SELECT * FROM broadcasts WHERE recording_status IN ('recording','processing') AND egress_id IS NOT NULL`).all();
   }
 
   getBroadcast(id) {

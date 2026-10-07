@@ -42,6 +42,7 @@ import { plainText } from './lib/plain-text.js';
 import { isReservedHandle } from './lib/reserved-handles.js';
 import { canAccessMedia, validMediaTarget } from './lib/media-access.js';
 import { HlsSessions, proxyMedia, upstreamUrl } from './lib/media-proxy.js';
+import { BroadcastRecorder, recordingConfigFromEnv, recordingKey } from './lib/broadcast-recording.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,6 +71,15 @@ if (!LIVEKIT_URL || !LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
 const livekitRoomService = (LIVEKIT_API_KEY && LIVEKIT_API_SECRET)
   ? new RoomServiceClient(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
   : null;
+
+// v2.110.0 — broadcast recording (LiveKit Egress → S3-compatible bucket).
+// Needs LiveKit AND all five RECORDING_S3_* settings; otherwise recording is
+// simply not offered.
+const RECORDING_CONFIG = recordingConfigFromEnv();
+const broadcastRecorder = (livekitRoomService && RECORDING_CONFIG)
+  ? new BroadcastRecorder({ config: RECORDING_CONFIG, livekitUrl: LIVEKIT_URL, apiKey: LIVEKIT_API_KEY, apiSecret: LIVEKIT_API_SECRET })
+  : null;
+if (broadcastRecorder) console.log(`✅ Broadcast recording configured (bucket ${RECORDING_CONFIG.bucket})`);
 
 // ============ FIREBASE ADMIN SDK (v2.31.0 - Capacitor Push) ============
 const FIREBASE_SERVICE_ACCOUNT_PATH = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
@@ -20674,6 +20684,9 @@ function broadcastView(b, { includePublic = false } = {}) {
     state: b.state, startedAt: b.started_at, endedAt: b.ended_at, viewerCap: b.viewer_cap,
     publicLink: includePublic && b.public_token ? `${getAppBaseUrl()}/live/${b.public_token}` : null,
     publicEnabled: !!b.public_token,
+    record: !!b.record,
+    recordingStatus: b.recording_status || 'none',
+    recordingDurationMs: b.recording_duration_ms ?? null,
   };
 }
 
@@ -20742,7 +20755,12 @@ app.post('/api/waves/:waveId/broadcasts', authenticateToken, apiLimiter, async (
     return res.status(409).json({ error: 'This wave is already live. End that broadcast first.' });
   }
 
-  const b = db.createBroadcast({ waveId: wave.id, eventId, title, createdBy: req.user.userId, viewerCap: BROADCAST_DEFAULT_CAP });
+  // Recording is asked for here and started by the studio once the camera is
+  // actually publishing, so the file does not open on seconds of black.
+  const b = db.createBroadcast({
+    waveId: wave.id, eventId, title, createdBy: req.user.userId, viewerCap: BROADCAST_DEFAULT_CAP,
+    record: req.body?.record === true && !!broadcastRecorder,
+  });
   if (req.body?.public === true && isFeatureEnabled('publicPortal')) {
     db.setBroadcastPublicToken(b.id, crypto.randomBytes(18).toString('base64url'));
   }
@@ -20766,6 +20784,11 @@ app.get('/api/waves/:waveId/broadcast', authenticateToken, (req, res) => {
   if (!canAccessWaveFromCache(req.params.waveId, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
   const b = db.getLiveBroadcastForWave(req.params.waveId);
   res.json({ broadcast: broadcastView(b, { includePublic: canControlBroadcast(b, req.user.userId) }) });
+});
+
+// What this server can do for a broadcast — asked before going live.
+app.get('/api/broadcast-capabilities', authenticateToken, (req, res) => {
+  res.json({ recording: isFeatureEnabled('broadcasts') && !!broadcastRecorder });
 });
 
 app.get('/api/broadcasts/:id', authenticateToken, (req, res) => {
@@ -20831,6 +20854,13 @@ app.post('/api/broadcasts/:id/end', authenticateToken, async (req, res) => {
   if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
   if (!canControlBroadcast(b, req.user.userId)) return res.status(403).json({ error: 'Only the performer or wave staff can end this' });
   if (!db.endBroadcast(b.id)) return res.status(409).json({ error: 'This broadcast has already ended' });
+  // Stop the recording before closing the room, so the file ends where the
+  // performer pressed End rather than wherever the room teardown landed.
+  if (b.recording_status === 'recording' && b.egress_id && broadcastRecorder) {
+    db.setBroadcastRecording(b.id, { recording_status: 'processing' });
+    await broadcastRecorder.stop(b.egress_id).catch(err => console.error(`[recording] stop ${b.id} failed:`, err.message));
+    setTimeout(() => settleBroadcastRecordings().catch(() => {}), 10_000);
+  }
   // Close the room so every viewer — including anyone on a public link —
   // is disconnected now, not whenever their token lapses.
   if (livekitRoomService) livekitRoomService.deleteRoom(b.room_name).catch(() => {});
@@ -20838,6 +20868,183 @@ app.post('/api/broadcasts/:id/end', authenticateToken, async (req, res) => {
   broadcastToWave(b.wave_id, { type: 'broadcast_ended', broadcastId: b.id, waveId: b.wave_id });
   res.json({ broadcast: broadcastView(db.getBroadcast(b.id)) });
 });
+
+// ----- Recording (v2.110.0) -----
+//
+// The studio starts the recording once its camera is publishing; ending the
+// broadcast stops it; a sweep notices when LiveKit has finished writing the
+// file, then posts it to the wave. Watching goes through Cortex: the bucket is
+// private, and the wave-membership check runs again on every request.
+
+const RECORDING_URL_TTL_SECONDS = 4 * 60 * 60;
+
+function recordingNotifyWave(b) {
+  broadcastToWave(b.wave_id, { type: 'broadcast_recording', broadcastId: b.id, waveId: b.wave_id, status: b.recording_status });
+}
+
+app.post('/api/broadcasts/:id/recording/start', authenticateToken, apiLimiter, async (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  const b = db.getBroadcast(req.params.id);
+  if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
+  if (!canControlBroadcast(b, req.user.userId)) return res.status(403).json({ error: 'Only the performer or wave staff can record' });
+  if (!broadcastRecorder) return res.status(503).json({ error: 'Recording is not set up on this server', code: 'RECORDING_UNAVAILABLE' });
+  if (b.state !== 'live') return res.status(410).json({ error: 'This broadcast has ended' });
+  if (b.recording_status === 'recording' || b.recording_status === 'processing') {
+    return res.json({ broadcast: broadcastView(b, { includePublic: true }) }); // already running: idempotent
+  }
+
+  const key = recordingKey(FEDERATION_NODE_NAME || new URL(getAppBaseUrl()).hostname, b.id);
+  if (!db.claimBroadcastRecording(b.id, key)) {
+    return res.json({ broadcast: broadcastView(db.getBroadcast(b.id), { includePublic: true }) });
+  }
+  try {
+    const egressId = await broadcastRecorder.start(b.room_name, key);
+    const fresh = db.setBroadcastRecording(b.id, { egress_id: egressId });
+    db.logActivity(req.user.userId, 'broadcast_recording_started', 'wave', b.wave_id, { broadcastId: b.id });
+    recordingNotifyWave(fresh);
+    res.json({ broadcast: broadcastView(fresh, { includePublic: true }) });
+  } catch (err) {
+    console.error(`[recording] start ${b.id} failed:`, err.message);
+    db.setBroadcastRecording(b.id, { recording_status: 'failed', egress_id: null });
+    res.status(502).json({ error: 'The recording could not be started', code: 'RECORDING_START_FAILED' });
+  }
+});
+
+// Status, plus a short-lived URL to watch it once it is ready.
+app.get('/api/broadcasts/:id/recording', authenticateToken, (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  const b = db.getBroadcast(req.params.id);
+  if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
+  let streamUrl = null;
+  if (b.recording_status === 'ready' && broadcastRecorder) {
+    // A <video> element cannot send an Authorization header, so the URL
+    // carries a token of its own. It deliberately has no `userId` claim, so it
+    // can never pass authenticateToken as a login.
+    const t = jwt.sign({ purpose: 'recording', bid: b.id, uid: req.user.userId }, JWT_SECRET, { expiresIn: RECORDING_URL_TTL_SECONDS });
+    streamUrl = `/api/recordings/${encodeURIComponent(b.id)}/stream?t=${encodeURIComponent(t)}`;
+  }
+  res.json({
+    broadcast: broadcastView(b),
+    status: b.recording_status,
+    durationMs: b.recording_duration_ms ?? null,
+    size: b.recording_size ?? null,
+    streamUrl,
+    canDelete: canControlBroadcast(b, req.user.userId),
+  });
+});
+
+app.get('/api/recordings/:id/stream', async (req, res) => {
+  if (!isFeatureEnabled('broadcasts') || !broadcastRecorder) return res.status(404).json({ error: 'Not found' });
+  let claims;
+  try {
+    claims = jwt.verify(String(req.query.t || ''), JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'This link has expired — reopen the recording' });
+  }
+  if (claims?.purpose !== 'recording' || claims.bid !== req.params.id || !claims.uid) return res.status(401).json({ error: 'Invalid link' });
+  const b = db.getBroadcast(req.params.id);
+  // Re-checked on every request: someone removed from the wave loses the
+  // recording now, not when their link expires.
+  if (!b || b.recording_status !== 'ready' || !b.recording_key || !canAccessWaveFromCache(b.wave_id, claims.uid)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const status = db.getUserAccountStatus?.(claims.uid);
+  if (status && (status.accountStatus === 'disabled' || status.accountStatus === 'banned')) return res.status(404).json({ error: 'Not found' });
+  try {
+    await broadcastRecorder.streamObject(b.recording_key, req, res);
+  } catch (err) {
+    console.error(`[recording] stream ${b.id} failed:`, err.message);
+    if (!res.headersSent) res.status(502).json({ error: 'The recording could not be loaded' });
+  }
+});
+
+app.delete('/api/broadcasts/:id/recording', authenticateToken, apiLimiter, async (req, res) => {
+  if (!requireFeature('broadcasts', res)) return;
+  const b = db.getBroadcast(req.params.id);
+  if (!b || !canAccessWaveFromCache(b.wave_id, req.user.userId)) return res.status(404).json({ error: 'Not found' });
+  if (!canControlBroadcast(b, req.user.userId)) return res.status(403).json({ error: 'Only the performer or wave staff can delete this' });
+  if (b.recording_status !== 'ready' && b.recording_status !== 'failed') {
+    return res.status(409).json({ error: b.recording_status === 'deleted' ? 'Already deleted' : 'The recording is not finished yet' });
+  }
+  if (b.recording_key && broadcastRecorder) {
+    try { await broadcastRecorder.remove(b.recording_key); }
+    catch (err) {
+      console.error(`[recording] delete ${b.id} failed:`, err.message);
+      return res.status(502).json({ error: 'The recording could not be deleted — try again' });
+    }
+  }
+  const fresh = db.setBroadcastRecording(b.id, { recording_status: 'deleted', recording_key: null, recording_size: null });
+  db.logActivity(req.user.userId, 'broadcast_recording_deleted', 'wave', b.wave_id, { broadcastId: b.id });
+  recordingNotifyWave(fresh);
+  res.json({ broadcast: broadcastView(fresh) });
+});
+
+/**
+ * Settle recordings that LiveKit has finished with: mark them ready (and post
+ * them to the wave) or failed. Runs on a timer and shortly after each End,
+ * and is safe to run twice — a recording only settles once.
+ */
+let settlingRecordings = false;
+async function settleBroadcastRecordings() {
+  if (!broadcastRecorder || settlingRecordings) return;
+  settlingRecordings = true;
+  try {
+    for (const b of db.getUnsettledBroadcastRecordings()) {
+      let result;
+      try { result = await broadcastRecorder.check(b.egress_id); }
+      catch (err) { console.error(`[recording] check ${b.id} failed:`, err.message); continue; }
+      if (!result.settled) continue;
+
+      if (!result.ok) {
+        console.error(`[recording] ${b.id} produced no file${result.error ? `: ${result.error}` : ''}`);
+        recordingNotifyWave(db.setBroadcastRecording(b.id, { recording_status: 'failed' }));
+        continue;
+      }
+      let fresh = db.setBroadcastRecording(b.id, {
+        recording_status: 'ready', recording_size: result.size, recording_duration_ms: result.durationMs,
+      });
+      // Post it where the audience will see it. Like an event card, the server
+      // writes this ping in plaintext even in an encrypted wave — it has no
+      // key — and it says nothing the broadcast record does not already hold.
+      if (b.created_by && db.getWave(b.wave_id)) {
+        try {
+          const ping = db.createPing({
+            waveId: b.wave_id,
+            authorId: b.created_by,
+            content: `🎬 Recording of "${b.title}" is ready to watch: ${getAppBaseUrl()}/recording/${b.id}`,
+            privacy: 'private',
+          });
+          fresh = db.setBroadcastRecording(b.id, { recording_ping_id: ping.id });
+          broadcastToWave(b.wave_id, { type: 'new_ping', data: ping });
+        } catch (err) {
+          console.error(`[recording] could not post ${b.id} to its wave:`, err.message);
+        }
+      }
+      recordingNotifyWave(fresh);
+    }
+  } finally {
+    settlingRecordings = false;
+  }
+}
+if (broadcastRecorder) setInterval(() => settleBroadcastRecordings().catch(() => {}), 30_000).unref?.();
+
+// A deleted wave takes its broadcast rows with it, but not the files in the
+// bucket. A trigger queues the key of every recording whose row disappears;
+// this deletes exactly those. It never infers "orphaned" from a row being
+// absent — a wiped or restored database would otherwise erase every show.
+async function removeQueuedRecordings() {
+  if (!broadcastRecorder) return;
+  for (const key of db.getQueuedRecordingDeletions()) {
+    try {
+      await broadcastRecorder.remove(key);
+      db.clearQueuedRecordingDeletion(key);
+      console.log('[recording] removed the recording of a deleted broadcast');
+    } catch (err) {
+      console.error('[recording] queued delete failed (will retry):', err.message);
+    }
+  }
+}
+if (broadcastRecorder) setInterval(() => removeQueuedRecordings().catch(() => {}), 10 * 60_000).unref?.();
 
 // ----- Public viewing (no account) -----
 
