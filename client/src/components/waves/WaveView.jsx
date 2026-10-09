@@ -19,7 +19,7 @@ import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import WaveContextBar from './WaveContextBar.jsx';
 import EventDetailModal from '../calendar/EventDetailModal.jsx';
 import EventCreateModal from '../calendar/EventCreateModal.jsx';
-import { uploadFile } from '../../utils/uploads.js';
+import { uploadFile, deliverUpload, registerUploadTarget } from '../../utils/uploads.js';
 import { registerAttachments } from '../../utils/attachments.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
@@ -1135,6 +1135,23 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   };
 
   // Handle image upload for messages
+  // Receive finished uploads meant for this wave's message box — including
+  // ones that finished while another wave was open (v2.111.0).
+  // Which wave the on-screen composer belongs to: only once that wave has
+  // loaded. On a switch there is a render where the new wave id is set but the
+  // old wave's data and composer are still showing.
+  const readyForRef = useRef(null);
+  readyForRef.current = (!loading && waveData && (waveData.id || wave?.id) === wave?.id) ? wave?.id : null;
+  useEffect(() => registerUploadTarget(wave?.id, 'wave', (text, item) => {
+    // While the wave is loading there is no composer, or the previous wave's
+    // is about to be replaced: refuse, and the upload is offered again.
+    if (!composerRef.current || readyForRef.current !== wave?.id) return false;
+    composerRef.current.appendMessage(text);
+    composerRef.current.focus();
+    const what = item.kind === 'picture' ? 'Picture' : 'File';
+    showToast(item.deferred ? `${what} finished uploading — it's in the message box, ready to send` : (item.kind === 'picture' ? 'Image uploaded' : 'File attached'), 'success');
+  }), [wave?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleImageUpload = async (file) => {
     if (!file) return;
 
@@ -1162,15 +1179,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
 
       const data = await uploadFile('/uploads', formData, { label: file.name || 'Picture', size: file.size });
-      // Insert the image URL into the message - it will auto-embed when sent
-      if (composerRef.current) {
-        composerRef.current.appendMessage(data.url);
-        composerRef.current.focus();
-      } else {
-        setNewMessage(prev => prev + (prev ? '\n' : '') + data.url);
-        textareaRef.current?.focus();
-      }
-      showToast('Image uploaded', 'success');
+      // Into THIS wave's message box — `wave` is the one the upload started
+      // in, even if the person has since opened another (v2.111.0).
+      deliverUpload({ waveId: wave.id, surface: 'wave', text: data.url, kind: 'picture', label: file.name, waveTitle: wave.title });
     } catch (err) {
       if (!err.cancelled) showToast(err.message || formatError('Failed to upload image'), 'error');
     } finally {
@@ -1212,14 +1223,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       const data = await uploadFile('/uploads/file', formData, { label: file.name || 'File', size: file.size });
       // Insert file marker into the message
       const marker = `[file:${data.filename}:${data.size}]${data.url}`;
-      if (composerRef.current) {
-        composerRef.current.appendMessage(marker);
-        composerRef.current.focus();
-      } else {
-        setNewMessage(prev => prev + (prev ? '\n' : '') + marker);
-        textareaRef.current?.focus();
-      }
-      showToast('File attached', 'success');
+      deliverUpload({ waveId: wave.id, surface: 'wave', text: marker, kind: 'file', label: file.name, waveTitle: wave.title });
     } catch (err) {
       if (!err.cancelled) showToast(err.message || 'Failed to upload file', 'error');
     } finally {
