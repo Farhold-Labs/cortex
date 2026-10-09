@@ -4,7 +4,7 @@ import { useVoiceCall } from '../../hooks/useVoiceCall.js';
 import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
 import { useSystemBack } from '../../hooks/useSystemBack.js';
 import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL } from '../../../messages.js';
-import { PRIVACY_LEVELS, API_URL, BASE_URL, canAccess } from '../../config/constants.js';
+import { PRIVACY_LEVELS, BASE_URL, canAccess } from '../../config/constants.js';
 import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { LegacyWaveNotice, PartialEncryptionBanner } from '../../../e2ee-components.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
@@ -19,7 +19,7 @@ import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import WaveContextBar from './WaveContextBar.jsx';
 import EventDetailModal from '../calendar/EventDetailModal.jsx';
 import EventCreateModal from '../calendar/EventCreateModal.jsx';
-import { storage } from '../../utils/storage.js';
+import { uploadFile, deliverUpload, registerUploadTarget } from '../../utils/uploads.js';
 import { registerAttachments } from '../../utils/attachments.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
@@ -1135,6 +1135,23 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   };
 
   // Handle image upload for messages
+  // Receive finished uploads meant for this wave's message box — including
+  // ones that finished while another wave was open (v2.111.0).
+  // Which wave the on-screen composer belongs to: only once that wave has
+  // loaded. On a switch there is a render where the new wave id is set but the
+  // old wave's data and composer are still showing.
+  const readyForRef = useRef(null);
+  readyForRef.current = (!loading && waveData && (waveData.id || wave?.id) === wave?.id) ? wave?.id : null;
+  useEffect(() => registerUploadTarget(wave?.id, 'wave', (text, item) => {
+    // While the wave is loading there is no composer, or the previous wave's
+    // is about to be replaced: refuse, and the upload is offered again.
+    if (!composerRef.current || readyForRef.current !== wave?.id) return false;
+    composerRef.current.appendMessage(text);
+    composerRef.current.focus();
+    const what = item.kind === 'picture' ? 'Picture' : 'File';
+    showToast(item.deferred ? `${what} finished uploading — it's in the message box, ready to send` : (item.kind === 'picture' ? 'Image uploaded' : 'File attached'), 'success');
+  }), [wave?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleImageUpload = async (file) => {
     if (!file) return;
 
@@ -1161,30 +1178,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       if (wave?.id) formData.append('waveId', wave.id);
 
 
-      const token = storage.getToken();
-      const response = await fetch(`${API_URL}/uploads`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Upload failed');
-      }
-
-      const data = await response.json();
-      // Insert the image URL into the message - it will auto-embed when sent
-      if (composerRef.current) {
-        composerRef.current.appendMessage(data.url);
-        composerRef.current.focus();
-      } else {
-        setNewMessage(prev => prev + (prev ? '\n' : '') + data.url);
-        textareaRef.current?.focus();
-      }
-      showToast('Image uploaded', 'success');
+      const data = await uploadFile('/uploads', formData, { label: file.name || 'Picture', size: file.size });
+      // Into THIS wave's message box — `wave` is the one the upload started
+      // in, even if the person has since opened another (v2.111.0).
+      deliverUpload({ waveId: wave.id, surface: 'wave', text: data.url, kind: 'picture', label: file.name, waveTitle: wave.title });
     } catch (err) {
-      showToast(err.message || formatError('Failed to upload image'), 'error');
+      if (!err.cancelled) showToast(err.message || formatError('Failed to upload image'), 'error');
     } finally {
       setUploading(false);
       // Reset file input
@@ -1221,31 +1220,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       if (wave?.id) formData.append('waveId', wave.id);
 
 
-      const token = storage.getToken();
-      const response = await fetch(`${API_URL}/uploads/file`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Upload failed');
-      }
-
-      const data = await response.json();
+      const data = await uploadFile('/uploads/file', formData, { label: file.name || 'File', size: file.size });
       // Insert file marker into the message
       const marker = `[file:${data.filename}:${data.size}]${data.url}`;
-      if (composerRef.current) {
-        composerRef.current.appendMessage(marker);
-        composerRef.current.focus();
-      } else {
-        setNewMessage(prev => prev + (prev ? '\n' : '') + marker);
-        textareaRef.current?.focus();
-      }
-      showToast('File attached', 'success');
+      deliverUpload({ waveId: wave.id, surface: 'wave', text: marker, kind: 'file', label: file.name, waveTitle: wave.title });
     } catch (err) {
-      showToast(err.message || 'Failed to upload file', 'error');
+      if (!err.cancelled) showToast(err.message || 'Failed to upload file', 'error');
     } finally {
       setUploading(false);
       if (fileAttachInputRef.current) {
@@ -1285,20 +1265,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
       formData.append('duration', Math.round(duration * 1000).toString()); // Convert to ms
 
-      const token = storage.getToken();
-      const uploadResponse = await fetch(`${API_URL}/uploads/media`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-
-      if (!uploadResponse.ok) {
-        const data = await uploadResponse.json();
-        throw new Error(data.error || 'Upload failed');
-      }
-
+      const uploadData = await uploadFile('/uploads/media', formData, { label: mediaType === 'video' ? 'Video recording' : 'Voice recording', size: file.size });
       setMediaUploadStatus('Sending message...');
-      const uploadData = await uploadResponse.json();
 
       // Create ping with media
       let messageBody = {
@@ -1351,7 +1319,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         }
       }, 150);
     } catch (err) {
-      showToast(err.message || formatError('Failed to send media'), 'error');
+      if (!err.cancelled) showToast(err.message || formatError('Failed to send media'), 'error');
     } finally {
       setUploadingMedia(false);
       setMediaUploadStatus('');

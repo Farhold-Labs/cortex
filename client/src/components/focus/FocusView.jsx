@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture.js';
 import { SUCCESS, EMPTY, formatError, CONFIRM_DIALOG } from '../../../messages.js';
-import { PRIVACY_LEVELS, API_URL, BASE_URL } from '../../config/constants.js';
+import { PRIVACY_LEVELS, BASE_URL } from '../../config/constants.js';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
-import { storage } from '../../utils/storage.js';
+import { uploadFile, deliverUpload, registerUploadTarget } from '../../utils/uploads.js';
 import { registerAttachments } from '../../utils/attachments.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import Message from '../messages/Message.jsx';
@@ -207,6 +207,17 @@ const FocusView = ({
     }
   };
 
+  // Finished uploads come back to this message box, even if the person
+  // browsed elsewhere meanwhile (v2.111.0).
+  const uploadSurface = `focus:${focusStack?.[focusStack.length - 1]?.pingId}`;
+  useEffect(() => registerUploadTarget(wave?.id, uploadSurface, (text, item) => {
+    if (!composerRef.current) return false; // not on screen yet: offered again shortly
+    composerRef.current.appendMessage(text);
+    composerRef.current?.focus();
+    const what = item.kind === 'picture' ? 'Picture' : 'File';
+    showToast(item.deferred ? `${what} finished uploading — it's in the message box, ready to send` : (item.kind === 'picture' ? 'Image uploaded' : 'File attached'), 'success');
+  }), [wave?.id, uploadSurface]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleImageUpload = async (file) => {
     if (!file) return;
     const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
@@ -222,22 +233,11 @@ const FocusView = ({
     try {
       const formData = new FormData();
       formData.append('image', file);
-      const token = storage.getToken();
-      const response = await fetch(`${API_URL}/uploads`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Upload failed');
-      }
-      const data = await response.json();
-      composerRef.current?.appendMessage(data.url);
-      composerRef.current?.focus();
-      showToast('Image uploaded', 'success');
+      if (wave?.id) formData.append('waveId', wave.id);
+      const data = await uploadFile('/uploads', formData, { label: file.name || 'Picture', size: file.size });
+      deliverUpload({ waveId: wave.id, surface: uploadSurface, text: data.url, kind: 'picture', label: file.name, waveTitle: wave.title });
     } catch (err) {
-      showToast(err.message || formatError('Failed to upload image'), 'error');
+      if (!err.cancelled) showToast(err.message || formatError('Failed to upload image'), 'error');
     } finally {
       setUploading(false);
     }
@@ -260,23 +260,11 @@ const FocusView = ({
       // nobody can protect.
       if (wave?.id) formData.append('waveId', wave.id);
 
-      const token = storage.getToken();
-      const response = await fetch(`${API_URL}/uploads/file`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Upload failed');
-      }
-      const data = await response.json();
+      const data = await uploadFile('/uploads/file', formData, { label: file.name || 'File', size: file.size });
       const marker = `[file:${data.filename}:${data.size}]${data.url}`;
-      composerRef.current?.appendMessage(marker);
-      composerRef.current?.focus();
-      showToast('File attached', 'success');
+      deliverUpload({ waveId: wave.id, surface: uploadSurface, text: marker, kind: 'file', label: file.name, waveTitle: wave.title });
     } catch (err) {
-      showToast(err.message || 'Failed to upload file', 'error');
+      if (!err.cancelled) showToast(err.message || 'Failed to upload file', 'error');
     } finally {
       setUploading(false);
     }

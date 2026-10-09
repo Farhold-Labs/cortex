@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { confirmLeaveDuringUpload } from '../../utils/uploads.js';
 import { BASE_URL, PRIVACY_LEVELS } from '../../config/constants.js';
 import { OFFLINE, VERSION_CHECK } from '../../../messages.js';
 
@@ -199,6 +200,7 @@ export const VersionMismatchBanner = ({ serverVersion, clientVersion }) => {
       <span>{VERSION_CHECK.outdated} (v{serverVersion})</span>
       <button
         onClick={async () => {
+          if (!confirmLeaveDuringUpload()) return;
           if (window.electronAPI?.clearCacheAndReload) {
             window.electronAPI.clearCacheAndReload();
             return;
