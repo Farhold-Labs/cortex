@@ -12,13 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An uploading screen, with progress.** On a slow connection a picture, file or recording used to sit behind nothing more than a disabled button, with no sign it was moving. People refreshed, and the refresh silently threw the upload away. Every upload — pictures, files, voice and video recordings, profile pictures, profile videos — now shows a screen with:
   - the file name, a progress bar, the percentage, KB/MB sent of the total, and the time left (estimated from the speed so far, after a couple of seconds);
   - **"Keep this page open. Refreshing, closing or leaving it will cancel the upload."**;
-  - **Cancel**, and **Keep browsing**, which shrinks it to a small pill at the top ("UPLOADING 59%") that reopens the screen when tapped;
+  - **Cancel**, and **Keep browsing**, which shrinks it to a small pill at the top ("UPLOADING 59%") that reopens the screen when tapped. Only leaving the page cancels an upload; browsing doesn't;
   - once every byte has gone, "Uploaded — the server is finishing up…", because videos are transcoded before the server answers.
   - It appears only after 600 ms, so a quick upload on a good connection doesn't flash it.
 - **Leaving mid-upload now asks first.** While anything is uploading, refreshing, closing the tab or navigating away brings up the browser's "Leave site?" prompt. The in-app "update available → reload" button asks too. The guard is removed as soon as nothing is uploading.
 - **The access token is refreshed before a long upload rather than failing at the end of it.** If the token expires within five minutes it is rotated first, and a `TOKEN_EXPIRED` answer is retried once. Before this, an upload slower than the rest of an hour-long token was refused after sending every byte.
 
 All nine upload call sites now go through one module, `client/src/utils/uploads.js`. It uses `XMLHttpRequest`, since `fetch` cannot report upload progress.
+
+- **A finished upload goes back to the message box it came from**, wherever the person is when it finishes. The app reuses one wave view for every wave, so inserting into "the composer" put a picture into whichever wave happened to be open. Its members couldn't even load it, because the file is bound to the wave it was uploaded for. If no wave was open, the picture was simply lost. Each upload now names its target — the wave plus the message box: the wave's own, a thread's, or a focused message's — and waits until that box is on screen. If a thread panel has since closed, the wave's main box takes it.
+  - Finishing while you're in another wave shows **"✓ photo.jpg finished uploading. It is waiting in the message box of *Wave name* — open it to send."** On returning, it's in the box with "Picture finished uploading — it's in the message box, ready to send".
+  - The first version of this delivered the picture into a composer the wave view then threw away: it shows a spinner while a wave loads, and then mounts a fresh composer. A host now refuses a delivery until its own wave has loaded, and the upload is offered again shortly.
 
 ### Fixed
 
@@ -30,6 +34,7 @@ On dev, driving the real app in headless Chrome with upload speed throttled to 6
 - Nothing appeared at 300 ms. At 3 s the screen showed 19% with "~13 s left", and at 7 s 45% with "~9 s left".
 - A refresh brought up the browser's leave-page prompt. Declining it left the upload running at 55%.
 - *Keep browsing* shrank it to an "UPLOADING 59%" pill, and the pill reopened the screen.
+- **Browsing mid-upload:** an upload was started in *Test Public Wave*. *Keep browsing* was pressed, then the list, then *Test mptc wave* was opened (pill at 38%). When the upload finished, that wave's message box stayed empty and the notice named *Test Public Wave*. Reopening *Test Public Wave* showed the picture's link in its box, with the "ready to send" message. The first run of this test found the composer bug described above.
 - The upload finished, and the picture's link was in the message box.
 - *Cancel* closed the screen with no error message and left the message box empty.
 - With nothing uploading, a refresh gave no prompt.

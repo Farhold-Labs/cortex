@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
-import { subscribeUploads, getUploadsSnapshot, cancelUpload } from '../../utils/uploads.js';
+import { subscribeUploads, getUploadsSnapshot, getWaitingSnapshot, dismissWaiting, cancelUpload } from '../../utils/uploads.js';
+import { plainText } from '../../utils/plainText.js';
 
 /**
  * The uploading screen (v2.111.0).
@@ -39,8 +40,33 @@ const UploadProgress = () => {
     return () => clearInterval(t);
   }, [uploads.length]);
 
+  const waiting = useSyncExternalStore(subscribeUploads, getWaitingSnapshot);
+
   const visible = uploads.filter(u => now - u.startedAt >= SHOW_AFTER_MS);
-  if (!visible.length) return null;
+  if (!visible.length) {
+    // Finished while the person was in another wave: say where it went, so
+    // it is not a mystery when it turns up in that wave's message box.
+    if (!waiting.length) return null;
+    const w = waiting[0];
+    return (
+      <div role="status"
+        style={{
+          position: 'fixed', top: 'calc(8px + env(safe-area-inset-top))', left: '50%', transform: 'translateX(-50%)', zIndex: 4000,
+          width: 'min(420px, calc(100% - 32px))', boxSizing: 'border-box', display: 'flex', alignItems: 'flex-start', gap: 10,
+          padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--accent-green, #0ead69)',
+          color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.78rem', lineHeight: 1.45, boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+        }}>
+        <span style={{ color: 'var(--accent-green, #0ead69)' }}>✓</span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          {w.label ? <strong style={{ wordBreak: 'break-all' }}>{w.label}</strong> : (w.kind === 'picture' ? 'Your picture' : 'Your file')} finished uploading.
+          {' '}It is waiting in the message box of <strong>{plainText(w.waveTitle || 'the wave you started in')}</strong> — open it to send.
+          {waiting.length > 1 ? ` (+${waiting.length - 1} more)` : ''}
+        </span>
+        <button onClick={() => dismissWaiting(w.id)} aria-label="Dismiss"
+          style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '1rem', padding: 0, lineHeight: 1 }}>✕</button>
+      </div>
+    );
+  }
 
   const loaded = visible.reduce((a, u) => a + (u.loaded || 0), 0);
   const total = visible.reduce((a, u) => a + (u.total || 0), 0);
