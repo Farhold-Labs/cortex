@@ -5,6 +5,45 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.111.0] - 2026-10-08
+
+### Added
+
+- **An uploading screen, with progress.** On a slow connection a picture, file or recording used to sit behind nothing more than a disabled button, with no sign it was moving. People refreshed, and the refresh silently threw the upload away. Every upload — pictures, files, voice and video recordings, profile pictures, profile videos — now shows a screen with:
+  - the file name, a progress bar, the percentage, KB/MB sent of the total, and the time left (estimated from the speed so far, after a couple of seconds);
+  - **"Keep this page open. Refreshing, closing or leaving it will cancel the upload."**;
+  - **Cancel**, and **Keep browsing**, which shrinks it to a small pill at the top ("UPLOADING 59%") that reopens the screen when tapped. Only leaving the page cancels an upload; browsing doesn't;
+  - once every byte has gone, "Uploaded — the server is finishing up…", because videos are transcoded before the server answers.
+  - It appears only after 600 ms, so a quick upload on a good connection doesn't flash it.
+- **Leaving mid-upload now asks first.** While anything is uploading, refreshing, closing the tab or navigating away brings up the browser's "Leave site?" prompt. The in-app "update available → reload" button asks too. The guard is removed as soon as nothing is uploading.
+- **The access token is refreshed before a long upload rather than failing at the end of it.** If the token expires within five minutes it is rotated first, and a `TOKEN_EXPIRED` answer is retried once. Before this, an upload slower than the rest of an hour-long token was refused after sending every byte.
+
+All nine upload call sites now go through one module, `client/src/utils/uploads.js`. It uses `XMLHttpRequest`, since `fetch` cannot report upload progress.
+
+- **A finished upload goes back to the message box it came from**, wherever the person is when it finishes. The app reuses one wave view for every wave, so inserting into "the composer" put a picture into whichever wave happened to be open. Its members couldn't even load it, because the file is bound to the wave it was uploaded for. If no wave was open, the picture was simply lost. Each upload now names its target — the wave plus the message box: the wave's own, a thread's, or a focused message's — and waits until that box is on screen. If a thread panel has since closed, the wave's main box takes it.
+  - Finishing while you're in another wave shows **"✓ photo.jpg finished uploading. It is waiting in the message box of *Wave name* — open it to send."** On returning, it's in the box with "Picture finished uploading — it's in the message box, ready to send".
+  - The first version of this delivered the picture into a composer the wave view then threw away: it shows a spinner while a wave loads, and then mounts a fresh composer. A host now refuses a delivery until its own wave has loaded, and the upload is offered again shortly.
+
+### Fixed
+
+- **Pictures uploaded from the focus view or a thread panel were never bound to their wave.** These two upload paths didn't send the wave ID, so the v2.104.0 wave-membership gate on `/uploads` had nothing to bind them to. A file nobody can attribute to a wave stays public, as legacy files do. They now send it, like the main wave view always has.
+
+### Verified
+
+On dev, driving the real app in headless Chrome with upload speed throttled to 64 KB/s, using a 987 KB picture:
+- Nothing appeared at 300 ms. At 3 s the screen showed 19% with "~13 s left", and at 7 s 45% with "~9 s left".
+- A refresh brought up the browser's leave-page prompt. Declining it left the upload running at 55%.
+- *Keep browsing* shrank it to an "UPLOADING 59%" pill, and the pill reopened the screen.
+- **Browsing mid-upload:** an upload was started in *Test Public Wave*. *Keep browsing* was pressed, then the list, then *Test mptc wave* was opened (pill at 38%). When the upload finished, that wave's message box stayed empty and the notice named *Test Public Wave*. Reopening *Test Public Wave* showed the picture's link in its box, with the "ready to send" message. The first run of this test found the composer bug described above.
+- The upload finished, and the picture's link was in the message box.
+- *Cancel* closed the screen with no error message and left the message box empty.
+- With nothing uploading, a refresh gave no prompt.
+- 464/464 tests.
+
+### Fixed — tooling
+
+- **`tools/backup-release-db.sh` could back up the wrong file and still say "verified".** It took the first `data/*.db` in alphabetical order. Dev and QA both carry a stale, unused `data/cortex.db`, which sorts before the live `farhold.db`, so on those two boxes the release backups were copies of that file. On QA, the "v2.109.0 backup" was its January `cortex.db`; on dev it was an empty file that still printed "verified". farhold, PMP and port1 have only `farhold.db` and were never affected. The script now backs up `data/farhold.db` — the file the server opens — or `DB_FILE` if set. It also **fails if the snapshot has no `users` table**, since a clean integrity check on an empty or foreign file proves nothing. The v2.110.0 backups for dev and QA were taken by hand from `farhold.db` and verified (dev 8 users / 612 pings; QA 11 users / 390 pings).
+
 ## [2.110.0] - 2026-10-06
 
 Live broadcasts can now be **recorded**. LiveKit Egress writes each recording straight into an S3-compatible bucket (Backblaze B2 in production), and members of the wave watch it afterwards from a recording page. **Database migration:** seven new columns on `broadcasts`, one new table and one trigger — take the verified backup first.

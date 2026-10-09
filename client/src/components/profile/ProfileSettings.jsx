@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
+import { uploadFile } from '../../utils/uploads.js';
 import { useWindowSize } from '../../hooks/useWindowSize.js';
 import { SUCCESS, CONFIRM, CONFIRM_DIALOG, EMPTY, UI_LABELS, formatError } from '../../../messages.js';
 import { API_URL, canAccess, FONT_SIZES, WAVE_DENSITY, DEFAULT_WAVE_DENSITY, MESSAGE_FONTS, DEFAULT_MESSAGE_FONT } from '../../config/constants.js';
@@ -571,34 +572,14 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
       const formData = new FormData();
       formData.append('avatar', file);
 
-      const response = await fetch(`${API_URL}/profile/avatar`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('farhold_token')}`,
-        },
-        body: formData,
-      });
-
-      // Try to parse as JSON, handle non-JSON responses gracefully
-      let data;
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        data = await response.json();
-      } else {
-        const text = await response.text();
-        throw new Error(text || `Server error (${response.status})`);
-      }
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Upload failed');
-      }
+      const data = await uploadFile('/profile/avatar', formData, { label: file.name || 'Profile picture', size: file.size });
 
       setAvatarUrl(data.avatarUrl);
       onUserUpdate?.({ ...user, avatarUrl: data.avatarUrl });
       showToast('Profile image uploaded', 'success');
     } catch (err) {
       console.error('Avatar upload error:', err);
-      showToast(err.message || formatError('Failed to upload image'), 'error');
+      if (!err.cancelled) showToast(err.message || formatError('Failed to upload image'), 'error');
     } finally {
       setUploadingAvatar(false);
     }
