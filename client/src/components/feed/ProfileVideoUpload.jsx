@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback } from 'react';
 import MediaRecorder from '../media/MediaRecorder.jsx';
+import { uploadFile } from '../../utils/uploads.js';
 
 /**
  * ProfileVideoUpload Component (v2.9.0)
@@ -117,26 +118,9 @@ const ProfileVideoUpload = ({
       formData.append('duration', duration.toString());
     }
 
-    try {
-      const response = await fetch('/api/uploads/media', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('farhold_token')}`,
-        },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Upload failed');
-      }
-
-      const result = await response.json();
-      return result;
-    } catch (error) {
-      console.error('Upload error:', error);
-      throw error;
-    }
+    // Through uploadFile so a long video shows real progress and is guarded
+    // against a refresh (v2.111.0).
+    return uploadFile('/uploads/media', formData, { label: 'Video', size: blob.size });
   }, []);
 
   // Post video to profile
@@ -153,7 +137,7 @@ const ProfileVideoUpload = ({
       const blob = previewFile || recordedBlob;
       const duration = recordedDuration || 0;
 
-      setUploadProgress('Transcoding video...');
+      setUploadProgress('Uploading video...');
       const uploadResult = await uploadMedia(blob, duration * 1000); // Convert to ms
 
       if (!uploadResult.url) {
@@ -177,7 +161,7 @@ const ProfileVideoUpload = ({
 
     } catch (error) {
       console.error('Failed to post video:', error);
-      showToast?.(error.message || 'Failed to post video', 'error');
+      if (!error.cancelled) showToast?.(error.message || 'Failed to post video', 'error');
     } finally {
       setUploading(false);
       setUploadProgress('');
