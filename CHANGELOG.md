@@ -5,6 +5,15 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.112.1] - 2026-10-08
+
+Same code as 2.112.0, re-versioned so the app builds could be published.
+
+### Release
+
+- **App builds are back:** Android (APK, and AAB for the Play Store), Windows, and Linux (AppImage x64/arm64, .deb, .rpm). These are the first since v2.81.4. The apps load the live site at runtime, so they were already running current features; these bring the installed version and app shell up to date. The APK is signed with the same key as v2.81.4, and its build number (2112001) is higher, so it installs as an upgrade. macOS builds need a Mac and aren't included.
+- **Why there's no 2.112.0 release page:** v2.112.0 was published as a server-only release. This repository has immutable releases, so binaries can't be added to a published one. The recorded workaround was to delete it, recreate it as a draft, upload, and publish. The last step failed: GitHub refuses to publish any release on a tag that once had an immutable release, even after deletion (`HTTP 422: tag_name was used by an immutable release`). The v2.112.0 tag still exists, but its release page is gone, so the v2.112.0 announcement link no longer works. `client-build-cortex.sh` no longer suggests that workaround; a published version that needs binaries gets a new patch number instead.
+
 ## [2.112.0] - 2026-10-08
 
 ### Added
