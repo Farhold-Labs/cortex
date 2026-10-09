@@ -25,6 +25,7 @@ import SearchModal from '../components/search/SearchModal.jsx';
 import ContactsView from '../components/contacts/ContactsView.jsx';
 import ErrorBoundary from '../components/ui/ErrorBoundary.jsx';
 import InstallPrompt from '../components/ui/InstallPrompt.jsx';
+import UploadProgress from '../components/ui/UploadProgress.jsx';
 import WaveView from '../components/waves/WaveView.jsx';
 import FocusView from '../components/focus/FocusView.jsx';
 import ThreadPanel from '../components/focus/ThreadPanel.jsx';
@@ -2347,6 +2348,7 @@ function MainApp({ sharePingId }) {
       <OfflineIndicator />
       <VersionMismatchBanner serverVersion={serverVersion} clientVersion={VERSION} />
       <InstallPrompt isMobile={isMobile} />
+      <UploadProgress />
 
       {/* Docked Call Window - persists across navigation (v2.6.1) */}
       {globalVoiceCall.connectionState !== 'disconnected' && (

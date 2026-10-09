@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture.js';
 import { SUCCESS, EMPTY, formatError, CONFIRM_DIALOG } from '../../../messages.js';
-import { PRIVACY_LEVELS, API_URL, BASE_URL } from '../../config/constants.js';
+import { PRIVACY_LEVELS, BASE_URL } from '../../config/constants.js';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
-import { storage } from '../../utils/storage.js';
+import { uploadFile } from '../../utils/uploads.js';
 import { registerAttachments } from '../../utils/attachments.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import Message from '../messages/Message.jsx';
@@ -222,22 +222,13 @@ const FocusView = ({
     try {
       const formData = new FormData();
       formData.append('image', file);
-      const token = storage.getToken();
-      const response = await fetch(`${API_URL}/uploads`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Upload failed');
-      }
-      const data = await response.json();
+      if (wave?.id) formData.append('waveId', wave.id);
+      const data = await uploadFile('/uploads', formData, { label: file.name || 'Picture', size: file.size });
       composerRef.current?.appendMessage(data.url);
       composerRef.current?.focus();
       showToast('Image uploaded', 'success');
     } catch (err) {
-      showToast(err.message || formatError('Failed to upload image'), 'error');
+      if (!err.cancelled) showToast(err.message || formatError('Failed to upload image'), 'error');
     } finally {
       setUploading(false);
     }
@@ -260,23 +251,13 @@ const FocusView = ({
       // nobody can protect.
       if (wave?.id) formData.append('waveId', wave.id);
 
-      const token = storage.getToken();
-      const response = await fetch(`${API_URL}/uploads/file`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Upload failed');
-      }
-      const data = await response.json();
+      const data = await uploadFile('/uploads/file', formData, { label: file.name || 'File', size: file.size });
       const marker = `[file:${data.filename}:${data.size}]${data.url}`;
       composerRef.current?.appendMessage(marker);
       composerRef.current?.focus();
       showToast('File attached', 'success');
     } catch (err) {
-      showToast(err.message || 'Failed to upload file', 'error');
+      if (!err.cancelled) showToast(err.message || 'Failed to upload file', 'error');
     } finally {
       setUploading(false);
     }
