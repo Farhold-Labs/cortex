@@ -5,6 +5,20 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.112.0] - 2026-10-08
+
+### Added
+
+- **Attached audio and video play in the conversation.** An MP3 or MP4 sent as a file used to be just a download card. Now a player appears above the card: an audio player for `.mp3`, `.m4a`, `.wav`, `.ogg`, `.oga`, `.opus`, and a video player for `.mp4`, `.webm`, `.m4v`, `.mov`. Both have play, seek and volume, and the video player has full screen. The card stays underneath for saving the file.
+  - **Display-time only, in `MessageWithEmbeds`.** Stored messages are unchanged, so every attachment already sent gets a player too, in encrypted waves as well (the server never sees those messages). No server change was needed: these extensions were already on the server's renderable list, so they're served with their real type and support partial requests, which the player needs to seek. The wave-membership check on `/uploads` applies to every request the player makes.
+  - Formats are limited to ones browsers play *and* the server serves inline. Anything else (`.mkv`, `.avi`, `.flac`, `.aac`) is sent as a forced download and could never play, so it keeps just the card.
+  - `playsinline` is now allowed through the client sanitizer, so an attached video plays inside the message on an iPhone instead of jumping to full screen.
+- Files are still limited to 25 MB, so long videos won't fit as attachments.
+
+### Verified
+
+On dev, in a private wave behind the attachment access check, I sent a 6 s MP3 and a 6 s 640×360 MP4 through the real composer in headless Chrome. Both loaded with the right duration, played, and seeked to 4 s. The server answered every request with `206` and the right type (`audio/mpeg`, `video/mp4`), and the download card stayed below each player. 464/464 tests.
+
 ## [2.111.0] - 2026-10-08
 
 ### Added

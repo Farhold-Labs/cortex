@@ -5,7 +5,8 @@ import DOMPurify from 'dompurify';
 export function sanitizeMessageHtml(html) {
   return DOMPurify.sanitize(html || '', {
     USE_PROFILES: { html: true },
-    ADD_ATTR: ['target'],
+    // playsinline: without it iOS takes an attached video full screen on play.
+    ADD_ATTR: ['target', 'playsinline'],
     FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'],
   });
 }
