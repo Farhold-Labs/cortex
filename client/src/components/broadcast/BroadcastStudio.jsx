@@ -3,6 +3,7 @@ import { Room, RoomEvent, Track, createLocalTracks, VideoPresets, AudioPresets }
 import { API_URL } from '../../config/constants.js';
 import { storage } from '../../utils/storage.js';
 import { plainText } from '../../utils/plainText.js';
+import { canLockOrientation, lockOrientation, unlockOrientation } from '../../utils/orientation.js';
 
 /**
  * The performer's side of a live broadcast (v2.109.0).
@@ -34,6 +35,12 @@ const BroadcastStudio = ({ broadcastId }) => {
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [copied, setCopied] = useState(false);
   const [canRecord, setCanRecord] = useState(false);
+  // v2.113.0 — sideways filming and camera zoom.
+  const [landscape, setLandscape] = useState(() => window.innerWidth > window.innerHeight);
+  const [rotateBusy, setRotateBusy] = useState(false);
+  const [zoomRange, setZoomRange] = useState(null); // { min, max, step } when the camera can zoom
+  const [zoom, setZoom] = useState(1);
+  const pinchRef = useRef(null);
 
   const api = useCallback(async (path, opts = {}) => {
     const res = await fetch(`${API_URL}${path}`, {
@@ -52,7 +59,8 @@ const BroadcastStudio = ({ broadcastId }) => {
 
   const publish = useCallback(async (room, { music, face }) => {
     const [video, audio] = await createLocalTracks({
-      video: { facingMode: face, resolution: VideoPresets.h720.resolution },
+      // zoom: true asks for the camera's zoom control where the browser has one.
+      video: { facingMode: face, resolution: VideoPresets.h720.resolution, zoom: true },
       audio: audioOptions(music),
     }).then(ts => [ts.find(t => t.kind === Track.Kind.Video), ts.find(t => t.kind === Track.Kind.Audio)]);
     if (video) {
@@ -65,7 +73,8 @@ const BroadcastStudio = ({ broadcastId }) => {
         : {});
     }
     tracksRef.current = { video, audio };
-  }, []);
+    readZoom();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let cancelled = false;
@@ -113,11 +122,61 @@ const BroadcastStudio = ({ broadcastId }) => {
     return () => clearInterval(t);
   }, [status, broadcastId, api]);
 
+  // ---- Zoom: the camera's own optical/digital zoom, where it has one ----
+  function readZoom() {
+    const mst = tracksRef.current.video?.mediaStreamTrack;
+    const caps = mst?.getCapabilities?.();
+    if (caps?.zoom && caps.zoom.max > caps.zoom.min) {
+      setZoomRange({ min: caps.zoom.min, max: caps.zoom.max, step: caps.zoom.step || 0.1 });
+      setZoom(mst.getSettings?.().zoom ?? caps.zoom.min);
+    } else {
+      setZoomRange(null);
+    }
+  }
+  const applyZoom = useCallback((value) => {
+    const mst = tracksRef.current.video?.mediaStreamTrack;
+    if (!mst || !zoomRange) return;
+    const z = Math.min(zoomRange.max, Math.max(zoomRange.min, value));
+    setZoom(z);
+    mst.applyConstraints({ advanced: [{ zoom: z }] }).catch(() => {});
+  }, [zoomRange]);
+  // Pinch on the preview zooms the camera, as in a camera app.
+  const onTouchStart = (e) => {
+    if (e.touches.length !== 2 || !zoomRange) return;
+    const [a, b] = e.touches;
+    pinchRef.current = { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), zoom };
+  };
+  const onTouchMove = (e) => {
+    if (e.touches.length !== 2 || !pinchRef.current) return;
+    const [a, b] = e.touches;
+    const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    applyZoom(pinchRef.current.zoom * (dist / pinchRef.current.dist));
+  };
+  const onTouchEnd = () => { pinchRef.current = null; };
+
+  // ---- Rotation ----
+  useEffect(() => {
+    const onResize = () => setLandscape(window.innerWidth > window.innerHeight);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+      unlockOrientation(); // leaving the studio hands rotation back to the phone
+    };
+  }, []);
+  const rotate = async () => {
+    setRotateBusy(true);
+    const ok = await lockOrientation(landscape ? 'portrait' : 'landscape');
+    if (!ok) setError('This device would not rotate. Turn on auto-rotate in your phone settings and turn the phone.');
+    setRotateBusy(false);
+  };
+
   const toggleMic = async () => { const a = tracksRef.current.audio; if (!a) return; if (micOn) await a.mute(); else await a.unmute(); setMicOn(!micOn); };
   const toggleCam = async () => { const v = tracksRef.current.video; if (!v) return; if (camOn) await v.mute(); else await v.unmute(); setCamOn(!camOn); };
   const flipCamera = async () => {
     const next = facing === 'environment' ? 'user' : 'environment';
-    try { await tracksRef.current.video?.restartTrack({ facingMode: next, resolution: VideoPresets.h720.resolution }); setFacing(next); } catch { /* only one camera */ }
+    try { await tracksRef.current.video?.restartTrack({ facingMode: next, resolution: VideoPresets.h720.resolution, zoom: true }); setFacing(next); readZoom(); } catch { /* only one camera */ }
   };
   const toggleMusicMode = async () => {
     const next = !musicMode;
@@ -147,7 +206,7 @@ const BroadcastStudio = ({ broadcastId }) => {
     try { await navigator.clipboard.writeText(broadcast.publicLink); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* select it manually */ }
   };
   const endBroadcast = async () => {
-    try { await api(`/broadcasts/${encodeURIComponent(broadcastId)}/end`, { method: 'POST' }); setStatus('ended'); roomRef.current?.disconnect(); }
+    try { await api(`/broadcasts/${encodeURIComponent(broadcastId)}/end`, { method: 'POST' }); setStatus('ended'); roomRef.current?.disconnect(); unlockOrientation(); }
     catch (err) { setError(err.message); }
   };
 
@@ -170,9 +229,14 @@ const BroadcastStudio = ({ broadcastId }) => {
     );
   }
 
+  // A phone on its side: controls move to a column on the right so the
+  // preview keeps the full height instead of a letterbox above a tall panel.
+  const sideways = landscape && window.innerHeight < 600;
+
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#000', color: '#fff', fontFamily: 'monospace', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: 'calc(10px + env(safe-area-inset-top)) 14px 10px', display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.7)' }}>
+    <div style={{ position: 'fixed', inset: 0, background: '#000', color: '#fff', fontFamily: 'monospace', display: 'flex', flexDirection: sideways ? 'row' : 'column' }}>
+     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: `calc(${sideways ? 6 : 10}px + env(safe-area-inset-top)) 14px ${sideways ? 6 : 10}px calc(14px + env(safe-area-inset-left))`, display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.7)' }}>
         <span style={{ background: status === 'live' ? '#e0242b' : '#555', padding: '2px 8px', borderRadius: 3, fontSize: '0.75rem', fontWeight: 'bold', letterSpacing: '0.1em' }}>
           {status === 'live' ? '● LIVE' : 'STARTING…'}
         </span>
@@ -183,17 +247,36 @@ const BroadcastStudio = ({ broadcastId }) => {
         {viewers !== null && <span style={{ fontSize: '0.8rem', color: '#ccc' }}>👁 {viewers}</span>}
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', touchAction: zoomRange ? 'none' : 'auto' }}
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}>
         <video ref={previewRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'contain', transform: facing === 'user' ? 'scaleX(-1)' : 'none' }} />
         {!camOn && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#aaa' }}>Camera off — viewers see a black screen</div>}
+        {zoomRange && (
+          <div style={{ position: 'absolute', left: '50%', bottom: 10, transform: 'translateX(-50%)', width: 'min(320px, 80%)', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 20, background: 'rgba(0,0,0,0.55)' }}>
+            <span style={{ fontSize: '0.75rem' }} aria-hidden="true">🔍</span>
+            <input type="range" aria-label="Camera zoom" min={zoomRange.min} max={zoomRange.max} step={zoomRange.step} value={zoom}
+              onChange={(e) => applyZoom(parseFloat(e.target.value))} style={{ flex: 1 }} />
+            <span style={{ fontSize: '0.75rem', minWidth: 38, textAlign: 'right' }}>{zoom.toFixed(1)}×</span>
+          </div>
+        )}
       </div>
+     </div>
 
-      <div style={{ padding: '10px 14px calc(12px + env(safe-area-inset-bottom))', background: 'rgba(0,0,0,0.8)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{
+        padding: sideways ? 'calc(8px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) 10px' : '10px 14px calc(12px + env(safe-area-inset-bottom))',
+        background: 'rgba(0,0,0,0.8)', display: 'flex', flexDirection: 'column', gap: 10,
+        ...(sideways ? { width: 250, flexShrink: 0, overflowY: 'auto' } : {}),
+      }}>
         {error && <div role="alert" style={{ color: '#ff6b35', fontSize: '0.8rem' }}>{error}</div>}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={toggleMic} style={btn(micOn)}>{micOn ? '🎙 MIC ON' : '🔇 MIC OFF'}</button>
           <button onClick={toggleCam} style={btn(camOn)}>{camOn ? '📷 CAMERA ON' : '🚫 CAMERA OFF'}</button>
           <button onClick={flipCamera} style={btn()}>🔄 FLIP</button>
+          {canLockOrientation() && (
+            <button onClick={rotate} disabled={rotateBusy} style={btn()} title="Turn the screen — works even with auto-rotate off">
+              {landscape ? '▯ PORTRAIT' : '▭ LANDSCAPE'}
+            </button>
+          )}
           <button onClick={toggleMusicMode} style={btn(musicMode)} title="Turns off the speech filters that damage music and stage sound">
             {musicMode ? '🎵 MUSIC MODE ON' : '🗣 SPEECH MODE'}
           </button>
