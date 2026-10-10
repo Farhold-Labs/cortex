@@ -16,6 +16,8 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Local plugins must be registered before the bridge starts (v2.113.0).
+        registerPlugin(OrientationPlugin.class);
         super.onCreate(savedInstanceState);
         createNotificationChannel();
         enableFileDownloads();
