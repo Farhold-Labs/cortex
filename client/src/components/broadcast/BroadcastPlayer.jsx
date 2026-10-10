@@ -3,6 +3,7 @@ import { Room, RoomEvent, Track, DisconnectReason } from 'livekit-client';
 import { API_URL } from '../../config/constants.js';
 import { storage } from '../../utils/storage.js';
 import { plainText } from '../../utils/plainText.js';
+import { lockOrientation, unlockOrientation } from '../../utils/orientation.js';
 
 /**
  * Watching a live broadcast (v2.109.0).
@@ -101,7 +102,11 @@ const BroadcastPlayer = ({ broadcastId = null, publicToken = null }) => {
 
   // Track real full-screen state, whichever way it was entered or left.
   useEffect(() => {
-    const onChange = () => setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement));
+    const onChange = () => {
+      const full = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      setIsFullscreen(full);
+      if (!full) unlockOrientation(); // left full screen by gesture or Back: let the phone turn freely again
+    };
     document.addEventListener('fullscreenchange', onChange);
     document.addEventListener('webkitfullscreenchange', onChange);
     return () => {
@@ -116,14 +121,16 @@ const BroadcastPlayer = ({ broadcastId = null, publicToken = null }) => {
     try {
       if (document.fullscreenElement || document.webkitFullscreenElement) {
         await (document.exitFullscreen?.() || document.webkitExitFullscreen?.());
-        screen.orientation?.unlock?.();
+        unlockOrientation();
         return;
       }
       if (el?.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' });
       else if (el?.webkitRequestFullscreen) el.webkitRequestFullscreen();
       else if (video?.webkitEnterFullscreen) { video.webkitEnterFullscreen(); return; } // iOS Safari
-      // A performance is wider than it is tall; on a phone, turn it.
-      await screen.orientation?.lock?.('landscape').catch?.(() => {});
+      // A performance is wider than it is tall; on a phone, turn it. In the
+      // Android app this goes through the native plugin (v2.113.0), since a
+      // WebView cannot lock orientation itself.
+      if (window.innerHeight > window.innerWidth) await lockOrientation('landscape');
     } catch { /* the browser said no; the page still plays */ }
   };
 
@@ -137,7 +144,7 @@ const BroadcastPlayer = ({ broadcastId = null, publicToken = null }) => {
     clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => setControlsVisible(false), 3000);
   };
-  useEffect(() => () => clearTimeout(hideTimer.current), []);
+  useEffect(() => () => { clearTimeout(hideTimer.current); unlockOrientation(); }, []);
 
   const message = {
     connecting: 'Connecting…',
