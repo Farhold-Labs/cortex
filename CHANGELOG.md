@@ -5,6 +5,35 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.113.0] - 2026-10-10
+
+Reported from a phone: when streaming with the phone held sideways, the Android app wouldn't rotate and the camera couldn't zoom.
+
+### Added
+
+- **Rotate button in the broadcast studio** (▭ LANDSCAPE / ▯ PORTRAIT). It turns the screen even when the phone's auto-rotate is off.
+  - In the Android app it uses a new native plugin, `CortexOrientation` (`OrientationPlugin.java`, registered in `MainActivity`). A WebView can't lock orientation itself, and nothing in the app ever asked for landscape, so it followed the system setting. The plugin uses the *sensor* landscape and portrait modes, so landscape still follows which way up the phone is held. **This part needs the v2.113.0 APK.** An older installed app falls back to the browser route.
+  - In a browser it uses the Screen Orientation API, going full screen first because Chrome only allows locking orientation in full screen.
+  - Leaving the studio, or ending the broadcast, hands rotation back to the phone.
+- **Studio layout for a phone held sideways:** the controls move to a 250 px column on the right, so the camera preview keeps the full height instead of sitting above a tall control panel.
+- **Camera zoom in the studio:** a zoom slider over the preview (🔍 1.0×–max), plus **pinch on the preview**, as in a camera app. It drives the camera's own zoom (`applyConstraints({ advanced: [{ zoom }] })`). The camera is opened with `zoom: true`, which is how Chrome is asked for zoom control. The slider appears only where the camera reports a zoom range, and is read again after *Flip*.
+- **Viewers:** full screen in the Android app now turns to landscape through the same plugin. Leaving full screen by gesture or Back lets the phone turn freely again.
+
+### Verified
+
+- In headless Chrome on dev, with a live broadcast and a phone-sized window:
+  - **Portrait (390×844):** controls along the bottom, and a "▭ LANDSCAPE" button.
+  - **Sideways (844×390):** layout switches to a row, with a 250 px control column and a 594×356 preview; the button reads "▯ PORTRAIT".
+  - **Zoom**, against a simulated camera reporting 1–5× (the fake test camera has no zoom):
+    - the slider appeared, and setting it to 3 asked the camera for 3.0×;
+    - pinching out stepped 3 → 3.6 → 4.2 → 5 and stopped at the maximum;
+    - pinching in halved it to 2.5.
+  - **Rotate:** the page went full screen and locked to landscape, with no errors.
+  - With the real fake camera, the slider correctly stays hidden.
+- The Android project compiles with the plugin (`compileReleaseJavaWithJavac`).
+- **Not verified on a real phone:** the native rotation and real camera zoom. No Android emulator is available here. Zoom support depends on the phone's camera and on Chrome/WebView exposing it.
+- 464/464 tests.
+
 ## [2.112.1] - 2026-10-08
 
 Same code as 2.112.0, re-versioned so the app builds could be published.
