@@ -5,6 +5,24 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.113.1] - 2026-10-10
+
+Tested on PMP: zoom worked well, but the orientation needs to be set **before** the broadcast starts. In v2.113.0 the studio went live the moment it opened, so the only rotate button was mid-broadcast. Turning there changes the picture's shape for every viewer and in the recording.
+
+### Added
+- **Orientation in the Go Live dialog:** LANDSCAPE (the default), PORTRAIT or AS HELD. The screen turns as you tap START BROADCAST, so the studio opens already turned. The browser only allows full screen, which turning needs, from inside the tap itself. Shown only on devices that can be turned.
+
+### Changed
+- **The studio waits for the screen to finish turning before starting the camera** (up to 1.5 s), so the first frames, and the recording that opens on them, are already the right shape. It locks the chosen orientation again on arrival, so a phone that was already sideways is held there.
+- **Go Live now opens the studio without reloading the page.** A reload leaves full screen, and in a browser that also drops the orientation lock.
+
+### Verified
+- Drove the real app on dev in headless Chrome at a phone size (390×844): Go Live → LANDSCAPE → START BROADCAST.
+- The order of events was: orientation lock, full screen, lock again in the studio, then the camera.
+- No page reload (same document), the URL carried `?orientation=landscape`, no errors, and 464/464 tests pass.
+- Desktop headless Chrome refuses the actual turn (`NotSupportedError`; it has no screen to turn). The turn itself still needs checking on a phone.
+- No native change: the v2.113.0 Android app picks this up from the server.
+
 ## [2.113.0] - 2026-10-10
 
 Reported from a phone: when streaming with the phone held sideways, the Android app wouldn't rotate and the camera couldn't zoom.

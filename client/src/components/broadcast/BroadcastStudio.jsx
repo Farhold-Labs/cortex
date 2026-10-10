@@ -76,6 +76,13 @@ const BroadcastStudio = ({ broadcastId }) => {
     readZoom();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Turn to `kind` and wait (briefly) until the screen has actually turned.
+  async function settleOrientation(kind) {
+    const isWanted = () => (window.innerWidth > window.innerHeight) === (kind === 'landscape');
+    await lockOrientation(kind); // even if already turned: hold it there
+    for (let i = 0; i < 15 && !isWanted(); i++) await new Promise(r => setTimeout(r, 100));
+  }
+
   useEffect(() => {
     let cancelled = false;
     const room = new Room({ adaptiveStream: false, dynacast: true });
@@ -90,6 +97,12 @@ const BroadcastStudio = ({ broadcastId }) => {
         if (info.broadcast.state === 'ended') { setStatus('ended'); return; }
         if (!info.isPerformer) { setStatus('notPerformer'); return; }
         const join = await api(`/broadcasts/${encodeURIComponent(broadcastId)}/token`, { method: 'POST' });
+        if (cancelled) return;
+        // v2.113.1 — the orientation chosen when going live. Settle it before
+        // the camera starts, so the first frames (and the recording, which
+        // opens on them) are already the right shape.
+        const wanted = new URLSearchParams(window.location.search).get('orientation');
+        if (wanted === 'landscape' || wanted === 'portrait') await settleOrientation(wanted);
         if (cancelled) return;
         await room.connect(join.url, join.token);
         await publish(room, { music: true, face: 'environment' });
