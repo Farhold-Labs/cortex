@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { plainText } from '../../utils/plainText.js';
+import { canLockOrientation, lockOrientation, unlockOrientation } from '../../utils/orientation.js';
 
 /**
  * Start a live broadcast from a wave (v2.109.0).
@@ -16,6 +17,8 @@ const GoLiveModal = ({ wave, fetchAPI, showToast, onClose }) => {
   const [canRecord, setCanRecord] = useState(false);
   const [record, setRecord] = useState(true);
   const [busy, setBusy] = useState(false);
+  const canRotate = canLockOrientation();
+  const [orientation, setOrientation] = useState('landscape'); // 'landscape' | 'portrait' | 'auto'
 
   useEffect(() => {
     fetchAPI(`/events/wave/${wave.id}?upcoming=1&limit=10`)
@@ -28,13 +31,21 @@ const GoLiveModal = ({ wave, fetchAPI, showToast, onClose }) => {
   const start = async () => {
     if (!title.trim() || busy) return;
     setBusy(true);
+    // Before the request: a browser only goes full screen (which it needs in
+    // order to turn) from inside the tap itself.
+    if (canRotate && orientation !== 'auto') await lockOrientation(orientation);
     try {
       const d = await fetchAPI(`/waves/${wave.id}/broadcasts`, {
         method: 'POST',
         body: { title: title.trim(), eventId: eventId || undefined, public: isPublic, record: canRecord && record },
       });
-      window.location.href = `/broadcast/${d.broadcast.id}`;
+      const url = `/broadcast/${d.broadcast.id}${canRotate && orientation !== 'auto' ? `?orientation=${orientation}` : ''}`;
+      // In-app navigation rather than a page load: a reload leaves full
+      // screen, and with it a browser's orientation lock.
+      window.history.pushState({}, '', url);
+      window.dispatchEvent(new PopStateEvent('popstate'));
     } catch (err) {
+      if (canRotate && orientation !== 'auto') unlockOrientation();
       showToast(err.message || 'Could not start the broadcast', 'error');
       setBusy(false);
     }
@@ -61,6 +72,26 @@ const GoLiveModal = ({ wave, fetchAPI, showToast, onClose }) => {
         <label style={label}>TITLE
           <input value={title} onChange={e => setTitle(e.target.value)} maxLength={120} style={field} autoFocus />
         </label>
+
+        {canRotate && (
+          <div style={label}>ORIENTATION
+            <div role="radiogroup" aria-label="Orientation" style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              {[['landscape', '▭', 'LANDSCAPE'], ['portrait', '▯', 'PORTRAIT'], ['auto', '⟳', 'AS HELD']].map(([v, icon, text]) => (
+                <button key={v} type="button" role="radio" aria-checked={orientation === v} onClick={() => setOrientation(v)}
+                  style={{
+                    flex: 1, minWidth: 0, padding: '7px 4px', minHeight: 44, fontFamily: 'monospace', fontSize: '0.72rem', cursor: 'pointer',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, whiteSpace: 'nowrap',
+                    background: orientation === v ? 'var(--accent-amber, #ffd23f)' : 'transparent',
+                    color: orientation === v ? '#000' : 'var(--text-secondary)',
+                    border: `1px solid ${orientation === v ? 'var(--accent-amber, #ffd23f)' : 'var(--border-primary)'}`,
+                  }}><span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>{icon}</span>{text}</button>
+              ))}
+            </div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', letterSpacing: 0, marginTop: 6, lineHeight: 1.4 }}>
+              {orientation === 'auto' ? 'Follows the phone (and its auto-rotate setting).' : 'The screen turns now and stays put, even with auto-rotate off.'}
+            </div>
+          </div>
+        )}
 
         {events.length > 0 && (
           <label style={label}>FOR AN EVENT (OPTIONAL)
