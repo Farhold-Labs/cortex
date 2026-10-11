@@ -322,6 +322,36 @@ RESEND_API_KEY=re_xxx
 EMAIL_FROM=Cortex <noreply@yourdomain.com>   # domain must be verified in Resend
 ```
 
+### Live broadcasts and recording (optional)
+
+Live broadcasts (v2.109.0) let a member stream their camera and microphone to a wave, and optionally to a public link. Recording (v2.110.0) saves the broadcast for wave members to watch afterwards.
+
+**1. Turn the feature on.** It is an **opt-in instance feature, off by default**: enable *LIVE BROADCASTS* under ADMIN → INSTANCE CONFIG. It is off by default because every viewer costs LiveKit minutes. When off, the routes answer 403 `FEATURE_DISABLED`.
+
+**2. LiveKit.** Broadcasts need the same three `LIVEKIT_*` variables as calls. Give each node its **own** LiveKit project.
+
+**3. Public links** also need the public portal enabled.
+
+**4. Recording** additionally needs a private S3-compatible bucket:
+
+```bash
+# Backblaze B2 in production; AWS S3 or MinIO work too
+RECORDING_S3_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+RECORDING_S3_REGION=us-east-005
+RECORDING_S3_BUCKET=cortex-recordings
+RECORDING_S3_ACCESS_KEY=<key id>
+RECORDING_S3_SECRET_KEY=<application key>
+```
+
+- **All five or nothing.** With any of them missing, recording is simply not offered.
+- **Keep the bucket private.** Viewers stream through `/api/recordings/:id/stream`, which checks wave membership on every request.
+- **Scope the key to this bucket.** LiveKit's servers upload with it, so restrict it to this one bucket with read, write and delete.
+- **Sharing a bucket.** Files land at `<FEDERATION_NODE_NAME>/broadcasts/<id>.mp4`, so several nodes can share one bucket.
+- **Deleting a recording** in Cortex removes the file from the bucket. If the bucket cannot be reached, the delete fails with "try again" and nothing changes.
+- **Deleting a wave** (or its broadcast) queues its recording's file in `recording_deletions`, a database trigger. The server removes queued files from the bucket in the background, so a deleted conversation does not leave its video behind.
+
+Restart `cortex-api` after setting the variables. Settings take effect with no client rebuild.
+
 ### Back Up Your Keys
 
 Store a copy of these keys somewhere secure and separate from the server (password manager, encrypted USB, etc.):
@@ -349,8 +379,14 @@ npm run build
 cd /opt/cortex/app/server
 pm2 start server.js --name cortex-api
 
-# Serve client with PM2
-pm2 serve /opt/cortex/app/client/dist 3000 --name cortex-web --spa
+# Serve client with PM2 — through serve.mjs, NOT `pm2 serve --spa`.
+# serve.mjs composes each public page's <head> (titles, Open Graph),
+# puts a readable no-JavaScript copy of /events and /portal into the page,
+# handles trailing-slash routes, and returns a real 404 for a missing asset.
+# A plain static server does none of that, and a 200-HTML answer for a
+# missing asset can brick clients through the service worker.
+cd /opt/cortex/app/client
+pm2 start serve.mjs --name cortex-web     # PORT=3000, API_PORT=3001 by default
 
 # Verify both are running
 pm2 list
@@ -592,15 +628,32 @@ Do **not** expose ports 3000 or 3001 — nginx proxies all traffic.
 su - cortex
 cd /opt/cortex/app
 
+# Back up the database first if the release migrates (the CHANGELOG says
+# "Database migration" when it does). See "Taking a release backup" below.
+tools/backup-release-db.sh <version>
+
 git pull origin master
 
-# Rebuild client
+# Rebuild client (atomic: a failed build leaves the old dist in place)
 cd client && npm run build
 
-# Restart server
-pm2 restart cortex-api
+# Restart BOTH. serve.mjs holds index.html in memory, so without restarting
+# cortex-web the new build is not served and the app can hang at
+# "ESTABLISHING SIGNAL" asking for bundles that no longer exist.
+pm2 restart cortex-api cortex-web
 pm2 logs cortex-api --lines 20
 ```
+
+Then check the release from outside:
+
+```bash
+curl -s https://<domain>/api/health                     # new version
+curl -s https://<domain>/sw.js | grep CACHE_NAME        # cortex-v<new version>
+curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/assets/nope.js   # must be 404
+```
+
+A small droplet can run out of memory building the client. Either use
+`npm run build:inplace`, or build elsewhere and copy `client/dist` over.
 
 ### Locking Down (Shutdown)
 
