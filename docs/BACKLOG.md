@@ -1,5 +1,7 @@
 # Cortex Feature Backlog
 
+> **Superseded.** The live roadmap is [OUTSTANDING-FEATURES.md](../OUTSTANDING-FEATURES.md), and shipped work is in [CHANGELOG.md](../CHANGELOG.md). This file is kept as the record of what was completed up to v2.72.2.
+
 Future feature ideas and enhancements for consideration.
 
 ---

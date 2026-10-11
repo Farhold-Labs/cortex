@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
-**Last Updated:** September 2026
-**Current Version:** v2.86.0
+**Last Updated:** October 2026
+**Current Version:** v2.113.3
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.86.0)
+## Completed Features (v1.5.0 - v2.113.3)
 
 | Feature | Version |
 |---------|---------|
@@ -109,10 +109,38 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Per-Wave Mute (calendar reminders deliberately exempt) | v2.84.0–v2.84.2 |
 | Plain, Light Email Templates Signed with the Instance Name | v2.85.0 |
 | Security Release: Wave-Scoped Media Grants, Playback Proxy, Fail-Closed Encryption | v2.86.0 |
+| Emoticons, Three More Quick Reactions; Half-Open WebSocket Detection | v2.87.0–v2.87.1 |
+| Per-Wave and Per-Crew Staff Roles (owner / admin / moderator) | v2.88.0 |
+| CI Gate (tests, schema check, build, dependency audit, secret scan); All Dependency Advisories Cleared | v2.89.0 |
+| Event Attendance: Invitations, Chasing, Capacity, Per-Occurrence RSVP; Edit Events from the Wave | v2.90.0–v2.90.1 |
+| Event-Change Notifications | v2.91.0 |
+| Email-Only Followers of Public Pages (double opt-in, digests, one unsubscribe) | v2.92.0–v2.92.2 |
+| Clickable Links in Event Descriptions; Federation Signature Minimum Set | v2.93.0–v2.93.1 |
+| Communities (domain model, authorization, API, remote membership, limits, UI, hardening) | v2.94.0–v2.99.2 |
+| Renewable Cross-Port Sessions; Channel Rename/Delete; Three-Dot Menus; COMMUNITIES / WAVES Sections | v2.100.0–v2.103.0 |
+| Security Audit Fixes (attachments gated by wave membership, federation scoping, account deletion, revoked sessions) | v2.103.1–v2.105.5 |
+| Public Pages Readable Without JavaScript; Per-Page Metadata; Aggregate Events Calendar Feed | v2.105.6–v2.105.11 |
+| Congested-Network Start-Up (service worker in the Android app, per-user wave-list cache, lazy loading) | v2.106.0 |
+| Escaped Text Shown as Typed; 10-Second Heartbeat; Codex Audit R-01–R-04 | v2.107.0–v2.107.2 |
+| Community Ownership Transfer; Cross-Port Step-Up; Captioned Pictures in Encrypted Waves | v2.108.0 |
+| Live Broadcasts (opt-in) and Broadcast Recording to S3/B2 | v2.109.0–v2.110.0 |
+| Uploading Screen with Progress, Refresh Guard and Keep Browsing | v2.111.0 |
+| Attached Audio and Video Play in the Conversation | v2.112.0–v2.113.2 |
+| Broadcast Studio: Rotate, Sideways Layout, Camera Zoom; Choose Orientation Before Going Live | v2.113.0–v2.113.1 |
+| Deleted Waves No Longer Leave Their Attachments Public | v2.113.3 |
 
 ---
 
 ## Outstanding Features
+
+### Near-term
+
+- **Mute from the wave view.** Per-wave mute (v2.84.0) is only in the wave-list row menu. It should also be in the ⋮ menu inside an open wave. The server side is done; this is UI only.
+- **Delete profile files with the account.** Account deletion leaves the profile picture and video on disk at their old addresses (nothing links to them). See PRIVACY.md.
+- **Broadcasts from OBS / RTMP** (LiveKit Ingress), for streaming from a camera rig rather than a phone.
+- **A persistent floating video player** that survives navigating away from a wave. Browser picture-in-picture dies when the embed unmounts.
+- **Watch-party UI.** The server side is protected and tested; the UI has not been certified.
+- **iOS app on the App Store.** Needs a Mac, Xcode and an Apple Developer account.
 
 ### 1. Export Wave as PDF/HTML
 **Complexity:** Medium

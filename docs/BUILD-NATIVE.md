@@ -250,7 +250,19 @@ npx cap sync android
 2. Updates the native `capacitor.config.json` from `capacitor.config.ts`
 3. Resolves and links Capacitor plugin native code
 
-> **Important**: You must run `npm run build && npx cap sync android` every time the web code changes before building.
+> **The app loads the live server, not these assets.** `server.url` in `capacitor.config.ts` points the WebView at `https://cortex.farhold.com`, so a change to the web code reaches app users with a **server deploy**, no new APK. A new APK is needed only when native code, plugins or the Capacitor config change. When you do build one, run `npm run build && npx cap sync android` first so the bundled fallback assets and plugin list are current.
+
+### Native plugins of our own
+
+Local plugins live in `android/app/src/main/java/com/farhold/cortex/` and must be registered in `MainActivity.onCreate` **before** `super.onCreate(...)`, or the bridge never sees them:
+
+| Plugin | Since | What it does |
+|--------|-------|--------------|
+| `CortexOrientation` (`OrientationPlugin.java`) | v2.113.0 | `lock({orientation: 'landscape'\|'portrait'})` / `unlock()`. Uses the activity's SENSOR orientations, so it works with auto-rotate off. Used by the broadcast studio and the broadcast player. |
+
+From the web side, reach a plugin through `window.Capacitor.registerPlugin('Name')`, guarded by `window.Capacitor?.isNativePlatform?.()` and `isPluginAvailable('Name')` (see `client/src/utils/orientation.js`). **Don't** `import '@capacitor/core'` for this: in an ordinary browser that import installs a Capacitor stub on `window`, which breaks native-app detection elsewhere.
+
+Older installed apps don't have a new plugin. Always keep a browser fallback.
 
 ### Build APK (sideloading)
 
@@ -515,14 +527,40 @@ npx cap copy ios           # Copy web assets only (skip plugin sync — faster)
 
 ## Release workflow
 
+### Version numbers
+
+The version lives in five places that must agree (see CLAUDE.md). For the native builds:
+
+- **Android:** `versionName` is the version. `versionCode` is the version with no dots, plus a two-digit patch: 2.113.0 → `2113000`, 2.113.3 → `2113003`.
+- **iOS:** `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` follow the same rule.
+
+A build whose code isn't higher than the installed one won't install as an upgrade.
+
+### Draft first, because published releases cannot be changed
+
+GitHub releases on this repository are **immutable once published**. Assets cannot be added to a published release, and deleting the release does not free its tag: that tag can never be published again (HTTP 422, "tag_name was used by an immutable release"). So:
+
+- **Server-only release:** publish the GitHub release directly.
+- **Release with app builds:** create it with `gh release create vX.Y.Z --draft …` **before** building, attach everything, then publish.
+- **Forgot the draft?** Never delete a published release to retry. Bump a patch version (v2.112.0 → v2.112.1, same code) and release that with the builds.
+
+### Steps
+
 1. Merge to `master` via PR chain (`develop` → `qa` → `master`)
-2. Tag the release: `git tag vX.Y.Z && git push origin vX.Y.Z`
+2. Tag the release: `git tag vX.Y.Z && git push origin vX.Y.Z`. If it will carry app builds, create the **draft** release now.
 3. Build native artifacts on their respective platforms:
    - **Linux**: `npm run electron:build:linux` (can run on any Linux machine or CI)
    - **Windows**: `npm run electron:build:win` (can cross-compile from Linux)
    - **macOS**: `npm run electron:build:mac` (requires macOS)
    - **Android**: `npm run cap:build:android` / `npm run cap:build:android:aab`
    - **iOS**: Archive from Xcode on macOS
-4. Create GitHub release and attach Electron artifacts (`.AppImage`, `.deb`, `.rpm`, `.exe`, `.dmg`, `.zip`)
-5. Upload Android AAB to Google Play Console
-6. Upload iOS build to App Store Connect via Xcode Organizer
+   The maintainer's `client-build-cortex.sh <version>` (kept outside the repo, next to the checkout) runs the Linux, Windows, APK and AAB builds in one go and uploads them to the matching draft release. `--upload-only` re-uploads without rebuilding. It runs `npm run build` in the working copy, which on the dev box is also what dev serves, so restart `cortex-web` afterwards.
+4. Check the APK before publishing:
+   ```bash
+   aapt2 dump badging Cortex-X.Y.Z.apk | head -1          # versionCode / versionName
+   apksigner verify --print-certs Cortex-X.Y.Z.apk        # signing certificate SHA-256
+   ```
+   The certificate must be the same one every earlier release used, or Android refuses to install it over the existing app.
+5. Attach the Electron artifacts (`.AppImage`, `.deb`, `.rpm`, `.exe`, `.dmg`, `.zip`) and the APK/AAB to the draft, then publish it (`gh release edit vX.Y.Z --draft=false`)
+6. Upload Android AAB to Google Play Console
+7. Upload iOS build to App Store Connect via Xcode Organizer
