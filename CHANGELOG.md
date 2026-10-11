@@ -5,6 +5,16 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.113.2] - 2026-10-11
+
+### Changed
+- **Attached audio and video show the player only, not the player plus a download card.** The player's own ⋮ menu downloads the file. Jared confirmed this in the Android app with an MP4, which corrects my v2.112.0 assumption that the app's player had no download. The card's filename and size remain as a small caption under the player.
+- **Files that can't play keep the full download card as before.** These are FLAC/AAC, PDFs, archives and so on; the pass only matches playable extensions.
+- **Trade-off, accepted:** iPhone/iPad Safari's player has no download option, and neither does Firefox's audio player, so those readers can play but not save a playable attachment.
+
+### Verified
+- On dev, in the real app at phone size: a wave with `tone.mp3` and `clip.mp4` shows 2 players, 0 media cards, and the captions `tone.mp3 · 71.1 KB` and `clip.mp4 · 93.4 KB`, with no errors.
+
 ## [2.113.1] - 2026-10-10
 
 Tested on PMP: zoom worked well, but the orientation needs to be set **before** the broadcast starts. In v2.113.0 the studio went live the moment it opened, so the only rotate button was mid-broadcast. Turning there changes the picture's shape for every viewer and in the recording.
