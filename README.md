@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.86.0** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.113.3** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -40,7 +40,7 @@ Client runs at `http://localhost:3000`
 
 Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - `mal` - Malcolm Reynolds (Admin)
-- `zoe`, `wash`, `kaylee`, `jayne`, `inara`, `simon`, `river`
+- `zoe`, `wash`, `kaylee`, `jayne`
 
 ---
 
@@ -60,7 +60,12 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Notification Preferences** — Per-type controls (mentions, replies, wave activity) with always/app-closed/never levels
 - **Collapsible Messages** — Collapse long messages to compact previews
 - **Support Tickets** — Unauthenticated ticket submission from the login screen; admin management panel
-- **Email Notifications** — Optional email alerts when you're offline, via the configured SMTP/SendGrid/Mailgun provider
+- **Email Notifications** — Optional email alerts when you're offline, sent through Resend (HTTPS, works on cloud hosts that block SMTP) or SMTP
+- **Reactions & emoticons** — Quick reactions on any ping; typed emoticons like `:)` and `<3` become emoji
+- **Wave and crew staff roles** — Owner, admin and moderator per wave or crew; crew roles carry into crew waves
+- **Announcement waves** — Per wave: who can post (everyone, or only the owner and staff), and whether replies and reactions are allowed
+- **Instance terminology** — The words "wave", "ping", "crew" and "thread" can be renamed for the whole server
+- **Fast start on slow networks** — The app opens from cache in a couple of seconds on a congested mobile connection, and heavy parts (calls, broadcasts, admin) load only when used
 - **Public Portal** — Admins can publish selected non-E2EE waves to a public, login-free reader at `/portal` (newest pings first), with per-wave `<iframe>` embed snippets
 
 ### Calendar & Events
@@ -71,10 +76,20 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Public event pages** — Admins can publish a wave's calendar to a login-free page: `/events` lists everything published on the server, `/events/<slug>` one wave, `/events/<slug>/<event>` a shareable page per event. Server-wide events can be published too, behind a separate opt-in switch that defaults off
 - **Guest RSVP** — Members of the public can RSVP with a name, email and party size, no account required. Rate limited per IP *and* per email address; confirmation and reminder emails carry a cancellation link
 - **Calendar downloads** — `.ics` per event (respecting the occurrence of a repeating event) and a subscribe link for a whole published calendar
+- **Attendance** — Invite people to an event, chase the ones who haven't answered, set a capacity, and RSVP per occurrence of a repeating event
+- **Change notifications** — Editing or cancelling an event tells the people it affects
+- **Follow by email** — Anyone can follow a public events page or portal wave by email, with no account: double opt-in, a choice of how often to hear, and one link that unsubscribes from everything
+- **Readable by machines too** — Public pages carry their own titles and previews when shared, work without JavaScript, and offer a server-wide `.ics` feed at `/api/public/events/calendar.ics`
 - **Reminders** — In-app, push, and email. In-app reminders escalate as the event approaches: a corner card a day out, a centre-screen countdown fifteen minutes out. Email goes to members when they're away, and to public guests who RSVP'd
 
+### Communities
+- **Communities with channels** — Anyone can create a Community; channels inside it hold waves. Join with an invite code, browse public Communities, or be added directly
+- **Roles and permissions** — Community roles with per-channel overrides (deny wins), bans, an audit log and ownership transfer (offer, then accept)
+- **Across servers** — Members from allied ports join with their home identity; their standing is re-checked with their home server, so suspending or unpairing reaches them
+- **Opt-in per server** — An instance feature, off unless the admin turns it on; abuse limits and admin suspend/close controls built in
+
 ### End-to-End Encryption
-- **ECDH P-384 + AES-256-GCM** — Per-wave symmetric keys distributed via key exchange
+- **ECDH P-384 + AES-256-GCM** — Per-wave symmetric keys distributed via key exchange. Encryption is chosen per wave (or forced for every wave with `FORCE_WAVE_ENCRYPTION`); it covers message text, not attached files
 - **Zero-knowledge server** — Server never sees plaintext message content
 - **Key rotation** — Automatic re-encryption when participants are removed
 - **Migration UI** — Bulk re-encryption of existing messages when enabling E2EE on a wave
@@ -104,6 +119,10 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 ### Media
 - **Voice/Video messages** — Record and send audio (5 min) and video messages
 - **Voice/Video calls** — Real-time calls via LiveKit with screen sharing
+- **Live broadcasts** — Stream your camera and microphone to a wave, optionally to a public link for people without an account. Viewers are hidden and silent. The studio has camera zoom (pinch or slider), a rotate button, a sideways layout, and the orientation is chosen before going live. Opt-in per server
+- **Broadcast recording** — Record a broadcast to an S3-compatible bucket (Backblaze B2 in production); wave members watch it afterwards, and it is posted to the wave when ready
+- **Attachments** — Any file up to 25 MB, with an uploading screen that shows progress, warns before a refresh would cancel it, and lets you keep browsing. Attached audio and video play right in the conversation
+- **Private attachments** — A file posted to a wave can only be opened by people in that wave, and is deleted with the wave
 - **Rich embeds** — YouTube, Spotify, Vimeo, Twitter, SoundCloud
 - **Images & GIFs** — Upload, paste, or search via GIPHY/Klipy (Tenor was shut down by Google in 2026)
 - **Media server integration** — Jellyfin, Emby, and Plex with OAuth and HLS transcoding
@@ -162,7 +181,10 @@ See [docs/BUILD-NATIVE.md](docs/BUILD-NATIVE.md) for build instructions.
 
 - `capacitor.config.ts` sets `server.url: 'https://cortex.farhold.com'` — the WebView loads from the live server
 - Push notifications via FCM with `priority: high` to bypass Android Doze mode
-- Links open in the system browser; media plays natively
+- Links open in the system browser; media plays natively; attachment downloads go through the system download manager
+- A service worker caches the app shell, so it starts quickly on a poor connection (v2.106.0)
+- A native orientation plugin turns the screen for live broadcasts even with auto-rotate off (v2.113.0 app and later)
+- Signed APKs (and Windows/Linux desktop builds) are attached to the GitHub release when the app itself changes
 
 See [docs/BUILD-NATIVE.md](docs/BUILD-NATIVE.md) for build instructions.
 
@@ -174,10 +196,12 @@ See [docs/BUILD-NATIVE.md](docs/BUILD-NATIVE.md) for build instructions.
 cortex/
 ├── server/
 │   ├── server.js              # Express + WebSocket server
-│   ├── database-sqlite.js     # SQLite database layer
+│   ├── database-sqlite.js     # SQLite database layer and migrations
+│   ├── lib/                   # Extracted modules: communities, media access/proxy,
+│   │                          #   broadcast recording, field crypto, wave roles, …
 │   ├── email-service.js       # Email provider abstraction
 │   ├── storage.js             # File/S3 storage abstraction
-│   ├── schema.sql             # Database schema
+│   ├── schema.sql             # Database schema (GENERATED — tools/generate-schema.mjs)
 │   ├── holidays.js            # Holiday detection for alerts
 │   └── data/                  # Data storage
 ├── client/
@@ -186,6 +210,7 @@ cortex/
 │   │   ├── main.js            # Electron main process
 │   │   └── preload.cjs        # Electron preload (IPC bridge)
 │   ├── capacitor.config.ts    # Capacitor config (iOS/Android)
+│   ├── serve.mjs              # Production static server (page metadata, no-JS fallback)
 │   └── src/
 │       ├── views/             # Page-level components
 │       ├── components/        # Feature components (admin, calls, media, etc.)
@@ -196,6 +221,8 @@ cortex/
 ├── landing/
 │   ├── index.html             # Landing page (static)
 │   └── nginx.conf             # Nginx config for landing + app
+├── tests/                     # node --test suites (npm test from the repo root)
+├── tools/                     # schema generator, release DB backup, secret scan
 └── docs/                      # API docs, privacy policy, build instructions
 ```
 
@@ -253,7 +280,15 @@ SMTP_USER=your-email@gmail.com
 SMTP_PASS=your-app-password
 EMAIL_FROM=noreply@yourdomain.com
 
-# Crawl Bar APIs (optional)
+# Live broadcast recording (optional — needs LiveKit above and all five)
+RECORDING_S3_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+RECORDING_S3_REGION=us-east-005
+RECORDING_S3_BUCKET=cortex-recordings   # keep it private
+RECORDING_S3_ACCESS_KEY=your-key-id
+RECORDING_S3_SECRET_KEY=your-app-key
+
+# Crawl Bar APIs (optional, read once at first start to seed the admin
+# settings; after that, manage them under ADMIN → CRAWL BAR CONFIG)
 FINNHUB_API_KEY=your-key           # Stock quotes
 OPENWEATHERMAP_API_KEY=your-key    # Weather data
 NEWSAPI_KEY=your-key               # News headlines
@@ -359,8 +394,9 @@ npm install -g pm2
 # Build client
 cd client && npm run build
 
-# Start server
+# Start server and client
 cd server && pm2 start server.js --name cortex-api
+cd ../client && pm2 start serve.mjs --name cortex-web   # not `pm2 serve` — see DEPLOYMENT.md
 
 # Auto-start on boot
 pm2 startup && pm2 save
@@ -411,7 +447,8 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 - [docs/MEDIA-SECURITY.md](docs/MEDIA-SECURITY.md) — Jellyfin/Plex grant model and playback proxy
 - [docs/SECRET-AUDIT.md](docs/SECRET-AUDIT.md) — Git-history credential audit, method and findings
 - [docs/PLAN-federated-push.md](docs/PLAN-federated-push.md) — Why native push is hard in a federated app, and the options
-- [docs/communities/](docs/communities/) — Federated Communities: existing architecture, threat model and implementation plan (Phase 0, not built)
+- [docs/communities/](docs/communities/) — Federated Communities: architecture, threat model and implementation plan (built in v2.94.0–v2.99.2)
+- [docs/SECURITY-AUDIT-STATE.md](docs/SECURITY-AUDIT-STATE.md) — The latest security audit's findings and how each was resolved
 - [docs/PRIVACY.md](docs/PRIVACY.md) — Privacy policy
 - [CLAUDE.md](CLAUDE.md) — Developer workflow, branching, and architecture notes
 - [OUTSTANDING-FEATURES.md](OUTSTANDING-FEATURES.md) — Future roadmap

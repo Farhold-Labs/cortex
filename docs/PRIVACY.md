@@ -1,6 +1,6 @@
 # Cortex Privacy Policy
 
-*Last updated: August 2026 — applies to Cortex v2.72.0+*
+*Last updated: October 2026 — applies to Cortex v2.113.2+*
 
 This policy describes what a Cortex instance actually does with your data. No legalese, no weasel words. If you can't verify a claim yourself, it shouldn't be in here.
 
@@ -56,12 +56,50 @@ that event and nothing else.
 
 ## Message Content
 
-All message content is end-to-end encrypted (E2EE) using ECDH P-384 key exchange and AES-256-GCM encryption. This means:
+End-to-end encryption (E2EE) is **set per wave**, using ECDH P-384 key exchange and AES-256-GCM. A wave is encrypted when it is created encrypted, or on every wave if the operator sets `FORCE_WAVE_ENCRYPTION`. Each wave shows whether it is encrypted.
 
-- Messages are encrypted on your device before they leave it
-- The server stores only ciphertext — it cannot read your messages
-- Only participants with the correct wave keys can decrypt message content
-- Not even the instance operator can read your conversations
+**In an encrypted wave:**
+
+- Messages are encrypted on your device before they leave it.
+- The server stores only ciphertext and cannot read your messages.
+- Only participants with the correct wave keys can decrypt message content.
+- Not even the instance operator can read these conversations.
+
+**In a wave that is not encrypted,** including public waves, waves published to the portal and announcement waves, messages are stored as text the server can read. They are protected by access control, not encryption.
+
+---
+
+## Attachments, Live Broadcasts and Recordings
+
+These are **not end-to-end encrypted, even in an encrypted wave.** The encryption covers the message text. A file, a broadcast or a recording is stored or relayed in a form the server and its operator can read.
+
+- **Attached files** (pictures, documents, audio, video) are stored on the server, or in the operator's S3 storage, as uploaded.
+  - **Who can open them:** since v2.104.0, a file posted to a wave can be opened only by people who can read that wave, checked on every request. Files from before then, and profile pictures and videos, are readable by anyone who has the link.
+  - **When they're deleted:** a file posted to a wave is deleted with that wave (since v2.113.3). It is not deleted when the uploader's account is deleted, because it is part of a conversation other people are still in.
+- **Live broadcasts** (if the operator enables them) are relayed through LiveKit, a third-party media service the operator chooses (LiveKit Cloud or self-hosted).
+  - Viewers are hidden from one another and cannot be seen or heard.
+  - The performer can see how many people are watching, but not who.
+  - A public link lets anyone watch without an account, until it is turned off or the broadcast ends.
+- **Recordings** are made only when the performer chooses to record.
+  - **Where they're stored:** in the operator's S3-compatible bucket (for example Backblaze B2), written there by LiveKit.
+  - **Who can watch:** members of the wave, through Cortex, which checks membership on every request. The bucket itself is private.
+  - **Deleting:** the performer or wave staff can delete a recording, which removes the file from the bucket. Deleting the wave also removes its recordings.
+
+---
+
+## If You Follow a Public Page by Email
+
+Anyone can ask to be kept posted about a public events page or portal wave without an account (v2.92.0). The server stores:
+
+- **Your email**, encrypted (AES-256-GCM) with a hash for lookup, the same way account emails are held.
+- **Your name**, if you give one.
+- **Which pages you follow** and how often you want to hear.
+
+How the address is handled:
+
+- **Confirmation first.** Nothing is sent to an address until you confirm it, except the one confirmation email. Unconfirmed sign-ups are deleted after 7 days.
+- **Unsubscribing deletes the record** rather than flagging it. Every email carries the same unsubscribe link.
+- **Encrypted waves never send anything** to followers.
 
 ---
 
@@ -95,6 +133,9 @@ Cortex supports PIN-protected hidden waves (Ghost Protocol). These waves:
 - **Activity logs** — automatically deleted after 30 days (configurable by operator)
 - **Sessions** — automatically cleaned up after 30 days (configurable by operator)
 - **Messages** — retained until the wave is deleted by participants
+- **Attachments** — retained until their wave is deleted. A replaced profile picture is deleted. **Known gap:** deleting an account does not yet delete its profile picture or video files. Nothing links to them any more, but they remain at their old addresses until the operator removes them.
+- **Broadcast recordings** — retained until deleted by the performer or wave staff, or until the wave is deleted
+- **Unconfirmed email follow sign-ups** — deleted after 7 days
 - **Account data** — retained until you delete your account
 
 ---
@@ -133,6 +174,8 @@ The instance operator (whoever runs the server) can see:
   event card shown inside an encrypted wave says so on the card itself.
 - **Guest RSVP names**, and their email addresses via the moderator attendee
   list (see the guest RSVP section above)
+- **Messages in waves that are not end-to-end encrypted**
+- **Attached files and broadcast recordings**, in any wave (see above)
 
 ---
 
@@ -140,7 +183,7 @@ The instance operator (whoever runs the server) can see:
 
 Even with full database access, the operator cannot see:
 
-- Message content (E2EE — they don't have the keys)
+- Message content in encrypted waves (they don't have the keys)
 - Who is in which wave (encrypted at rest)
 - Your contact list (client-side encrypted)
 - Crew membership lists (encrypted at rest)
@@ -154,8 +197,13 @@ Even with full database access, the operator cannot see:
 
 - **No analytics** — Cortex does not phone home or track usage
 - **No advertising** — no ads, no ad networks, no tracking pixels
-- **No third-party cookies** — Cortex uses JWT tokens in headers, not cookies
-- **GIF providers** — if enabled by the operator, GIF search queries are sent to Tenor and/or Giphy; this is the only external service Cortex contacts on your behalf
+- **No third-party cookies.** Cortex uses JWT tokens in headers. Its only cookie is a first-party, 15-minute, HttpOnly cookie that lets your browser load private attachments. It is scoped to `/uploads` and is not a tracking cookie.
+- **GIF providers.** If enabled by the operator, GIF search queries are sent to GIPHY and/or Klipy. Tenor was shut down by Google in 2026.
+- **Calls and live broadcasts.** If enabled by the operator, audio and video go through LiveKit (LiveKit Cloud or the operator's own LiveKit server).
+- **Broadcast recordings** are stored in the operator's S3-compatible bucket.
+- **Email** is sent through the operator's mail provider, for example Resend or SMTP.
+
+Cortex contacts these services only for the features above, and only when the operator has configured them.
 
 ---
 

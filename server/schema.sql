@@ -1499,6 +1499,12 @@ CREATE TABLE IF NOT EXISTS recording_deletions (
           queued_at     TEXT NOT NULL
         );
 
+CREATE TABLE IF NOT EXISTS attachment_tombstones (
+          path       TEXT PRIMARY KEY,
+          queued_at  TEXT NOT NULL,
+          removed_at TEXT
+        );
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
@@ -1518,4 +1524,11 @@ CREATE TRIGGER IF NOT EXISTS trg_broadcasts_recording_cleanup
         WHEN OLD.recording_key IS NOT NULL
         BEGIN
           INSERT OR IGNORE INTO recording_deletions (recording_key, queued_at) VALUES (OLD.recording_key, datetime('now'));
+        END;
+
+CREATE TRIGGER IF NOT EXISTS trg_attachments_tombstone
+        AFTER DELETE ON attachments
+        WHEN OLD.wave_id IS NOT NULL
+        BEGIN
+          INSERT OR IGNORE INTO attachment_tombstones (path, queued_at) VALUES (OLD.path, datetime('now'));
         END;

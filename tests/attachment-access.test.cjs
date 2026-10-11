@@ -26,7 +26,7 @@ const password = 'Review123!';
 const jwtSecret = 'isolated-attachment-test-signing-key';
 
 /** Stand up a throwaway Cortex with three users, a private wave and a public one. */
-async function startServer(temp, { disableGate = false, breakBinding = false } = {}) {
+async function startServer(temp, { disableGate = false, breakBinding = false, disableTombstones = false } = {}) {
   const serverDir = path.join(temp, 'server');
   fs.mkdirSync(serverDir, { recursive: true });
   for (const name of fs.readdirSync(path.join(root, 'server'))) {
@@ -56,6 +56,15 @@ async function startServer(temp, { disableGate = false, breakBinding = false } =
     const gate = source.match(/\n    if \(attachment && attachment\.wave_id\) \{[\s\S]*?\n    \}\n/);
     assert.ok(gate, 'could not find the attachment gate to disable');
     source = source.replace(gate[0], '\n');
+  }
+  if (disableTombstones) {
+    // v2.113.3 counterfactual: the server as it was, with no tombstone check.
+    const check = source.match(/\n    if \(!attachment && db\.isAttachmentTombstoned\?\.\(relative\)\) \{[\s\S]*?\n    \}\n/);
+    assert.ok(check, 'could not find the tombstone check to disable');
+    source = source.replace(check[0], '\n');
+    const sweep = '  if (sweepingAttachments || !db.getUnremovedAttachmentTombstones) return;';
+    assert.ok(source.includes(sweep), 'could not find the tombstone sweep to disable');
+    source = source.replace(sweep, '  return;');
   }
   if (breakBinding) {
     // Security audit R-02: the binding write fails (a full disk, a locked
@@ -290,4 +299,55 @@ test('R-02: an upload whose binding fails is refused and removed, not left publi
     srv?.child.kill('SIGKILL');
     fs.rmSync(temp, { recursive: true, force: true });
   }
+});
+
+// v2.113.3 — deleting a wave cascaded its attachment rows away while the files
+// stayed, and /uploads reads "no row" as a public legacy upload. So deleting a
+// private wave published every file in it to anyone holding a link.
+async function deleteWaveScenario(options) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-attach-delwave-'));
+  let srv;
+  try {
+    srv = await startServer(temp, options);
+    const { base, tokens, upload, get, cookieFor, serverDir } = srv;
+    const created = await fetch(`${base}/api/waves`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.owner}` },
+      body: JSON.stringify({ title: 'Soon gone', privacy: 'private', participants: ['member'] }),
+    });
+    const createdBody = await created.json();
+    const wave = createdBody.wave || createdBody;
+    assert.ok(wave?.id, 'wave not created');
+    const url = await upload('owner', { waveId: wave.id, name: 'private.txt' });
+    const memberCookie = await cookieFor('member');
+    assert.equal((await get(url)).status, 401, 'private while the wave exists');
+
+    const del = await fetch(`${base}/api/waves/${wave.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${tokens.owner}` } });
+    assert.equal(del.status, 200, await del.text());
+
+    const anonymous = (await get(url)).status;
+    const formerMember = (await get(url, memberCookie)).status;
+    const file = path.join(serverDir, 'uploads', url.replace(/^\/uploads\//, ''));
+    const deadline = Date.now() + 5000;
+    while (fs.existsSync(file) && Date.now() < deadline) await new Promise(r => setTimeout(r, 100));
+    return { anonymous, formerMember, fileRemains: fs.existsSync(file) };
+  } finally {
+    srv?.child.kill('SIGKILL');
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+test('a deleted wave does not leave its attachments public', { timeout: 90000 }, async () => {
+  const r = await deleteWaveScenario();
+  assert.equal(r.anonymous, 404, 'the file of a deleted private wave must not be served to anyone');
+  assert.equal(r.formerMember, 404, 'nor to its former members');
+  assert.equal(r.fileRemains, false, 'and the file itself is removed');
+});
+
+test('without tombstones, the same deletion publishes the file — the fix is what refuses it', { timeout: 90000 }, async () => {
+  // The server as it was before v2.113.3: proves the test above catches the
+  // leak rather than passing for an unrelated reason.
+  const r = await deleteWaveScenario({ disableTombstones: true });
+  assert.equal(r.anonymous, 200, 'the pre-fix server served the deleted wave\'s file to anyone');
+  assert.equal(r.fileRemains, true);
 });

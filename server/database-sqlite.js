@@ -3484,6 +3484,34 @@ export class DatabaseSQLite {
       console.log('✅ attachments created');
     }
 
+    // v2.113.3 — a deleted wave's attachments must not become public.
+    //
+    // Deleting a wave cascades to its `attachments` rows, but the files stay in
+    // storage — and /uploads serves a path with NO row as public, because that
+    // is what a pre-v2.104.0 upload looks like. So deleting a private wave made
+    // every file in it readable by anyone holding a link. The trigger leaves a
+    // tombstone for each bound file whose row disappears, whichever path
+    // deleted it (wave delete, thread clean-up, account deletion): /uploads
+    // refuses tombstoned paths outright, and a sweep removes the files.
+    // Tombstones are kept after the sweep because storage.delete cannot report
+    // failure — the refusal must not depend on the file actually being gone.
+    if (!this.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='attachment_tombstones'`).get()) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS attachment_tombstones (
+          path       TEXT PRIMARY KEY,
+          queued_at  TEXT NOT NULL,
+          removed_at TEXT
+        );
+        CREATE TRIGGER IF NOT EXISTS trg_attachments_tombstone
+        AFTER DELETE ON attachments
+        WHEN OLD.wave_id IS NOT NULL
+        BEGIN
+          INSERT OR IGNORE INTO attachment_tombstones (path, queued_at) VALUES (OLD.path, datetime('now'));
+        END;
+      `);
+      console.log('✅ attachment_tombstones created');
+    }
+
     const waveColsForCommunity = this.db.prepare(`PRAGMA table_info(waves)`).all();
     if (waveColsForCommunity.length && !waveColsForCommunity.some(c => c.name === 'community_id')) {
       console.log('📝 Adding wave container columns (v2.94.0)...');
@@ -14512,6 +14540,21 @@ export class DatabaseSQLite {
 
   getAttachmentByPath(path) {
     return this.db.prepare('SELECT * FROM attachments WHERE path = ?').get(path) || null;
+  }
+
+  /** True if this path belonged to a wave that has since been deleted (v2.113.3). */
+  isAttachmentTombstoned(path) {
+    return !!this.db.prepare('SELECT 1 FROM attachment_tombstones WHERE path = ?').get(path);
+  }
+
+  /** Tombstoned files not yet removed from storage. */
+  getUnremovedAttachmentTombstones(limit = 200) {
+    return this.db.prepare('SELECT path FROM attachment_tombstones WHERE removed_at IS NULL ORDER BY queued_at LIMIT ?')
+      .all(limit).map(r => r.path);
+  }
+
+  markAttachmentTombstoneRemoved(path) {
+    this.db.prepare(`UPDATE attachment_tombstones SET removed_at = datetime('now') WHERE path = ?`).run(path);
   }
 
   // ----- Communities: Phase 3 additions (v2.96.0) -----

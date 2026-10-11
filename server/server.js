@@ -4996,6 +4996,12 @@ app.use('/uploads', (req, res, next) => {
     const relative = decodeURIComponent((req.path || '').replace(/^\/+/, ''));
     const attachment = db.getAttachmentByPath ? db.getAttachmentByPath(relative) : null;
 
+    // v2.113.3 — the file of a deleted wave. Its row is gone, which would
+    // otherwise read as "legacy upload, public"; the tombstone says otherwise.
+    if (!attachment && db.isAttachmentTombstoned?.(relative)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
     if (attachment && attachment.wave_id) {
       const wave = db.getWave(attachment.wave_id);
       if (!wave) return res.status(404).json({ error: 'Not found' });
@@ -21046,6 +21052,29 @@ async function removeQueuedRecordings() {
 }
 if (broadcastRecorder) setInterval(() => removeQueuedRecordings().catch(() => {}), 10 * 60_000).unref?.();
 
+// v2.113.3 — remove the files of deleted waves. A trigger tombstones every
+// bound attachment whose row is deleted (see attachment_tombstones); /uploads
+// already refuses those paths, and this deletes the files themselves. Like
+// removeQueuedRecordings, it acts only on what the trigger recorded — never on
+// "a file with no row", which also describes every legitimate legacy upload.
+let sweepingAttachments = false;
+async function removeTombstonedAttachments() {
+  if (sweepingAttachments || !db.getUnremovedAttachmentTombstones) return;
+  sweepingAttachments = true;
+  try {
+    const paths = db.getUnremovedAttachmentTombstones();
+    for (const p of paths) {
+      await storage.delete(p);
+      db.markAttachmentTombstoneRemoved(p);
+    }
+    if (paths.length) console.log(`🧹 Removed ${paths.length} attachment file(s) of deleted waves`);
+  } finally {
+    sweepingAttachments = false;
+  }
+}
+setTimeout(() => removeTombstonedAttachments().catch(err => console.error('[attachments] sweep failed:', err.message)), 15_000).unref?.();
+setInterval(() => removeTombstonedAttachments().catch(err => console.error('[attachments] sweep failed:', err.message)), 10 * 60_000).unref?.();
+
 // ----- Public viewing (no account) -----
 
 app.get('/api/public/broadcasts/:token', (req, res) => {
@@ -21929,6 +21958,8 @@ app.delete('/api/waves/:id', authenticateToken, (req, res) => {
 
   const result = db.deleteWave(waveId, req.user.userId);
   if (!result.success) return res.status(400).json({ error: result.error });
+  // Its attachment files go too (refused by /uploads from this moment on).
+  removeTombstonedAttachments().catch(err => console.error('[attachments] sweep failed:', err.message));
 
   // Broadcast deletion to all participants
   broadcastToWave(waveId, {
