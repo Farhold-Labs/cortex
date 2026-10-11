@@ -558,20 +558,25 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
     // Absolutize relative server paths so Electron (app:// origin) loads
     // images and file links from the remote server, not the local filesystem.
     // Attached audio and video play in place (v2.112.0). An MP3 or MP4 sent
-    // as a file used to be only a download card; the card stays (to save the
-    // file) with a player above it. Formats limited to ones browsers play
+    // as a file used to be only a download card. Since v2.113.2 the player
+    // replaces the card rather than sitting above it: the player's own ⋮ menu
+    // downloads (confirmed in the Android app), so both was a duplicate. The
+    // card's name and size stay as a caption. Formats limited to ones browsers play
     // AND the server serves inline (RENDERABLE_UPLOAD_TYPES) — anything else
     // is sent as a forced download and could never play.
     // Display-time only: stored messages are unchanged, so every existing
     // attachment gains a player too, encrypted waves included.
     result = result.replace(
-      /<a href="(\/uploads\/files\/[^"]+\.(mp3|m4a|wav|ogg|oga|opus|mp4|webm|m4v|mov))" download="[^"]*" class="file-attachment-card"[\s\S]*?<\/a>/gi,
-      (card, url, ext) => {
+      /<a href="(\/uploads\/files\/[^"]+\.(mp3|m4a|wav|ogg|oga|opus|mp4|webm|m4v|mov))" download="([^"]*)" class="file-attachment-card"[\s\S]*?<\/a>/gi,
+      (card, url, ext, filename) => {
         const video = ['mp4', 'webm', 'm4v', 'mov'].includes(ext.toLowerCase());
         const player = video
           ? `<video src="${url}" controls playsinline preload="metadata" class="message-media" style="display:block;max-width:100%;max-height:420px;margin:6px 0 2px;background:#000;"></video>`
           : `<audio src="${url}" controls preload="metadata" class="message-audio" style="display:block;width:100%;max-width:360px;margin:6px 0 2px;"></audio>`;
-        return player + card;
+        // Both pieces come out of the card already escaped.
+        const size = (card.match(/margin-top:2px;">([^<]*)<\/span>/) || [])[1] || '';
+        const caption = `<span class="message-media-caption" style="display:block;max-width:360px;margin:0 0 6px;font-family:monospace;font-size:0.72rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${filename}${size ? ` · ${size}` : ''}</span>`;
+        return player + caption;
       }
     );
 

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.86.0**. Last brought current 2026-09-10.
+Current version: **2.113.3**. Last brought current 2026-10-11.
 
 ## Project Overview
 
@@ -65,11 +65,11 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 28600 / versionName "2.86.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 28600 / MARKETING_VERSION 2.86.0
+client/android/app/build.gradle                  versionCode 2113003 / versionName "2.113.3"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2113003 / MARKETING_VERSION 2.113.3
 ```
 
-Native build numbers are the version with no dots and a trailing patch digit pair — `2.86.0` → `28600`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them.
+Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
 
 ### Testing requirements
 
@@ -78,12 +78,31 @@ Before committing:
 ```bash
 npm test                 # from the repo root: node --test tests/*.test.cjs
 cd client && npm run build
-pm2 restart cortex-api && pm2 logs cortex-api --lines 20
+pm2 restart cortex-api cortex-web && pm2 logs cortex-api --lines 20
 ```
 
-`tests/` holds `review.test.cjs` (sanitization, schema lifecycle, session/auth, dependency-patch regressions) and `media-security.test.cjs` (end-to-end grant/proxy/HLS coverage against a disposable server with simulated Jellyfin/Plex upstreams). There is currently **no CI gate** — nothing runs these automatically, so run them yourself.
+Restart **`cortex-web` as well** after every client build. `serve.mjs` holds `index.html` in memory, so a new build isn't served until it restarts. Until then the app hangs at "ESTABLISHING SIGNAL", asking for bundles that no longer exist.
 
-Then test the affected functionality manually. For UI work, driving the real running app headlessly catches what a build cannot.
+`tests/` holds about 35 suites; most start a disposable server against a throwaway database. Notable ones:
+
+- `review.test.cjs`: sanitization, schema lifecycle, session/auth.
+- `media-security.test.cjs`: simulated Jellyfin/Plex upstreams.
+- `attachment-access.test.cjs`: the `/uploads` gate, and deleted waves.
+- `communities-*.test.cjs`
+- `broadcasts.test.cjs` and `broadcast-recording.test.cjs`: fake LiveKit Twirp and S3.
+
+**Security fixes ship with a counterfactual test.** It runs the same scenario with the fix stripped out of a copy of `server.js` and asserts the bug reappears. That proves the main test fails for the right reason.
+
+**CI** (`.github/workflows/ci.yml`, since v2.89.0) runs, on every PR:
+
+- `npm test` and `tools/generate-schema.mjs --check`;
+- a client build, checking the service worker was stamped;
+- `npm audit --audit-level=moderate` for server and client;
+- `tools/secret-scan.py` over the whole history.
+
+It runs on PRs, but merges use `--admin`, so run the tests yourself before merging.
+
+Then test the affected functionality manually. For UI work, drive the real running app headlessly (Chrome DevTools Protocol) at a phone size; it catches what a build cannot. Real-device behaviour (rotation, camera, downloads in the Android app) needs a person with a phone, so say when something is only verified headlessly.
 
 ### Documentation requirements
 
@@ -95,9 +114,16 @@ Then test the affected functionality manually. For UI work, driving the real run
 ### Release process
 
 1. `git tag vX.Y.Z && git push origin vX.Y.Z`
-2. Create the GitHub release with notes. Publish directly for server-only releases; use `--draft` **only** when platform build assets will be uploaded, because a published release is immutable (HTTP 422).
-3. **Take a verified database backup before any release that migrates.** Standing rule, no exceptions.
-4. Deploy dev/QA/production nodes, verify the service worker and bundle after each.
+2. Create the GitHub release with notes.
+   - **Server-only release:** publish directly.
+   - **With app builds:** create it with `--draft` **before** building, attach the builds, check the APK's `versionCode` and signing certificate, then publish.
+   - **Published releases are immutable (HTTP 422).** Deleting one does not free its tag: the tag can never be published again. **Never delete a published release.** If builds were missed, release the same code as the next patch version. Details in `docs/BUILD-NATIVE.md`.
+3. **Take a verified database backup before any release that migrates.** Standing rule, no exceptions. Use `tools/backup-release-db.sh <version>`: it snapshots `data/farhold.db` (or `DB_FILE`) and fails unless the copy is non-empty, passes `integrity_check` and has a `users` table. Dev and QA keep a stale empty `data/cortex.db`, which the script used to back up by mistake.
+4. Deploy, restarting `cortex-api` **and** `cortex-web`, to dev, QA, port1, farhold and PMP. Verify each from outside:
+   - `/api/health` reports the new version;
+   - `sw.js` `CACHE_NAME` is `cortex-v<version>`;
+   - the main bundle returns 200;
+   - a made-up `/assets/…js` returns **404**, not 200 HTML (the v2.60.3 service-worker poisoning incident).
 5. Post the release notice to the Cortex Updates wave (plain text — the bot endpoint does not take HTML).
 
 ---
@@ -130,6 +156,8 @@ Then test the affected functionality manually. For UI work, driving the real run
 
 The message allow-list is `img, a, br, p, strong, em, code, pre, video` (`server/server.js`). No headings, no lists, no `b`/`i`. Rich text reaches the user through **client-side markdown rendering at display time** (`client/src/utils/markdown.js`) — stored content stays raw markdown source and no new tags come off the wire.
 
+**Text from the database is entity-encoded** (`sanitizeInput` escapes on the way in). Decode it only at non-HTML exits, such as emails' plain parts, push payloads, `<title>` and React text, with `plainText()` (`client/src/utils/plainText.js`, `server/lib/plain-text.js`). Decoding before HTML output reintroduces XSS; never decoding shows `&amp;` to users (v2.107.0).
+
 **Message processing exists in three copies that drift** — `server/server.js`, `server/database-sqlite.js` (the one production actually uses) and `client/src/components/messages/MessageWithEmbeds.jsx`. Patch all three, or the fix will appear to work in one wave type and not another.
 
 ### E2EE
@@ -139,6 +167,15 @@ Encrypted pings never reach server-side processing — the server cannot read th
 ### Media access (v2.86.0)
 
 Jellyfin/Plex playback requires an item-specific, **wave-scoped grant** (`media_shares`), and all playback is **proxied through Cortex** so upstream credentials never reach a client. `server/lib/media-access.js` holds the authorization decision, `server/lib/media-proxy.js` the transport and HLS URI rewriting. A connection ID, item ID or copied embed URL grants nothing on its own. Full model in `docs/MEDIA-SECURITY.md`.
+
+### Attachments (v2.104.0, v2.113.3)
+
+- **The gate.** Files under `/uploads` are rows in `attachments`. A file **bound** to a wave is served only to people who can read that wave, checked on every request. Media elements authenticate with a 15-minute HttpOnly cookie from `POST /api/attachments/session`.
+- **Unbound files stay public:** avatars, profile media, pre-v2.104 uploads, and anything in a public wave.
+- **Uploads.** Every upload goes through `uploadFile()` (`client/src/utils/uploads.js`, which gives progress, the refresh guard and cancel) and sends `waveId`. Binding fails closed: if it can't be written, the file is deleted.
+- **Encrypted waves.** The client binds after decrypting, via `/api/attachments/bind`. Only the uploader may bind, because binding restricts the file.
+- **Deleted waves** cascade their `attachments` rows away. A trigger writes `attachment_tombstones`, `/uploads` refuses tombstoned paths, and a sweep deletes the files.
+- **Never treat "a file with no row" as orphaned:** that also describes every legitimate legacy upload. Act only on what a trigger recorded, the same pattern as `recording_deletions`.
 
 ### Security checklist for new features
 
@@ -208,14 +245,19 @@ pm2 logs cortex-api --lines 50
 
 ### Server
 
-- **`server/server.js`** (~23k lines) — single-file Express app in `// =====` sections: configuration, security middleware, API routes by feature, WebSocket server.
-- **`server/database-sqlite.js`** (~12k lines) — SQLite wrapper and the schema-update logic.
-- **`server/lib/`** — extracted modules: `media-access.js`, `media-proxy.js`, and the field-level crypto helpers (`crew-membership-crypto.js`, `wave-participation-crypto.js`, `push-subscription-crypto.js`, `crawl-secret-crypto.js`).
+- **`server/server.js`** (~27k lines) — single-file Express app in `// =====` sections: configuration, security middleware, API routes by feature, WebSocket server.
+- **`server/database-sqlite.js`** (~15k lines) — SQLite wrapper and the schema-update logic.
+- **`server/lib/`** — extracted modules:
+  - `communities/` (domain model, the `authorize()` evaluator, limits);
+  - `media-access.js` and `media-proxy.js`;
+  - `broadcast-recording.js` (LiveKit Egress to S3);
+  - `wave-roles.js`, `plain-text.js`, `reserved-handles.js`, `field-crypto-health.js`;
+  - the field-level crypto helpers (`crew-membership-crypto.js`, `wave-participation-crypto.js`, `push-subscription-crypto.js`, `crawl-secret-crypto.js`).
 - **`server/email-service.js`**, **`storage.js`**, **`holidays.js`**.
 
 ### Client
 
-`client/CortexApp.jsx` is the app shell; the bulk of the UI has been extracted into `client/src/`:
+`client/CortexApp.jsx` is a ~60-line shell; the UI lives in `client/src/`:
 
 ```
 src/views/        AuthProvider, MainApp, AppContent, LoginScreen, public + cross-port views
@@ -230,6 +272,13 @@ src/config/       constants themes terminology emojiData holidays
 
 E2EE lives in `client/crypto.js`, `e2ee-context.jsx` and `e2ee-components.jsx`.
 
+**Loading.**
+- **Lazy loading.** Heavy or rare screens load on demand through `lazyComponent()` (`src/utils/lazyComponent.jsx`): LiveKit, hls.js, admin, the login screen and the broadcast pages.
+- **Public pages are deliberately eager.** `/events` and `/portal` stay in the main bundle because `serve.mjs` puts a readable copy of them inside `#root` for readers without JavaScript. A lazy page would replace that copy with a spinner.
+- **`client/serve.mjs` is the production static server.** It composes per-page `<head>` metadata, the no-JavaScript fallback, trailing-slash routes and real 404s for missing assets. Never replace it with `pm2 serve --spa`.
+
+**Native.** The Android app has local Capacitor plugins (`CortexOrientation`, v2.113.0) registered in `MainActivity` before `super.onCreate`. Reach them through `window.Capacitor` and never `import '@capacitor/core'`, which stubs `window.Capacitor` in browsers. See `docs/BUILD-NATIVE.md`.
+
 ### Database
 
 SQLite via better-sqlite3. Tables include users, user_sessions, user_encryption_keys, waves, wave_participants, wave_encryption_keys, wave_mutes, pings, ping_read_by, groups, group_members, contacts, notifications, events, media_shares, instance_config, crawl_config.
@@ -242,6 +291,24 @@ node tools/generate-schema.mjs --check    # verify only (CI-shaped)
 ```
 
 Migrations are applied idempotently at boot from within `database-sqlite.js` rather than as numbered files, so a fresh install and a migrated one must end up identical — that is exactly what `--check` verifies.
+
+### Communities (v2.94.0–v2.108.0)
+
+A first-class layer of Community → channel → waves (a channel **contains** waves; it is not itself a wave). Anyone can create one. It is an opt-in instance feature.
+
+- **Authorization:** one evaluator, `server/lib/communities/authorize.js`. Channel overrides pool, and deny wins.
+- **Remote members** join with their home identity. Their standing is re-checked with their home node, so suspending or unpairing reaches them.
+- **Ownership** transfers by offer and accept.
+- **Design docs:** `docs/communities/`. The audit register is in `docs/SECURITY-AUDIT-STATE.md` and the Communities docs.
+
+### Live broadcasts (v2.109.0–v2.113.1)
+
+A member streams to a wave through LiveKit; viewers get hidden, subscribe-only tokens.
+
+- **Opt-in instance feature `broadcasts`,** off by default because each viewer costs LiveKit minutes. Public links need `publicPortal`.
+- **Recording:** LiveKit Egress writes the room composite straight into a private S3/B2 bucket (`RECORDING_S3_*`). Viewers stream it through `/api/recordings/:id/stream`, which checks membership on each request. A sweep settles finished recordings every 30 s.
+- **Deleted broadcasts:** a trigger queues their files in `recording_deletions`.
+- **The studio** (`BroadcastStudio.jsx`) publishes the moment it opens. So orientation is chosen in the Go Live dialog, locked inside the START tap, and carried as `?orientation=`. Camera zoom uses the track's `zoom` capability.
 
 ### Federation
 
@@ -273,6 +340,8 @@ if (canAccess(user, 'moderator')) { … }
 
 Preferences resolve in **three layers: code default ← instance default ← user override**. Store **only explicit overrides** — `null` clears an override, and `false` is a real value, not an absence. Feature switches (videoFeed, crawlBar, calendar, publicPortal, registration) are enforced **server-side with 403**; hiding the UI is not the control. Public read via `GET /api/instance-config`.
 
+**Opt-in instance features** (off unless an admin enables them) are listed in `INSTANCE_OPT_IN_FEATURES`: `publicServerEvents`, `communities` and `broadcasts`.
+
 Instance-level settings also cover branding, terminology, notification defaults, security policy and **timezone** — naive event times are interpreted in the instance zone, not the server's, because a UTC box rolls "today" over at the wrong moment for its users.
 
 ### Sessions and auth (v2.75.0)
@@ -285,7 +354,7 @@ Every path that completes an authentication must go through `issueAuthCredential
 
 ## Environment Variables
 
-See **`server/.env.example`** (~440 lines, heavily commented) for the full list. It is *nearly* complete — the LiveKit variables below are used by the server but have never been added to it. Core:
+See **`server/.env.example`** (heavily commented) for the full list, including LiveKit and broadcast recording. Core:
 
 ```bash
 PORT=3001
@@ -320,11 +389,16 @@ EMAIL_FROM=cortex@example.com
 RESEND_API_KEY=re_…
 SMTP_HOST= SMTP_PORT= SMTP_USER= SMTP_PASS= SMTP_SECURE=
 
-# Voice/video (LiveKit) — no feature flag, no client rebuild; each node needs
-# its own project. NOT present in .env.example.
+# Voice/video calls and live broadcasts (LiveKit) — no client rebuild; each
+# node needs its own project. Broadcasts additionally need the instance feature.
 LIVEKIT_URL=wss://….livekit.cloud
 LIVEKIT_API_KEY=…
 LIVEKIT_API_SECRET=…
+
+# Broadcast recording — all five, or recording is not offered. Private bucket.
+RECORDING_S3_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+RECORDING_S3_REGION=…  RECORDING_S3_BUCKET=…
+RECORDING_S3_ACCESS_KEY=…  RECORDING_S3_SECRET_KEY=…
 ```
 
 The crawl bar is **no longer configured here** — as of v2.80.0 its feeds, keys, symbols and intervals live in the database and are edited under ADMIN → CRAWL BAR CONFIG.
@@ -349,7 +423,9 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 
 - **CHANGELOG.md** — complete version history with technical detail
 - **docs/API.md** — API endpoints
-- **docs/DEPLOYMENT.md** — hardened VPS deployment, hardware sizing
+- **docs/DEPLOYMENT.md** — hardened VPS deployment, hardware sizing, broadcasts/recording setup, release backups
+- **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
+- **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy
 - **docs/BUILD-NATIVE.md** — Electron and Capacitor builds
 - **README.md** — user-facing documentation

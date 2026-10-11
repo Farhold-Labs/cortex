@@ -5,6 +5,65 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.113.3] - 2026-10-11
+
+A security fix and dependency advisories found while bringing the documentation up to date, and the documentation pass itself. **Database migration:** one new table (`attachment_tombstones`) and one trigger. **New app builds:** Capacitor's own advisory needs a new APK.
+
+### Security
+- **Deleting a private wave made its attachments public.**
+  - **The bug:** deleting a wave cascades to its `attachments` rows, but the files stay in storage. `/uploads` reads a file with no row as a pre-v2.104.0 upload and serves it publicly.
+  - **Reproduced on dev:** a file in a private wave answered 401 without credentials, and 200 to anyone once the wave was deleted.
+  - **The fix:** a trigger now writes a tombstone for every bound attachment whose row is deleted, by whichever path (wave delete, thread clean-up, account deletion). `/uploads` refuses tombstoned paths, and a sweep (straight after a wave delete, then every 10 minutes) removes the files.
+  - **Tombstones are kept after the sweep,** because `storage.delete` cannot report failure. The refusal must not depend on the file actually being gone.
+  - **Never acted on "a file with no row":** that also describes every legitimate legacy upload, the same reasoning as `recording_deletions`.
+- **No real exposure found.** A read-only scan of every node, counting message-folder files uploaded since v2.104.0 that have no attachment row, found **none** on production, PMP, QA or port1. The only one anywhere was the dev probe, now removed. So the bug existed, but no wave with attachments had been deleted yet.
+- **Dependency advisories, all fixed within existing version ranges** (lockfiles only, `npm audit fix` without `--force`). The CI dependency-audit job had been failing on every run since at least 2026-10-05, unnoticed because merges use `--admin`.
+  - **Server:** `proxy-addr` 2.0.8 (critical, IP spoofing via IPv4-mapped IPv6), `nodemailer` 10.1.0, `sharp` 0.35.5, `@grpc/grpc-js`, `@fastify/busboy`, `source-map-js` (high), and `multer` 2.4.0 (moderate).
+  - **Client:** `@capacitor/android` and `@capacitor/ios` 8.5.3 (critical: remote content loadable at the app origin through the internal proxy path), `brace-expansion` (high), `proxy-addr` and `dompurify` 3.4.16.
+  - **Both** now report 0 vulnerabilities.
+- **The Capacitor fix is native, so it needs the new APK.** The v2.113.0 app was built on 8.1.0.
+
+### Documentation
+- **CLAUDE.md** brought from v2.86.0 to now.
+  - **Corrected two false claims:** that there is no CI (there has been since v2.89.0), and that the LiveKit variables are missing from `.env.example` (they're there).
+  - **Added:** restarting `cortex-web`, draft-first releases and the never-delete rule, the backup script, the external release checks, the attachment model, entity-encoded text, Communities, broadcasts, lazy loading and `serve.mjs`, and the native plugin rule.
+- **README** brought current through v2.113.
+  - **Added:** Communities, broadcasts and recording, attachments, reactions and emoticons, staff roles, announcement waves, attendance, followers, and machine-readable public pages.
+  - **Fixed:** the demo account list (three accounts that were never seeded), the email providers, and the crawl-bar keys, which now only seed the admin settings.
+  - **Corrected the claim that E2EE covers attachments.**
+- **docs/DEPLOYMENT.md**
+  - It started the client with `pm2 serve --spa`, which drops page metadata, the no-JavaScript fallback and real asset 404s. Production runs `serve.mjs`.
+  - Its update steps restarted only `cortex-api`.
+  - **Added:** broadcast and recording setup, and the external release checks.
+- **docs/API.md:** the file, media and presign uploads, `waveId` binding, `/api/attachments/session|bind`, inline-served types, deleted-wave behaviour, the broadcast client pages and `?orientation=`.
+- **docs/PRIVACY.md** corrected and extended.
+  - **Corrected:** it said *all* messages are end-to-end encrypted. Encryption is per wave.
+  - **New section:** attachments, broadcasts and recordings are not end-to-end encrypted.
+  - **Added:** email followers, retention, LiveKit and S3 as third parties, and the attachment cookie.
+  - **Known gap, stated plainly:** deleting an account does not yet delete its profile picture and video files. Added to the roadmap.
+- **docs/BUILD-NATIVE.md:** the app loads the live server, so web changes need a deploy, not an APK. Added our native plugins and how to reach them, version codes, draft-first and immutable releases, and checking an APK's version and certificate.
+- **OUTSTANDING-FEATURES.md** brought current, with the open near-term items. `docs/BACKLOG.md` is marked superseded.
+
+### Verified
+- 466/466 tests pass. The new attachment test has a counterfactual: with the fix stripped from a copy of the server, the deleted wave's file is served (200) and stays on disk.
+- On dev, the probe went from 401 to 404 after deletion, and the file was removed.
+- After the upgrades:
+  - an image upload through the new sharp (1600×900 PNG to a 1200×675 WebP);
+  - the inline players and the Go Live orientation flow re-checked in the real app;
+  - the Android app compiles against Capacitor 8.5.3;
+  - the client builds;
+  - both audits are clean.
+
+## [2.113.2] - 2026-10-11
+
+### Changed
+- **Attached audio and video show the player only, not the player plus a download card.** The player's own ⋮ menu downloads the file. Jared confirmed this in the Android app with an MP4, which corrects my v2.112.0 assumption that the app's player had no download. The card's filename and size remain as a small caption under the player.
+- **Files that can't play keep the full download card as before.** These are FLAC/AAC, PDFs, archives and so on; the pass only matches playable extensions.
+- **Trade-off, accepted:** iPhone/iPad Safari's player has no download option, and neither does Firefox's audio player, so those readers can play but not save a playable attachment.
+
+### Verified
+- On dev, in the real app at phone size: a wave with `tone.mp3` and `clip.mp4` shows 2 players, 0 media cards, and the captions `tone.mp3 · 71.1 KB` and `clip.mp4 · 93.4 KB`, with no errors.
+
 ## [2.113.1] - 2026-10-10
 
 Tested on PMP: zoom worked well, but the orientation needs to be set **before** the broadcast starts. In v2.113.0 the studio went live the moment it opened, so the only rotate button was mid-broadcast. Turning there changes the picture's shape for every viewer and in the recording.

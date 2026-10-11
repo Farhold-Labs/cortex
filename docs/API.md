@@ -50,6 +50,7 @@ The Cortex API is a RESTful API that powers the Cortex federated communication p
    - [Instance Configuration](#instance-configuration-endpoints)
    - [Invitations](#invitations-endpoints)
    - [Crawl Bar](#crawl-bar-endpoints)
+   - [Live broadcasts and recording](#live-broadcasts-v21090-and-recording-v21100)
 5. [WebSocket API](#websocket-api)
 
 ---
@@ -2262,6 +2263,78 @@ curl -X POST http://localhost:3001/api/uploads \
 
 - Uploaded images are automatically embedded in messages when URL is included
 - Images displayed as thumbnails with click-to-zoom lightbox
+
+#### `waveId` — binding an upload to its conversation (v2.104.0)
+
+Every message upload route (`/api/uploads`, `/api/uploads/file`, `/api/uploads/media`) accepts an optional `waveId` form field. Send it whenever the upload is for a wave. The file is then **bound** to that wave, and `GET /uploads/...` serves it only to people who can read the wave.
+
+- **Membership:** a `waveId` the uploader is not in is ignored and the file is left unbound.
+- **No `waveId`** (profile videos, or a message composed before its wave exists): the file is unbound and stays public. The server still records who uploaded it.
+- **Fails closed** (v2.107.2): if the binding cannot be written, the stored file is deleted and the upload returns an error. A file nobody can secure is never left behind.
+- **Deleting a wave** (v2.113.3) tombstones its files: from that moment `/uploads` answers 404 for them, and a background sweep deletes them from storage.
+  - **Why:** before this fix, the wave's attachment rows were deleted with it, and a file with no row reads as a public pre-v2.104 upload. Deleting a private wave made its files public.
+  - **Scope:** the tombstone is written by a database trigger, so it covers every way a wave is deleted.
+
+**Reading bound files.** `<img>` and `<video>` cannot send an `Authorization` header, so they use a cookie instead:
+
+- `POST /api/attachments/session` sets a 15-minute HttpOnly, `SameSite=Strict` cookie scoped to `/uploads`. The response is `{ expiresInSeconds }`.
+- Membership is checked on every request, not only at upload.
+- Files from before v2.104.0 have no binding and stay public.
+
+**Encrypted waves.** The server cannot read the message, so the client binds the file after decrypting it:
+
+```
+POST /api/attachments/bind    { "path": "/uploads/files/…", "waveId": "…" }
+```
+
+| Status | Meaning |
+|--------|---------|
+| 400 | `path` or `waveId` missing, or the path is not an uploads path (`..` is refused) |
+| 403 | not in that wave, or not the uploader. Only the uploader may bind, because binding restricts the file. |
+| 404 | unknown wave, or no upload record for the path |
+| 409 | the file already belongs to another conversation. It is refused, not moved. |
+
+**What `/uploads` serves inline.** Every response has `X-Content-Type-Options: nosniff` and a `sandbox` CSP. Only these types are served for display; everything else is sent as an `application/octet-stream` attachment:
+
+- **Images:** `.jpg` `.jpeg` `.png` `.gif` `.webp` `.avif`
+- **Video:** `.mp4` `.webm` `.ogg` `.ogv` `.mov` `.m4v`
+- **Audio:** `.mp3` `.m4a` `.wav` `.oga` `.opus`
+
+#### POST /api/uploads/file
+
+Attach any file (field `file`, max **25 MB**). Executable and script extensions are refused (`.exe`, `.bat`, `.sh`, `.js`, `.ps1`, `.dll`, …).
+
+**Response:** `{ "success": true, "url": "/uploads/files/…", "filename", "size", "mimetype" }`.
+
+The client sends the result as a file marker. It shows as a download card, or as an audio or video player for `.mp3 .m4a .wav .ogg .oga .opus .mp4 .webm .m4v .mov` (v2.112.0). Since v2.113.2 the player **replaces** the card, with the filename and size as a caption, because the player's own menu downloads. This all happens at display time, so stored messages are unchanged.
+
+#### POST /api/uploads/media
+
+Voice and video messages (field `media`, plus optional `duration` in seconds).
+
+- **Accepted types:** `audio/webm|mp4|ogg|mpeg|wav` and `video/webm|mp4|ogg`.
+- **Limits:** audio up to 10 MB; the route as a whole up to 500 MB.
+- **Video** is transcoded to H.264 MP4 with FFmpeg before the response.
+
+**Response:** `{ "success": true, "url", "type": "audio"|"video", "duration", "size" }`.
+
+#### POST /api/uploads/presign
+
+Asks for a presigned URL so the browser uploads straight to S3, for large files.
+
+- **Body:** `{ filename, contentType }`.
+- **Needs the S3 storage backend;** returns 400 otherwise.
+- **Size cap:** `S3_MAX_FILE_SIZE_MB` (default 5000).
+
+#### Upload progress (client)
+
+The client sends every upload through `uploadFile()` in `client/src/utils/uploads.js` (v2.111.0). It uses XHR rather than `fetch`, so it can show:
+
+- an uploading screen with progress and the time left;
+- a warning before the page is closed or refreshed mid-upload;
+- a cancel button.
+
+It refreshes the access token before a long upload, and retries once on `TOKEN_EXPIRED`. **Keep browsing** delivers the finished upload to the composer of the wave it started in, not to whichever wave is open. Any new upload path should use `uploadFile()` and send `waveId`.
 
 ---
 
@@ -4493,3 +4566,16 @@ Opt-in instance feature `broadcasts` (403 `FEATURE_DISABLED` when off). Needs Li
 | POST | `/api/public/broadcasts/:token/token` | anyone (rate-limited) | hidden viewer token |
 
 WebSocket events: `broadcast_started`, `broadcast_ended`, `broadcast_recording` (`{ broadcastId, waveId, status }`). When a recording is ready, it is also posted to the wave as an ordinary ping.
+
+Client pages that use these routes:
+
+| Page | What it is |
+|---|---|
+| `/broadcast/:id` | The performer's studio. It publishes as soon as it opens. |
+| `/watch/:id` | A member watching. |
+| `/live/:token` | A public viewer, no account. |
+| `/recording/:id` | Playing a recording afterwards. |
+
+**Studio orientation.** The studio accepts `?orientation=landscape|portrait` (v2.113.1). The Go Live dialog sets it and turns the screen inside the START tap, because browsers only allow full screen from a user gesture. It then opens the studio with `pushState`, not a page load, because a reload drops full screen and with it the orientation lock. The studio re-locks the screen and waits up to 1.5 s for it to turn before starting the camera.
+
+**Native orientation lock.** In the Android app, the lock goes through the native `CortexOrientation` plugin (`lock({orientation})` / `unlock()`), which works even with auto-rotate off. The plugin exists from the v2.113.0 APK; older installs fall back to the browser API.
