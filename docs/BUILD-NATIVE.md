@@ -536,6 +536,8 @@ The version lives in five places that must agree (see CLAUDE.md). For the native
 
 A build whose code isn't higher than the installed one won't install as an upgrade.
 
+To see what someone has installed, ask them to open **Settings → About** (v2.114.0). It shows the installed app's `versionName` and `versionCode` next to the web app's version, which always follows the server. COPY FOR SUPPORT puts both on the clipboard.
+
 ### Draft first, because published releases cannot be changed
 
 GitHub releases on this repository are **immutable once published**. Assets cannot be added to a published release, and deleting the release does not free its tag: that tag can never be published again (HTTP 422, "tag_name was used by an immutable release"). So:

@@ -5,6 +5,29 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.114.0] - 2026-10-12
+
+An About section under Settings that reports the installed app's version as well as the web app's and the server's. **No database migration. No new app build needed.**
+
+### Added
+
+- **Settings → ABOUT** (`client/src/components/settings/AboutPanel.jsx`). It shows:
+  - **Web app:** the screens' version. The Android and desktop apps load these from the server, so this always matches the server, whatever app is installed.
+  - **App:** the installed shell's version and build number. Android and iOS ask `@capacitor/app`'s `App.getInfo()` through `window.Capacitor.Plugins.App` (never an import, which stubs `window.Capacitor` in browsers); desktop asks the existing `electronAPI.getAppVersion()`. Shows "Web browser" in a browser. This is the only place that tells you whether someone is still on an old APK.
+  - **Server:** version and node name from `/api/server/info`.
+  - Links to this node's `/about` page (in-app navigation), the Cortex website (farhold.com), the GitHub repository and its release notes.
+  - **COPY FOR SUPPORT:** the versions and the user agent, for pasting into a support request.
+- When the installed app and the web app differ, a line explains why, so a mismatch isn't mistaken for a failed update.
+
+### Changed
+
+- **The version is no longer in the header or the desktop footer.** It lives in Settings → About.
+
+### Verified
+
+- `App.getInfo` is compiled into the released v2.113.0 APK (`com/capacitorjs/plugins/app/AppPlugin` in `classes.dex`, `@capacitor/app` in `capacitor.plugins.json`). So this works in the app already installed, with a server deploy and no new build.
+- Driven headlessly at 390 px wide in three modes: a browser, an Android stand-in (an `App.getInfo` stub) and a desktop stand-in (an `electronAPI` stub). Each shows the right rows with no sideways scroll, and the node link opens `/about`. The real Android app's reading of `App.getInfo`, and external links opening in the system browser, still need checking on a phone.
+
 ## [2.113.3] - 2026-10-11
 
 A security fix and dependency advisories found while bringing the documentation up to date, and the documentation pass itself. **Database migration:** one new table (`attachment_tombstones`) and one trigger. **New app builds:** Capacitor's own advisory needs a new APK.
