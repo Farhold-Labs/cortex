@@ -12,6 +12,7 @@ import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { E2EEStatusIndicator } from '../../../e2ee-components.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import MyReportsPanel from '../reports/MyReportsPanel.jsx';
+import AboutPanel from '../settings/AboutPanel.jsx';
 import { T } from '../../config/terminology.js';
 
 // ============ PREFERENCE LABEL WITH RESET (v2.65.1) ============
@@ -2377,6 +2378,11 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
       <div style={{ marginTop: '20px', padding: '20px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))', border: '1px solid var(--border-subtle)' }}>
         <MyReportsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} />
       </div>
+
+      {/* About (v2.114.0) — the web app, installed app and server versions */}
+      <CollapsibleSection title="ABOUT" isOpen={openSection === 'about'} onToggle={() => toggleSection('about')} isMobile={isMobile}>
+        <AboutPanel showToast={showToast} isMobile={isMobile} />
+      </CollapsibleSection>
 
       {/* Logout Section */}
       <div style={{ marginTop: '20px', padding: '20px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))', border: '1px solid var(--border-subtle)' }}>
