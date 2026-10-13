@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.113.3**. Last brought current 2026-10-11.
+Current version: **2.114.0**. Last brought current 2026-10-12.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2113003 / versionName "2.113.3"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2113003 / MARKETING_VERSION 2.113.3
+client/android/app/build.gradle                  versionCode 2114000 / versionName "2.114.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2114000 / MARKETING_VERSION 2.114.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -277,7 +277,7 @@ E2EE lives in `client/crypto.js`, `e2ee-context.jsx` and `e2ee-components.jsx`.
 - **Public pages are deliberately eager.** `/events` and `/portal` stay in the main bundle because `serve.mjs` puts a readable copy of them inside `#root` for readers without JavaScript. A lazy page would replace that copy with a spinner.
 - **`client/serve.mjs` is the production static server.** It composes per-page `<head>` metadata, the no-JavaScript fallback, trailing-slash routes and real 404s for missing assets. Never replace it with `pm2 serve --spa`.
 
-**Native.** The Android app has local Capacitor plugins (`CortexOrientation`, v2.113.0) registered in `MainActivity` before `super.onCreate`. Reach them through `window.Capacitor` and never `import '@capacitor/core'`, which stubs `window.Capacitor` in browsers. See `docs/BUILD-NATIVE.md`.
+**Native.** The Android app has local Capacitor plugins (`CortexOrientation`, v2.113.0) registered in `MainActivity` before `super.onCreate`. Reach them through `window.Capacitor` and never `import '@capacitor/core'`, which stubs `window.Capacitor` in browsers. See `docs/BUILD-NATIVE.md`. The installed app's version (`App.getInfo`, or `electronAPI.getAppVersion` on desktop) is shown in Settings → About; `VERSION` is always the server's build (v2.114.0).
 
 ### Database
 
