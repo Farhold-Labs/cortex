@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.115.0** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.116.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -130,7 +130,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 - **S3-compatible storage** — Optional S3/MinIO backend for uploads
 
 ### Crawl Bar
-Configured in the admin panel (ADMIN → CRAWL BAR CONFIG) rather than `.env` since v2.80.0 — feeds, keys, symbols and intervals live in the database, with a TEST button for every key and feed.
+Configured in Settings (ADMINISTRATION → CRAWL BAR CONFIG) rather than `.env` since v2.80.0 — feeds, keys, symbols and intervals live in the database, with a TEST button for every key and feed.
 
 - **Stock ticker** — Real-time quotes from Finnhub API
 - **Weather data** — Current conditions from OpenWeatherMap
@@ -288,7 +288,7 @@ RECORDING_S3_ACCESS_KEY=your-key-id
 RECORDING_S3_SECRET_KEY=your-app-key
 
 # Crawl Bar APIs (optional, read once at first start to seed the admin
-# settings; after that, manage them under ADMIN → CRAWL BAR CONFIG)
+# settings; after that, manage them under Settings → ADMINISTRATION → CRAWL BAR CONFIG)
 FINNHUB_API_KEY=your-key           # Stock quotes
 OPENWEATHERMAP_API_KEY=your-key    # Weather data
 NEWSAPI_KEY=your-key               # News headlines

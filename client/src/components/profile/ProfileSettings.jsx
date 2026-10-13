@@ -90,8 +90,6 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
   const toggleSection = (section) => { setOpenSection(prev => prev === section ? null : section); setOpenSub(null); };
   const toggleSub = (sub) => setOpenSub(prev => prev === sub ? null : sub);
   // Accordion state for Admin Panel subsections
-  const [openAdminSection, setOpenAdminSection] = useState(null); // 'users' | 'reports' | 'activity' | 'handles' | 'crawl' | 'alerts' | 'subscriptions' | 'federation' | null
-  const toggleAdminSection = (section) => setOpenAdminSection(prev => prev === section ? null : section);
   const [notificationPrefs, setNotificationPrefs] = useState(null);
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [mutedUsers, setMutedUsers] = useState([]);
@@ -2405,73 +2403,35 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
       </CollapsibleSection>
 
-      {/* Admin Panel (visible to moderator+) */}
+      {/* Moderation and administration (v2.116.0): two categories in place of
+          one ADMIN PANEL, so each tool is a sub-category at the same depth as
+          everything else and its forms keep their width on a phone. */}
       {canAccess(user, 'moderator') && (
-        <CollapsibleSection title="⚙️ ADMIN PANEL" isOpen={openSection === 'admin'} onToggle={() => toggleSection('admin')} isMobile={isMobile} accentColor="var(--accent-amber)" titleColor="var(--accent-amber)">
+        <CollapsibleSection title="MODERATION" isOpen={openSection === 'moderation'} onToggle={() => toggleSection('moderation')} isMobile={isMobile}>
           <React.Suspense fallback={<div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', padding: '8px 0' }}>Loading admin tools…</div>}>
-          {/* MODERATION SECTION - Available to moderator+ */}
-          <div style={{ marginBottom: '16px' }}>
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Moderation
-            </div>
+          <UserManagementPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'users'} onToggle={() => toggleSub('users')} currentUser={user} />
+          <AdminReportsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'reports'} onToggle={() => toggleSub('reports')} />
+          <ModerationAppealsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'appeals'} onToggle={() => toggleSub('appeals')} />
+          <ActivityLogPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'activity'} onToggle={() => toggleSub('activity')} />
+          </React.Suspense>
+        </CollapsibleSection>
+      )}
 
-            {/* User Management Panel */}
-            <UserManagementPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'users'} onToggle={() => toggleAdminSection('users')} currentUser={user} />
-
-            {/* Admin Reports Dashboard */}
-            <AdminReportsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'reports'} onToggle={() => toggleAdminSection('reports')} />
-
-            {/* Moderation Appeals Panel (v2.37.0) */}
-            <ModerationAppealsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'appeals'} onToggle={() => toggleAdminSection('appeals')} />
-
-            {/* Activity Log Panel */}
-            <ActivityLogPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'activity'} onToggle={() => toggleAdminSection('activity')} />
-          </div>
-
-          {/* SYSTEM CONFIGURATION - Admin only */}
-          {canAccess(user, 'admin') && (
-            <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
-              <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                System Configuration
-              </div>
-
-              {/* Handle Requests Panel */}
-              <HandleRequestsList fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'handles'} onToggle={() => toggleAdminSection('handles')} />
-
-              {/* Invitations (v2.67.0) — the way in when registration is closed */}
-              <InvitesAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} user={user} isOpen={openAdminSection === 'invites'} onToggle={() => toggleAdminSection('invites')} />
-
-              {/* Instance Defaults (v2.65.0) — server-wide defaults, features, branding */}
-              <InstanceConfigAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'instance'} onToggle={() => toggleAdminSection('instance')} />
-
-              {/* Crawl Bar Admin Panel */}
-              <CrawlBarAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'crawl'} onToggle={() => toggleAdminSection('crawl')} />
-
-              {/* Alerts Admin Panel */}
-              <AlertsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'alerts'} onToggle={() => toggleAdminSection('alerts')} />
-
-              {/* Events Calendar Panel */}
-              <EventsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'events'} onToggle={() => toggleAdminSection('events')} />
-
-              {/* Alert Subscriptions Panel */}
-              <AlertSubscriptionsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'subscriptions'} onToggle={() => toggleAdminSection('subscriptions')} />
-
-              {/* Federation Admin Panel */}
-              <FederationAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} refreshTrigger={federationRequestsRefresh} isOpen={openAdminSection === 'federation'} onToggle={() => toggleAdminSection('federation')} />
-
-              {/* Bots Admin Panel (v2.1.0) */}
-              <BotsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'bots'} onToggle={() => toggleAdminSection('bots')} />
-
-              {/* Support Tickets (v2.47.11) */}
-              <SupportTicketsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isOpen={openAdminSection === 'support'} onToggle={() => toggleAdminSection('support')} />
-
-              {/* Public Portal (v2.55.0) */}
-              <PublicPortalAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'portal'} onToggle={() => toggleAdminSection('portal')} />
-
-              {/* Privacy & Encryption Dashboard (v2.21.0) */}
-              <PrivacyDashboard fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openAdminSection === 'privacy'} onToggle={() => toggleAdminSection('privacy')} />
-            </div>
-          )}
+      {canAccess(user, 'admin') && (
+        <CollapsibleSection title="ADMINISTRATION" isOpen={openSection === 'administration'} onToggle={() => toggleSection('administration')} isMobile={isMobile}>
+          <React.Suspense fallback={<div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', padding: '8px 0' }}>Loading admin tools…</div>}>
+          <InstanceConfigAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'instance'} onToggle={() => toggleSub('instance')} />
+          <FederationAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} refreshTrigger={federationRequestsRefresh} isOpen={openSub === 'federation'} onToggle={() => toggleSub('federation')} />
+          <InvitesAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} user={user} isOpen={openSub === 'invites'} onToggle={() => toggleSub('invites')} />
+          <HandleRequestsList fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'handles'} onToggle={() => toggleSub('handles')} />
+          <PublicPortalAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'portal'} onToggle={() => toggleSub('portal')} />
+          <EventsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'events'} onToggle={() => toggleSub('events')} />
+          <CrawlBarAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'crawl'} onToggle={() => toggleSub('crawl')} />
+          <AlertsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'alerts'} onToggle={() => toggleSub('alerts')} />
+          <AlertSubscriptionsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'subscriptions'} onToggle={() => toggleSub('subscriptions')} />
+          <BotsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'bots'} onToggle={() => toggleSub('bots')} />
+          <SupportTicketsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'support'} onToggle={() => toggleSub('support')} />
+          <PrivacyDashboard fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'privacy'} onToggle={() => toggleSub('privacy')} />
           </React.Suspense>
         </CollapsibleSection>
       )}

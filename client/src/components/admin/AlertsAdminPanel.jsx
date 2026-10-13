@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG, FEDERATION } from '../../../messages.js';
 import { plainText } from '../../utils/plainText.js';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
 const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [alerts, setAlerts] = useState([]);
@@ -161,135 +162,104 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
   };
 
   return (
-    <div style={{
-      marginTop: '20px',
-      padding: isMobile ? '16px' : '20px',
-      background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
-      border: '1px solid var(--accent-amber)40',
-    }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
-        <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', fontWeight: 500 }}>🚨 SYSTEM ALERTS</div>
-        <button
-          onClick={onToggle}
-          style={{
-            padding: isMobile ? '8px 12px' : '6px 10px',
-            background: isOpen ? 'var(--accent-amber)20' : 'transparent',
-            border: `1px solid ${isOpen ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
-            color: isOpen ? 'var(--accent-amber)' : 'var(--text-dim)',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: '0.7rem',
-          }}
-        >
-          {isOpen ? '▼ HIDE' : '▶ SHOW'}
-        </button>
-      </div>
+    <CollapsibleSection title="SYSTEM ALERTS" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
+        {loading ? (
+          <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>Loading...</div>
+        ) : (
+          <>
+            {/* Create button */}
+            <div style={{ marginBottom: '16px' }}>
+              <button onClick={openCreateModal} style={{
+                padding: isMobile ? '10px 16px' : '8px 14px',
+                minHeight: isMobile ? '44px' : 'auto',
+                background: 'var(--accent-amber)20',
+                border: '1px solid var(--accent-amber)',
+                color: 'var(--accent-amber)',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: isMobile ? '0.85rem' : '0.8rem',
+              }}>+ NEW ALERT</button>
+            </div>
 
-      {isOpen && (
-        <div style={{ marginTop: '16px' }}>
-          {loading ? (
-            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>Loading...</div>
-          ) : (
-            <>
-              {/* Create button */}
-              <div style={{ marginBottom: '16px' }}>
-                <button onClick={openCreateModal} style={{
-                  padding: isMobile ? '10px 16px' : '8px 14px',
-                  minHeight: isMobile ? '44px' : 'auto',
-                  background: 'var(--accent-amber)20',
-                  border: '1px solid var(--accent-amber)',
-                  color: 'var(--accent-amber)',
-                  cursor: 'pointer',
-                  fontFamily: 'monospace',
-                  fontSize: isMobile ? '0.85rem' : '0.8rem',
-                }}>+ NEW ALERT</button>
+            {/* Alerts list */}
+            {alerts.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+                No alerts configured
               </div>
-
-              {/* Alerts list */}
-              {alerts.length === 0 ? (
-                <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
-                  No alerts configured
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {alerts.map(alert => {
-                    const status = getAlertStatus(alert);
-                    const cfg = priorityConfig[alert.priority] || priorityConfig.info;
-                    return (
-                      <div key={alert.id} style={{
-                        padding: '12px',
-                        background: 'var(--bg-surface)',
-                        border: `1px solid ${cfg.color}40`,
-                        display: 'flex',
-                        flexDirection: isMobile ? 'column' : 'row',
-                        gap: '8px',
-                        alignItems: isMobile ? 'flex-start' : 'center',
-                      }}>
-                        {/* Priority icon and title */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                            <span>{cfg.icon}</span>
-                            <span style={{
-                              color: 'var(--text-primary)',
-                              fontFamily: 'monospace',
-                              fontSize: '0.85rem',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}>
-                              {plainText(alert.title)}
-                            </span>
-                          </div>
-                          <div style={{ display: 'flex', gap: '8px', fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-                            <span style={{ color: status.color, fontWeight: 600 }}>{status.label}</span>
-                            <span>•</span>
-                            <span>{alert.category}</span>
-                            <span>•</span>
-                            <span>{alert.scope}</span>
-                            {alert.origin_node && (
-                              <>
-                                <span>•</span>
-                                <span style={{ color: 'var(--accent-purple)' }}>@{alert.origin_node}</span>
-                              </>
-                            )}
-                          </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {alerts.map(alert => {
+                  const status = getAlertStatus(alert);
+                  const cfg = priorityConfig[alert.priority] || priorityConfig.info;
+                  return (
+                    <div key={alert.id} style={{
+                      padding: '12px',
+                      background: 'var(--bg-surface)',
+                      border: `1px solid ${cfg.color}40`,
+                      display: 'flex',
+                      flexDirection: isMobile ? 'column' : 'row',
+                      gap: '8px',
+                      alignItems: isMobile ? 'flex-start' : 'center',
+                    }}>
+                      {/* Priority icon and title */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                          <span>{cfg.icon}</span>
+                          <span style={{
+                            color: 'var(--text-primary)',
+                            fontFamily: 'monospace',
+                            fontSize: '0.85rem',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {plainText(alert.title)}
+                          </span>
                         </div>
-                        {/* Actions */}
-                        {!alert.origin_node && (
-                          <div style={{ display: 'flex', gap: '6px' }}>
-                            <button onClick={() => openEditModal(alert)} style={{
-                              padding: '4px 8px',
-                              background: 'transparent',
-                              border: '1px solid var(--border-secondary)',
-                              color: 'var(--text-secondary)',
-                              cursor: 'pointer',
-                              fontFamily: 'monospace',
-                              fontSize: '0.7rem',
-                            }}>EDIT</button>
-                            <button onClick={() => handleDelete(alert.id)} style={{
-                              padding: '4px 8px',
-                              background: 'transparent',
-                              border: '1px solid var(--accent-orange)40',
-                              color: 'var(--accent-orange)',
-                              cursor: 'pointer',
-                              fontFamily: 'monospace',
-                              fontSize: '0.7rem',
-                            }}>DEL</button>
-                          </div>
-                        )}
+                        <div style={{ display: 'flex', gap: '8px', fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+                          <span style={{ color: status.color, fontWeight: 600 }}>{status.label}</span>
+                          <span>•</span>
+                          <span>{alert.category}</span>
+                          <span>•</span>
+                          <span>{alert.scope}</span>
+                          {alert.origin_node && (
+                            <>
+                              <span>•</span>
+                              <span style={{ color: 'var(--accent-purple)' }}>@{alert.origin_node}</span>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+                      {/* Actions */}
+                      {!alert.origin_node && (
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button onClick={() => openEditModal(alert)} style={{
+                            padding: '4px 8px',
+                            background: 'transparent',
+                            border: '1px solid var(--border-secondary)',
+                            color: 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            fontFamily: 'monospace',
+                            fontSize: '0.7rem',
+                          }}>EDIT</button>
+                          <button onClick={() => handleDelete(alert.id)} style={{
+                            padding: '4px 8px',
+                            background: 'transparent',
+                            border: '1px solid var(--accent-orange)40',
+                            color: 'var(--accent-orange)',
+                            cursor: 'pointer',
+                            fontFamily: 'monospace',
+                            fontSize: '0.7rem',
+                          }}>DEL</button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
 
       {/* Create/Edit Modal */}
       {showCreateModal && (
@@ -479,7 +449,7 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
           </div>
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 };
 

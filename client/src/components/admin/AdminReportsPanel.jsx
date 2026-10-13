@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError } from '../../../messages.js';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
 const AdminReportsPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [reports, setReports] = useState([]);
@@ -85,167 +86,145 @@ const AdminReportsPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) 
   ];
 
   return (
-    <div style={{ marginTop: '20px', padding: isMobile ? '16px' : '20px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))', border: '1px solid var(--accent-orange)40' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ color: 'var(--accent-orange)', fontSize: '0.8rem', fontWeight: 500 }}>REPORTS DASHBOARD</div>
+    <CollapsibleSection title="REPORTS" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+      {tabs.map((tab) => (
         <button
-          onClick={onToggle}
+          key={tab.id}
+          onClick={() => setActiveTab(tab.id)}
           style={{
-            padding: isMobile ? '8px 12px' : '6px 10px',
-            background: isOpen ? 'var(--accent-orange)20' : 'transparent',
-            border: `1px solid ${isOpen ? 'var(--accent-orange)' : 'var(--border-primary)'}`,
-            color: isOpen ? 'var(--accent-orange)' : 'var(--text-dim)',
+            padding: isMobile ? '10px 16px' : '8px 16px',
+            minHeight: isMobile ? '44px' : 'auto',
+            background: activeTab === tab.id ? `${tab.color}20` : 'transparent',
+            border: `1px solid ${activeTab === tab.id ? tab.color : 'var(--border-primary)'}`,
+            color: activeTab === tab.id ? tab.color : 'var(--text-dim)',
             cursor: 'pointer',
             fontFamily: 'monospace',
-            fontSize: '0.7rem',
+            fontSize: isMobile ? '0.85rem' : '0.8rem',
+            textTransform: 'uppercase',
           }}
         >
-          {isOpen ? '▼ HIDE' : '▶ SHOW'}
+          {tab.label}
         </button>
-      </div>
+      ))}
+    </div>
 
-      {isOpen && (
-        <div style={{ marginTop: '16px' }}>
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+    {loading ? (
+      <div style={{ color: 'var(--text-dim)', padding: '20px', textAlign: 'center' }}>Loading reports...</div>
+    ) : reports.length === 0 ? (
+      <div style={{ color: 'var(--text-dim)', padding: '20px', textAlign: 'center', border: '1px dashed var(--border-subtle)' }}>
+        No {activeTab} reports
+      </div>
+    ) : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {reports.map((report) => (
+          <div
+            key={report.id}
             style={{
-              padding: isMobile ? '10px 16px' : '8px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              background: activeTab === tab.id ? `${tab.color}20` : 'transparent',
-              border: `1px solid ${activeTab === tab.id ? tab.color : 'var(--border-primary)'}`,
-              color: activeTab === tab.id ? tab.color : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.85rem' : '0.8rem',
-              textTransform: 'uppercase',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              padding: isMobile ? '14px' : '16px',
             }}
           >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div style={{ color: 'var(--text-dim)', padding: '20px', textAlign: 'center' }}>Loading reports...</div>
-      ) : reports.length === 0 ? (
-        <div style={{ color: 'var(--text-dim)', padding: '20px', textAlign: 'center', border: '1px dashed var(--border-subtle)' }}>
-          No {activeTab} reports
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {reports.map((report) => (
-            <div
-              key={report.id}
-              style={{
-                background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
-                padding: isMobile ? '14px' : '16px',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                <div>
-                  <span style={{
-                    display: 'inline-block',
-                    padding: '2px 8px',
-                    background: report.type === 'message' ? 'var(--accent-teal)20' : report.type === 'wave' ? 'var(--accent-amber)20' : 'var(--accent-orange)20',
-                    color: report.type === 'message' ? 'var(--accent-teal)' : report.type === 'wave' ? 'var(--accent-amber)' : 'var(--accent-orange)',
-                    fontSize: '0.7rem',
-                    textTransform: 'uppercase',
-                    marginRight: '8px',
-                  }}>
-                    {report.type}
-                  </span>
-                  <span style={{ color: 'var(--text-primary)', fontSize: isMobile ? '0.9rem' : '0.85rem' }}>
-                    {report.reason}
-                  </span>
-                </div>
-                <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-                  {new Date(report.created_at).toLocaleDateString()}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+              <div>
+                <span style={{
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  background: report.type === 'message' ? 'var(--accent-teal)20' : report.type === 'wave' ? 'var(--accent-amber)20' : 'var(--accent-orange)20',
+                  color: report.type === 'message' ? 'var(--accent-teal)' : report.type === 'wave' ? 'var(--accent-amber)' : 'var(--accent-orange)',
+                  fontSize: '0.7rem',
+                  textTransform: 'uppercase',
+                  marginRight: '8px',
+                }}>
+                  {report.type}
+                </span>
+                <span style={{ color: 'var(--text-primary)', fontSize: isMobile ? '0.9rem' : '0.85rem' }}>
+                  {report.reason}
                 </span>
               </div>
-
-              {report.details && (
-                <div style={{
-                  color: 'var(--text-secondary)',
-                  fontSize: isMobile ? '0.85rem' : '0.8rem',
-                  marginBottom: '8px',
-                  padding: '8px',
-                  background: 'var(--bg-base)',
-                  border: '1px solid var(--bg-hover)',
-                }}>
-                  {report.details}
-                </div>
-              )}
-
-              {report.target_preview && (
-                <div style={{
-                  color: 'var(--text-dim)',
-                  fontSize: '0.75rem',
-                  marginBottom: '8px',
-                  fontStyle: 'italic',
-                }}>
-                  Target: {report.target_preview}
-                </div>
-              )}
-
-              <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Reported by: {report.reporter_handle || report.reporter_id}
-              </div>
-
-              {activeTab === 'pending' && (
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <button
-                    onClick={() => setSelectedReport(report)}
-                    style={{
-                      padding: isMobile ? '10px 14px' : '6px 12px',
-                      minHeight: isMobile ? '44px' : 'auto',
-                      background: 'var(--accent-green)',
-                      border: '1px solid var(--accent-green)',
-                      color: '#fff',
-                      cursor: 'pointer',
-                      fontFamily: 'monospace',
-                      fontSize: isMobile ? '0.85rem' : '0.75rem',
-                    }}
-                  >
-                    RESOLVE
-                  </button>
-                  <button
-                    onClick={() => handleDismiss(report.id)}
-                    style={{
-                      padding: isMobile ? '10px 14px' : '6px 12px',
-                      minHeight: isMobile ? '44px' : 'auto',
-                      background: 'transparent',
-                      border: '1px solid var(--text-dim)',
-                      color: 'var(--text-dim)',
-                      cursor: 'pointer',
-                      fontFamily: 'monospace',
-                      fontSize: isMobile ? '0.85rem' : '0.75rem',
-                    }}
-                  >
-                    DISMISS
-                  </button>
-                </div>
-              )}
-
-              {report.resolution && (
-                <div style={{ marginTop: '8px', padding: '8px', background: 'var(--accent-green)20', border: '1px solid var(--accent-green)50' }}>
-                  <div style={{ color: 'var(--accent-green)', fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                    Resolution: {report.resolution.replace(/_/g, ' ')}
-                  </div>
-                  {report.resolution_notes && (
-                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '4px' }}>
-                      {report.resolution_notes}
-                    </div>
-                  )}
-                </div>
-              )}
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+                {new Date(report.created_at).toLocaleDateString()}
+              </span>
             </div>
-          ))}
-        </div>
-      )}
+
+            {report.details && (
+              <div style={{
+                color: 'var(--text-secondary)',
+                fontSize: isMobile ? '0.85rem' : '0.8rem',
+                marginBottom: '8px',
+                padding: '8px',
+                background: 'var(--bg-base)',
+                border: '1px solid var(--bg-hover)',
+              }}>
+                {report.details}
+              </div>
+            )}
+
+            {report.target_preview && (
+              <div style={{
+                color: 'var(--text-dim)',
+                fontSize: '0.75rem',
+                marginBottom: '8px',
+                fontStyle: 'italic',
+              }}>
+                Target: {report.target_preview}
+              </div>
+            )}
+
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              Reported by: {report.reporter_handle || report.reporter_id}
+            </div>
+
+            {activeTab === 'pending' && (
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setSelectedReport(report)}
+                  style={{
+                    padding: isMobile ? '10px 14px' : '6px 12px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: 'var(--accent-green)',
+                    border: '1px solid var(--accent-green)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    fontFamily: 'monospace',
+                    fontSize: isMobile ? '0.85rem' : '0.75rem',
+                  }}
+                >
+                  RESOLVE
+                </button>
+                <button
+                  onClick={() => handleDismiss(report.id)}
+                  style={{
+                    padding: isMobile ? '10px 14px' : '6px 12px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: 'transparent',
+                    border: '1px solid var(--text-dim)',
+                    color: 'var(--text-dim)',
+                    cursor: 'pointer',
+                    fontFamily: 'monospace',
+                    fontSize: isMobile ? '0.85rem' : '0.75rem',
+                  }}
+                >
+                  DISMISS
+                </button>
+              </div>
+            )}
+
+            {report.resolution && (
+              <div style={{ marginTop: '8px', padding: '8px', background: 'var(--accent-green)20', border: '1px solid var(--accent-green)50' }}>
+                <div style={{ color: 'var(--accent-green)', fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                  Resolution: {report.resolution.replace(/_/g, ' ')}
+                </div>
+                {report.resolution_notes && (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '4px' }}>
+                    {report.resolution_notes}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
 
       {selectedReport && (
         <div style={{
@@ -338,7 +317,7 @@ const AdminReportsPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) 
       )}
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 };
 

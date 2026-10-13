@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG, FEDERATION } from '../../../messages.js';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
 const AlertSubscriptionsPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [subscriptions, setSubscriptions] = useState([]);
@@ -131,159 +132,127 @@ const AlertSubscriptionsPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTogg
   const availableNodes = federationNodes.filter(n => !subscribedNodes.includes(n.node_name) && n.status === 'active');
 
   return (
-    <div style={{
-      marginTop: '20px',
-      padding: isMobile ? '16px' : '20px',
-      background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
-      border: '1px solid var(--accent-purple)40',
-    }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
-        <div style={{ color: 'var(--accent-purple)', fontSize: '0.8rem', fontWeight: 500 }}>◇ ALERT SUBSCRIPTIONS</div>
-        <button
-          onClick={onToggle}
-          style={{
-            padding: isMobile ? '8px 12px' : '6px 10px',
-            background: isOpen ? 'var(--accent-purple)20' : 'transparent',
-            border: `1px solid ${isOpen ? 'var(--accent-purple)' : 'var(--border-primary)'}`,
-            color: isOpen ? 'var(--accent-purple)' : 'var(--text-dim)',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: '0.7rem',
-          }}
-        >
-          {isOpen ? '▼ HIDE' : '▶ SHOW'}
-        </button>
-      </div>
+    <CollapsibleSection title="ALERT SUBSCRIPTIONS" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
+        {loading ? (
+          <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>Loading...</div>
+        ) : (
+          <>
+            {/* Info text */}
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              {FEDERATION.subscribeInfo}
+            </div>
 
-      {isOpen && (
-        <div style={{ marginTop: '16px' }}>
-          {loading ? (
-            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>Loading...</div>
-          ) : (
-            <>
-              {/* Info text */}
-              <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                {FEDERATION.subscribeInfo}
+            {/* Add button */}
+            <div style={{ marginBottom: '16px' }}>
+              <button onClick={openAddModal} disabled={availableNodes.length === 0} style={{
+                padding: isMobile ? '10px 16px' : '8px 14px',
+                minHeight: isMobile ? '44px' : 'auto',
+                background: 'var(--accent-purple)20',
+                border: '1px solid var(--accent-purple)',
+                color: 'var(--accent-purple)',
+                cursor: availableNodes.length === 0 ? 'not-allowed' : 'pointer',
+                fontFamily: 'monospace',
+                fontSize: isMobile ? '0.85rem' : '0.8rem',
+                opacity: availableNodes.length === 0 ? 0.5 : 1,
+              }}>+ NEW SUBSCRIPTION</button>
+              {availableNodes.length === 0 && federationNodes.length > 0 && (
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: '8px' }}>
+                  {FEDERATION.subscribedToAllPorts}
+                </span>
+              )}
+              {federationNodes.length === 0 && (
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: '8px' }}>
+                  {FEDERATION.noAlliedPortsConfigured}
+                </span>
+              )}
+            </div>
+
+            {/* Subscriptions list */}
+            {subscriptions.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+                {FEDERATION.noAlertSubscriptions}
               </div>
-
-              {/* Add button */}
-              <div style={{ marginBottom: '16px' }}>
-                <button onClick={openAddModal} disabled={availableNodes.length === 0} style={{
-                  padding: isMobile ? '10px 16px' : '8px 14px',
-                  minHeight: isMobile ? '44px' : 'auto',
-                  background: 'var(--accent-purple)20',
-                  border: '1px solid var(--accent-purple)',
-                  color: 'var(--accent-purple)',
-                  cursor: availableNodes.length === 0 ? 'not-allowed' : 'pointer',
-                  fontFamily: 'monospace',
-                  fontSize: isMobile ? '0.85rem' : '0.8rem',
-                  opacity: availableNodes.length === 0 ? 0.5 : 1,
-                }}>+ NEW SUBSCRIPTION</button>
-                {availableNodes.length === 0 && federationNodes.length > 0 && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: '8px' }}>
-                    {FEDERATION.subscribedToAllPorts}
-                  </span>
-                )}
-                {federationNodes.length === 0 && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: '8px' }}>
-                    {FEDERATION.noAlliedPortsConfigured}
-                  </span>
-                )}
-              </div>
-
-              {/* Subscriptions list */}
-              {subscriptions.length === 0 ? (
-                <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
-                  {FEDERATION.noAlertSubscriptions}
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {subscriptions.map(sub => {
-                    const cats = JSON.parse(sub.categories || '[]');
-                    return (
-                      <div key={sub.id} style={{
-                        padding: '12px',
-                        background: 'var(--bg-surface)',
-                        border: `1px solid ${sub.status === 'active' ? 'var(--accent-purple)40' : 'var(--border-subtle)'}`,
-                        display: 'flex',
-                        flexDirection: isMobile ? 'column' : 'row',
-                        gap: '8px',
-                        alignItems: isMobile ? 'flex-start' : 'center',
-                        opacity: sub.status === 'paused' ? 0.6 : 1,
-                      }}>
-                        {/* Node name and categories */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                            <span style={{ color: 'var(--accent-purple)' }}>◇</span>
-                            <span style={{
-                              color: 'var(--text-primary)',
-                              fontFamily: 'monospace',
-                              fontSize: '0.85rem',
-                            }}>
-                              {sub.source_node}
-                            </span>
-                            {sub.status === 'paused' && (
-                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>(paused)</span>
-                            )}
-                          </div>
-                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                            {cats.map(cat => (
-                              <span key={cat} style={{
-                                fontSize: '0.65rem',
-                                padding: '2px 6px',
-                                background: 'var(--accent-purple)20',
-                                border: '1px solid var(--accent-purple)40',
-                                color: 'var(--accent-purple)',
-                                fontFamily: 'monospace',
-                              }}>
-                                {cat}
-                              </span>
-                            ))}
-                          </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {subscriptions.map(sub => {
+                  const cats = JSON.parse(sub.categories || '[]');
+                  return (
+                    <div key={sub.id} style={{
+                      padding: '12px',
+                      background: 'var(--bg-surface)',
+                      border: `1px solid ${sub.status === 'active' ? 'var(--accent-purple)40' : 'var(--border-subtle)'}`,
+                      display: 'flex',
+                      flexDirection: isMobile ? 'column' : 'row',
+                      gap: '8px',
+                      alignItems: isMobile ? 'flex-start' : 'center',
+                      opacity: sub.status === 'paused' ? 0.6 : 1,
+                    }}>
+                      {/* Node name and categories */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                          <span style={{
+                            color: 'var(--text-primary)',
+                            fontFamily: 'monospace',
+                            fontSize: '0.85rem',
+                          }}>
+                            {sub.source_node}
+                          </span>
+                          {sub.status === 'paused' && (
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>(paused)</span>
+                          )}
                         </div>
-                        {/* Actions */}
-                        <div style={{ display: 'flex', gap: '6px' }}>
-                          <button onClick={() => handleToggleStatus(sub)} style={{
-                            padding: '4px 8px',
-                            background: 'transparent',
-                            border: '1px solid var(--border-secondary)',
-                            color: 'var(--text-secondary)',
-                            cursor: 'pointer',
-                            fontFamily: 'monospace',
-                            fontSize: '0.7rem',
-                          }}>{sub.status === 'active' ? 'PAUSE' : 'RESUME'}</button>
-                          <button onClick={() => openEditModal(sub)} style={{
-                            padding: '4px 8px',
-                            background: 'transparent',
-                            border: '1px solid var(--border-secondary)',
-                            color: 'var(--text-secondary)',
-                            cursor: 'pointer',
-                            fontFamily: 'monospace',
-                            fontSize: '0.7rem',
-                          }}>EDIT</button>
-                          <button onClick={() => handleDelete(sub.id)} style={{
-                            padding: '4px 8px',
-                            background: 'transparent',
-                            border: '1px solid var(--accent-orange)40',
-                            color: 'var(--accent-orange)',
-                            cursor: 'pointer',
-                            fontFamily: 'monospace',
-                            fontSize: '0.7rem',
-                          }}>DEL</button>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {cats.map(cat => (
+                            <span key={cat} style={{
+                              fontSize: '0.65rem',
+                              padding: '2px 6px',
+                              background: 'var(--accent-purple)20',
+                              border: '1px solid var(--accent-purple)40',
+                              color: 'var(--accent-purple)',
+                              fontFamily: 'monospace',
+                            }}>
+                              {cat}
+                            </span>
+                          ))}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+                      {/* Actions */}
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button onClick={() => handleToggleStatus(sub)} style={{
+                          padding: '4px 8px',
+                          background: 'transparent',
+                          border: '1px solid var(--border-secondary)',
+                          color: 'var(--text-secondary)',
+                          cursor: 'pointer',
+                          fontFamily: 'monospace',
+                          fontSize: '0.7rem',
+                        }}>{sub.status === 'active' ? 'PAUSE' : 'RESUME'}</button>
+                        <button onClick={() => openEditModal(sub)} style={{
+                          padding: '4px 8px',
+                          background: 'transparent',
+                          border: '1px solid var(--border-secondary)',
+                          color: 'var(--text-secondary)',
+                          cursor: 'pointer',
+                          fontFamily: 'monospace',
+                          fontSize: '0.7rem',
+                        }}>EDIT</button>
+                        <button onClick={() => handleDelete(sub.id)} style={{
+                          padding: '4px 8px',
+                          background: 'transparent',
+                          border: '1px solid var(--accent-orange)40',
+                          color: 'var(--accent-orange)',
+                          cursor: 'pointer',
+                          fontFamily: 'monospace',
+                          fontSize: '0.7rem',
+                        }}>DEL</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
 
       {/* Add/Edit Modal */}
       {showAddModal && (
@@ -380,7 +349,7 @@ const AlertSubscriptionsPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTogg
           </div>
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 };
 
