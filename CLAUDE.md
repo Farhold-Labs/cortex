@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.115.0**. Last brought current 2026-10-13.
+Current version: **2.116.0**. Last brought current 2026-10-13.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2115000 / versionName "2.115.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2115000 / MARKETING_VERSION 2.115.0
+client/android/app/build.gradle                  versionCode 2116000 / versionName "2.116.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2116000 / MARKETING_VERSION 2.116.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -403,7 +403,7 @@ RECORDING_S3_REGION=…  RECORDING_S3_BUCKET=…
 RECORDING_S3_ACCESS_KEY=…  RECORDING_S3_SECRET_KEY=…
 ```
 
-The crawl bar is **no longer configured here** — as of v2.80.0 its feeds, keys, symbols and intervals live in the database and are edited under ADMIN → CRAWL BAR CONFIG.
+The crawl bar is **no longer configured here** — as of v2.80.0 its feeds, keys, symbols and intervals live in the database and are edited under Settings → ADMINISTRATION → CRAWL BAR CONFIG.
 
 ---
 

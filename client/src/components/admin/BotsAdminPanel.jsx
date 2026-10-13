@@ -3,8 +3,12 @@ import { LoadingSpinner, GlowText } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG } from '../../../messages.js';
 import BotDetailsModal from './BotDetailsModal.jsx';
 import { T } from '../../config/terminology.js';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
 const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
+  // Its posting-tokens section collapses like the rest of Settings (v2.116.0).
+  const [openGroup, setOpenGroup] = useState(null);
+  const toggleGroup = (g) => setOpenGroup(prev => prev === g ? null : g);
   const [bots, setBots] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -126,207 +130,170 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
   };
 
   return (
-    <div style={{
-      marginTop: '20px',
-      padding: isMobile ? '16px' : '20px',
-      background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
-      border: '1px solid var(--accent-teal)40',
-    }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
-        <div style={{ color: 'var(--accent-teal)', fontSize: '0.8rem', fontWeight: 500 }}>
-          🤖 BOTS & WEBHOOKS
-        </div>
-        <button
-          onClick={onToggle}
-          style={{
-            padding: isMobile ? '8px 12px' : '6px 10px',
-            background: isOpen ? 'var(--accent-teal)20' : 'transparent',
-            border: `1px solid ${isOpen ? 'var(--accent-teal)' : 'var(--border-primary)'}`,
-            color: isOpen ? 'var(--accent-teal)' : 'var(--text-dim)',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: '0.7rem',
-          }}
-        >
-          {isOpen ? '▼ HIDE' : '▶ SHOW'}
-        </button>
-      </div>
-
-      {isOpen && (
-        <div style={{ marginTop: '16px' }}>
-          {loading ? (
-            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>
-              Loading bots...
+    <CollapsibleSection title="BOTS & WEBHOOKS" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
+        {loading ? (
+          <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>
+            Loading bots...
+          </div>
+        ) : (
+          <>
+            {/* Info */}
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              Bots can post messages to {T.waves} via API. Each bot has a unique API key and optional webhook URL.
             </div>
-          ) : (
-            <>
-              {/* Info */}
-              <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Bots can post messages to {T.waves} via API. Each bot has a unique API key and optional webhook URL.
-              </div>
 
-              {/* Create button */}
-              <div style={{ marginBottom: '16px' }}>
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  style={{
-                    padding: isMobile ? '10px 16px' : '8px 14px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: 'var(--accent-teal)20',
-                    border: '1px solid var(--accent-teal)',
-                    color: 'var(--accent-teal)',
-                    cursor: 'pointer',
-                    fontFamily: 'monospace',
-                    fontSize: isMobile ? '0.85rem' : '0.8rem',
-                  }}
-                >
-                  + CREATE BOT
-                </button>
-              </div>
+            {/* Create button */}
+            <div style={{ marginBottom: '16px' }}>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                style={{
+                  padding: isMobile ? '10px 16px' : '8px 14px',
+                  minHeight: isMobile ? '44px' : 'auto',
+                  background: 'var(--accent-teal)20',
+                  border: '1px solid var(--accent-teal)',
+                  color: 'var(--accent-teal)',
+                  cursor: 'pointer',
+                  fontFamily: 'monospace',
+                  fontSize: isMobile ? '0.85rem' : '0.8rem',
+                }}
+              >
+                + CREATE BOT
+              </button>
+            </div>
 
-              {/* Bots list */}
-              {bots.length === 0 ? (
-                <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
-                  No bots created yet
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {bots.map(bot => (
-                    <div
-                      key={bot.id}
-                      style={{
-                        padding: '12px',
-                        background: 'var(--bg-surface)',
-                        border: `1px solid ${bot.status === 'active' ? 'var(--accent-green)40' : 'var(--text-dim)40'}`,
-                        display: 'flex',
-                        flexDirection: isMobile ? 'column' : 'row',
-                        gap: '12px',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                          <span style={{ fontSize: '1.2rem' }}>🤖</span>
-                          <span style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 500 }}>
-                            {bot.name}
-                          </span>
-                          <span style={{
-                            padding: '2px 6px',
-                            fontSize: '0.65rem',
-                            background: bot.status === 'active' ? 'var(--accent-green)20' : 'var(--text-dim)20',
-                            color: bot.status === 'active' ? 'var(--accent-green)' : 'var(--text-dim)',
-                            border: `1px solid ${bot.status === 'active' ? 'var(--accent-green)' : 'var(--text-dim)'}`,
-                          }}>
-                            {bot.status.toUpperCase()}
-                          </span>
-                        </div>
-                        {bot.description && (
-                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', marginBottom: '6px' }}>
-                            {bot.description}
-                          </div>
-                        )}
-                        <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem' }}>
-                          Owner: {bot.owner_name} (@{bot.owner_handle}) •
-                          Pings: {bot.total_pings} •
-                          API Calls: {bot.total_api_calls}
-                        </div>
-                        {bot.wave_count > 0 && (
-                          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
-                            Waves: {bot.wave_titles || `${bot.wave_count} ${T.wave}(s)`}
-                          </div>
-                        )}
+            {/* Bots list */}
+            {bots.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+                No bots created yet
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {bots.map(bot => (
+                  <div
+                    key={bot.id}
+                    style={{
+                      padding: '12px',
+                      background: 'var(--bg-surface)',
+                      border: `1px solid ${bot.status === 'active' ? 'var(--accent-green)40' : 'var(--text-dim)40'}`,
+                      display: 'flex',
+                      flexDirection: isMobile ? 'column' : 'row',
+                      gap: '12px',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        <span style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 500 }}>
+                          {bot.name}
+                        </span>
+                        <span style={{
+                          padding: '2px 6px',
+                          fontSize: '0.65rem',
+                          background: bot.status === 'active' ? 'var(--accent-green)20' : 'var(--text-dim)20',
+                          color: bot.status === 'active' ? 'var(--accent-green)' : 'var(--text-dim)',
+                          border: `1px solid ${bot.status === 'active' ? 'var(--accent-green)' : 'var(--text-dim)'}`,
+                        }}>
+                          {bot.status.toUpperCase()}
+                        </span>
                       </div>
+                      {bot.description && (
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', marginBottom: '6px' }}>
+                          {bot.description}
+                        </div>
+                      )}
+                      <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem' }}>
+                        Owner: {bot.owner_name} (@{bot.owner_handle}) •
+                        Pings: {bot.total_pings} •
+                        API Calls: {bot.total_api_calls}
+                      </div>
+                      {bot.wave_count > 0 && (
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
+                          Waves: {bot.wave_titles || `${bot.wave_count} ${T.wave}(s)`}
+                        </div>
+                      )}
+                    </div>
 
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                      <button
+                        onClick={() => handleViewDetails(bot.id)}
+                        style={{
+                          padding: '6px 10px',
+                          background: 'var(--accent-purple)20',
+                          border: '1px solid var(--accent-purple)',
+                          color: 'var(--accent-purple)',
+                          cursor: 'pointer',
+                          fontSize: '0.7rem',
+                        }}
+                      >
+                        DETAILS
+                      </button>
+                      <button
+                        onClick={() => handleRegenerateKey(bot.id)}
+                        style={{
+                          padding: '6px 10px',
+                          background: 'var(--accent-amber)20',
+                          border: '1px solid var(--accent-amber)',
+                          color: 'var(--accent-amber)',
+                          cursor: 'pointer',
+                          fontSize: '0.7rem',
+                        }}
+                      >
+                        REGEN KEY
+                      </button>
+                      {bot.status === 'active' && (
                         <button
-                          onClick={() => handleViewDetails(bot.id)}
-                          style={{
-                            padding: '6px 10px',
-                            background: 'var(--accent-purple)20',
-                            border: '1px solid var(--accent-purple)',
-                            color: 'var(--accent-purple)',
-                            cursor: 'pointer',
-                            fontSize: '0.7rem',
-                          }}
-                        >
-                          DETAILS
-                        </button>
-                        <button
-                          onClick={() => handleRegenerateKey(bot.id)}
-                          style={{
-                            padding: '6px 10px',
-                            background: 'var(--accent-amber)20',
-                            border: '1px solid var(--accent-amber)',
-                            color: 'var(--accent-amber)',
-                            cursor: 'pointer',
-                            fontSize: '0.7rem',
-                          }}
-                        >
-                          REGEN KEY
-                        </button>
-                        {bot.status === 'active' && (
-                          <button
-                            onClick={() => handleUpdateStatus(bot.id, 'suspended')}
-                            style={{
-                              padding: '6px 10px',
-                              background: 'transparent',
-                              border: '1px solid var(--accent-orange)',
-                              color: 'var(--accent-orange)',
-                              cursor: 'pointer',
-                              fontSize: '0.7rem',
-                            }}
-                          >
-                            SUSPEND
-                          </button>
-                        )}
-                        {bot.status === 'suspended' && (
-                          <button
-                            onClick={() => handleUpdateStatus(bot.id, 'active')}
-                            style={{
-                              padding: '6px 10px',
-                              background: 'var(--accent-green)20',
-                              border: '1px solid var(--accent-green)',
-                              color: 'var(--accent-green)',
-                              cursor: 'pointer',
-                              fontSize: '0.7rem',
-                            }}
-                          >
-                            ACTIVATE
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleDeleteBot(bot.id, bot.name)}
+                          onClick={() => handleUpdateStatus(bot.id, 'suspended')}
                           style={{
                             padding: '6px 10px',
                             background: 'transparent',
-                            border: '1px solid var(--status-error)',
-                            color: 'var(--status-error)',
+                            border: '1px solid var(--accent-orange)',
+                            color: 'var(--accent-orange)',
                             cursor: 'pointer',
                             fontSize: '0.7rem',
                           }}
                         >
-                          DELETE
+                          SUSPEND
                         </button>
-                      </div>
+                      )}
+                      {bot.status === 'suspended' && (
+                        <button
+                          onClick={() => handleUpdateStatus(bot.id, 'active')}
+                          style={{
+                            padding: '6px 10px',
+                            background: 'var(--accent-green)20',
+                            border: '1px solid var(--accent-green)',
+                            color: 'var(--accent-green)',
+                            cursor: 'pointer',
+                            fontSize: '0.7rem',
+                          }}
+                        >
+                          ACTIVATE
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteBot(bot.id, bot.name)}
+                        style={{
+                          padding: '6px 10px',
+                          background: 'transparent',
+                          border: '1px solid var(--status-error)',
+                          color: 'var(--status-error)',
+                          cursor: 'pointer',
+                          fontSize: '0.7rem',
+                        }}
+                      >
+                        DELETE
+                      </button>
                     </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
 
       {/* Posting Tokens Section */}
-      {isOpen && postingTokens.length > 0 && (
-        <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--border-subtle)' }}>
-          <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', fontWeight: 500, marginBottom: '12px' }}>
-            🔑 WAVE POSTING TOKENS ({postingTokens.length})
-          </div>
+      {postingTokens.length > 0 && (
+        <CollapsibleSection title="WAVE POSTING TOKENS" badge={String(postingTokens.length)} isOpen={openGroup === 'tokens'} onToggle={() => toggleGroup('tokens')} isMobile={isMobile}>
           <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '12px' }}>
             Per-{T.wave} tokens created by {T.wave} owners. Each token is locked to its {T.wave} — it cannot post to any other {T.wave}.
           </div>
@@ -374,7 +341,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
               </div>
             ))}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {/* Create Bot Modal */}
@@ -538,7 +505,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                   fontSize: '0.75rem',
                 }}
               >
-                📋 COPY KEY
+                COPY KEY
               </button>
             </div>
 
@@ -573,7 +540,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
                     fontSize: '0.75rem',
                   }}
                 >
-                  📋 COPY SECRET
+                  COPY SECRET
                 </button>
               </div>
             )}
@@ -627,7 +594,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
           onUpdate={loadBots}
         />
       )}
-    </div>
+    </CollapsibleSection>
   );
 };
 

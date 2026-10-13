@@ -124,7 +124,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defa
         justifyContent: 'space-between',
         alignItems: 'center',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
           <div style={{ color: titleColor, fontSize: '0.8rem', fontWeight: 500 }}>{title}</div>
           {badge && (
             <span style={{
@@ -151,6 +151,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defa
             cursor: 'pointer',
             fontFamily: 'monospace',
             fontSize: '0.7rem',
+            whiteSpace: 'nowrap', flexShrink: 0,
           }}
         >
           {isOpen ? '▼ HIDE' : '▶ SHOW'}

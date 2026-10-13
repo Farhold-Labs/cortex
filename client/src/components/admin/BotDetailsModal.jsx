@@ -250,7 +250,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                           fontSize: '0.6rem',
                         }}
                       >
-                        📋
+                        COPY
                       </button>
                     </div>
                     <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>
@@ -331,7 +331,7 @@ const BotDetailsModal = ({ bot, onClose, fetchAPI, showToast, isMobile, onUpdate
                 <option value="">-- Choose a {T.wave} --</option>
                 {waves.map(wave => (
                   <option key={wave.id} value={wave.id}>
-                    {wave.title} {wave.encrypted ? '🔒' : ''}
+                    {wave.title}{wave.encrypted ? ' (encrypted)' : ''}
                   </option>
                 ))}
               </select>

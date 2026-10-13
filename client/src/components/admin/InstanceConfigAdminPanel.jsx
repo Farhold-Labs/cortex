@@ -110,6 +110,9 @@ const PUBLIC_THEMES = [
 ];
 
 const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
+  // One group open at a time, like the rest of Settings (v2.116.0).
+  const [openGroup, setOpenGroup] = useState(null);
+  const toggleGroup = (g) => setOpenGroup(prev => prev === g ? null : g);
   const [config, setConfig] = useState(null);
   const [codeDefaults, setCodeDefaults] = useState({});
   const [loading, setLoading] = useState(true);
@@ -177,11 +180,11 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
   const labelStyle = { display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '6px' };
 
   return (
-    <CollapsibleSection title="INSTANCE DEFAULTS" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile} accentColor="var(--accent-teal)">
+    <CollapsibleSection title="INSTANCE DEFAULTS" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
       {loading ? <LoadingSpinner /> : !config ? (
         <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Configuration unavailable.</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
 
           <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', lineHeight: 1.5 }}>
             Defaults apply to every user who has not chosen for themselves — including existing
@@ -190,8 +193,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
           </div>
 
           {/* ---- Preference defaults ---- */}
-          <div>
-            <div style={{ color: 'var(--accent-teal)', fontSize: '0.8rem', marginBottom: '12px' }}>▸ APPEARANCE DEFAULTS</div>
+          <CollapsibleSection title="APPEARANCE DEFAULTS" isOpen={openGroup === 'appearance'} onToggle={() => toggleGroup('appearance')} isMobile={isMobile}>
 
             {CHOICE_DEFAULTS.map(({ key, label, options }) => (
               <div key={key} style={{ marginBottom: '16px' }}>
@@ -238,11 +240,10 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
                 </div>
               </div>
             ))}
-          </div>
+          </CollapsibleSection>
 
           {/* ---- Notification defaults ---- */}
-          <div>
-            <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ NOTIFICATION DEFAULTS</div>
+          <CollapsibleSection title="NOTIFICATION DEFAULTS" isOpen={openGroup === 'notifications'} onToggle={() => toggleGroup('notifications')} isMobile={isMobile}>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '12px', lineHeight: 1.5 }}>
               What new users start with. Existing users who never opened their notification
               settings pick these up too; anyone who has changed a setting keeps their choice.
@@ -299,7 +300,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
               </div>
             </div>
 
-            <div style={{ color: 'var(--accent-teal)', fontSize: '0.75rem', margin: '18px 0 10px' }}>▹ EMAIL</div>
+            <div style={{ color: 'var(--accent-teal)', fontSize: '0.75rem', margin: '18px 0 10px' }}>EMAIL</div>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '12px', lineHeight: 1.5 }}>
               Email notifications only send when a user is offline past their threshold, and
               only if this server has SMTP configured.
@@ -337,11 +338,10 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
                 )}
               </div>
             </div>
-          </div>
+          </CollapsibleSection>
 
           {/* ---- Feature switches ---- */}
-          <div>
-            <div style={{ color: 'var(--accent-orange)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ FEATURES</div>
+          <CollapsibleSection title="FEATURES" isOpen={openGroup === 'features'} onToggle={() => toggleGroup('features')} isMobile={isMobile}>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '12px', lineHeight: 1.5 }}>
               Switching a feature off hides it AND refuses the matching API calls — users cannot
               re-enable it for themselves.
@@ -361,11 +361,10 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
                 </div>
               );
             })}
-          </div>
+          </CollapsibleSection>
 
           {/* ---- Branding ---- */}
-          <div>
-            <div style={{ color: 'var(--accent-purple)', fontSize: '0.8rem', marginBottom: '12px' }}>▸ BRANDING</div>
+          <CollapsibleSection title="BRANDING" isOpen={openGroup === 'branding'} onToggle={() => toggleGroup('branding')} isMobile={isMobile}>
             {BRANDING.map(({ key, label, placeholder }) => (
               <div key={key} style={{ marginBottom: '12px' }}>
                 <label style={labelStyle}>{label}</label>
@@ -412,11 +411,10 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
             >
               {saving ? 'SAVING…' : 'SAVE BRANDING'}
             </button>
-          </div>
+          </CollapsibleSection>
 
-          {/* ▸ TERMINOLOGY (v2.82.0) */}
-          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
-            <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ TERMINOLOGY</div>
+          {/* TERMINOLOGY (v2.82.0) */}
+          <CollapsibleSection title="TERMINOLOGY" isOpen={openGroup === 'terminology'} onToggle={() => toggleGroup('terminology')} isMobile={isMobile}>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '10px', lineHeight: 1.5 }}>
               The words this instance uses for its core objects. Applies to everyone on this
               server — people, emails and help text all read the same vocabulary. Leave a field
@@ -485,11 +483,10 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
             >
               {saving ? 'SAVING…' : 'SAVE TERMINOLOGY'}
             </button>
-          </div>
+          </CollapsibleSection>
 
-          {/* ▸ TIMEZONE (v2.79.0) */}
-          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
-            <div style={{ color: 'var(--accent-teal)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ TIMEZONE</div>
+          {/* TIMEZONE (v2.79.0) */}
+          <CollapsibleSection title="TIMEZONE" isOpen={openGroup === 'timezone'} onToggle={() => toggleGroup('timezone')} isMobile={isMobile}>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '10px', lineHeight: 1.5 }}>
               Event times are stored without a timezone — "6:00 PM" means six in the evening where the
               event happens. This is the zone they are interpreted in when working out <em>when</em> that is,
@@ -519,11 +516,10 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
             >
               {saving ? 'SAVING…' : 'SAVE TIMEZONE'}
             </button>
-          </div>
+          </CollapsibleSection>
 
-          {/* ▸ SESSIONS & SECURITY (v2.75.0) */}
-          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
-            <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', marginBottom: '4px' }}>▸ SESSIONS &amp; SECURITY</div>
+          {/* SESSIONS & SECURITY (v2.75.0) */}
+          <CollapsibleSection title="SESSIONS & SECURITY" isOpen={openGroup === 'sessions'} onToggle={() => toggleGroup('sessions')} isMobile={isMobile}>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '12px', lineHeight: 1.5 }}>
               People stay signed in as long as they use Cortex at least once inside the idle window.
               Sign-in is not the security boundary any more — access tokens are short-lived and rotate
@@ -585,7 +581,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
             >
               {saving ? 'SAVING…' : 'SAVE SESSION POLICY'}
             </button>
-          </div>
+          </CollapsibleSection>
 
           {config.updatedAt && (
             <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>

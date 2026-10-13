@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { formatError } from '../../../messages.js';
 import { plainText } from '../../utils/plainText.js';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
 const EventsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [events, setEvents] = useState([]);
@@ -112,124 +113,93 @@ const EventsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
   };
 
   return (
-    <div style={{
-      marginTop: '20px',
-      padding: isMobile ? '16px' : '20px',
-      background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
-      border: '1px solid var(--accent-amber)40',
-    }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
-        <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', fontWeight: 500 }}>EVENTS CALENDAR</div>
-        <button
-          onClick={onToggle}
-          style={{
-            padding: isMobile ? '8px 12px' : '6px 10px',
-            background: isOpen ? 'var(--accent-amber)20' : 'transparent',
-            border: `1px solid ${isOpen ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
-            color: isOpen ? 'var(--accent-amber)' : 'var(--text-dim)',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: '0.7rem',
-          }}
-        >
-          {isOpen ? '\u25BC HIDE' : '\u25B6 SHOW'}
-        </button>
-      </div>
+    <CollapsibleSection title="EVENTS CALENDAR" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
+        {loading ? (
+          <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>Loading...</div>
+        ) : (
+          <>
+            {/* Create button */}
+            <div style={{ marginBottom: '16px' }}>
+              <button onClick={openCreateModal} style={{
+                padding: isMobile ? '10px 16px' : '8px 14px',
+                minHeight: isMobile ? '44px' : 'auto',
+                background: 'var(--accent-amber)20',
+                border: '1px solid var(--accent-amber)',
+                color: 'var(--accent-amber)',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: isMobile ? '0.85rem' : '0.8rem',
+              }}>+ NEW EVENT</button>
+            </div>
 
-      {isOpen && (
-        <div style={{ marginTop: '16px' }}>
-          {loading ? (
-            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>Loading...</div>
-          ) : (
-            <>
-              {/* Create button */}
-              <div style={{ marginBottom: '16px' }}>
-                <button onClick={openCreateModal} style={{
-                  padding: isMobile ? '10px 16px' : '8px 14px',
-                  minHeight: isMobile ? '44px' : 'auto',
-                  background: 'var(--accent-amber)20',
-                  border: '1px solid var(--accent-amber)',
-                  color: 'var(--accent-amber)',
-                  cursor: 'pointer',
-                  fontFamily: 'monospace',
-                  fontSize: isMobile ? '0.85rem' : '0.8rem',
-                }}>+ NEW EVENT</button>
+            {/* Events list */}
+            {events.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+                No events configured
               </div>
-
-              {/* Events list */}
-              {events.length === 0 ? (
-                <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
-                  No events configured
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {events.map(event => (
-                    <div key={event.id} style={{
-                      padding: '12px',
-                      background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-primary)',
-                      display: 'flex',
-                      flexDirection: isMobile ? 'column' : 'row',
-                      gap: '8px',
-                      alignItems: isMobile ? 'flex-start' : 'center',
-                    }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                          <span style={{
-                            color: 'var(--text-primary)',
-                            fontFamily: 'monospace',
-                            fontSize: '0.85rem',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}>
-                            {plainText(event.title)}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', fontSize: '0.7rem', color: 'var(--text-dim)', flexWrap: 'wrap' }}>
-                          <span>{event.eventDate}</span>
-                          {event.recurring && (
-                            <>
-                              <span>•</span>
-                              <span style={{ color: 'var(--accent-purple)' }}>RECURRING</span>
-                            </>
-                          )}
-                          <span>•</span>
-                          <span>{event.category}</span>
-                        </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {events.map(event => (
+                  <div key={event.id} style={{
+                    padding: '12px',
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border-primary)',
+                    display: 'flex',
+                    flexDirection: isMobile ? 'column' : 'row',
+                    gap: '8px',
+                    alignItems: isMobile ? 'flex-start' : 'center',
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                        <span style={{
+                          color: 'var(--text-primary)',
+                          fontFamily: 'monospace',
+                          fontSize: '0.85rem',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {plainText(event.title)}
+                        </span>
                       </div>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <button onClick={() => openEditModal(event)} style={{
-                          padding: '4px 8px',
-                          background: 'transparent',
-                          border: '1px solid var(--border-secondary)',
-                          color: 'var(--text-secondary)',
-                          cursor: 'pointer',
-                          fontFamily: 'monospace',
-                          fontSize: '0.7rem',
-                        }}>EDIT</button>
-                        <button onClick={() => handleDelete(event.id)} style={{
-                          padding: '4px 8px',
-                          background: 'transparent',
-                          border: '1px solid var(--accent-orange)40',
-                          color: 'var(--accent-orange)',
-                          cursor: 'pointer',
-                          fontFamily: 'monospace',
-                          fontSize: '0.7rem',
-                        }}>DEL</button>
+                      <div style={{ display: 'flex', gap: '8px', fontSize: '0.7rem', color: 'var(--text-dim)', flexWrap: 'wrap' }}>
+                        <span>{event.eventDate}</span>
+                        {event.recurring && (
+                          <>
+                            <span>•</span>
+                            <span style={{ color: 'var(--accent-purple)' }}>RECURRING</span>
+                          </>
+                        )}
+                        <span>•</span>
+                        <span>{event.category}</span>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button onClick={() => openEditModal(event)} style={{
+                        padding: '4px 8px',
+                        background: 'transparent',
+                        border: '1px solid var(--border-secondary)',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        fontSize: '0.7rem',
+                      }}>EDIT</button>
+                      <button onClick={() => handleDelete(event.id)} style={{
+                        padding: '4px 8px',
+                        background: 'transparent',
+                        border: '1px solid var(--accent-orange)40',
+                        color: 'var(--accent-orange)',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        fontSize: '0.7rem',
+                      }}>DEL</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
 
       {/* Create/Edit Modal */}
       {showCreateModal && (
@@ -345,7 +315,7 @@ const EventsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
           </div>
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 };
 
