@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false }) => {
+const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false, headerAction }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -137,6 +137,10 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defa
             }}>{badge}</span>
           )}
         </div>
+        {/* An action that belongs in the header, such as SIGN OUT on Profile
+            (v2.115.0) — reachable whether or not the section is open. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {headerAction}
         <button
           onClick={handleToggle}
           style={{
@@ -151,6 +155,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defa
         >
           {isOpen ? '▼ HIDE' : '▶ SHOW'}
         </button>
+        </div>
       </div>
       {isOpen && (
         <div style={{ marginTop: '16px' }}>
