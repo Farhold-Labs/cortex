@@ -5,6 +5,25 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.116.1] - 2026-10-13
+
+**No database migration. No new app build.**
+
+### Fixed
+
+- **User management: a selected user's actions now open directly under that user.** They were drawn after the whole search results list, so choosing the top user of several meant scrolling past every other result to reach RESET PASSWORD, BAN and the rest. The confirmation steps ("Reset password for @…?") open there too. The actions block is unchanged; it is rendered after the selected row instead of after the list.
+
+### Verified
+
+Driven headlessly on dev at 390 px with a search returning five users:
+
+- tapping the top user put its actions 4 px under the row, ahead of the second user;
+- a confirmation opened in the same place, and CANCEL returned to the actions;
+- tapping the user again closed them;
+- no account was changed, no console errors, no sideways scroll.
+
+466/466 tests pass.
+
 ## [2.116.0] - 2026-10-13
 
 The admin tools get the v2.115.0 treatment: everything collapses, there are no category icons, and they sit in two logical places. **No database migration. No new app build.**
