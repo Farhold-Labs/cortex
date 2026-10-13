@@ -92,6 +92,13 @@ export function E2EEProvider({ children, token, API_URL }) {
   // Wave key cache (waveId -> { waveKey: CryptoKey, version: number })
   const waveKeyCacheRef = useRef(new Map());
   const sessionRestoreAttempted = useRef(false);
+  // The unlocked key, readable from checkE2EEStatus without re-creating it.
+  // The gate that calls checkE2EEStatus unmounts whenever the app leaves its
+  // shell for a full-page route (/about, /watch, /broadcast, /recording) and
+  // re-checks when it comes back. With the key still in memory, that re-check
+  // must not ask for the passphrase again (v2.114.1).
+  const privateKeyRef = useRef(null);
+  useEffect(() => { privateKeyRef.current = privateKey; }, [privateKey]);
 
   // Always-current token. saveToSessionCache reads this so the 'auto' duration
   // computes against the live JWT — the provider mounts on the login screen with
@@ -257,6 +264,14 @@ export function E2EEProvider({ children, token, API_URL }) {
           console.log('E2EE: Restored from session cache - no passphrase needed');
           return;
         }
+      }
+
+      // Already unlocked in this page's memory: nothing to ask.
+      if (privateKeyRef.current) {
+        setE2eeStatus(prev => prev || { enabled: true });
+        setNeedsPassphrase(false);
+        setNeedsSetup(false);
+        return;
       }
 
       const res = await fetchAPI('/e2ee/status');
@@ -1007,6 +1022,16 @@ export function E2EEProvider({ children, token, API_URL }) {
     clearSessionCache();
     sessionRestoreAttempted.current = false;
   }, [clearSessionCache]);
+
+  // Signed out, by any route, means the key goes (v2.114.1). Only the gate's
+  // own logout button used to call clearE2EE: Settings → LOGOUT, a revoked or
+  // expired session all left the unlocked key in memory and the remembered one
+  // in localStorage, next to the session key that decrypts it. AuthProvider
+  // reads the token synchronously from storage, so a null token on mount is a
+  // real sign-out too — which also sweeps keys those older sign-outs left behind.
+  useEffect(() => {
+    if (!token) clearE2EE();
+  }, [token, clearE2EE]);
 
   // ============ Invalidate wave key cache ============
   const invalidateWaveKey = useCallback((waveId) => {

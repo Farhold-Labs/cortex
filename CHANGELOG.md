@@ -5,6 +5,35 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.114.1] - 2026-10-13
+
+Two encryption fixes, both in `client/e2ee-context.jsx`. **No database migration. No new app build.**
+
+### Fixed
+
+- **Coming back from the node's About page asked for the encryption passphrase again** (reported on Android: About this node, then swipe back). The same happened coming back from watching a broadcast, the broadcast studio or a recording.
+  - **Cause:** those are full-page routes outside the app shell, so the encryption gate unmounts and re-checks on return. The re-check could only restore a key from storage once per page load. After that it asked the server whether encryption was set up, and treated "yes" as "ask for the passphrase", although the key was still unlocked in memory.
+  - **Fix:** the re-check keeps a key that is already unlocked.
+
+### Security
+
+- **Signing out from Settings left the encryption key on the device.** Only the logout button on the unlock screen cleared it. Settings → LOGOUT, a revoked session and an expired session all left:
+  - the unlocked private key in memory, until the page was closed;
+  - the remembered copy in `localStorage`, stored next to the session key that decrypts it, until it expired (by default, when the 90-day session would have ended).
+- **Fix:** the encryption layer now clears both whenever the sign-in token goes away, whatever the route. The token is read from storage at start-up, so an app that starts signed out also clears any key that an earlier sign-out left behind.
+- **This was a precondition for the fix above.** Keeping an in-memory key is only safe if signing out always removes it. Otherwise the next account to sign in on the same page would have been handed the previous person's key.
+
+### Verified
+
+Driven headlessly on dev at phone size. On the 2.114.0 build, the run showed both bugs: back from `/about` showed the unlock prompt, and all five `farhold_e2ee_persistent_*` entries survived Settings → LOGOUT. On this build:
+
+- back from `/about` stays unlocked;
+- reopening the app still restores the remembered key without asking;
+- signing out leaves no `farhold_e2ee_*` entries;
+- signing back in is unlocked by the login password with no prompt.
+
+466/466 tests pass.
+
 ## [2.114.0] - 2026-10-12
 
 An About section under Settings that reports the installed app's version as well as the web app's and the server's. **No database migration. No new app build needed.**
