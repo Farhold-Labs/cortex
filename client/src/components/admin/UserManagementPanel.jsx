@@ -3,6 +3,7 @@ import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { canAccess } from '../../config/constants.js';
 import { LOADING, formatError } from '../../../messages.js';
 import { T } from '../../config/terminology.js';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
 const UserManagementPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, currentUser }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -227,451 +228,420 @@ const UserManagementPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, 
   };
 
   return (
-    <div style={{
-      marginTop: '20px',
-      padding: isMobile ? '16px' : '20px',
-      background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
-      border: '1px solid var(--accent-purple)40',
-    }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
-        <div style={{ color: 'var(--accent-purple)', fontSize: '0.8rem', fontWeight: 500 }}>USER MANAGEMENT</div>
-        <button
-          onClick={onToggle}
-          style={{
-            padding: isMobile ? '8px 12px' : '6px 10px',
-            background: isOpen ? 'var(--accent-purple)20' : 'transparent',
-            border: `1px solid ${isOpen ? 'var(--accent-purple)' : 'var(--border-primary)'}`,
-            color: isOpen ? 'var(--accent-purple)' : 'var(--text-dim)',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: '0.7rem',
-          }}
-        >
-          {isOpen ? '▼ HIDE' : '▶ SHOW'}
-        </button>
-      </div>
+    <CollapsibleSection title="USER MANAGEMENT" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
+        {/* Search */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && searchUsers()}
+            placeholder="Search by handle or email..."
+            style={{ ...inputStyle, flex: 1, minWidth: '200px' }}
+          />
+          <button
+            onClick={searchUsers}
+            disabled={searching || !searchQuery.trim()}
+            style={{
+              ...buttonStyle,
+              border: '1px solid var(--accent-teal)',
+              color: 'var(--accent-teal)',
+              opacity: searching || !searchQuery.trim() ? 0.5 : 1,
+            }}
+          >
+            {searching ? LOADING.searching : 'SEARCH'}
+          </button>
+        </div>
 
-      {isOpen && (
-        <div style={{ marginTop: '16px' }}>
-          {/* Search */}
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && searchUsers()}
-              placeholder="Search by handle or email..."
-              style={{ ...inputStyle, flex: 1, minWidth: '200px' }}
-            />
-            <button
-              onClick={searchUsers}
-              disabled={searching || !searchQuery.trim()}
-              style={{
-                ...buttonStyle,
-                border: '1px solid var(--accent-teal)',
-                color: 'var(--accent-teal)',
-                opacity: searching || !searchQuery.trim() ? 0.5 : 1,
-              }}
-            >
-              {searching ? LOADING.searching : 'SEARCH'}
-            </button>
-          </div>
-
-          {/* Results */}
-          {searchResults.length > 0 && (
-            <div style={{ marginBottom: '16px' }}>
-              <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
-                Found {searchResults.length} user(s)
-              </div>
-              {searchResults.map(u => {
-                const userRole = u.role || (u.isAdmin ? 'admin' : 'user');
-                const roleColors = {
-                  admin: 'var(--accent-amber)',
-                  moderator: 'var(--accent-teal)',
-                  user: 'var(--text-muted)'
-                };
-                return (
-                  <div
-                    key={u.id}
-                    onClick={() => setSelectedUser(selectedUser?.id === u.id ? null : u)}
-                    style={{
-                      padding: '10px 12px',
-                      marginBottom: '4px',
-                      background: selectedUser?.id === u.id ? 'var(--accent-purple)20' : 'var(--bg-elevated)',
-                      border: `1px solid ${selectedUser?.id === u.id ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <div>
-                      <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{u.displayName || u.handle}</div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>@{u.handle}</div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                      {u.accountStatus && u.accountStatus !== 'active' && (
-                        <span style={{
-                          color: u.accountStatus === 'banned' ? 'var(--accent-orange)' : 'var(--accent-amber)',
-                          fontSize: '0.65rem',
-                          padding: '2px 5px',
-                          border: `1px solid ${u.accountStatus === 'banned' ? 'var(--accent-orange)' : 'var(--accent-amber)'}`,
-                          borderRadius: '3px',
-                          textTransform: 'uppercase',
-                        }}>
-                          {u.accountStatus}
-                        </span>
-                      )}
-                      <span style={{
-                        color: roleColors[userRole],
-                        fontSize: '0.7rem',
-                        padding: '2px 6px',
-                        border: `1px solid ${roleColors[userRole]}`,
-                        borderRadius: '3px',
-                        textTransform: 'uppercase'
-                      }}>
-                        {userRole}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+        {/* Results */}
+        {searchResults.length > 0 && (
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+              Found {searchResults.length} user(s)
             </div>
-          )}
+            {searchResults.map(u => {
+              const userRole = u.role || (u.isAdmin ? 'admin' : 'user');
+              const roleColors = {
+                admin: 'var(--accent-amber)',
+                moderator: 'var(--accent-teal)',
+                user: 'var(--text-muted)'
+              };
+              return (
+                <div
+                  key={u.id}
+                  onClick={() => setSelectedUser(selectedUser?.id === u.id ? null : u)}
+                  style={{
+                    padding: '10px 12px',
+                    marginBottom: '4px',
+                    background: selectedUser?.id === u.id ? 'var(--accent-purple)20' : 'var(--bg-elevated)',
+                    border: `1px solid ${selectedUser?.id === u.id ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <div>
+                    <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{u.displayName || u.handle}</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>@{u.handle}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    {u.accountStatus && u.accountStatus !== 'active' && (
+                      <span style={{
+                        color: u.accountStatus === 'banned' ? 'var(--accent-orange)' : 'var(--accent-amber)',
+                        fontSize: '0.65rem',
+                        padding: '2px 5px',
+                        border: `1px solid ${u.accountStatus === 'banned' ? 'var(--accent-orange)' : 'var(--accent-amber)'}`,
+                        borderRadius: '3px',
+                        textTransform: 'uppercase',
+                      }}>
+                        {u.accountStatus}
+                      </span>
+                    )}
+                    <span style={{
+                      color: roleColors[userRole],
+                      fontSize: '0.7rem',
+                      padding: '2px 6px',
+                      border: `1px solid ${roleColors[userRole]}`,
+                      borderRadius: '3px',
+                      textTransform: 'uppercase'
+                    }}>
+                      {userRole}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
-          {/* Actions for selected user */}
-          {selectedUser && !showConfirm && (
-            <div style={{ padding: '12px', background: 'var(--bg-hover)', border: '1px solid var(--border-secondary)' }}>
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
-                Actions for <strong style={{ color: 'var(--text-primary)' }}>@{selectedUser.handle}</strong>
-                {selectedUser.role && (
-                  <span style={{ marginLeft: '8px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                    (role: {selectedUser.role || (selectedUser.isAdmin ? 'admin' : 'user')})
-                  </span>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        {/* Actions for selected user */}
+        {selectedUser && !showConfirm && (
+          <div style={{ padding: '12px', background: 'var(--bg-hover)', border: '1px solid var(--border-secondary)' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
+              Actions for <strong style={{ color: 'var(--text-primary)' }}>@{selectedUser.handle}</strong>
+              {selectedUser.role && (
+                <span style={{ marginLeft: '8px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                  (role: {selectedUser.role || (selectedUser.isAdmin ? 'admin' : 'user')})
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setShowConfirm('reset-password')}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)' }}
+              >
+                RESET PASSWORD
+              </button>
+              <button
+                onClick={() => setShowConfirm('disable-mfa')}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)' }}
+              >
+                DISABLE MFA
+              </button>
+              {canAssignRoles && selectedUser.id !== currentUser?.id && (
                 <button
-                  onClick={() => setShowConfirm('reset-password')}
+                  onClick={() => setShowConfirm('change-role')}
+                  style={{ ...buttonStyle, border: '1px solid var(--accent-purple)', color: 'var(--accent-purple)' }}
+                >
+                  CHANGE ROLE
+                </button>
+              )}
+              {selectedUser.id !== currentUser?.id && (!selectedUser.accountStatus || selectedUser.accountStatus === 'active') && (
+                <button
+                  onClick={() => { setShowConfirm('disable-account'); setModerationReason(''); }}
                   style={{ ...buttonStyle, border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)' }}
                 >
-                  RESET PASSWORD
+                  DISABLE
                 </button>
+              )}
+              {canAssignRoles && selectedUser.id !== currentUser?.id && (!selectedUser.accountStatus || selectedUser.accountStatus === 'active') && (
                 <button
-                  onClick={() => setShowConfirm('disable-mfa')}
+                  onClick={() => { setShowConfirm('ban-account'); setModerationReason(''); }}
                   style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)' }}
                 >
-                  DISABLE MFA
+                  BAN
                 </button>
-                {canAssignRoles && selectedUser.id !== currentUser?.id && (
-                  <button
-                    onClick={() => setShowConfirm('change-role')}
-                    style={{ ...buttonStyle, border: '1px solid var(--accent-purple)', color: 'var(--accent-purple)' }}
-                  >
-                    CHANGE ROLE
-                  </button>
-                )}
-                {selectedUser.id !== currentUser?.id && (!selectedUser.accountStatus || selectedUser.accountStatus === 'active') && (
-                  <button
-                    onClick={() => { setShowConfirm('disable-account'); setModerationReason(''); }}
-                    style={{ ...buttonStyle, border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)' }}
-                  >
-                    DISABLE
-                  </button>
-                )}
-                {canAssignRoles && selectedUser.id !== currentUser?.id && (!selectedUser.accountStatus || selectedUser.accountStatus === 'active') && (
-                  <button
-                    onClick={() => { setShowConfirm('ban-account'); setModerationReason(''); }}
-                    style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)' }}
-                  >
-                    BAN
-                  </button>
-                )}
-                {canAssignRoles && selectedUser.accountStatus && selectedUser.accountStatus !== 'active' && (
-                  <button
-                    onClick={() => setShowConfirm('reinstate-account')}
-                    style={{ ...buttonStyle, border: '1px solid var(--accent-green)', color: 'var(--accent-green)' }}
-                  >
-                    REINSTATE
-                  </button>
-                )}
-                {selectedUser.id !== currentUser?.id && (
-                  <button
-                    onClick={() => { setShowConfirm('kick-from-wave'); setKickWaveId(''); }}
-                    style={{ ...buttonStyle, border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)' }}
-                  >
-                    KICK FROM {T.WAVE}
-                  </button>
-                )}
-                {canAssignRoles && selectedUser.id !== currentUser?.id && (
-                  <button
-                    onClick={() => { setShowConfirm('reset-encryption'); setModerationReason(''); }}
-                    style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)' }}
-                  >
-                    RESET E2EE
-                  </button>
-                )}
-                {canAssignRoles && selectedUser.id !== currentUser?.id && (
-                  <button
-                    onClick={() => setShowConfirm('delete-account')}
-                    style={{ ...buttonStyle, border: '1px solid #ff4444', color: '#ff4444' }}
-                  >
-                    DELETE ACCOUNT
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Confirmation dialogs */}
-          {showConfirm === 'reset-password' && (
-            <div style={{ padding: '16px', background: 'var(--accent-amber)10', border: '1px solid var(--accent-amber)40' }}>
-              <div style={{ color: 'var(--accent-amber)', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Reset password for @{selectedUser.handle}?
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                User will be required to change password on next login.
-              </div>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              )}
+              {canAssignRoles && selectedUser.accountStatus && selectedUser.accountStatus !== 'active' && (
                 <button
-                  onClick={() => handleResetPassword(true)}
-                  disabled={actionLoading}
+                  onClick={() => setShowConfirm('reinstate-account')}
                   style={{ ...buttonStyle, border: '1px solid var(--accent-green)', color: 'var(--accent-green)' }}
                 >
-                  {actionLoading ? '...' : 'RESET & EMAIL USER'}
+                  REINSTATE
                 </button>
+              )}
+              {selectedUser.id !== currentUser?.id && (
                 <button
-                  onClick={() => handleResetPassword(false)}
-                  disabled={actionLoading}
-                  style={{ ...buttonStyle, border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)' }}
+                  onClick={() => { setShowConfirm('kick-from-wave'); setKickWaveId(''); }}
+                  style={{ ...buttonStyle, border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)' }}
                 >
-                  {actionLoading ? '...' : 'RESET (SHOW PASSWORD)'}
+                  KICK FROM {T.WAVE}
                 </button>
+              )}
+              {canAssignRoles && selectedUser.id !== currentUser?.id && (
                 <button
-                  onClick={() => setShowConfirm(null)}
-                  disabled={actionLoading}
-                  style={buttonStyle}
-                >
-                  CANCEL
-                </button>
-              </div>
-            </div>
-          )}
-
-          {showConfirm === 'disable-mfa' && (
-            <div style={{ padding: '16px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)40' }}>
-              <div style={{ color: 'var(--accent-orange)', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Disable all MFA for @{selectedUser.handle}?
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                This will disable TOTP, email MFA, and remove all recovery codes.
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={handleDisableMfa}
-                  disabled={actionLoading}
+                  onClick={() => { setShowConfirm('reset-encryption'); setModerationReason(''); }}
                   style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)' }}
                 >
-                  {actionLoading ? '...' : 'DISABLE MFA'}
+                  RESET E2EE
                 </button>
+              )}
+              {canAssignRoles && selectedUser.id !== currentUser?.id && (
                 <button
-                  onClick={() => setShowConfirm(null)}
-                  disabled={actionLoading}
-                  style={buttonStyle}
+                  onClick={() => setShowConfirm('delete-account')}
+                  style={{ ...buttonStyle, border: '1px solid #ff4444', color: '#ff4444' }}
                 >
-                  CANCEL
+                  DELETE ACCOUNT
                 </button>
-              </div>
+              )}
             </div>
-          )}
+          </div>
+        )}
 
-          {showConfirm === 'change-role' && (
-            <div style={{ padding: '16px', background: 'var(--accent-purple)10', border: '1px solid var(--accent-purple)40' }}>
-              <div style={{ color: 'var(--accent-purple)', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Change role for @{selectedUser.handle}
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Current role: <strong>{selectedUser.role || (selectedUser.isAdmin ? 'admin' : 'user')}</strong>
-              </div>
-              <div style={{ marginBottom: '12px' }}>
-                <select
-                  value={pendingRole || ''}
-                  onChange={(e) => setPendingRole(e.target.value)}
-                  style={{
-                    ...inputStyle,
-                    width: '100%',
-                    cursor: 'pointer',
-                    background: 'var(--bg-elevated)',
-                  }}
-                >
-                  <option value="">Select new role...</option>
-                  <option value="user">User - Regular user</option>
-                  <option value="moderator">Moderator - Reports, warnings, user management</option>
-                  <option value="admin">Admin - Full access</option>
-                </select>
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={handleChangeRole}
-                  disabled={actionLoading || !pendingRole}
-                  style={{
-                    ...buttonStyle,
-                    border: '1px solid var(--accent-purple)',
-                    color: 'var(--accent-purple)',
-                    opacity: !pendingRole ? 0.5 : 1
-                  }}
-                >
-                  {actionLoading ? '...' : 'CONFIRM CHANGE'}
-                </button>
-                <button
-                  onClick={() => { setShowConfirm(null); setPendingRole(null); }}
-                  disabled={actionLoading}
-                  style={buttonStyle}
-                >
-                  CANCEL
-                </button>
-              </div>
+        {/* Confirmation dialogs */}
+        {showConfirm === 'reset-password' && (
+          <div style={{ padding: '16px', background: 'var(--accent-amber)10', border: '1px solid var(--accent-amber)40' }}>
+            <div style={{ color: 'var(--accent-amber)', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Reset password for @{selectedUser.handle}?
             </div>
-          )}
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              User will be required to change password on next login.
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => handleResetPassword(true)}
+                disabled={actionLoading}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-green)', color: 'var(--accent-green)' }}
+              >
+                {actionLoading ? '...' : 'RESET & EMAIL USER'}
+              </button>
+              <button
+                onClick={() => handleResetPassword(false)}
+                disabled={actionLoading}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)' }}
+              >
+                {actionLoading ? '...' : 'RESET (SHOW PASSWORD)'}
+              </button>
+              <button
+                onClick={() => setShowConfirm(null)}
+                disabled={actionLoading}
+                style={buttonStyle}
+              >
+                CANCEL
+              </button>
+            </div>
+          </div>
+        )}
 
-          {showConfirm === 'disable-account' && (
-            <div style={{ padding: '16px', background: 'var(--accent-amber)10', border: '1px solid var(--accent-amber)40' }}>
-              <div style={{ color: 'var(--accent-amber)', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Disable account @{selectedUser.handle}?
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                User will be logged out and unable to sign in. They can submit an appeal.
-              </div>
-              <textarea
-                value={moderationReason}
-                onChange={(e) => setModerationReason(e.target.value)}
-                placeholder="Reason for disabling (required)"
-                rows={2}
-                style={{ ...inputStyle, width: '100%', marginBottom: '12px', resize: 'vertical', boxSizing: 'border-box' }}
-              />
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={handleDisableAccount} disabled={actionLoading || !moderationReason.trim()}
-                  style={{ ...buttonStyle, border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)', opacity: !moderationReason.trim() ? 0.5 : 1 }}>
-                  {actionLoading ? '...' : 'DISABLE ACCOUNT'}
-                </button>
-                <button onClick={() => { setShowConfirm(null); setModerationReason(''); }} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
-              </div>
+        {showConfirm === 'disable-mfa' && (
+          <div style={{ padding: '16px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)40' }}>
+            <div style={{ color: 'var(--accent-orange)', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Disable all MFA for @{selectedUser.handle}?
             </div>
-          )}
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              This will disable TOTP, email MFA, and remove all recovery codes.
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={handleDisableMfa}
+                disabled={actionLoading}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)' }}
+              >
+                {actionLoading ? '...' : 'DISABLE MFA'}
+              </button>
+              <button
+                onClick={() => setShowConfirm(null)}
+                disabled={actionLoading}
+                style={buttonStyle}
+              >
+                CANCEL
+              </button>
+            </div>
+          </div>
+        )}
 
-          {showConfirm === 'ban-account' && (
-            <div style={{ padding: '16px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)40' }}>
-              <div style={{ color: 'var(--accent-orange)', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Ban account @{selectedUser.handle}?
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                This is a severe action. User will be logged out and unable to sign in.
-              </div>
-              <textarea
-                value={moderationReason}
-                onChange={(e) => setModerationReason(e.target.value)}
-                placeholder="Reason for banning (required)"
-                rows={2}
-                style={{ ...inputStyle, width: '100%', marginBottom: '12px', resize: 'vertical', boxSizing: 'border-box' }}
-              />
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={handleBanAccount} disabled={actionLoading || !moderationReason.trim()}
-                  style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)', opacity: !moderationReason.trim() ? 0.5 : 1 }}>
-                  {actionLoading ? '...' : 'BAN ACCOUNT'}
-                </button>
-                <button onClick={() => { setShowConfirm(null); setModerationReason(''); }} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
-              </div>
+        {showConfirm === 'change-role' && (
+          <div style={{ padding: '16px', background: 'var(--accent-purple)10', border: '1px solid var(--accent-purple)40' }}>
+            <div style={{ color: 'var(--accent-purple)', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Change role for @{selectedUser.handle}
             </div>
-          )}
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              Current role: <strong>{selectedUser.role || (selectedUser.isAdmin ? 'admin' : 'user')}</strong>
+            </div>
+            <div style={{ marginBottom: '12px' }}>
+              <select
+                value={pendingRole || ''}
+                onChange={(e) => setPendingRole(e.target.value)}
+                style={{
+                  ...inputStyle,
+                  width: '100%',
+                  cursor: 'pointer',
+                  background: 'var(--bg-elevated)',
+                }}
+              >
+                <option value="">Select new role...</option>
+                <option value="user">User - Regular user</option>
+                <option value="moderator">Moderator - Reports, warnings, user management</option>
+                <option value="admin">Admin - Full access</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={handleChangeRole}
+                disabled={actionLoading || !pendingRole}
+                style={{
+                  ...buttonStyle,
+                  border: '1px solid var(--accent-purple)',
+                  color: 'var(--accent-purple)',
+                  opacity: !pendingRole ? 0.5 : 1
+                }}
+              >
+                {actionLoading ? '...' : 'CONFIRM CHANGE'}
+              </button>
+              <button
+                onClick={() => { setShowConfirm(null); setPendingRole(null); }}
+                disabled={actionLoading}
+                style={buttonStyle}
+              >
+                CANCEL
+              </button>
+            </div>
+          </div>
+        )}
 
-          {showConfirm === 'reinstate-account' && (
-            <div style={{ padding: '16px', background: 'var(--accent-green)10', border: '1px solid var(--accent-green)40' }}>
-              <div style={{ color: 'var(--accent-green)', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Reinstate account @{selectedUser.handle}?
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Currently <strong>{selectedUser.accountStatus}</strong>: {selectedUser.moderationReason || 'No reason recorded'}
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={handleReinstateAccount} disabled={actionLoading}
-                  style={{ ...buttonStyle, border: '1px solid var(--accent-green)', color: 'var(--accent-green)' }}>
-                  {actionLoading ? '...' : 'REINSTATE'}
-                </button>
-                <button onClick={() => setShowConfirm(null)} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
-              </div>
+        {showConfirm === 'disable-account' && (
+          <div style={{ padding: '16px', background: 'var(--accent-amber)10', border: '1px solid var(--accent-amber)40' }}>
+            <div style={{ color: 'var(--accent-amber)', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Disable account @{selectedUser.handle}?
             </div>
-          )}
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              User will be logged out and unable to sign in. They can submit an appeal.
+            </div>
+            <textarea
+              value={moderationReason}
+              onChange={(e) => setModerationReason(e.target.value)}
+              placeholder="Reason for disabling (required)"
+              rows={2}
+              style={{ ...inputStyle, width: '100%', marginBottom: '12px', resize: 'vertical', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={handleDisableAccount} disabled={actionLoading || !moderationReason.trim()}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)', opacity: !moderationReason.trim() ? 0.5 : 1 }}>
+                {actionLoading ? '...' : 'DISABLE ACCOUNT'}
+              </button>
+              <button onClick={() => { setShowConfirm(null); setModerationReason(''); }} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
+            </div>
+          </div>
+        )}
 
-          {showConfirm === 'kick-from-wave' && (
-            <div style={{ padding: '16px', background: 'var(--accent-teal)10', border: '1px solid var(--accent-teal)40' }}>
-              <div style={{ color: 'var(--accent-teal)', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Kick @{selectedUser.handle} from a wave
-              </div>
-              <input
-                value={kickWaveId}
-                onChange={(e) => setKickWaveId(e.target.value)}
-                placeholder={`${T.Wave} ID (e.g., ${T.thread}-abc123...)`}
-                style={{ ...inputStyle, width: '100%', marginBottom: '12px', boxSizing: 'border-box' }}
-              />
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={handleKickFromWave} disabled={actionLoading || !kickWaveId.trim()}
-                  style={{ ...buttonStyle, border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)', opacity: !kickWaveId.trim() ? 0.5 : 1 }}>
-                  {actionLoading ? '...' : 'KICK'}
-                </button>
-                <button onClick={() => { setShowConfirm(null); setKickWaveId(''); }} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
-              </div>
+        {showConfirm === 'ban-account' && (
+          <div style={{ padding: '16px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)40' }}>
+            <div style={{ color: 'var(--accent-orange)', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Ban account @{selectedUser.handle}?
             </div>
-          )}
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              This is a severe action. User will be logged out and unable to sign in.
+            </div>
+            <textarea
+              value={moderationReason}
+              onChange={(e) => setModerationReason(e.target.value)}
+              placeholder="Reason for banning (required)"
+              rows={2}
+              style={{ ...inputStyle, width: '100%', marginBottom: '12px', resize: 'vertical', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={handleBanAccount} disabled={actionLoading || !moderationReason.trim()}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)', opacity: !moderationReason.trim() ? 0.5 : 1 }}>
+                {actionLoading ? '...' : 'BAN ACCOUNT'}
+              </button>
+              <button onClick={() => { setShowConfirm(null); setModerationReason(''); }} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
+            </div>
+          </div>
+        )}
 
-          {showConfirm === 'reset-encryption' && (
-            <div style={{ padding: '16px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)40' }}>
-              <div style={{ color: 'var(--accent-orange)', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Reset encryption keys for @{selectedUser.handle}?
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                This will wipe all encryption keys for this user. They will lose access to previously encrypted messages and must set up encryption again.
-              </div>
-              <textarea
-                value={moderationReason}
-                onChange={(e) => setModerationReason(e.target.value)}
-                placeholder="Reason for resetting encryption (required)"
-                rows={2}
-                style={{ ...inputStyle, width: '100%', marginBottom: '12px', resize: 'vertical', boxSizing: 'border-box' }}
-              />
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={handleResetEncryption} disabled={actionLoading || !moderationReason.trim()}
-                  style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)', opacity: !moderationReason.trim() ? 0.5 : 1 }}>
-                  {actionLoading ? '...' : 'RESET E2EE KEYS'}
-                </button>
-                <button onClick={() => { setShowConfirm(null); setModerationReason(''); }} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
-              </div>
+        {showConfirm === 'reinstate-account' && (
+          <div style={{ padding: '16px', background: 'var(--accent-green)10', border: '1px solid var(--accent-green)40' }}>
+            <div style={{ color: 'var(--accent-green)', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Reinstate account @{selectedUser.handle}?
             </div>
-          )}
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              Currently <strong>{selectedUser.accountStatus}</strong>: {selectedUser.moderationReason || 'No reason recorded'}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={handleReinstateAccount} disabled={actionLoading}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-green)', color: 'var(--accent-green)' }}>
+                {actionLoading ? '...' : 'REINSTATE'}
+              </button>
+              <button onClick={() => setShowConfirm(null)} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
+            </div>
+          </div>
+        )}
 
-          {showConfirm === 'delete-account' && (
-            <div style={{ padding: '16px', background: '#ff444415', border: '1px solid #ff444440' }}>
-              <div style={{ color: '#ff4444', marginBottom: '12px', fontSize: '0.85rem' }}>
-                Permanently delete account @{selectedUser.handle}?
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                This action is <strong>irreversible</strong>. All user data will be removed.
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={handleDeleteAccount} disabled={actionLoading}
-                  style={{ ...buttonStyle, border: '1px solid #ff4444', color: '#ff4444' }}>
-                  {actionLoading ? '...' : 'DELETE PERMANENTLY'}
-                </button>
-                <button onClick={() => setShowConfirm(null)} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
-              </div>
+        {showConfirm === 'kick-from-wave' && (
+          <div style={{ padding: '16px', background: 'var(--accent-teal)10', border: '1px solid var(--accent-teal)40' }}>
+            <div style={{ color: 'var(--accent-teal)', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Kick @{selectedUser.handle} from a wave
             </div>
-          )}
-        </div>
-      )}
-    </div>
+            <input
+              value={kickWaveId}
+              onChange={(e) => setKickWaveId(e.target.value)}
+              placeholder={`${T.Wave} ID (e.g., ${T.thread}-abc123...)`}
+              style={{ ...inputStyle, width: '100%', marginBottom: '12px', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={handleKickFromWave} disabled={actionLoading || !kickWaveId.trim()}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)', opacity: !kickWaveId.trim() ? 0.5 : 1 }}>
+                {actionLoading ? '...' : 'KICK'}
+              </button>
+              <button onClick={() => { setShowConfirm(null); setKickWaveId(''); }} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
+            </div>
+          </div>
+        )}
+
+        {showConfirm === 'reset-encryption' && (
+          <div style={{ padding: '16px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)40' }}>
+            <div style={{ color: 'var(--accent-orange)', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Reset encryption keys for @{selectedUser.handle}?
+            </div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              This will wipe all encryption keys for this user. They will lose access to previously encrypted messages and must set up encryption again.
+            </div>
+            <textarea
+              value={moderationReason}
+              onChange={(e) => setModerationReason(e.target.value)}
+              placeholder="Reason for resetting encryption (required)"
+              rows={2}
+              style={{ ...inputStyle, width: '100%', marginBottom: '12px', resize: 'vertical', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={handleResetEncryption} disabled={actionLoading || !moderationReason.trim()}
+                style={{ ...buttonStyle, border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)', opacity: !moderationReason.trim() ? 0.5 : 1 }}>
+                {actionLoading ? '...' : 'RESET E2EE KEYS'}
+              </button>
+              <button onClick={() => { setShowConfirm(null); setModerationReason(''); }} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
+            </div>
+          </div>
+        )}
+
+        {showConfirm === 'delete-account' && (
+          <div style={{ padding: '16px', background: '#ff444415', border: '1px solid #ff444440' }}>
+            <div style={{ color: '#ff4444', marginBottom: '12px', fontSize: '0.85rem' }}>
+              Permanently delete account @{selectedUser.handle}?
+            </div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+              This action is <strong>irreversible</strong>. All user data will be removed.
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={handleDeleteAccount} disabled={actionLoading}
+                style={{ ...buttonStyle, border: '1px solid #ff4444', color: '#ff4444' }}>
+                {actionLoading ? '...' : 'DELETE PERMANENTLY'}
+              </button>
+              <button onClick={() => setShowConfirm(null)} disabled={actionLoading} style={buttonStyle}>CANCEL</button>
+            </div>
+          </div>
+        )}
+    </CollapsibleSection>
   );
 };
 

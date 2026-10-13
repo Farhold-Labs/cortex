@@ -326,7 +326,7 @@ EMAIL_FROM=Cortex <noreply@yourdomain.com>   # domain must be verified in Resend
 
 Live broadcasts (v2.109.0) let a member stream their camera and microphone to a wave, and optionally to a public link. Recording (v2.110.0) saves the broadcast for wave members to watch afterwards.
 
-**1. Turn the feature on.** It is an **opt-in instance feature, off by default**: enable *LIVE BROADCASTS* under ADMIN → INSTANCE CONFIG. It is off by default because every viewer costs LiveKit minutes. When off, the routes answer 403 `FEATURE_DISABLED`.
+**1. Turn the feature on.** It is an **opt-in instance feature, off by default**: enable *LIVE BROADCASTS* under Settings → ADMINISTRATION → INSTANCE DEFAULTS → FEATURES. It is off by default because every viewer costs LiveKit minutes. When off, the routes answer 403 `FEATURE_DISABLED`.
 
 **2. LiveKit.** Broadcasts need the same three `LIVEKIT_*` variables as calls. Give each node its **own** LiveKit project.
 

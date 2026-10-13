@@ -3,6 +3,7 @@ import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { API_URL } from '../../config/constants.js';
 import { T } from '../../config/terminology.js';
 import { plainText } from '../../utils/plainText.js';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
 const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [portalWaves, setPortalWaves] = useState([]);
@@ -103,103 +104,79 @@ const PublicPortalAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggl
   });
 
   return (
-    <div style={{
-      marginTop: '20px',
-      padding: isMobile ? '16px' : '20px',
-      background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
-      border: '1px solid var(--accent-teal)40',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ color: 'var(--accent-teal)', fontSize: '0.8rem', fontWeight: 500 }}>
-          🌐 PUBLIC PORTAL
-        </div>
-        <button onClick={onToggle} style={{
-          ...smallBtnStyle(
-            isOpen ? 'var(--accent-teal)' : 'var(--border-primary)',
-            isOpen ? 'var(--accent-teal)' : 'var(--text-dim)'
-          ),
-          background: isOpen ? 'var(--accent-teal)20' : 'transparent',
-        }}>
-          {isOpen ? '▼ HIDE' : '▶ SHOW'}
-        </button>
-      </div>
+    <CollapsibleSection title="PUBLIC PORTAL" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontFamily: 'monospace', margin: '0 0 16px 0' }}>
+          Waves added here are readable at{' '}
+          <a href="/portal" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-amber)' }}>
+            {window.location.origin}/portal
+          </a>{' '}
+          without login. E2EE-encrypted {T.waves} cannot be added.
+        </p>
 
-      {isOpen && (
-        <div style={{ marginTop: '16px' }}>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontFamily: 'monospace', margin: '0 0 16px 0' }}>
-            Waves added here are readable at{' '}
-            <a href="/portal" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-amber)' }}>
-              {window.location.origin}/portal
-            </a>{' '}
-            without login. E2EE-encrypted {T.waves} cannot be added.
-          </p>
-
-          {/* Add wave form */}
-          <div style={{ marginBottom: 20, padding: 14, background: 'var(--bg-base)', border: '1px solid var(--border-subtle)' }}>
-            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: 10, fontFamily: 'monospace' }}>
-              ADD {T.WAVE} TO PORTAL
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>{T.WAVE}</div>
-              <select value={selectedWaveId} onChange={e => setSelectedWaveId(e.target.value)} style={inputStyle}>
-                <option value="">— select a {T.wave} —</option>
-                {allWaves.map(w => (
-                  <option key={w.id} value={w.id}>{w.title} ({w.privacy})</option>
-                ))}
-              </select>
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>DISPLAY LABEL (optional)</div>
-              <input
-                type="text"
-                value={label}
-                onChange={e => setLabel(e.target.value)}
-                placeholder={`Leave blank to use ${T.wave} title`}
-                style={inputStyle}
-              />
-            </div>
-            <button
-              onClick={handleAdd}
-              disabled={!selectedWaveId || adding}
-              style={{
-                padding: '6px 16px', background: selectedWaveId ? 'var(--accent-green)' : 'var(--bg-hover)',
-                border: 'none', color: selectedWaveId ? '#000' : 'var(--text-muted)',
-                cursor: selectedWaveId ? 'pointer' : 'default',
-                fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 'bold',
-              }}
-            >
-              {adding ? 'Adding...' : 'Add to Portal'}
-            </button>
+        {/* Add wave form */}
+        <div style={{ marginBottom: 20, padding: 14, background: 'var(--bg-base)', border: '1px solid var(--border-subtle)' }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: 10, fontFamily: 'monospace' }}>
+            ADD {T.WAVE} TO PORTAL
           </div>
-
-          {/* Portal wave list */}
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: 24 }}><LoadingSpinner /></div>
-          ) : portalWaves.length === 0 ? (
-            <p style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.8rem', textAlign: 'center', margin: '24px 0' }}>
-              No {T.waves} in portal yet.
-            </p>
-          ) : (
-            portalWaves.map(w => (
-              <PortalWaveRow
-                key={w.waveId}
-                wave={w}
-                onRemove={() => handleRemove(w.waveId)}
-                onUpdateLabel={(lbl) => handleUpdateLabel(w.waveId, lbl)}
-                onUpdateEvents={(patch) => handleUpdateEvents(w.waveId, patch)}
-                fetchAPI={fetchAPI}
-                showToast={showToast}
-                embedSnippet={embedSnippet(w.waveId)}
-                onCopy={() => copySnippet(w.waveId)}
-                copied={copiedId === w.waveId}
-                isMobile={isMobile}
-                inputStyle={inputStyle}
-              />
-            ))
-          )}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>{T.WAVE}</div>
+            <select value={selectedWaveId} onChange={e => setSelectedWaveId(e.target.value)} style={inputStyle}>
+              <option value="">— select a {T.wave} —</option>
+              {allWaves.map(w => (
+                <option key={w.id} value={w.id}>{w.title} ({w.privacy})</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4, fontFamily: 'monospace' }}>DISPLAY LABEL (optional)</div>
+            <input
+              type="text"
+              value={label}
+              onChange={e => setLabel(e.target.value)}
+              placeholder={`Leave blank to use ${T.wave} title`}
+              style={inputStyle}
+            />
+          </div>
+          <button
+            onClick={handleAdd}
+            disabled={!selectedWaveId || adding}
+            style={{
+              padding: '6px 16px', background: selectedWaveId ? 'var(--accent-green)' : 'var(--bg-hover)',
+              border: 'none', color: selectedWaveId ? '#000' : 'var(--text-muted)',
+              cursor: selectedWaveId ? 'pointer' : 'default',
+              fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 'bold',
+            }}
+          >
+            {adding ? 'Adding...' : 'Add to Portal'}
+          </button>
         </div>
-      )}
-    </div>
+
+        {/* Portal wave list */}
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 24 }}><LoadingSpinner /></div>
+        ) : portalWaves.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.8rem', textAlign: 'center', margin: '24px 0' }}>
+            No {T.waves} in portal yet.
+          </p>
+        ) : (
+          portalWaves.map(w => (
+            <PortalWaveRow
+              key={w.waveId}
+              wave={w}
+              onRemove={() => handleRemove(w.waveId)}
+              onUpdateLabel={(lbl) => handleUpdateLabel(w.waveId, lbl)}
+              onUpdateEvents={(patch) => handleUpdateEvents(w.waveId, patch)}
+              fetchAPI={fetchAPI}
+              showToast={showToast}
+              embedSnippet={embedSnippet(w.waveId)}
+              onCopy={() => copySnippet(w.waveId)}
+              copied={copiedId === w.waveId}
+              isMobile={isMobile}
+              inputStyle={inputStyle}
+            />
+          ))
+        )}
+    </CollapsibleSection>
   );
 };
 

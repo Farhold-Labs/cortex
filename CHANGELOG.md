@@ -5,6 +5,41 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.116.0] - 2026-10-13
+
+The admin tools get the v2.115.0 treatment: everything collapses, there are no category icons, and they sit in two logical places. **No database migration. No new app build.**
+
+### Changed
+
+- **ADMIN PANEL is replaced by two Settings categories:**
+  - **MODERATION** (moderators and admins): user management, reports, appeals, activity log.
+  - **ADMINISTRATION** (admins only), in this order: instance defaults, federation, invitations, handle requests, public portal, events calendar, crawl bar config, system alerts, alert subscriptions, bots & webhooks, support tickets, privacy & encryption.
+  - Who can see what is unchanged.
+  - The single panel would have put each tool's own sections four boxes deep, too narrow for forms on a phone. Two categories keep tools at the same depth as everything else in Settings.
+- **Every tool now uses `CollapsibleSection`.** Thirteen of the fifteen drew their own header and SHOW/HIDE button by hand, each in its own colour. The conversion replaced only the header and the `{isOpen && …}` wrapper. A whitespace-blind diff of each file shows nothing else changed.
+  - Appeals keeps its pending count as a badge.
+  - Activity log's 7-day summary moves from the header into the section, because it was too long for a phone header.
+- **Groups inside tools collapse too**, one open at a time:
+  - **Instance defaults:** appearance defaults, notification defaults, features, branding, terminology, timezone, sessions & security. They had ▸ markers that looked clickable but weren't.
+  - **Federation:** status & identity, cover traffic, request docking, incoming docking requests (when there are any) and allied ports.
+  - **Invitations:** new invitation; issued, with a count badge.
+  - **Bots & webhooks:** wave posting tokens, with a count badge.
+- **Titles are plain:** FEDERATION rather than "THE VERSE", REPORTS rather than "REPORTS DASHBOARD", APPEALS rather than "MODERATION APPEALS".
+- **No category icons:** the title icons 📊 🚨 🎫 ◇ 🤖 🌐 🔐, the Privacy dashboard's 📧 👥 🔔 🚀 📇 📡, the 🤖 on each bot, 🔑 on posting tokens, 📋 on copy buttons (the icon-only one now reads COPY), 📈 🌡️ ◆ in crawl bar config, the 🔒 after encrypted waves (now "(encrypted)"), and the ↻ on refresh buttons.
+  - **Kept**, because they carry meaning: the alert priority icons 🚨 ⚠️ 🎉 (they are what an alert shows in the crawl bar), warning ⚠️, ✓/✗ results and ✕ buttons.
+- **`CollapsibleSection`:** its SHOW/HIDE button no longer wraps onto two lines when a long title shares the row, which happened at the third level on a phone.
+- **Docs:** CLAUDE.md, README, DEPLOYMENT.md and `.env.example` now say *Settings → ADMINISTRATION → …* instead of *ADMIN → …*.
+
+### Verified
+
+Driven headlessly on dev as an admin, at 390 px and 1280 px:
+
+- every category, every admin tool and every group inside a tool was opened in turn;
+- all render, with no console errors and no sideways scroll;
+- screenshots of Instance defaults → Features and Federation → Status & identity at 390 px read cleanly.
+
+The moderator-only view (MODERATION without ADMINISTRATION) uses the same `canAccess` checks as before, but was not driven as a moderator account. 466/466 tests pass.
+
 ## [2.115.0] - 2026-10-13
 
 Settings reorganised: every category and sub-category collapses, related settings sit together, no category icons, and SIGN OUT in the Profile header. The admin panel is unchanged. **No database migration. No new app build.**
