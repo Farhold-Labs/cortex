@@ -19,6 +19,9 @@ const STATUS_COLOR = {
 };
 
 const InvitesAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, user }) => {
+  // One section open at a time, like the rest of Settings (v2.116.0).
+  const [openGroup, setOpenGroup] = useState(null);
+  const toggleGroup = (g) => setOpenGroup(prev => prev === g ? null : g);
   const [invitations, setInvitations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -115,11 +118,10 @@ const InvitesAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, us
       isOpen={isOpen}
       onToggle={onToggle}
       isMobile={isMobile}
-      accentColor="var(--accent-green)"
       badge={pending.length ? String(pending.length) : undefined}
     >
       {loading ? <LoadingSpinner /> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
 
           <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', lineHeight: 1.5 }}>
             Each invitation is a single-use link. The link is shown once, here, when you create
@@ -128,8 +130,7 @@ const InvitesAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, us
           </div>
 
           {/* ---- Create ---- */}
-          <div>
-            <div style={{ color: 'var(--accent-green)', fontSize: '0.8rem', marginBottom: '12px' }}>▸ NEW INVITATION</div>
+          <CollapsibleSection title="NEW INVITATION" isOpen={openGroup === 'new'} onToggle={() => toggleGroup('new')} isMobile={isMobile}>
 
             <div style={{ marginBottom: '12px' }}>
               <label style={labelStyle}>EMAIL (optional)</label>
@@ -197,13 +198,10 @@ const InvitesAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, us
                 </div>
               </div>
             )}
-          </div>
+          </CollapsibleSection>
 
           {/* ---- Existing ---- */}
-          <div>
-            <div style={{ color: 'var(--accent-teal)', fontSize: '0.8rem', marginBottom: '12px' }}>
-              ▸ ISSUED ({invitations.length})
-            </div>
+          <CollapsibleSection title="ISSUED" badge={String(invitations.length)} isOpen={openGroup === 'issued'} onToggle={() => toggleGroup('issued')} isMobile={isMobile}>
             {invitations.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>No invitations yet.</div>
             ) : (
@@ -238,7 +236,7 @@ const InvitesAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle, us
                 ))}
               </div>
             )}
-          </div>
+          </CollapsibleSection>
         </div>
       )}
     </CollapsibleSection>

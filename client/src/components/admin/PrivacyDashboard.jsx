@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { formatError, FEDERATION } from '../../../messages.js';
 import { T } from '../../config/terminology.js';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
 /**
  * Privacy & Encryption Dashboard (v2.24.0)
@@ -141,308 +142,269 @@ const PrivacyDashboard = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
   );
 
   return (
-    <div style={{
-      marginTop: '20px',
-      padding: isMobile ? '16px' : '20px',
-      background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
-      border: '1px solid var(--accent-green)40',
-    }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
-        <div style={{ color: 'var(--accent-green)', fontSize: '0.8rem', fontWeight: 500 }}>
-          🔐 PRIVACY & ENCRYPTION
-        </div>
-        <button
-          onClick={onToggle}
-          style={{
-            padding: isMobile ? '8px 12px' : '6px 10px',
-            background: isOpen ? 'var(--accent-green)20' : 'transparent',
-            border: `1px solid ${isOpen ? 'var(--accent-green)' : 'var(--border-primary)'}`,
-            color: isOpen ? 'var(--accent-green)' : 'var(--text-dim)',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: '0.7rem',
-          }}
-        >
-          {isOpen ? '▼ HIDE' : '▶ SHOW'}
-        </button>
-      </div>
-
-      {isOpen && (
-        <div style={{ marginTop: '16px' }}>
-          {loading ? (
-            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>
-              Loading encryption status...
+    <CollapsibleSection title="PRIVACY & ENCRYPTION" isOpen={isOpen} onToggle={onToggle} isMobile={isMobile}>
+        {loading ? (
+          <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>
+            Loading encryption status...
+          </div>
+        ) : status ? (
+          <>
+            {/* Email Encryption */}
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ flex: 1, minWidth: '200px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Email Addresses</span>
+                    {statusBadge(status.config?.emailEncryptionEnabled, status.config?.emailEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
+                  </div>
+                  <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={labelStyle}>Hashed</div>
+                      <div style={valueStyle}>{status.emailProtection?.hashed || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Encrypted</div>
+                      <div style={valueStyle}>{status.emailProtection?.encrypted || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Plaintext</div>
+                      <div style={{ ...valueStyle, color: status.emailProtection?.plaintext > 0 ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
+                        {status.emailProtection?.plaintext || 0}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ alignSelf: 'center' }}>
+                  {migrateButton(
+                    handleMigrateEmails,
+                    !status.config?.emailEncryptionEnabled,
+                    migrating === 'emails',
+                    status.emailProtection?.migrationNeeded || 0
+                  )}
+                </div>
+              </div>
+              {!status.config?.emailEncryptionEnabled && (
+                <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                  Set EMAIL_ENCRYPTION_KEY to enable
+                </div>
+              )}
             </div>
-          ) : status ? (
-            <>
-              {/* Email Encryption */}
-              <div style={cardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                  <div style={{ flex: 1, minWidth: '200px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '1rem' }}>📧</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Email Addresses</span>
-                      {statusBadge(status.config?.emailEncryptionEnabled, status.config?.emailEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
-                    </div>
-                    <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={labelStyle}>Hashed</div>
-                        <div style={valueStyle}>{status.emailProtection?.hashed || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Encrypted</div>
-                        <div style={valueStyle}>{status.emailProtection?.encrypted || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Plaintext</div>
-                        <div style={{ ...valueStyle, color: status.emailProtection?.plaintext > 0 ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
-                          {status.emailProtection?.plaintext || 0}
-                        </div>
-                      </div>
-                    </div>
+
+            {/* Wave Participation Encryption */}
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ flex: 1, minWidth: '200px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{T.Wave} Participation</span>
+                    {statusBadge(status.config?.waveParticipationEncryptionEnabled, status.config?.waveParticipationEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
                   </div>
-                  <div style={{ alignSelf: 'center' }}>
-                    {migrateButton(
-                      handleMigrateEmails,
-                      !status.config?.emailEncryptionEnabled,
-                      migrating === 'emails',
-                      status.emailProtection?.migrationNeeded || 0
-                    )}
+                  <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={labelStyle}>Total {T.Waves}</div>
+                      <div style={valueStyle}>{status.waveParticipation?.totalWaves || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Encrypted</div>
+                      <div style={valueStyle}>{status.waveParticipation?.encryptedWaves || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Pending</div>
+                      <div style={{ ...valueStyle, color: status.waveParticipation?.migrationNeeded > 0 ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
+                        {status.waveParticipation?.migrationNeeded || 0}
+                      </div>
+                    </div>
                   </div>
                 </div>
-                {!status.config?.emailEncryptionEnabled && (
-                  <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    Set EMAIL_ENCRYPTION_KEY to enable
-                  </div>
-                )}
+                <div style={{ alignSelf: 'center' }}>
+                  {migrateButton(
+                    handleMigrateParticipation,
+                    !status.config?.waveParticipationEncryptionEnabled,
+                    migrating === 'participation',
+                    status.waveParticipation?.migrationNeeded || 0
+                  )}
+                </div>
               </div>
+              {!status.config?.waveParticipationEncryptionEnabled && (
+                <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                  Set WAVE_PARTICIPATION_KEY to enable
+                </div>
+              )}
+            </div>
 
-              {/* Wave Participation Encryption */}
-              <div style={cardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                  <div style={{ flex: 1, minWidth: '200px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '1rem' }}>👥</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{T.Wave} Participation</span>
-                      {statusBadge(status.config?.waveParticipationEncryptionEnabled, status.config?.waveParticipationEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
-                    </div>
-                    <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={labelStyle}>Total {T.Waves}</div>
-                        <div style={valueStyle}>{status.waveParticipation?.totalWaves || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Encrypted</div>
-                        <div style={valueStyle}>{status.waveParticipation?.encryptedWaves || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Pending</div>
-                        <div style={{ ...valueStyle, color: status.waveParticipation?.migrationNeeded > 0 ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
-                          {status.waveParticipation?.migrationNeeded || 0}
-                        </div>
-                      </div>
-                    </div>
+            {/* Push Subscriptions Encryption (v2.22.0) */}
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ flex: 1, minWidth: '200px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Push Subscriptions</span>
+                    {statusBadge(status.config?.pushSubscriptionEncryptionEnabled, status.config?.pushSubscriptionEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
                   </div>
-                  <div style={{ alignSelf: 'center' }}>
-                    {migrateButton(
-                      handleMigrateParticipation,
-                      !status.config?.waveParticipationEncryptionEnabled,
-                      migrating === 'participation',
-                      status.waveParticipation?.migrationNeeded || 0
-                    )}
+                  <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={labelStyle}>Users</div>
+                      <div style={valueStyle}>{status.pushSubscriptions?.totalUsers || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Subscriptions</div>
+                      <div style={valueStyle}>{status.pushSubscriptions?.totalSubscriptions || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Encrypted</div>
+                      <div style={valueStyle}>{status.pushSubscriptions?.encryptedUsers || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Pending</div>
+                      <div style={{ ...valueStyle, color: status.pushSubscriptions?.migrationNeeded > 0 ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
+                        {status.pushSubscriptions?.migrationNeeded || 0}
+                      </div>
+                    </div>
                   </div>
                 </div>
-                {!status.config?.waveParticipationEncryptionEnabled && (
-                  <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    Set WAVE_PARTICIPATION_KEY to enable
-                  </div>
-                )}
+                <div style={{ alignSelf: 'center' }}>
+                  {migrateButton(
+                    handleMigratePushSubscriptions,
+                    !status.config?.pushSubscriptionEncryptionEnabled,
+                    migrating === 'pushSubs',
+                    status.pushSubscriptions?.migrationNeeded || 0
+                  )}
+                </div>
               </div>
+              {!status.config?.pushSubscriptionEncryptionEnabled && (
+                <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                  Set PUSH_SUBSCRIPTION_KEY to enable
+                </div>
+              )}
+            </div>
 
-              {/* Push Subscriptions Encryption (v2.22.0) */}
-              <div style={cardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                  <div style={{ flex: 1, minWidth: '200px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '1rem' }}>🔔</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Push Subscriptions</span>
-                      {statusBadge(status.config?.pushSubscriptionEncryptionEnabled, status.config?.pushSubscriptionEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
-                    </div>
-                    <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={labelStyle}>Users</div>
-                        <div style={valueStyle}>{status.pushSubscriptions?.totalUsers || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Subscriptions</div>
-                        <div style={valueStyle}>{status.pushSubscriptions?.totalSubscriptions || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Encrypted</div>
-                        <div style={valueStyle}>{status.pushSubscriptions?.encryptedUsers || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Pending</div>
-                        <div style={{ ...valueStyle, color: status.pushSubscriptions?.migrationNeeded > 0 ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
-                          {status.pushSubscriptions?.migrationNeeded || 0}
-                        </div>
-                      </div>
-                    </div>
+            {/* Crew Membership Encryption (v2.24.0) */}
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ flex: 1, minWidth: '200px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{T.Crew} Membership</span>
+                    {statusBadge(status.config?.crewMembershipEncryptionEnabled, status.config?.crewMembershipEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
                   </div>
-                  <div style={{ alignSelf: 'center' }}>
-                    {migrateButton(
-                      handleMigratePushSubscriptions,
-                      !status.config?.pushSubscriptionEncryptionEnabled,
-                      migrating === 'pushSubs',
-                      status.pushSubscriptions?.migrationNeeded || 0
-                    )}
+                  <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={labelStyle}>Total {T.Crews}</div>
+                      <div style={valueStyle}>{status.crewMembership?.totalCrews || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Encrypted</div>
+                      <div style={valueStyle}>{status.crewMembership?.encryptedCrews || 0}</div>
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Pending</div>
+                      <div style={{ ...valueStyle, color: status.crewMembership?.migrationNeeded > 0 ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
+                        {status.crewMembership?.migrationNeeded || 0}
+                      </div>
+                    </div>
                   </div>
                 </div>
-                {!status.config?.pushSubscriptionEncryptionEnabled && (
-                  <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    Set PUSH_SUBSCRIPTION_KEY to enable
-                  </div>
-                )}
-              </div>
-
-              {/* Crew Membership Encryption (v2.24.0) */}
-              <div style={cardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                  <div style={{ flex: 1, minWidth: '200px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '1rem' }}>🚀</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{T.Crew} Membership</span>
-                      {statusBadge(status.config?.crewMembershipEncryptionEnabled, status.config?.crewMembershipEncryptionEnabled ? 'KEY SET' : 'NO KEY')}
-                    </div>
-                    <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={labelStyle}>Total {T.Crews}</div>
-                        <div style={valueStyle}>{status.crewMembership?.totalCrews || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Encrypted</div>
-                        <div style={valueStyle}>{status.crewMembership?.encryptedCrews || 0}</div>
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Pending</div>
-                        <div style={{ ...valueStyle, color: status.crewMembership?.migrationNeeded > 0 ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
-                          {status.crewMembership?.migrationNeeded || 0}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ alignSelf: 'center' }}>
-                    {migrateButton(
-                      handleMigrateCrewMembers,
-                      !status.config?.crewMembershipEncryptionEnabled,
-                      migrating === 'crewMembers',
-                      status.crewMembership?.migrationNeeded || 0
-                    )}
-                  </div>
+                <div style={{ alignSelf: 'center' }}>
+                  {migrateButton(
+                    handleMigrateCrewMembers,
+                    !status.config?.crewMembershipEncryptionEnabled,
+                    migrating === 'crewMembers',
+                    status.crewMembership?.migrationNeeded || 0
+                  )}
                 </div>
-                {!status.config?.crewMembershipEncryptionEnabled && (
-                  <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    Set CREW_MEMBERSHIP_KEY to enable
-                  </div>
-                )}
               </div>
+              {!status.config?.crewMembershipEncryptionEnabled && (
+                <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                  Set CREW_MEMBERSHIP_KEY to enable
+                </div>
+              )}
+            </div>
 
-              {/* Contacts (client-side encrypted) */}
+            {/* Contacts (client-side encrypted) */}
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Contact Lists</span>
+                {statusBadge(true, 'CLIENT-SIDE')}
+              </div>
+              <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                Encrypted on user devices with their E2EE keys. Server cannot decrypt.
+              </div>
+            </div>
+
+            {/* Federation Cover Traffic (v2.28.0) */}
+            {fedStatus?.enabled && (
               <div style={cardStyle}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '1rem' }}>📇</span>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Contact Lists</span>
-                  {statusBadge(true, 'CLIENT-SIDE')}
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Federation Cover Traffic</span>
+                  {statusBadge(
+                    fedStatus.decoy?.enabled && fedStatus.decoy?.activeTargets > 0,
+                    fedStatus.decoy?.enabled ? FEDERATION.runningDark : FEDERATION.exposed
+                  )}
                 </div>
                 <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                  Encrypted on user devices with their E2EE keys. Server cannot decrypt.
+                  {fedStatus.decoy?.enabled
+                    ? `${FEDERATION.coverTrafficEnabled} — ${fedStatus.decoy.activeTargets || 0} V2 targets`
+                    : FEDERATION.coverTrafficDisabled
+                  }
                 </div>
               </div>
+            )}
 
-              {/* Federation Cover Traffic (v2.28.0) */}
-              {fedStatus?.enabled && (
-                <div style={cardStyle}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '1rem' }}>📡</span>
-                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Federation Cover Traffic</span>
-                    {statusBadge(
-                      fedStatus.decoy?.enabled && fedStatus.decoy?.activeTargets > 0,
-                      fedStatus.decoy?.enabled ? FEDERATION.runningDark : FEDERATION.exposed
-                    )}
-                  </div>
-                  <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    {fedStatus.decoy?.enabled
-                      ? `${FEDERATION.coverTrafficEnabled} — ${fedStatus.decoy.activeTargets || 0} V2 targets`
-                      : FEDERATION.coverTrafficDisabled
-                    }
-                  </div>
+            {/* Cache Stats */}
+            {(status.waveParticipation?.cacheStats || status.pushSubscriptions?.cacheStats || status.crewMembership?.cacheStats) && (
+              <div style={{ marginTop: '16px', padding: '12px', background: 'var(--bg-surface)', border: '1px dashed var(--border-subtle)' }}>
+                <div style={{ ...labelStyle, marginBottom: '8px' }}>IN-MEMORY CACHE</div>
+                <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+                  {status.waveParticipation?.cacheStats && (
+                    <>
+                      <span>Waves: {status.waveParticipation.cacheStats.waveCount}</span>
+                      <span>Participants: {status.waveParticipation.cacheStats.userCount}</span>
+                      <span>Mappings: {status.waveParticipation.cacheStats.totalMappings}</span>
+                    </>
+                  )}
+                  {status.pushSubscriptions?.cacheStats && (
+                    <>
+                      <span style={{ borderLeft: '1px solid var(--border-subtle)', paddingLeft: '12px' }}>
+                        Push Users: {status.pushSubscriptions.cacheStats.userCount}
+                      </span>
+                      <span>Push Subs: {status.pushSubscriptions.cacheStats.subscriptionCount}</span>
+                    </>
+                  )}
+                  {status.crewMembership?.cacheStats && (
+                    <>
+                      <span style={{ borderLeft: '1px solid var(--border-subtle)', paddingLeft: '12px' }}>
+                        Crews: {status.crewMembership.cacheStats.crewCount}
+                      </span>
+                      <span>Members: {status.crewMembership.cacheStats.userCount}</span>
+                    </>
+                  )}
                 </div>
-              )}
-
-              {/* Cache Stats */}
-              {(status.waveParticipation?.cacheStats || status.pushSubscriptions?.cacheStats || status.crewMembership?.cacheStats) && (
-                <div style={{ marginTop: '16px', padding: '12px', background: 'var(--bg-surface)', border: '1px dashed var(--border-subtle)' }}>
-                  <div style={{ ...labelStyle, marginBottom: '8px' }}>IN-MEMORY CACHE</div>
-                  <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                    {status.waveParticipation?.cacheStats && (
-                      <>
-                        <span>Waves: {status.waveParticipation.cacheStats.waveCount}</span>
-                        <span>Participants: {status.waveParticipation.cacheStats.userCount}</span>
-                        <span>Mappings: {status.waveParticipation.cacheStats.totalMappings}</span>
-                      </>
-                    )}
-                    {status.pushSubscriptions?.cacheStats && (
-                      <>
-                        <span style={{ borderLeft: '1px solid var(--border-subtle)', paddingLeft: '12px' }}>
-                          Push Users: {status.pushSubscriptions.cacheStats.userCount}
-                        </span>
-                        <span>Push Subs: {status.pushSubscriptions.cacheStats.subscriptionCount}</span>
-                      </>
-                    )}
-                    {status.crewMembership?.cacheStats && (
-                      <>
-                        <span style={{ borderLeft: '1px solid var(--border-subtle)', paddingLeft: '12px' }}>
-                          Crews: {status.crewMembership.cacheStats.crewCount}
-                        </span>
-                        <span>Members: {status.crewMembership.cacheStats.userCount}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Refresh Button */}
-              <div style={{ marginTop: '16px', textAlign: 'right' }}>
-                <button
-                  onClick={loadStatus}
-                  disabled={loading}
-                  style={{
-                    padding: isMobile ? '10px 16px' : '8px 14px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: 'transparent',
-                    border: '1px solid var(--border-subtle)',
-                    color: 'var(--text-dim)',
-                    cursor: loading ? 'wait' : 'pointer',
-                    fontFamily: 'monospace',
-                    fontSize: isMobile ? '0.85rem' : '0.8rem',
-                  }}
-                >
-                  ↻ REFRESH
-                </button>
               </div>
-            </>
-          ) : (
-            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>
-              Failed to load privacy status
+            )}
+
+            {/* Refresh Button */}
+            <div style={{ marginTop: '16px', textAlign: 'right' }}>
+              <button
+                onClick={loadStatus}
+                disabled={loading}
+                style={{
+                  padding: isMobile ? '10px 16px' : '8px 14px',
+                  minHeight: isMobile ? '44px' : 'auto',
+                  background: 'transparent',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--text-dim)',
+                  cursor: loading ? 'wait' : 'pointer',
+                  fontFamily: 'monospace',
+                  fontSize: isMobile ? '0.85rem' : '0.8rem',
+                }}
+              >
+                REFRESH
+              </button>
             </div>
-          )}
-        </div>
-      )}
-    </div>
+          </>
+        ) : (
+          <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>
+            Failed to load privacy status
+          </div>
+        )}
+    </CollapsibleSection>
   );
 };
 
