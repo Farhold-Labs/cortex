@@ -13,7 +13,7 @@ import { T } from '../../config/terminology.js';
  * - showToast: (msg, type) => void
  * - isMobile: boolean
  */
-const JellyfinConnectionManager = ({ fetchAPI, showToast, isMobile }) => {
+const JellyfinConnectionManager = ({ fetchAPI, showToast, isMobile, hideTitle = false }) => {
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -298,9 +298,11 @@ const JellyfinConnectionManager = ({ fetchAPI, showToast, isMobile }) => {
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <GlowText color="var(--accent-color)" size="0.9rem">
+        {!hideTitle && (
+          <GlowText color="var(--accent-color)" size="0.9rem">
           JELLYFIN CONNECTIONS
         </GlowText>
+        )}
         {!showAddForm && (
           <button
             style={{ ...styles.button, ...styles.primaryButton }}
@@ -313,7 +315,6 @@ const JellyfinConnectionManager = ({ fetchAPI, showToast, isMobile }) => {
 
       {connections.length === 0 && !showAddForm ? (
         <div style={styles.emptyState}>
-          <div style={styles.emptyIcon}>📺</div>
           <div>No Jellyfin servers connected</div>
           <div style={{ fontSize: '0.8rem', marginTop: '8px' }}>
             Connect a Jellyfin server to share media in {T.waves}

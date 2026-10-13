@@ -14,7 +14,7 @@ import { T } from '../../config/terminology.js';
  * - showToast: (msg, type) => void
  * - isMobile: boolean
  */
-const PlexConnectionManager = ({ fetchAPI, showToast, isMobile }) => {
+const PlexConnectionManager = ({ fetchAPI, showToast, isMobile, hideTitle = false }) => {
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -415,9 +415,11 @@ const PlexConnectionManager = ({ fetchAPI, showToast, isMobile }) => {
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <GlowText color="#e5a00d" size="0.9rem">
+        {!hideTitle && (
+          <GlowText color="#e5a00d" size="0.9rem">
           PLEX CONNECTIONS
         </GlowText>
+        )}
         {!showAddForm && (
           <button
             style={{ ...styles.button, ...styles.primaryButton }}
@@ -430,7 +432,6 @@ const PlexConnectionManager = ({ fetchAPI, showToast, isMobile }) => {
 
       {connections.length === 0 && !showAddForm ? (
         <div style={styles.emptyState}>
-          <div style={styles.emptyIcon}>📺</div>
           <div>No Plex servers connected</div>
           <div style={{ fontSize: '0.8rem', marginTop: '8px' }}>
             Connect a Plex server to share media in {T.waves}

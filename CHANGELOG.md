@@ -5,6 +5,40 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.115.0] - 2026-10-13
+
+Settings reorganised: every category and sub-category collapses, related settings sit together, no category icons, and SIGN OUT in the Profile header. The admin panel is unchanged. **No database migration. No new app build.**
+
+### Changed
+
+- **The order of Settings is now:**
+  - **PROFILE**, with CHANGE HANDLE as a sub-category;
+  - **NOTIFICATIONS**: IN-APP, PUSH and EMAIL;
+  - **APPEARANCE**, formerly Display preferences: THEME, TEXT & LAYOUT, EFFECTS and the ping options;
+  - **CRAWL BAR**, **VIDEO FEED**;
+  - **MEDIA SERVERS**: JELLYFIN / EMBY and PLEX;
+  - **SECURITY**: password, two-factor, E2EE recovery key and active sessions;
+  - **PRIVACY & SAFETY**: blocked and muted users (moved out of Security) and MY REPORTS;
+  - **ACCOUNT**: EXPORT MY DATA and DELETE ACCOUNT;
+  - then the admin panel and ABOUT.
+- **Everything collapses.** Notifications, My Reports and Account Management were hand-rolled or fixed panels; they are now `CollapsibleSection`s like the rest. One category is open at a time, and one sub-category within it. Opening another category closes the sub-category too.
+- **Profile starts open**, and its header carries **SIGN OUT** whether it is open or closed. It replaces the SESSION panel at the bottom. `CollapsibleSection` gained a `headerAction` slot for it.
+- **No category icons.** 🔒 Security, 📺 Media servers, the notification-type glyphs, 📲/✉️/📅, 📈/🌡️ in the crawl bar, ⊘/🔇 on blocked and muted, 🔑/🔐 on the MFA and recovery headings, and 📦/⚠️ on the account headings are gone.
+  - On/off buttons all read ▣ ENABLED / ▢ DISABLED. Some showed 🎄, 🔔 or ✉️.
+  - Warning callouts keep ⚠️, and status ticks keep ✓, because those carry meaning.
+  - The admin panel was left as it is, by request.
+- The heading is SETTINGS, not PROFILE SETTINGS. Inside Notifications, the master switch is labelled ALL NOTIFICATIONS.
+- The Jellyfin, Plex and My Reports panels take a `hideTitle` prop, so they don't repeat the sub-category's title.
+
+### Fixed
+
+- **Blocked and muted users always showed as empty.** The lists loaded only when a `showBlockedMuted` flag was set, and nothing ever set it. They now load when the sub-category opens.
+- The hint under "Suppress while viewing" showed its template code: ``Don`t show ${T.wave} activity…``.
+
+### Verified
+
+Driven headlessly on dev at 390 px and 1280 px. Every category and every sub-category was opened in turn: all render, with no console errors and no sideways scroll. Opening BLOCKED & MUTED USERS now requests `/users/blocked` and `/users/muted`. The v2.114.1 encryption run was repeated with the new SIGN OUT button. It still leaves no `farhold_e2ee_*` entries, and signing back in still unlocks by itself.
+
 ## [2.114.1] - 2026-10-13
 
 Two encryption fixes, both in `client/e2ee-context.jsx`. **No database migration. No new app build.**

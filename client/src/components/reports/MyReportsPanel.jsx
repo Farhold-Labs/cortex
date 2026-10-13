@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { LOADING, formatError } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 
-const MyReportsPanel = ({ fetchAPI, showToast, isMobile }) => {
+const MyReportsPanel = ({ fetchAPI, showToast, isMobile, hideTitle = false }) => {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -34,10 +34,12 @@ const MyReportsPanel = ({ fetchAPI, showToast, isMobile }) => {
   }
 
   return (
-    <div style={{ marginTop: '24px' }}>
-      <div style={{ marginBottom: '16px' }}>
-        <GlowText color="var(--accent-teal)" size={isMobile ? '1rem' : '1.1rem'}>My Reports</GlowText>
-      </div>
+    <div style={{ marginTop: hideTitle ? 0 : '24px' }}>
+      {!hideTitle && (
+        <div style={{ marginBottom: '16px' }}>
+          <GlowText color="var(--accent-teal)" size={isMobile ? '1rem' : '1.1rem'}>My Reports</GlowText>
+        </div>
+      )}
 
       {reports.length === 0 ? (
         <div style={{ color: 'var(--text-dim)', padding: '20px', textAlign: 'center', border: '1px dashed var(--border-subtle)' }}>
