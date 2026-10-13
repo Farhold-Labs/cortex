@@ -82,13 +82,13 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [newHandle, setNewHandle] = useState('');
-  const [showBlockedMuted, setShowBlockedMuted] = useState(false);
   // Accordion state - only one top-level section open at a time
-  const [openSection, setOpenSection] = useState(null); // 'handle' | 'security' | 'display' | 'crawl' | 'notifications' | 'admin' | 'account' | null
-  const toggleSection = (section) => setOpenSection(prev => prev === section ? null : section);
-  // Accordion state for Security subsections
-  const [openSecuritySection, setOpenSecuritySection] = useState(null); // 'password' | 'mfa' | 'e2ee' | 'sessions' | 'blocked' | null
-  const toggleSecuritySection = (section) => setOpenSecuritySection(prev => prev === section ? null : section);
+  // One category open at a time, and one sub-category within it (v2.115.0).
+  // Profile starts open: it is what most people come here for.
+  const [openSection, setOpenSection] = useState('profile');
+  const [openSub, setOpenSub] = useState(null);
+  const toggleSection = (section) => { setOpenSection(prev => prev === section ? null : section); setOpenSub(null); };
+  const toggleSub = (sub) => setOpenSub(prev => prev === sub ? null : sub);
   // Accordion state for Admin Panel subsections
   const [openAdminSection, setOpenAdminSection] = useState(null); // 'users' | 'reports' | 'activity' | 'handles' | 'crawl' | 'alerts' | 'subscriptions' | 'federation' | null
   const toggleAdminSection = (section) => setOpenAdminSection(prev => prev === section ? null : section);
@@ -134,9 +134,10 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
   const { width, isMobile, isTablet, isDesktop } = useWindowSize();
   const e2ee = useE2EE();
 
-  // Load blocked/muted users when section is expanded
+  // Load blocked/muted users when the sub-section opens. It used to wait on a
+  // flag nothing ever set, so the lists always showed empty (fixed v2.115.0).
   useEffect(() => {
-    if (showBlockedMuted) {
+    if (openSub === 'blocked') {
       Promise.all([
         fetchAPI('/users/blocked'),
         fetchAPI('/users/muted')
@@ -147,7 +148,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         console.error('Failed to load blocked/muted users:', err);
       });
     }
-  }, [showBlockedMuted, fetchAPI]);
+  }, [openSub, fetchAPI]);
 
   // Load notification preferences when section is expanded
   useEffect(() => {
@@ -174,16 +175,16 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
   // Load MFA status when section is expanded
   useEffect(() => {
-    if (openSecuritySection === 'mfa' && !mfaStatus) {
+    if (openSub === 'mfa' && !mfaStatus) {
       fetchAPI('/auth/mfa/status')
         .then(data => setMfaStatus(data))
         .catch(err => console.error('Failed to load MFA status:', err));
     }
-  }, [openSecuritySection, mfaStatus, fetchAPI]);
+  }, [openSub, mfaStatus, fetchAPI]);
 
   // Load sessions when section is expanded (v1.18.0)
   useEffect(() => {
-    if (openSecuritySection === 'sessions') {
+    if (openSub === 'sessions') {
       setSessionsLoading(true);
       fetchAPI('/auth/sessions')
         .then(data => {
@@ -196,7 +197,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         })
         .finally(() => setSessionsLoading(false));
     }
-  }, [openSecuritySection, fetchAPI]);
+  }, [openSub, fetchAPI]);
 
   // Sync crawl bar location when user preferences change
   useEffect(() => {
@@ -668,11 +669,18 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
   return (
     <div style={{ flex: 1, padding: isMobile ? '16px' : '20px', overflowY: 'auto' }}>
-      <GlowText color="var(--accent-amber)" size="1.1rem">PROFILE SETTINGS</GlowText>
+      <GlowText color="var(--accent-amber)" size="1.1rem">SETTINGS</GlowText>
 
-      {/* Profile Info */}
-      <div style={{ marginTop: '24px', padding: '20px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))', border: '1px solid var(--border-subtle)' }}>
-        <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '16px' }}>PROFILE</div>
+      {/* Every category and sub-category collapses, one open at a time at each
+          level (v2.115.0). Profile starts open and carries SIGN OUT in its
+          header, so signing out never needs a scroll to the bottom. */}
+      <CollapsibleSection title="PROFILE" isOpen={openSection === 'profile'} onToggle={() => toggleSection('profile')} isMobile={isMobile} headerAction={(
+        <button onClick={onLogout} style={{
+          padding: isMobile ? '8px 12px' : '6px 10px', minHeight: isMobile ? '36px' : 'auto',
+          background: 'transparent', border: '1px solid var(--accent-orange)', color: 'var(--accent-orange)',
+          cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem', whiteSpace: 'nowrap',
+        }}>SIGN OUT</button>
+      )}>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px', flexWrap: 'wrap' }}>
           <Avatar letter={avatar || displayName?.[0] || '?'} color="var(--accent-amber)" size={60} imageUrl={avatarUrl} />
@@ -807,30 +815,855 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
           padding: '10px 20px', background: 'var(--accent-amber)20', border: '1px solid var(--accent-amber)',
           color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'monospace',
         }}>SAVE PROFILE</button>
-      </div>
 
-      {/* Handle Change */}
-      <CollapsibleSection title="HANDLE CHANGE" isOpen={openSection === 'handle'} onToggle={() => toggleSection('handle')} isMobile={isMobile}>
-        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-          Handle changes require admin approval. You can change your handle once every 30 days.
-        </div>
-        <div style={{ marginBottom: '16px' }}>
-          <input type="text" value={newHandle} onChange={(e) => setNewHandle(e.target.value)}
-            placeholder="New handle..." style={inputStyle} />
-        </div>
-        <button onClick={handleRequestHandleChange} disabled={!newHandle} style={{
-          padding: '10px 20px',
-          background: newHandle ? 'var(--accent-teal)20' : 'transparent',
-          border: `1px solid ${newHandle ? 'var(--accent-teal)' : 'var(--border-primary)'}`,
-          color: newHandle ? 'var(--accent-teal)' : 'var(--text-muted)',
-          cursor: newHandle ? 'pointer' : 'not-allowed', fontFamily: 'monospace',
-        }}>REQUEST CHANGE</button>
+        <CollapsibleSection title="CHANGE HANDLE" isOpen={openSub === 'handle'} onToggle={() => toggleSub('handle')} isMobile={isMobile}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+            Handle changes require admin approval. You can change your handle once every 30 days.
+          </div>
+          <div style={{ marginBottom: '16px' }}>
+            <input type="text" value={newHandle} onChange={(e) => setNewHandle(e.target.value)}
+              placeholder="New handle..." style={inputStyle} />
+          </div>
+          <button onClick={handleRequestHandleChange} disabled={!newHandle} style={{
+            padding: '10px 20px',
+            background: newHandle ? 'var(--accent-teal)20' : 'transparent',
+            border: `1px solid ${newHandle ? 'var(--accent-teal)' : 'var(--border-primary)'}`,
+            color: newHandle ? 'var(--accent-teal)' : 'var(--text-muted)',
+            cursor: newHandle ? 'pointer' : 'not-allowed', fontFamily: 'monospace',
+          }}>REQUEST CHANGE</button>
+        </CollapsibleSection>
+
       </CollapsibleSection>
 
-      {/* Security Section */}
-      <CollapsibleSection title="🔒 SECURITY" isOpen={openSection === 'security'} onToggle={() => toggleSection('security')} isMobile={isMobile} accentColor="var(--accent-orange)">
+      {/* Notifications */}
+      <CollapsibleSection title="NOTIFICATIONS" isOpen={openSection === 'notifications'} onToggle={() => toggleSection('notifications')} isMobile={isMobile}>
+        {!notificationPrefs ? (
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', padding: '20px', textAlign: 'center' }}>Loading preferences...</div>
+        ) : (
+          <>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                ALL NOTIFICATIONS
+              </label>
+              <button
+                onClick={() => handleUpdateNotificationPrefs({ enabled: !notificationPrefs.enabled })}
+                style={{
+                  padding: isMobile ? '10px 16px' : '8px 16px',
+                  minHeight: isMobile ? '44px' : 'auto',
+                  background: notificationPrefs.enabled ? 'var(--accent-green)20' : 'transparent',
+                  border: `1px solid ${notificationPrefs.enabled ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
+                  color: notificationPrefs.enabled ? 'var(--accent-green)' : 'var(--text-dim)',
+                  cursor: 'pointer',
+                  fontFamily: 'monospace',
+                  fontSize: isMobile ? '0.9rem' : '0.85rem',
+                }}
+              >
+                {notificationPrefs.enabled ? '▣ ENABLED' : '▢ DISABLED'}
+              </button>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+                Master switch for all in-app notifications
+              </div>
+            </div>
+            {notificationPrefs.enabled && (
+              <>
+                <CollapsibleSection title="IN-APP" isOpen={openSub === 'notifTypes'} onToggle={() => toggleSub('notifTypes')} isMobile={isMobile}>
+                  {[
+                    { key: 'directMentions', label: '@MENTIONS', desc: 'When someone @mentions you' },
+                    { key: 'replies', label: 'REPLIES', desc: 'When someone replies to your ping' },
+                    { key: 'reactions', label: 'REACTIONS', desc: 'When someone reacts to your ping' },
+                    { key: 'waveActivity', label: `${T.WAVE} ACTIVITY`, desc: 'New pings in your waves' },
+                    { key: 'burstEvents', label: 'BURST EVENTS', desc: 'When pings are burst to new waves' },
+                  ].map(({ key, label, desc }) => (
+                    <div key={key} style={{ marginBottom: '16px' }}>
+                      <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                        {label}
+                      </label>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        {[
+                          { value: 'always', label: 'Always' },
+                          { value: 'app_closed', label: 'App Closed' },
+                          { value: 'never', label: 'Never' },
+                        ].map(opt => (
+                          <button
+                            key={opt.value}
+                            onClick={() => handleUpdateNotificationPrefs({ [key]: opt.value })}
+                            style={{
+                              padding: isMobile ? '8px 12px' : '6px 12px',
+                              minHeight: isMobile ? '40px' : 'auto',
+                              background: notificationPrefs[key] === opt.value ? 'var(--accent-amber)20' : 'transparent',
+                              border: `1px solid ${notificationPrefs[key] === opt.value ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                              color: notificationPrefs[key] === opt.value ? 'var(--accent-amber)' : 'var(--text-dim)',
+                              cursor: 'pointer',
+                              fontFamily: 'monospace',
+                              fontSize: '0.75rem',
+                            }}
+                          >
+                            {opt.label.toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>
+                        {desc}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                      SUPPRESS WHILE VIEWING
+                    </label>
+                    <button
+                      onClick={() => handleUpdateNotificationPrefs({ suppressWhileFocused: !notificationPrefs.suppressWhileFocused })}
+                      style={{
+                        padding: isMobile ? '10px 16px' : '8px 16px',
+                        minHeight: isMobile ? '44px' : 'auto',
+                        background: notificationPrefs.suppressWhileFocused ? 'var(--accent-amber)20' : 'transparent',
+                        border: `1px solid ${notificationPrefs.suppressWhileFocused ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                        color: notificationPrefs.suppressWhileFocused ? 'var(--accent-amber)' : 'var(--text-dim)',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        fontSize: isMobile ? '0.9rem' : '0.85rem',
+                      }}
+                    >
+                      {notificationPrefs.suppressWhileFocused ? '▣ ENABLED' : '▢ DISABLED'}
+                    </button>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+                      {`Don't show ${T.wave} activity notifications when you're viewing that ${T.wave}`}
+                    </div>
+                  </div>
+
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', marginTop: '12px' }}>
+                    "Always" shows notifications even when viewing the app. "App Closed" only notifies when the app is in background. "Never" disables that notification type.
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection title="PUSH" isOpen={openSub === 'notifPush'} onToggle={() => toggleSub('notifPush')} isMobile={isMobile}>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                      PUSH THROTTLE
+                    </label>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {[
+                        { value: 0, label: 'None' },
+                        { value: 1, label: '1 min' },
+                        { value: 5, label: '5 min' },
+                        { value: 15, label: '15 min' },
+                        { value: 30, label: '30 min' },
+                      ].map(opt => (
+                        <button
+                          key={opt.value}
+                          onClick={() => handleUpdateNotificationPrefs({ pushDebounceMinutes: opt.value })}
+                          style={{
+                            padding: isMobile ? '8px 12px' : '6px 12px',
+                            minHeight: isMobile ? '40px' : 'auto',
+                            background: (notificationPrefs.pushDebounceMinutes ?? 5) === opt.value ? 'var(--accent-amber)20' : 'transparent',
+                            border: `1px solid ${(notificationPrefs.pushDebounceMinutes ?? 5) === opt.value ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                            color: (notificationPrefs.pushDebounceMinutes ?? 5) === opt.value ? 'var(--accent-amber)' : 'var(--text-dim)',
+                            cursor: 'pointer',
+                            fontFamily: 'monospace',
+                            fontSize: '0.75rem',
+                          }}
+                        >
+                          {opt.label.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>
+                      Minimum time between push notifications — "None" sends every message
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                      PUSH NOTIFICATIONS
+                    </label>
+                    <button
+                      onClick={async () => {
+                        try {
+                          setPushError(null);
+                          const token = storage.getToken();
+                          if (pushEnabled) {
+                            storage.setPushEnabled(false);
+                            setPushEnabled(false);
+                            await unsubscribeFromPush(token);
+                            showToast('Push notifications disabled', 'success');
+                          } else {
+                            const result = await subscribeToPush(token);
+                            if (result.success) {
+                              storage.setPushEnabled(true);
+                              setPushEnabled(true);
+                              showToast('Push notifications enabled', 'success');
+                            } else {
+                              setPushError(result.reason || 'Failed to enable push notifications');
+                            }
+                          }
+                        } catch (err) {
+                          console.error('[Push] Unexpected error:', err);
+                          setPushError('Push notification setup failed. Check browser console for details.');
+                        }
+                      }}
+                      style={{
+                        padding: isMobile ? '10px 16px' : '8px 16px',
+                        minHeight: isMobile ? '44px' : 'auto',
+                        background: pushEnabled ? 'var(--accent-green)20' : 'transparent',
+                        border: `1px solid ${pushEnabled ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
+                        color: pushEnabled ? 'var(--accent-green)' : 'var(--text-dim)',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        fontSize: isMobile ? '0.9rem' : '0.85rem',
+                      }}
+                    >
+                      {pushEnabled ? '▣ ENABLED' : '▢ DISABLED'}
+                    </button>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+                      Receive notifications when the app is closed or in background
+                    </div>
+                    {/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.Capacitor && (
+                      <div style={{ color: 'var(--accent-orange)', fontSize: '0.65rem', marginTop: '6px', padding: '6px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)30' }}>
+                        ⚠️ iOS does not support push notifications for web apps. This is a platform limitation by Apple.
+                      </div>
+                    )}
+                    {pushError && (
+                      <div style={{ color: 'var(--accent-orange)', fontSize: '0.75rem', marginTop: '8px', padding: '10px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)40', lineHeight: '1.5', wordBreak: 'break-word', userSelect: 'text' }}>
+                        {pushError}
+                      </div>
+                    )}
+                    {/* Reset button for troubleshooting */}
+                    <button
+                      onClick={async () => {
+                        if (confirm(CONFIRM_DIALOG.clearLocalData)) {
+                          showToast('Resetting push state...', 'info');
+                          storage.setPushEnabled(false);
+                          setPushEnabled(false);
+                          await forceResetPushState();
+                          showToast('Push state reset. Try enabling notifications again.', 'success');
+                        }
+                      }}
+                      style={{
+                        marginTop: '8px',
+                        padding: '6px 12px',
+                        background: 'transparent',
+                        border: '1px solid var(--border-subtle)',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        fontSize: '0.7rem',
+                      }}
+                    >
+                      RESET PUSH STATE
+                    </button>
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection title="EMAIL" isOpen={openSub === 'notifEmail'} onToggle={() => toggleSub('notifEmail')} isMobile={isMobile}>
+                  <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                    EMAIL NOTIFICATIONS
+                  </label>
+                  <button
+                    onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), enabled: !(notificationPrefs.email?.enabled) } })}
+                    style={{
+                      padding: isMobile ? '10px 16px' : '8px 16px',
+                      minHeight: isMobile ? '44px' : 'auto',
+                      background: notificationPrefs.email?.enabled ? 'var(--accent-green)20' : 'transparent',
+                      border: `1px solid ${notificationPrefs.email?.enabled ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
+                      color: notificationPrefs.email?.enabled ? 'var(--accent-green)' : 'var(--text-dim)',
+                      cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.85rem',
+                    }}
+                  >
+                    {notificationPrefs.email?.enabled ? '▣ ENABLED' : '▢ DISABLED'}
+                  </button>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+                    Send email notifications when you're offline. Requires a verified email on your account.
+                  </div>
+
+                  {notificationPrefs.email?.enabled && (
+                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      {[
+                        { key: 'mentions', label: '@MENTIONS', desc: 'When someone @mentions you' },
+                        { key: 'replies', label: 'REPLIES', desc: `When someone replies to your ${T.ping}` },
+                        { key: 'calendarReminders', label: 'CALENDAR REMINDERS', desc: '1-day and 1-hour reminders for events' },
+                      ].map(({ key, label, desc }) => (
+                        <div key={key}>
+                          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
+                            {label}
+                          </label>
+                          <button
+                            onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), [key]: !(notificationPrefs.email?.[key] ?? true) } })}
+                            style={{
+                              padding: isMobile ? '8px 12px' : '6px 12px',
+                              minHeight: isMobile ? '40px' : 'auto',
+                              background: (notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)20' : 'transparent',
+                              border: `1px solid ${(notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                              color: (notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)' : 'var(--text-dim)',
+                              cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',
+                            }}
+                          >
+                            {(notificationPrefs.email?.[key] ?? true) ? 'ON' : 'OFF'}
+                          </button>
+                          <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>{desc}</div>
+                        </div>
+                      ))}
+
+                      <div style={{ marginTop: '4px' }}>
+                        <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.7rem', marginBottom: '6px' }}>
+                          OFFLINE THRESHOLD
+                        </label>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {[
+                            { value: 0, label: 'Immediately' },
+                            { value: 15, label: '15 min' },
+                            { value: 30, label: '30 min' },
+                            { value: 60, label: '1 hour' },
+                          ].map(opt => (
+                            <button
+                              key={opt.value}
+                              onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), offlineThresholdMinutes: opt.value } })}
+                              style={{
+                                padding: isMobile ? '8px 12px' : '6px 12px',
+                                minHeight: isMobile ? '40px' : 'auto',
+                                background: (notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)20' : 'transparent',
+                                border: `1px solid ${(notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                                color: (notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)' : 'var(--text-dim)',
+                                cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem',
+                              }}
+                            >
+                              {opt.label.toUpperCase()}
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>
+                          Only send email if you've been offline longer than this
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </CollapsibleSection>
+
+              </>
+            )}
+          </>
+        )}
+      </CollapsibleSection>
+
+      {/* Appearance */}
+      <CollapsibleSection title="APPEARANCE" isOpen={openSection === 'display'} onToggle={() => toggleSection('display')} isMobile={isMobile}>
+        <CollapsibleSection title="THEME" isOpen={openSub === 'theme'} onToggle={() => toggleSub('theme')} isMobile={isMobile}>
+          <div style={{ marginBottom: '16px' }}>
+            <PrefLabel prefKey="theme" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>THEME</PrefLabel>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <select
+                value={user?.preferences?.theme || 'serenity'}
+                onChange={(e) => {
+                  const themeId = e.target.value;
+                  // Check if it's a custom theme (prefixed with 'custom-')
+                  const isCustom = themeId.startsWith('custom-');
+                  const rawThemeId = isCustom ? themeId.replace('custom-', '') : themeId;
+                  const customTheme = isCustom ? availableThemes.find(t => t.id === rawThemeId) : null;
+                  if (customTheme) {
+                    // Apply custom theme CSS immediately
+                    applyCustomTheme(customTheme);
+                  } else {
+                    // Built-in theme - remove custom theme styles and set data-theme
+                    removeCustomTheme(themeId);
+                  }
+                  // Save preference to server (keep the full themeId with prefix)
+                  handleUpdatePreferences({ theme: themeId });
+                }}
+                style={{
+                  ...inputStyle,
+                  cursor: 'pointer',
+                  flex: 1,
+                  minWidth: '150px',
+                }}
+              >
+                <optgroup label="Built-in Themes">
+                  {Object.entries(THEMES).map(([key, config]) => (
+                    <option key={key} value={key}>{config.name}</option>
+                  ))}
+                </optgroup>
+                {availableThemes.length > 0 && (
+                  <optgroup label="Custom Themes">
+                    {availableThemes.map(theme => (
+                      <option key={theme.id} value={`custom-${theme.id}`}>{theme.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              <button
+                onClick={() => setShowThemeModal(true)}
+                style={{
+                  padding: isMobile ? '10px 16px' : '8px 16px',
+                  minHeight: isMobile ? '44px' : 'auto',
+                  background: 'var(--accent-amber)20',
+                  border: '1px solid var(--accent-amber)',
+                  color: 'var(--accent-amber)',
+                  cursor: 'pointer',
+                  fontFamily: 'monospace',
+                  fontSize: isMobile ? '0.85rem' : '0.8rem',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                CUSTOMIZE
+              </button>
+            </div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+              {THEMES[user?.preferences?.theme]?.description ||
+               availableThemes.find(t => `custom-${t.id}` === user?.preferences?.theme)?.description ||
+               (user?.preferences?.theme?.startsWith('custom-')
+                 ? 'Custom theme'
+                 : 'Click "Customize" to create themes or install themes from the gallery')}
+            </div>
+          </div>
+
+        </CollapsibleSection>
+
+        <CollapsibleSection title="TEXT & LAYOUT" isOpen={openSub === 'textLayout'} onToggle={() => toggleSub('textLayout')} isMobile={isMobile}>
+          <div style={{ marginBottom: '16px' }}>
+            <PrefLabel prefKey="fontSize" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>FONT SIZE</PrefLabel>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {Object.entries(FONT_SIZES).map(([key, config]) => (
+                <button
+                  key={key}
+                  onClick={() => handleUpdatePreferences({ fontSize: key })}
+                  style={{
+                    padding: isMobile ? '10px 16px' : '8px 16px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: (user?.preferences?.fontSize || 'medium') === key ? 'var(--accent-amber)20' : 'transparent',
+                    border: `1px solid ${(user?.preferences?.fontSize || 'medium') === key ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                    color: (user?.preferences?.fontSize || 'medium') === key ? 'var(--accent-amber)' : 'var(--text-dim)',
+                    cursor: 'pointer',
+                    fontFamily: 'monospace',
+                    fontSize: key === 'small' ? '0.75rem' : key === 'large' ? '1rem' : key === 'xlarge' ? '1.1rem' : '0.85rem',
+                  }}
+                >
+                  {config.name.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <PrefLabel prefKey="waveDensity" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>{T.WAVE} LIST DENSITY</PrefLabel>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {Object.entries(WAVE_DENSITY).map(([key, config]) => {
+                const active = (user?.preferences?.waveDensity || DEFAULT_WAVE_DENSITY) === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => handleUpdatePreferences({ waveDensity: key })}
+                    style={{
+                      padding: isMobile ? '10px 16px' : '8px 16px',
+                      minHeight: isMobile ? '44px' : 'auto',
+                      background: active ? 'var(--accent-amber)20' : 'transparent',
+                      border: `1px solid ${active ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                      color: active ? 'var(--accent-amber)' : 'var(--text-dim)',
+                      cursor: 'pointer',
+                      fontFamily: 'monospace',
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    {config.name.toUpperCase()}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+              Row spacing for the {T.wave} list — Compact fits more, Spacious is easier to tap.
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <PrefLabel prefKey="messageFont" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>INTERFACE FONT</PrefLabel>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {Object.entries(MESSAGE_FONTS).map(([key, config]) => {
+                const active = (user?.preferences?.messageFont || DEFAULT_MESSAGE_FONT) === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => handleUpdatePreferences({ messageFont: key })}
+                    onMouseEnter={() => setFontPreview(key)}
+                    onMouseLeave={() => setFontPreview(null)}
+                    onFocus={() => setFontPreview(key)}
+                    onBlur={() => setFontPreview(null)}
+                    style={{
+                      padding: isMobile ? '10px 16px' : '8px 16px',
+                      minHeight: isMobile ? '44px' : 'auto',
+                      background: active ? 'var(--accent-amber)20' : 'transparent',
+                      border: `1px solid ${active ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                      color: active ? 'var(--accent-amber)' : 'var(--text-dim)',
+                      cursor: 'pointer',
+                      fontFamily: config.stack,
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    {config.name}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Live preview: shows the hovered/focused font, else the current one. */}
+            {(() => {
+              const previewKey = MESSAGE_FONTS[fontPreview] ? fontPreview
+                : (MESSAGE_FONTS[user?.preferences?.messageFont] ? user.preferences.messageFont : DEFAULT_MESSAGE_FONT);
+              const stack = MESSAGE_FONTS[previewKey].stack;
+              return (
+                <div style={{
+                  marginTop: '10px', padding: '10px 12px',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                  borderRadius: '4px', fontFamily: stack,
+                }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', letterSpacing: '1px', marginBottom: '4px', fontFamily: "'Courier New', monospace" }}>
+                    PREVIEW · {MESSAGE_FONTS[previewKey].name.toUpperCase()}
+                  </div>
+                  <div style={{ color: 'var(--text-primary)', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                    The quick brown fox jumps over the lazy dog.
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '3px' }}>
+                    {T.Pings}, {T.Waves}, {T.Crews} — 0123456789 · !?@#
+                  </div>
+                </div>
+              );
+            })()}
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+              Font for the whole interface (hover an option to preview). Terminal is the classic monospace look; code blocks always stay monospace.
+            </div>
+          </div>
+
+        </CollapsibleSection>
+
+        <CollapsibleSection title="EFFECTS" isOpen={openSub === 'effects'} onToggle={() => toggleSub('effects')} isMobile={isMobile}>
+          <div style={{ marginBottom: '16px' }}>
+            <PrefLabel prefKey="scanLines" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>CRT SCAN LINES</PrefLabel>
+            <button
+              onClick={() => handleUpdatePreferences({ scanLines: !(user?.preferences?.scanLines !== false) })}
+              style={{
+                padding: isMobile ? '10px 16px' : '8px 16px',
+                minHeight: isMobile ? '44px' : 'auto',
+                background: (user?.preferences?.scanLines !== false) ? 'var(--accent-amber)20' : 'transparent',
+                border: `1px solid ${(user?.preferences?.scanLines !== false) ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                color: (user?.preferences?.scanLines !== false) ? 'var(--accent-amber)' : 'var(--text-dim)',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: isMobile ? '0.9rem' : '0.85rem',
+              }}
+            >
+              {(user?.preferences?.scanLines !== false) ? '▣ ENABLED' : '▢ DISABLED'}
+            </button>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+              Disable for improved readability
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <PrefLabel prefKey="holidayEffects" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>HOLIDAY EFFECTS</PrefLabel>
+            <button
+              onClick={() => handleUpdatePreferences({ holidayEffects: !(user?.preferences?.holidayEffects !== false) })}
+              style={{
+                padding: isMobile ? '10px 16px' : '8px 16px',
+                minHeight: isMobile ? '44px' : 'auto',
+                background: (user?.preferences?.holidayEffects !== false) ? 'var(--accent-teal)20' : 'transparent',
+                border: `1px solid ${(user?.preferences?.holidayEffects !== false) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                color: (user?.preferences?.holidayEffects !== false) ? 'var(--accent-teal)' : 'var(--text-dim)',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: isMobile ? '0.9rem' : '0.85rem',
+              }}
+            >
+              {(user?.preferences?.holidayEffects !== false) ? '▣ ENABLED' : '▢ DISABLED'}
+            </button>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+              Seasonal visual effects for holidays
+            </div>
+          </div>
+
+        </CollapsibleSection>
+
+        <CollapsibleSection title={T.PINGS} isOpen={openSub === 'pingBehaviour'} onToggle={() => toggleSub('pingBehaviour')} isMobile={isMobile}>
+          <div style={{ marginBottom: '16px' }}>
+            <PrefLabel prefKey="autoFocusMessages" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>AUTO-FOCUS {T.PINGS}</PrefLabel>
+            <button
+              onClick={() => handleUpdatePreferences({ autoFocusMessages: !(user?.preferences?.autoFocusMessages === true) })}
+              style={{
+                padding: isMobile ? '10px 16px' : '8px 16px',
+                minHeight: isMobile ? '44px' : 'auto',
+                background: (user?.preferences?.autoFocusMessages === true) ? 'var(--accent-teal)20' : 'transparent',
+                border: `1px solid ${(user?.preferences?.autoFocusMessages === true) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                color: (user?.preferences?.autoFocusMessages === true) ? 'var(--accent-teal)' : 'var(--text-dim)',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: isMobile ? '0.9rem' : '0.85rem',
+              }}
+            >
+              {(user?.preferences?.autoFocusMessages === true) ? '⤢ ENABLED' : '⤢ DISABLED'}
+            </button>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+              Automatically enter Focus View when clicking {T.pings} with replies
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <PrefLabel prefKey="autoCollapseMessages" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>AUTO-COLLAPSE LONG MESSAGES</PrefLabel>
+            <button
+              onClick={() => handleUpdatePreferences({ autoCollapseMessages: !(user?.preferences?.autoCollapseMessages === true) })}
+              style={{
+                padding: isMobile ? '10px 16px' : '8px 16px',
+                minHeight: isMobile ? '44px' : 'auto',
+                background: (user?.preferences?.autoCollapseMessages === true) ? 'var(--accent-teal)20' : 'transparent',
+                border: `1px solid ${(user?.preferences?.autoCollapseMessages === true) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                color: (user?.preferences?.autoCollapseMessages === true) ? 'var(--accent-teal)' : 'var(--text-dim)',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: isMobile ? '0.9rem' : '0.85rem',
+              }}
+            >
+              {(user?.preferences?.autoCollapseMessages === true) ? '▣ ENABLED' : '▢ DISABLED'}
+            </button>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+              Automatically minimize messages with 3+ lines or media
+            </div>
+          </div>
+
+
+        </CollapsibleSection>
+
+      </CollapsibleSection>
+
+      {/* Crawl Bar Preferences */}
+      <CollapsibleSection title="CRAWL BAR" isOpen={openSection === 'crawl'} onToggle={() => toggleSection('crawl')} isMobile={isMobile}>
+
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>ENABLE CRAWL BAR</label>
+          <button
+            onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, enabled: !(user?.preferences?.crawlBar?.enabled !== false) } })}
+            style={{
+              padding: isMobile ? '10px 16px' : '8px 16px',
+              minHeight: isMobile ? '44px' : 'auto',
+              background: (user?.preferences?.crawlBar?.enabled !== false) ? 'var(--accent-teal)20' : 'transparent',
+              border: `1px solid ${(user?.preferences?.crawlBar?.enabled !== false) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+              color: (user?.preferences?.crawlBar?.enabled !== false) ? 'var(--accent-teal)' : 'var(--text-dim)',
+              cursor: 'pointer',
+              fontFamily: 'monospace',
+              fontSize: isMobile ? '0.9rem' : '0.85rem',
+            }}
+          >
+            {(user?.preferences?.crawlBar?.enabled !== false) ? '▣ ENABLED' : '▢ DISABLED'}
+          </button>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+            Show scrolling ticker with stocks, weather, and news
+          </div>
+        </div>
+
+        {(user?.preferences?.crawlBar?.enabled !== false) && (
+          <>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>CONTENT</label>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, showStocks: !(user?.preferences?.crawlBar?.showStocks !== false) } })}
+                  style={{
+                    padding: isMobile ? '10px 16px' : '8px 16px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: (user?.preferences?.crawlBar?.showStocks !== false) ? 'var(--accent-green)20' : 'transparent',
+                    border: `1px solid ${(user?.preferences?.crawlBar?.showStocks !== false) ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
+                    color: (user?.preferences?.crawlBar?.showStocks !== false) ? 'var(--accent-green)' : 'var(--text-dim)',
+                    cursor: 'pointer',
+                    fontFamily: 'monospace',
+                    fontSize: isMobile ? '0.9rem' : '0.85rem',
+                  }}
+                >
+                  STOCKS
+                </button>
+                <button
+                  onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, showWeather: !(user?.preferences?.crawlBar?.showWeather !== false) } })}
+                  style={{
+                    padding: isMobile ? '10px 16px' : '8px 16px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: (user?.preferences?.crawlBar?.showWeather !== false) ? 'var(--accent-teal)20' : 'transparent',
+                    border: `1px solid ${(user?.preferences?.crawlBar?.showWeather !== false) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                    color: (user?.preferences?.crawlBar?.showWeather !== false) ? 'var(--accent-teal)' : 'var(--text-dim)',
+                    cursor: 'pointer',
+                    fontFamily: 'monospace',
+                    fontSize: isMobile ? '0.9rem' : '0.85rem',
+                  }}
+                >
+                  WEATHER
+                </button>
+                <button
+                  onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, showNews: !(user?.preferences?.crawlBar?.showNews !== false) } })}
+                  style={{
+                    padding: isMobile ? '10px 16px' : '8px 16px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: (user?.preferences?.crawlBar?.showNews !== false) ? 'var(--accent-purple)20' : 'transparent',
+                    border: `1px solid ${(user?.preferences?.crawlBar?.showNews !== false) ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
+                    color: (user?.preferences?.crawlBar?.showNews !== false) ? 'var(--accent-purple)' : 'var(--text-dim)',
+                    cursor: 'pointer',
+                    fontFamily: 'monospace',
+                    fontSize: isMobile ? '0.9rem' : '0.85rem',
+                  }}
+                >
+                  NEWS
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SCROLL SPEED</label>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {['slow', 'normal', 'fast'].map((speed) => (
+                  <button
+                    key={speed}
+                    onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, scrollSpeed: speed } })}
+                    style={{
+                      padding: isMobile ? '10px 16px' : '8px 16px',
+                      minHeight: isMobile ? '44px' : 'auto',
+                      background: (user?.preferences?.crawlBar?.scrollSpeed || 'normal') === speed ? 'var(--accent-amber)20' : 'transparent',
+                      border: `1px solid ${(user?.preferences?.crawlBar?.scrollSpeed || 'normal') === speed ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                      color: (user?.preferences?.crawlBar?.scrollSpeed || 'normal') === speed ? 'var(--accent-amber)' : 'var(--text-dim)',
+                      cursor: 'pointer',
+                      fontFamily: 'monospace',
+                      fontSize: isMobile ? '0.9rem' : '0.85rem',
+                    }}
+                  >
+                    {speed.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>LOCATION OVERRIDE</label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  placeholder="e.g., New York, NY or Coudersport, US"
+                  value={crawlBarLocation}
+                  onChange={(e) => setCrawlBarLocation(e.target.value)}
+                  style={{
+                    flex: 1,
+                    padding: isMobile ? '12px' : '10px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: 'var(--bg-base)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-primary)',
+                    fontFamily: 'monospace',
+                    fontSize: isMobile ? '0.9rem' : '0.85rem',
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, locationName: crawlBarLocation || null, location: null } });
+                  }}
+                  disabled={crawlBarLocation === (user?.preferences?.crawlBar?.locationName || '')}
+                  style={{
+                    padding: isMobile ? '10px 12px' : '8px 12px',
+                    minHeight: isMobile ? '44px' : 'auto',
+                    background: crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'var(--accent-amber)20' : 'transparent',
+                    border: `1px solid ${crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                    color: crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'var(--accent-amber)' : 'var(--text-muted)',
+                    cursor: crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'pointer' : 'default',
+                    fontFamily: 'monospace',
+                    fontSize: isMobile ? '0.9rem' : '0.85rem',
+                  }}
+                >
+                  SAVE
+                </button>
+                {(crawlBarLocation || user?.preferences?.crawlBar?.locationName) && (
+                  <button
+                    onClick={() => {
+                      setCrawlBarLocation('');
+                      handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, locationName: null, location: null } });
+                    }}
+                    style={{
+                      padding: isMobile ? '10px 12px' : '8px 12px',
+                      minHeight: isMobile ? '44px' : 'auto',
+                      background: 'transparent',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-dim)',
+                      cursor: 'pointer',
+                      fontFamily: 'monospace',
+                      fontSize: isMobile ? '0.9rem' : '0.85rem',
+                    }}
+                  >
+                    CLEAR
+                  </button>
+                )}
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+                Enter city name (e.g., "Coudersport, US") then click SAVE
+              </div>
+            </div>
+          </>
+        )}
+      </CollapsibleSection>
+
+      {/* Video Feed Preferences (v2.8.0) */}
+      <CollapsibleSection title="VIDEO FEED" isOpen={openSection === 'videoFeed'} onToggle={() => toggleSection('videoFeed')} isMobile={isMobile}>
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SHOW MY VIDEOS IN DISCOVER FEED</label>
+          <button
+            onClick={() => handleUpdatePreferences({ videoFeed: { ...user?.preferences?.videoFeed, showInFeed: !(user?.preferences?.videoFeed?.showInFeed !== false) } })}
+            style={{
+              padding: isMobile ? '10px 16px' : '8px 16px',
+              minHeight: isMobile ? '44px' : 'auto',
+              background: (user?.preferences?.videoFeed?.showInFeed !== false) ? 'var(--accent-teal)20' : 'transparent',
+              border: `1px solid ${(user?.preferences?.videoFeed?.showInFeed !== false) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+              color: (user?.preferences?.videoFeed?.showInFeed !== false) ? 'var(--accent-teal)' : 'var(--text-dim)',
+              cursor: 'pointer',
+              fontFamily: 'monospace',
+              fontSize: isMobile ? '0.9rem' : '0.85rem',
+            }}
+          >
+            {(user?.preferences?.videoFeed?.showInFeed !== false) ? '▣ ENABLED' : '▢ DISABLED'}
+          </button>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+            When enabled, your video pings from public waves can appear in other users' feeds
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>AUTOPLAY VIDEOS</label>
+          <button
+            onClick={() => handleUpdatePreferences({ videoFeed: { ...user?.preferences?.videoFeed, autoplay: !(user?.preferences?.videoFeed?.autoplay !== false) } })}
+            style={{
+              padding: isMobile ? '10px 16px' : '8px 16px',
+              minHeight: isMobile ? '44px' : 'auto',
+              background: (user?.preferences?.videoFeed?.autoplay !== false) ? 'var(--accent-green)20' : 'transparent',
+              border: `1px solid ${(user?.preferences?.videoFeed?.autoplay !== false) ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
+              color: (user?.preferences?.videoFeed?.autoplay !== false) ? 'var(--accent-green)' : 'var(--text-dim)',
+              cursor: 'pointer',
+              fontFamily: 'monospace',
+              fontSize: isMobile ? '0.9rem' : '0.85rem',
+            }}
+          >
+            {(user?.preferences?.videoFeed?.autoplay !== false) ? '▣ ENABLED' : '▢ DISABLED'}
+          </button>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+            Automatically play videos as you scroll through the feed
+          </div>
+        </div>
+
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
+          ℹ️ The Discover feed shows video {T.pings} from public {T.waves} and {T.waves} you participate in.
+        </div>
+      </CollapsibleSection>
+
+      {/* Media Server Integration (v2.14.0 Jellyfin, v2.15.0 Plex) */}
+      <CollapsibleSection title="MEDIA SERVERS" isOpen={openSection === 'media'} onToggle={() => toggleSection('media')} isMobile={isMobile}>
+        <CollapsibleSection title="JELLYFIN / EMBY" isOpen={openSub === 'jellyfin'} onToggle={() => toggleSub('jellyfin')} isMobile={isMobile}>
+          <JellyfinConnectionManager fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} hideTitle />
+        </CollapsibleSection>
+        <CollapsibleSection title="PLEX" isOpen={openSub === 'plex'} onToggle={() => toggleSub('plex')} isMobile={isMobile}>
+          <PlexConnectionManager fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} hideTitle />
+        </CollapsibleSection>
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
+          Connect your Jellyfin, Emby, or Plex media server to share content in {T.waves}.
+        </div>
+      </CollapsibleSection>
+
+      {/* Security */}
+      <CollapsibleSection title="SECURITY" isOpen={openSection === 'security'} onToggle={() => toggleSection('security')} isMobile={isMobile} accentColor="var(--accent-orange)">
         {/* Change Password Sub-section */}
-        <CollapsibleSection title="CHANGE PASSWORD" isOpen={openSecuritySection === 'password'} onToggle={() => toggleSecuritySection('password')} isMobile={isMobile}>
+        <CollapsibleSection title="CHANGE PASSWORD" isOpen={openSub === 'password'} onToggle={() => toggleSub('password')} isMobile={isMobile}>
           {/* E2EE Warning: Show when E2EE is enabled but not unlocked */}
           {e2ee.isE2EEEnabled && !e2ee.isUnlocked && (
             <div style={{
@@ -886,7 +1719,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </CollapsibleSection>
 
         {/* Two-Factor Authentication Sub-section */}
-        <CollapsibleSection title="TWO-FACTOR AUTHENTICATION" isOpen={openSecuritySection === 'mfa'} onToggle={() => toggleSecuritySection('mfa')} isMobile={isMobile}>
+        <CollapsibleSection title="TWO-FACTOR AUTHENTICATION" isOpen={openSub === 'mfa'} onToggle={() => toggleSub('mfa')} isMobile={isMobile}>
           {mfaStatus ? (
               <>
                 {/* Recovery Codes Modal/Display */}
@@ -1055,7 +1888,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                     <div style={{ marginBottom: '16px', padding: '12px', background: 'var(--bg-elevated)', border: `1px solid ${mfaStatus.totpEnabled ? 'var(--accent-green)' : 'var(--border-subtle)'}` }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                         <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem' }}>
-                          🔑 Authenticator App (TOTP)
+                          Authenticator App (TOTP)
                         </div>
                         <div style={{ color: mfaStatus.totpEnabled ? 'var(--accent-green)' : 'var(--text-muted)', fontSize: '0.75rem' }}>
                           {mfaStatus.totpEnabled ? '✓ ENABLED' : 'NOT SET UP'}
@@ -1085,7 +1918,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                     <div style={{ marginBottom: '16px', padding: '12px', background: 'var(--bg-elevated)', border: `1px solid ${mfaStatus.emailMfaEnabled ? 'var(--accent-green)' : 'var(--border-subtle)'}` }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                         <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem' }}>
-                          ✉️ Email Verification
+                          Email Verification
                         </div>
                         <div style={{ color: mfaStatus.emailMfaEnabled ? 'var(--accent-green)' : 'var(--text-muted)', fontSize: '0.75rem' }}>
                           {mfaStatus.emailMfaEnabled ? '✓ ENABLED' : 'NOT SET UP'}
@@ -1110,7 +1943,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                       <div style={{ padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                           <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem' }}>
-                            🔐 Recovery Codes
+                            Recovery Codes
                           </div>
                           <div style={{ color: mfaStatus.hasRecoveryCodes ? 'var(--accent-green)' : 'var(--accent-orange)', fontSize: '0.75rem' }}>
                             {mfaStatus.hasRecoveryCodes ? '✓ AVAILABLE' : '⚠️ NOT SET'}
@@ -1147,13 +1980,13 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
         {/* E2EE Recovery Key Sub-section */}
         {e2ee.isE2EEEnabled && (
-          <CollapsibleSection title="E2EE RECOVERY KEY" isOpen={openSecuritySection === 'e2ee'} onToggle={() => toggleSecuritySection('e2ee')} isMobile={isMobile}>
+          <CollapsibleSection title="E2EE RECOVERY KEY" isOpen={openSub === 'e2ee'} onToggle={() => toggleSub('e2ee')} isMobile={isMobile}>
             <div>
               {/* Display regenerated recovery key */}
               {e2eeRecoveryKey && (
                 <div style={{ marginBottom: '20px', padding: '16px', background: 'var(--accent-green)10', border: '2px solid var(--accent-green)', borderRadius: '4px' }}>
                   <div style={{ color: 'var(--accent-green)', fontSize: '0.9rem', fontWeight: 'bold', marginBottom: '12px' }}>
-                    🔐 New Recovery Key Generated
+                    New Recovery Key Generated
                   </div>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
                     Save this key in a safe place. You'll need it to recover access if your password changes.
@@ -1212,7 +2045,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
                     <span style={{ color: 'var(--accent-green)', fontSize: '0.85rem' }}>
-                      🔐 End-to-End Encryption Active
+                      End-to-End Encryption Active
                     </span>
                   </div>
 
@@ -1247,7 +2080,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                       fontSize: '0.75rem'
                     }}
                   >
-                    {e2eeRecoveryLoading ? 'GENERATING...' : '🔑 REGENERATE RECOVERY KEY'}
+                    {e2eeRecoveryLoading ? 'GENERATING...' : 'REGENERATE RECOVERY KEY'}
                   </button>
 
                   <div style={{ marginTop: '12px', color: 'var(--text-dim)', fontSize: '0.7rem' }}>
@@ -1260,7 +2093,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         )}
 
         {/* Active Sessions Sub-section */}
-        <CollapsibleSection title="ACTIVE SESSIONS" isOpen={openSecuritySection === 'sessions'} onToggle={() => toggleSecuritySection('sessions')} isMobile={isMobile}>
+        <CollapsibleSection title="ACTIVE SESSIONS" isOpen={openSub === 'sessions'} onToggle={() => toggleSub('sessions')} isMobile={isMobile}>
           {!sessionsEnabled ? (
               <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '20px' }}>
                 Session management is not enabled on this server.
@@ -1366,12 +2199,16 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
             )}
         </CollapsibleSection>
 
+      </CollapsibleSection>
+
+      {/* Privacy & safety */}
+      <CollapsibleSection title="PRIVACY & SAFETY" isOpen={openSection === 'privacy'} onToggle={() => toggleSection('privacy')} isMobile={isMobile}>
         {/* Blocked & Muted Users Sub-section */}
-        <CollapsibleSection title="BLOCKED & MUTED USERS" isOpen={openSecuritySection === 'blocked'} onToggle={() => toggleSecuritySection('blocked')} isMobile={isMobile}>
+        <CollapsibleSection title="BLOCKED & MUTED USERS" isOpen={openSub === 'blocked'} onToggle={() => toggleSub('blocked')} isMobile={isMobile}>
           {/* Blocked Users */}
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--accent-orange)', fontSize: '0.75rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>⊘</span> BLOCKED ({blockedUsers.length})
+              BLOCKED ({blockedUsers.length})
             </div>
             {blockedUsers.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--bg-hover)' }}>
@@ -1416,7 +2253,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
           {/* Muted Users */}
           <div>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>🔇</span> MUTED ({mutedUsers.length})
+              MUTED ({mutedUsers.length})
             </div>
             {mutedUsers.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--bg-hover)' }}>
@@ -1459,849 +2296,114 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
           </div>
         </CollapsibleSection>
 
+        <CollapsibleSection title="MY REPORTS" isOpen={openSub === 'reports'} onToggle={() => toggleSub('reports')} isMobile={isMobile}>
+          <MyReportsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} hideTitle />
+        </CollapsibleSection>
+
       </CollapsibleSection>
 
-      {/* Display Preferences */}
-      <CollapsibleSection title="DISPLAY PREFERENCES" isOpen={openSection === 'display'} onToggle={() => toggleSection('display')} isMobile={isMobile}>
+      {/* Account (v1.18.0) */}
+      <CollapsibleSection title="ACCOUNT" isOpen={openSection === 'account'} onToggle={() => toggleSection('account')} isMobile={isMobile} accentColor="var(--accent-orange)" titleColor="var(--accent-orange)">
+        <CollapsibleSection title="EXPORT MY DATA" isOpen={openSub === 'export'} onToggle={() => toggleSub('export')} isMobile={isMobile}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+            Download a copy of all your personal data including profile, {T.pings}, contacts, and settings.
+          </div>
+          <button
+            onClick={handleExportData}
+            disabled={exportLoading}
+            style={{
+              padding: '10px 20px',
+              background: 'var(--accent-teal)20',
+              border: '1px solid var(--accent-teal)',
+              color: 'var(--accent-teal)',
+              cursor: exportLoading ? 'wait' : 'pointer',
+              fontFamily: 'monospace',
+              fontSize: '0.8rem',
+            }}
+          >
+            {exportLoading ? UI_LABELS.exportingData : UI_LABELS.downloadData}
+          </button>
+        </CollapsibleSection>
 
-        <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="theme" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>THEME</PrefLabel>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <select
-              value={user?.preferences?.theme || 'serenity'}
-              onChange={(e) => {
-                const themeId = e.target.value;
-                // Check if it's a custom theme (prefixed with 'custom-')
-                const isCustom = themeId.startsWith('custom-');
-                const rawThemeId = isCustom ? themeId.replace('custom-', '') : themeId;
-                const customTheme = isCustom ? availableThemes.find(t => t.id === rawThemeId) : null;
-                if (customTheme) {
-                  // Apply custom theme CSS immediately
-                  applyCustomTheme(customTheme);
-                } else {
-                  // Built-in theme - remove custom theme styles and set data-theme
-                  removeCustomTheme(themeId);
-                }
-                // Save preference to server (keep the full themeId with prefix)
-                handleUpdatePreferences({ theme: themeId });
-              }}
-              style={{
-                ...inputStyle,
-                cursor: 'pointer',
-                flex: 1,
-                minWidth: '150px',
-              }}
-            >
-              <optgroup label="Built-in Themes">
-                {Object.entries(THEMES).map(([key, config]) => (
-                  <option key={key} value={key}>{config.name}</option>
-                ))}
-              </optgroup>
-              {availableThemes.length > 0 && (
-                <optgroup label="Custom Themes">
-                  {availableThemes.map(theme => (
-                    <option key={theme.id} value={`custom-${theme.id}`}>{theme.name}</option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
+        <CollapsibleSection title="DELETE ACCOUNT" isOpen={openSub === 'delete'} onToggle={() => toggleSub('delete')} isMobile={isMobile} accentColor="var(--accent-orange)" titleColor="var(--accent-orange)">
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
+            Permanently delete your account and all associated data. This action cannot be undone.
+            Your pings will remain visible as "[Deleted User]" for context in conversations.
+          </div>
+
+          {!showDeleteConfirm ? (
             <button
-              onClick={() => setShowThemeModal(true)}
+              onClick={() => setShowDeleteConfirm(true)}
               style={{
-                padding: isMobile ? '10px 16px' : '8px 16px',
-                minHeight: isMobile ? '44px' : 'auto',
-                background: 'var(--accent-amber)20',
-                border: '1px solid var(--accent-amber)',
-                color: 'var(--accent-amber)',
+                padding: '10px 20px',
+                background: 'transparent',
+                border: '1px solid var(--accent-orange)',
+                color: 'var(--accent-orange)',
                 cursor: 'pointer',
                 fontFamily: 'monospace',
-                fontSize: isMobile ? '0.85rem' : '0.8rem',
-                whiteSpace: 'nowrap',
+                fontSize: '0.8rem',
               }}
             >
-              CUSTOMIZE
+              DELETE MY ACCOUNT
             </button>
-          </div>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            {THEMES[user?.preferences?.theme]?.description ||
-             availableThemes.find(t => `custom-${t.id}` === user?.preferences?.theme)?.description ||
-             (user?.preferences?.theme?.startsWith('custom-')
-               ? 'Custom theme'
-               : 'Click "Customize" to create themes or install themes from the gallery')}
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="fontSize" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>FONT SIZE</PrefLabel>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {Object.entries(FONT_SIZES).map(([key, config]) => (
-              <button
-                key={key}
-                onClick={() => handleUpdatePreferences({ fontSize: key })}
+          ) : (
+            <div style={{ marginTop: '12px' }}>
+              <div style={{ color: 'var(--accent-orange)', fontSize: '0.8rem', marginBottom: '12px', fontWeight: 'bold' }}>
+                Are you sure? Enter your password to confirm:
+              </div>
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder="Your password"
                 style={{
-                  padding: isMobile ? '10px 16px' : '8px 16px',
-                  minHeight: isMobile ? '44px' : 'auto',
-                  background: (user?.preferences?.fontSize || 'medium') === key ? 'var(--accent-amber)20' : 'transparent',
-                  border: `1px solid ${(user?.preferences?.fontSize || 'medium') === key ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                  color: (user?.preferences?.fontSize || 'medium') === key ? 'var(--accent-amber)' : 'var(--text-dim)',
-                  cursor: 'pointer',
+                  width: '100%',
+                  padding: '10px 12px',
+                  background: 'var(--bg-base)',
+                  border: '1px solid var(--accent-orange)',
+                  color: 'var(--text-primary)',
                   fontFamily: 'monospace',
-                  fontSize: key === 'small' ? '0.75rem' : key === 'large' ? '1rem' : key === 'xlarge' ? '1.1rem' : '0.85rem',
+                  marginBottom: '12px',
+                  boxSizing: 'border-box',
                 }}
-              >
-                {config.name.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="waveDensity" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>{T.WAVE} LIST DENSITY</PrefLabel>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {Object.entries(WAVE_DENSITY).map(([key, config]) => {
-              const active = (user?.preferences?.waveDensity || DEFAULT_WAVE_DENSITY) === key;
-              return (
+              />
+              <div style={{ display: 'flex', gap: '8px' }}>
                 <button
-                  key={key}
-                  onClick={() => handleUpdatePreferences({ waveDensity: key })}
+                  onClick={handleDeleteAccount}
+                  disabled={deleteLoading || !deletePassword}
                   style={{
-                    padding: isMobile ? '10px 16px' : '8px 16px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: active ? 'var(--accent-amber)20' : 'transparent',
-                    border: `1px solid ${active ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                    color: active ? 'var(--accent-amber)' : 'var(--text-dim)',
+                    padding: '10px 20px',
+                    background: deletePassword ? 'var(--accent-orange)' : 'transparent',
+                    border: '1px solid var(--accent-orange)',
+                    color: deletePassword ? '#000' : 'var(--accent-orange)',
+                    cursor: deleteLoading || !deletePassword ? 'not-allowed' : 'pointer',
+                    fontFamily: 'monospace',
+                    fontSize: '0.8rem',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  {deleteLoading ? 'DELETING...' : CONFIRM.destructive.toUpperCase()}
+                </button>
+                <button
+                  onClick={() => { setShowDeleteConfirm(false); setDeletePassword(''); }}
+                  style={{
+                    padding: '10px 20px',
+                    background: 'transparent',
+                    border: '1px solid var(--border-primary)',
+                    color: 'var(--text-muted)',
                     cursor: 'pointer',
                     fontFamily: 'monospace',
-                    fontSize: '0.85rem',
+                    fontSize: '0.8rem',
                   }}
                 >
-                  {config.name.toUpperCase()}
+                  {CONFIRM.cancel.toUpperCase()}
                 </button>
-              );
-            })}
-          </div>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Row spacing for the {T.wave} list — Compact fits more, Spacious is easier to tap.
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="messageFont" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>INTERFACE FONT</PrefLabel>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {Object.entries(MESSAGE_FONTS).map(([key, config]) => {
-              const active = (user?.preferences?.messageFont || DEFAULT_MESSAGE_FONT) === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => handleUpdatePreferences({ messageFont: key })}
-                  onMouseEnter={() => setFontPreview(key)}
-                  onMouseLeave={() => setFontPreview(null)}
-                  onFocus={() => setFontPreview(key)}
-                  onBlur={() => setFontPreview(null)}
-                  style={{
-                    padding: isMobile ? '10px 16px' : '8px 16px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: active ? 'var(--accent-amber)20' : 'transparent',
-                    border: `1px solid ${active ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                    color: active ? 'var(--accent-amber)' : 'var(--text-dim)',
-                    cursor: 'pointer',
-                    fontFamily: config.stack,
-                    fontSize: '0.85rem',
-                  }}
-                >
-                  {config.name}
-                </button>
-              );
-            })}
-          </div>
-          {/* Live preview: shows the hovered/focused font, else the current one. */}
-          {(() => {
-            const previewKey = MESSAGE_FONTS[fontPreview] ? fontPreview
-              : (MESSAGE_FONTS[user?.preferences?.messageFont] ? user.preferences.messageFont : DEFAULT_MESSAGE_FONT);
-            const stack = MESSAGE_FONTS[previewKey].stack;
-            return (
-              <div style={{
-                marginTop: '10px', padding: '10px 12px',
-                background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                borderRadius: '4px', fontFamily: stack,
-              }}>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', letterSpacing: '1px', marginBottom: '4px', fontFamily: "'Courier New', monospace" }}>
-                  PREVIEW · {MESSAGE_FONTS[previewKey].name.toUpperCase()}
-                </div>
-                <div style={{ color: 'var(--text-primary)', fontSize: '0.9rem', lineHeight: 1.5 }}>
-                  The quick brown fox jumps over the lazy dog.
-                </div>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '3px' }}>
-                  {T.Pings}, {T.Waves}, {T.Crews} — 0123456789 · !?@#
-                </div>
               </div>
-            );
-          })()}
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Font for the whole interface (hover an option to preview). Terminal is the classic monospace look; code blocks always stay monospace.
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="scanLines" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>CRT SCAN LINES</PrefLabel>
-          <button
-            onClick={() => handleUpdatePreferences({ scanLines: !(user?.preferences?.scanLines !== false) })}
-            style={{
-              padding: isMobile ? '10px 16px' : '8px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              background: (user?.preferences?.scanLines !== false) ? 'var(--accent-amber)20' : 'transparent',
-              border: `1px solid ${(user?.preferences?.scanLines !== false) ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-              color: (user?.preferences?.scanLines !== false) ? 'var(--accent-amber)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.9rem' : '0.85rem',
-            }}
-          >
-            {(user?.preferences?.scanLines !== false) ? '▣ ENABLED' : '▢ DISABLED'}
-          </button>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Disable for improved readability
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="holidayEffects" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>HOLIDAY EFFECTS</PrefLabel>
-          <button
-            onClick={() => handleUpdatePreferences({ holidayEffects: !(user?.preferences?.holidayEffects !== false) })}
-            style={{
-              padding: isMobile ? '10px 16px' : '8px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              background: (user?.preferences?.holidayEffects !== false) ? 'var(--accent-teal)20' : 'transparent',
-              border: `1px solid ${(user?.preferences?.holidayEffects !== false) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
-              color: (user?.preferences?.holidayEffects !== false) ? 'var(--accent-teal)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.9rem' : '0.85rem',
-            }}
-          >
-            {(user?.preferences?.holidayEffects !== false) ? '🎄 ENABLED' : '🎄 DISABLED'}
-          </button>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Seasonal visual effects for holidays
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="autoFocusMessages" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>AUTO-FOCUS {T.PINGS}</PrefLabel>
-          <button
-            onClick={() => handleUpdatePreferences({ autoFocusMessages: !(user?.preferences?.autoFocusMessages === true) })}
-            style={{
-              padding: isMobile ? '10px 16px' : '8px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              background: (user?.preferences?.autoFocusMessages === true) ? 'var(--accent-teal)20' : 'transparent',
-              border: `1px solid ${(user?.preferences?.autoFocusMessages === true) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
-              color: (user?.preferences?.autoFocusMessages === true) ? 'var(--accent-teal)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.9rem' : '0.85rem',
-            }}
-          >
-            {(user?.preferences?.autoFocusMessages === true) ? '⤢ ENABLED' : '⤢ DISABLED'}
-          </button>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Automatically enter Focus View when clicking {T.pings} with replies
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <PrefLabel prefKey="autoCollapseMessages" overrides={user?.preferenceOverrides} onReset={handleResetPreference}>AUTO-COLLAPSE LONG MESSAGES</PrefLabel>
-          <button
-            onClick={() => handleUpdatePreferences({ autoCollapseMessages: !(user?.preferences?.autoCollapseMessages === true) })}
-            style={{
-              padding: isMobile ? '10px 16px' : '8px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              background: (user?.preferences?.autoCollapseMessages === true) ? 'var(--accent-teal)20' : 'transparent',
-              border: `1px solid ${(user?.preferences?.autoCollapseMessages === true) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
-              color: (user?.preferences?.autoCollapseMessages === true) ? 'var(--accent-teal)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.9rem' : '0.85rem',
-            }}
-          >
-            {(user?.preferences?.autoCollapseMessages === true) ? '▼ ENABLED' : '▼ DISABLED'}
-          </button>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Automatically minimize messages with 3+ lines or media
-          </div>
-        </div>
-
+            </div>
+          )}
+        </CollapsibleSection>
 
       </CollapsibleSection>
-
-      {/* Crawl Bar Preferences */}
-      <CollapsibleSection title="CRAWL BAR" isOpen={openSection === 'crawl'} onToggle={() => toggleSection('crawl')} isMobile={isMobile}>
-
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>ENABLE CRAWL BAR</label>
-          <button
-            onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, enabled: !(user?.preferences?.crawlBar?.enabled !== false) } })}
-            style={{
-              padding: isMobile ? '10px 16px' : '8px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              background: (user?.preferences?.crawlBar?.enabled !== false) ? 'var(--accent-teal)20' : 'transparent',
-              border: `1px solid ${(user?.preferences?.crawlBar?.enabled !== false) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
-              color: (user?.preferences?.crawlBar?.enabled !== false) ? 'var(--accent-teal)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.9rem' : '0.85rem',
-            }}
-          >
-            {(user?.preferences?.crawlBar?.enabled !== false) ? '▣ ENABLED' : '▢ DISABLED'}
-          </button>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Show scrolling ticker with stocks, weather, and news
-          </div>
-        </div>
-
-        {(user?.preferences?.crawlBar?.enabled !== false) && (
-          <>
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>CONTENT</label>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <button
-                  onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, showStocks: !(user?.preferences?.crawlBar?.showStocks !== false) } })}
-                  style={{
-                    padding: isMobile ? '10px 16px' : '8px 16px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: (user?.preferences?.crawlBar?.showStocks !== false) ? 'var(--accent-green)20' : 'transparent',
-                    border: `1px solid ${(user?.preferences?.crawlBar?.showStocks !== false) ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
-                    color: (user?.preferences?.crawlBar?.showStocks !== false) ? 'var(--accent-green)' : 'var(--text-dim)',
-                    cursor: 'pointer',
-                    fontFamily: 'monospace',
-                    fontSize: isMobile ? '0.9rem' : '0.85rem',
-                  }}
-                >
-                  📈 STOCKS
-                </button>
-                <button
-                  onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, showWeather: !(user?.preferences?.crawlBar?.showWeather !== false) } })}
-                  style={{
-                    padding: isMobile ? '10px 16px' : '8px 16px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: (user?.preferences?.crawlBar?.showWeather !== false) ? 'var(--accent-teal)20' : 'transparent',
-                    border: `1px solid ${(user?.preferences?.crawlBar?.showWeather !== false) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
-                    color: (user?.preferences?.crawlBar?.showWeather !== false) ? 'var(--accent-teal)' : 'var(--text-dim)',
-                    cursor: 'pointer',
-                    fontFamily: 'monospace',
-                    fontSize: isMobile ? '0.9rem' : '0.85rem',
-                  }}
-                >
-                  🌡️ WEATHER
-                </button>
-                <button
-                  onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, showNews: !(user?.preferences?.crawlBar?.showNews !== false) } })}
-                  style={{
-                    padding: isMobile ? '10px 16px' : '8px 16px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: (user?.preferences?.crawlBar?.showNews !== false) ? 'var(--accent-purple)20' : 'transparent',
-                    border: `1px solid ${(user?.preferences?.crawlBar?.showNews !== false) ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
-                    color: (user?.preferences?.crawlBar?.showNews !== false) ? 'var(--accent-purple)' : 'var(--text-dim)',
-                    cursor: 'pointer',
-                    fontFamily: 'monospace',
-                    fontSize: isMobile ? '0.9rem' : '0.85rem',
-                  }}
-                >
-                  ◆ NEWS
-                </button>
-              </div>
-            </div>
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SCROLL SPEED</label>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                {['slow', 'normal', 'fast'].map((speed) => (
-                  <button
-                    key={speed}
-                    onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, scrollSpeed: speed } })}
-                    style={{
-                      padding: isMobile ? '10px 16px' : '8px 16px',
-                      minHeight: isMobile ? '44px' : 'auto',
-                      background: (user?.preferences?.crawlBar?.scrollSpeed || 'normal') === speed ? 'var(--accent-amber)20' : 'transparent',
-                      border: `1px solid ${(user?.preferences?.crawlBar?.scrollSpeed || 'normal') === speed ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                      color: (user?.preferences?.crawlBar?.scrollSpeed || 'normal') === speed ? 'var(--accent-amber)' : 'var(--text-dim)',
-                      cursor: 'pointer',
-                      fontFamily: 'monospace',
-                      fontSize: isMobile ? '0.9rem' : '0.85rem',
-                    }}
-                  >
-                    {speed.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>LOCATION OVERRIDE</label>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <input
-                  type="text"
-                  placeholder="e.g., New York, NY or Coudersport, US"
-                  value={crawlBarLocation}
-                  onChange={(e) => setCrawlBarLocation(e.target.value)}
-                  style={{
-                    flex: 1,
-                    padding: isMobile ? '12px' : '10px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: 'var(--bg-base)',
-                    border: '1px solid var(--border-subtle)',
-                    color: 'var(--text-primary)',
-                    fontFamily: 'monospace',
-                    fontSize: isMobile ? '0.9rem' : '0.85rem',
-                  }}
-                />
-                <button
-                  onClick={() => {
-                    handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, locationName: crawlBarLocation || null, location: null } });
-                  }}
-                  disabled={crawlBarLocation === (user?.preferences?.crawlBar?.locationName || '')}
-                  style={{
-                    padding: isMobile ? '10px 12px' : '8px 12px',
-                    minHeight: isMobile ? '44px' : 'auto',
-                    background: crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'var(--accent-amber)20' : 'transparent',
-                    border: `1px solid ${crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                    color: crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'var(--accent-amber)' : 'var(--text-muted)',
-                    cursor: crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'pointer' : 'default',
-                    fontFamily: 'monospace',
-                    fontSize: isMobile ? '0.9rem' : '0.85rem',
-                  }}
-                >
-                  SAVE
-                </button>
-                {(crawlBarLocation || user?.preferences?.crawlBar?.locationName) && (
-                  <button
-                    onClick={() => {
-                      setCrawlBarLocation('');
-                      handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, locationName: null, location: null } });
-                    }}
-                    style={{
-                      padding: isMobile ? '10px 12px' : '8px 12px',
-                      minHeight: isMobile ? '44px' : 'auto',
-                      background: 'transparent',
-                      border: '1px solid var(--border-subtle)',
-                      color: 'var(--text-dim)',
-                      cursor: 'pointer',
-                      fontFamily: 'monospace',
-                      fontSize: isMobile ? '0.9rem' : '0.85rem',
-                    }}
-                  >
-                    CLEAR
-                  </button>
-                )}
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-                Enter city name (e.g., "Coudersport, US") then click SAVE
-              </div>
-            </div>
-          </>
-        )}
-      </CollapsibleSection>
-
-      {/* Video Feed Preferences (v2.8.0) */}
-      <CollapsibleSection title="VIDEO FEED" isOpen={openSection === 'videoFeed'} onToggle={() => toggleSection('videoFeed')} isMobile={isMobile}>
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SHOW MY VIDEOS IN DISCOVER FEED</label>
-          <button
-            onClick={() => handleUpdatePreferences({ videoFeed: { ...user?.preferences?.videoFeed, showInFeed: !(user?.preferences?.videoFeed?.showInFeed !== false) } })}
-            style={{
-              padding: isMobile ? '10px 16px' : '8px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              background: (user?.preferences?.videoFeed?.showInFeed !== false) ? 'var(--accent-teal)20' : 'transparent',
-              border: `1px solid ${(user?.preferences?.videoFeed?.showInFeed !== false) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
-              color: (user?.preferences?.videoFeed?.showInFeed !== false) ? 'var(--accent-teal)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.9rem' : '0.85rem',
-            }}
-          >
-            {(user?.preferences?.videoFeed?.showInFeed !== false) ? '▣ ENABLED' : '▢ DISABLED'}
-          </button>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            When enabled, your video pings from public waves can appear in other users' feeds
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>AUTOPLAY VIDEOS</label>
-          <button
-            onClick={() => handleUpdatePreferences({ videoFeed: { ...user?.preferences?.videoFeed, autoplay: !(user?.preferences?.videoFeed?.autoplay !== false) } })}
-            style={{
-              padding: isMobile ? '10px 16px' : '8px 16px',
-              minHeight: isMobile ? '44px' : 'auto',
-              background: (user?.preferences?.videoFeed?.autoplay !== false) ? 'var(--accent-green)20' : 'transparent',
-              border: `1px solid ${(user?.preferences?.videoFeed?.autoplay !== false) ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
-              color: (user?.preferences?.videoFeed?.autoplay !== false) ? 'var(--accent-green)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: isMobile ? '0.9rem' : '0.85rem',
-            }}
-          >
-            {(user?.preferences?.videoFeed?.autoplay !== false) ? '▶ ENABLED' : '▶ DISABLED'}
-          </button>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-            Automatically play videos as you scroll through the feed
-          </div>
-        </div>
-
-        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
-          ℹ️ The Discover feed shows video {T.pings} from public {T.waves} and {T.waves} you participate in.
-        </div>
-      </CollapsibleSection>
-
-      {/* Media Server Integration (v2.14.0 Jellyfin, v2.15.0 Plex) */}
-      <CollapsibleSection title="📺 MEDIA SERVERS" isOpen={openSection === 'jellyfin'} onToggle={() => toggleSection('jellyfin')} isMobile={isMobile}>
-        <JellyfinConnectionManager
-          fetchAPI={fetchAPI}
-          showToast={showToast}
-          isMobile={isMobile}
-        />
-        <PlexConnectionManager
-          fetchAPI={fetchAPI}
-          showToast={showToast}
-          isMobile={isMobile}
-        />
-        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
-          ℹ️ Connect your Jellyfin, Emby, or Plex media server to share content in {T.waves}.
-        </div>
-      </CollapsibleSection>
-
-      {/* Notification Preferences */}
-      <div style={{ marginTop: '20px', padding: isMobile ? '16px' : '20px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))', border: '1px solid var(--border-subtle)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', fontWeight: 500 }}>NOTIFICATION PREFERENCES</div>
-          <button
-            onClick={() => toggleSection('notifications')}
-            style={{
-              padding: isMobile ? '8px 12px' : '6px 10px',
-              background: openSection === 'notifications' ? 'var(--accent-amber)20' : 'transparent',
-              border: `1px solid ${openSection === 'notifications' ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
-              color: openSection === 'notifications' ? 'var(--accent-amber)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: '0.7rem',
-            }}
-          >
-            {openSection === 'notifications' ? '▼ HIDE' : '▶ SHOW'}
-          </button>
-        </div>
-
-        {openSection === 'notifications' && notificationPrefs && (
-          <div>
-            {/* Global Enable */}
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
-                NOTIFICATIONS
-              </label>
-              <button
-                onClick={() => handleUpdateNotificationPrefs({ enabled: !notificationPrefs.enabled })}
-                style={{
-                  padding: isMobile ? '10px 16px' : '8px 16px',
-                  minHeight: isMobile ? '44px' : 'auto',
-                  background: notificationPrefs.enabled ? 'var(--accent-green)20' : 'transparent',
-                  border: `1px solid ${notificationPrefs.enabled ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
-                  color: notificationPrefs.enabled ? 'var(--accent-green)' : 'var(--text-dim)',
-                  cursor: 'pointer',
-                  fontFamily: 'monospace',
-                  fontSize: isMobile ? '0.9rem' : '0.85rem',
-                }}
-              >
-                {notificationPrefs.enabled ? '🔔 ENABLED' : '🔕 DISABLED'}
-              </button>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-                Master switch for all in-app notifications
-              </div>
-            </div>
-
-            {notificationPrefs.enabled && (
-              <>
-                {/* Notification Type Preferences */}
-                {[
-                  { key: 'directMentions', label: '@MENTIONS', icon: '@', desc: 'When someone @mentions you' },
-                  { key: 'replies', label: 'REPLIES', icon: '↩', desc: 'When someone replies to your ping' },
-                  { key: 'reactions', label: 'REACTIONS', icon: '♡', desc: 'When someone reacts to your ping' },
-                  { key: 'waveActivity', label: `${T.WAVE} ACTIVITY`, icon: '◎', desc: 'New pings in your waves' },
-                  { key: 'burstEvents', label: 'BURST EVENTS', icon: '◈', desc: 'When pings are burst to new waves' },
-                ].map(({ key, label, icon, desc }) => (
-                  <div key={key} style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
-                      {icon} {label}
-                    </label>
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                      {[
-                        { value: 'always', label: 'Always' },
-                        { value: 'app_closed', label: 'App Closed' },
-                        { value: 'never', label: 'Never' },
-                      ].map(opt => (
-                        <button
-                          key={opt.value}
-                          onClick={() => handleUpdateNotificationPrefs({ [key]: opt.value })}
-                          style={{
-                            padding: isMobile ? '8px 12px' : '6px 12px',
-                            minHeight: isMobile ? '40px' : 'auto',
-                            background: notificationPrefs[key] === opt.value ? 'var(--accent-amber)20' : 'transparent',
-                            border: `1px solid ${notificationPrefs[key] === opt.value ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                            color: notificationPrefs[key] === opt.value ? 'var(--accent-amber)' : 'var(--text-dim)',
-                            cursor: 'pointer',
-                            fontFamily: 'monospace',
-                            fontSize: '0.75rem',
-                          }}
-                        >
-                          {opt.label.toUpperCase()}
-                        </button>
-                      ))}
-                    </div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>
-                      {desc}
-                    </div>
-                  </div>
-                ))}
-
-                {/* Suppress While Focused */}
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
-                    SUPPRESS WHILE VIEWING
-                  </label>
-                  <button
-                    onClick={() => handleUpdateNotificationPrefs({ suppressWhileFocused: !notificationPrefs.suppressWhileFocused })}
-                    style={{
-                      padding: isMobile ? '10px 16px' : '8px 16px',
-                      minHeight: isMobile ? '44px' : 'auto',
-                      background: notificationPrefs.suppressWhileFocused ? 'var(--accent-amber)20' : 'transparent',
-                      border: `1px solid ${notificationPrefs.suppressWhileFocused ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                      color: notificationPrefs.suppressWhileFocused ? 'var(--accent-amber)' : 'var(--text-dim)',
-                      cursor: 'pointer',
-                      fontFamily: 'monospace',
-                      fontSize: isMobile ? '0.9rem' : '0.85rem',
-                    }}
-                  >
-                    {notificationPrefs.suppressWhileFocused ? '▣ ENABLED' : '▢ DISABLED'}
-                  </button>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-                    Don`t show ${T.wave} activity notifications when you`re viewing that wave
-                  </div>
-                </div>
-
-                {/* Push Debounce */}
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
-                    PUSH THROTTLE
-                  </label>
-                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {[
-                      { value: 0, label: 'None' },
-                      { value: 1, label: '1 min' },
-                      { value: 5, label: '5 min' },
-                      { value: 15, label: '15 min' },
-                      { value: 30, label: '30 min' },
-                    ].map(opt => (
-                      <button
-                        key={opt.value}
-                        onClick={() => handleUpdateNotificationPrefs({ pushDebounceMinutes: opt.value })}
-                        style={{
-                          padding: isMobile ? '8px 12px' : '6px 12px',
-                          minHeight: isMobile ? '40px' : 'auto',
-                          background: (notificationPrefs.pushDebounceMinutes ?? 5) === opt.value ? 'var(--accent-amber)20' : 'transparent',
-                          border: `1px solid ${(notificationPrefs.pushDebounceMinutes ?? 5) === opt.value ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                          color: (notificationPrefs.pushDebounceMinutes ?? 5) === opt.value ? 'var(--accent-amber)' : 'var(--text-dim)',
-                          cursor: 'pointer',
-                          fontFamily: 'monospace',
-                          fontSize: '0.75rem',
-                        }}
-                      >
-                        {opt.label.toUpperCase()}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>
-                    Minimum time between push notifications — "None" sends every message
-                  </div>
-                </div>
-
-                {/* Push Notifications */}
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
-                    📲 PUSH NOTIFICATIONS
-                  </label>
-                  <button
-                    onClick={async () => {
-                      try {
-                        setPushError(null);
-                        const token = storage.getToken();
-                        if (pushEnabled) {
-                          storage.setPushEnabled(false);
-                          setPushEnabled(false);
-                          await unsubscribeFromPush(token);
-                          showToast('Push notifications disabled', 'success');
-                        } else {
-                          const result = await subscribeToPush(token);
-                          if (result.success) {
-                            storage.setPushEnabled(true);
-                            setPushEnabled(true);
-                            showToast('Push notifications enabled', 'success');
-                          } else {
-                            setPushError(result.reason || 'Failed to enable push notifications');
-                          }
-                        }
-                      } catch (err) {
-                        console.error('[Push] Unexpected error:', err);
-                        setPushError('Push notification setup failed. Check browser console for details.');
-                      }
-                    }}
-                    style={{
-                      padding: isMobile ? '10px 16px' : '8px 16px',
-                      minHeight: isMobile ? '44px' : 'auto',
-                      background: pushEnabled ? 'var(--accent-green)20' : 'transparent',
-                      border: `1px solid ${pushEnabled ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
-                      color: pushEnabled ? 'var(--accent-green)' : 'var(--text-dim)',
-                      cursor: 'pointer',
-                      fontFamily: 'monospace',
-                      fontSize: isMobile ? '0.9rem' : '0.85rem',
-                    }}
-                  >
-                    {pushEnabled ? '🔔 ENABLED' : '🔕 DISABLED'}
-                  </button>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-                    Receive notifications when the app is closed or in background
-                  </div>
-                  {/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.Capacitor && (
-                    <div style={{ color: 'var(--accent-orange)', fontSize: '0.65rem', marginTop: '6px', padding: '6px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)30' }}>
-                      ⚠️ iOS does not support push notifications for web apps. This is a platform limitation by Apple.
-                    </div>
-                  )}
-                  {pushError && (
-                    <div style={{ color: 'var(--accent-orange)', fontSize: '0.75rem', marginTop: '8px', padding: '10px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)40', lineHeight: '1.5', wordBreak: 'break-word', userSelect: 'text' }}>
-                      {pushError}
-                    </div>
-                  )}
-                  {/* Reset button for troubleshooting */}
-                  <button
-                    onClick={async () => {
-                      if (confirm(CONFIRM_DIALOG.clearLocalData)) {
-                        showToast('Resetting push state...', 'info');
-                        storage.setPushEnabled(false);
-                        setPushEnabled(false);
-                        await forceResetPushState();
-                        showToast('Push state reset. Try enabling notifications again.', 'success');
-                      }
-                    }}
-                    style={{
-                      marginTop: '8px',
-                      padding: '6px 12px',
-                      background: 'transparent',
-                      border: '1px solid var(--border-subtle)',
-                      color: 'var(--text-muted)',
-                      cursor: 'pointer',
-                      fontFamily: 'monospace',
-                      fontSize: '0.7rem',
-                    }}
-                  >
-                    ↻ Reset Push State
-                  </button>
-                </div>
-
-                {/* Email Notifications */}
-                <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
-                  <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
-                    ✉️ EMAIL NOTIFICATIONS
-                  </label>
-                  <button
-                    onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), enabled: !(notificationPrefs.email?.enabled) } })}
-                    style={{
-                      padding: isMobile ? '10px 16px' : '8px 16px',
-                      minHeight: isMobile ? '44px' : 'auto',
-                      background: notificationPrefs.email?.enabled ? 'var(--accent-green)20' : 'transparent',
-                      border: `1px solid ${notificationPrefs.email?.enabled ? 'var(--accent-green)' : 'var(--border-subtle)'}`,
-                      color: notificationPrefs.email?.enabled ? 'var(--accent-green)' : 'var(--text-dim)',
-                      cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.85rem',
-                    }}
-                  >
-                    {notificationPrefs.email?.enabled ? '✉️ ENABLED' : '✉️ DISABLED'}
-                  </button>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
-                    Send email notifications when you're offline. Requires a verified email on your account.
-                  </div>
-
-                  {notificationPrefs.email?.enabled && (
-                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      {[
-                        { key: 'mentions', label: '@ MENTIONS', desc: 'When someone @mentions you' },
-                        { key: 'replies', label: '↩ REPLIES', desc: `When someone replies to your ${T.ping}` },
-                        { key: 'calendarReminders', label: '📅 CALENDAR REMINDERS', desc: '1-day and 1-hour reminders for events' },
-                      ].map(({ key, label, desc }) => (
-                        <div key={key}>
-                          <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
-                            {label}
-                          </label>
-                          <button
-                            onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), [key]: !(notificationPrefs.email?.[key] ?? true) } })}
-                            style={{
-                              padding: isMobile ? '8px 12px' : '6px 12px',
-                              minHeight: isMobile ? '40px' : 'auto',
-                              background: (notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)20' : 'transparent',
-                              border: `1px solid ${(notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                              color: (notificationPrefs.email?.[key] ?? true) ? 'var(--accent-amber)' : 'var(--text-dim)',
-                              cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',
-                            }}
-                          >
-                            {(notificationPrefs.email?.[key] ?? true) ? 'ON' : 'OFF'}
-                          </button>
-                          <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>{desc}</div>
-                        </div>
-                      ))}
-
-                      <div style={{ marginTop: '4px' }}>
-                        <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.7rem', marginBottom: '6px' }}>
-                          OFFLINE THRESHOLD
-                        </label>
-                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                          {[
-                            { value: 0, label: 'Immediately' },
-                            { value: 15, label: '15 min' },
-                            { value: 30, label: '30 min' },
-                            { value: 60, label: '1 hour' },
-                          ].map(opt => (
-                            <button
-                              key={opt.value}
-                              onClick={() => handleUpdateNotificationPrefs({ email: { ...(notificationPrefs.email || {}), offlineThresholdMinutes: opt.value } })}
-                              style={{
-                                padding: isMobile ? '8px 12px' : '6px 12px',
-                                minHeight: isMobile ? '40px' : 'auto',
-                                background: (notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)20' : 'transparent',
-                                border: `1px solid ${(notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                                color: (notificationPrefs.email?.offlineThresholdMinutes ?? 15) === opt.value ? 'var(--accent-amber)' : 'var(--text-dim)',
-                                cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem',
-                              }}
-                            >
-                              {opt.label.toUpperCase()}
-                            </button>
-                          ))}
-                        </div>
-                        <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', marginTop: '4px' }}>
-                          Only send email if you've been offline longer than this
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', padding: '10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', marginTop: '12px' }}>
-              ℹ️ "Always" shows notifications even when viewing the app. "App Closed" only notifies when the app is in background. "Never" disables that notification type.
-            </div>
-          </div>
-        )}
-
-        {openSection === 'notifications' && !notificationPrefs && (
-          <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', padding: '20px', textAlign: 'center' }}>
-            Loading preferences...
-          </div>
-        )}
-      </div>
 
       {/* Admin Panel (visible to moderator+) */}
       {canAccess(user, 'moderator') && (
@@ -2374,170 +2476,11 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
         </CollapsibleSection>
       )}
 
-      {/* My Reports Section */}
-      <div style={{ marginTop: '20px', padding: '20px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))', border: '1px solid var(--border-subtle)' }}>
-        <MyReportsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} />
-      </div>
-
       {/* About (v2.114.0) — the web app, installed app and server versions */}
       <CollapsibleSection title="ABOUT" isOpen={openSection === 'about'} onToggle={() => toggleSection('about')} isMobile={isMobile}>
         <AboutPanel showToast={showToast} isMobile={isMobile} />
       </CollapsibleSection>
 
-      {/* Logout Section */}
-      <div style={{ marginTop: '20px', padding: '20px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))', border: '1px solid var(--border-subtle)' }}>
-        <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '16px' }}>SESSION</div>
-        <button
-          onClick={onLogout}
-          style={{
-            padding: isMobile ? '14px 24px' : '12px 24px',
-            minHeight: isMobile ? '44px' : 'auto',
-            background: 'transparent',
-            border: '1px solid var(--accent-orange)',
-            color: 'var(--accent-orange)',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: isMobile ? '0.9rem' : '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          <span>⏻</span> LOGOUT
-        </button>
-      </div>
-
-      {/* Account Management (v1.18.0) */}
-      <div style={{ marginTop: '20px', padding: isMobile ? '16px' : '20px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))', border: '1px solid var(--accent-orange)40' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ color: 'var(--accent-orange)', fontSize: '0.8rem', fontWeight: 500 }}>ACCOUNT MANAGEMENT</div>
-          <button
-            onClick={() => toggleSection('account')}
-            style={{
-              padding: isMobile ? '8px 12px' : '6px 10px',
-              background: openSection === 'account' ? 'var(--accent-orange)20' : 'transparent',
-              border: `1px solid ${openSection === 'account' ? 'var(--accent-orange)' : 'var(--border-primary)'}`,
-              color: openSection === 'account' ? 'var(--accent-orange)' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: '0.7rem',
-            }}
-          >
-            {openSection === 'account' ? '▼ HIDE' : '▶ SHOW'}
-          </button>
-        </div>
-
-        {openSection === 'account' && (
-          <div style={{ marginTop: '16px' }}>
-            {/* Data Export */}
-            <div style={{ marginBottom: '20px', padding: '16px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
-              <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', marginBottom: '8px' }}>
-                {"📦 " + UI_LABELS.exportData}
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Download a copy of all your personal data including profile, {T.pings}, contacts, and settings.
-              </div>
-              <button
-                onClick={handleExportData}
-                disabled={exportLoading}
-                style={{
-                  padding: '10px 20px',
-                  background: 'var(--accent-teal)20',
-                  border: '1px solid var(--accent-teal)',
-                  color: 'var(--accent-teal)',
-                  cursor: exportLoading ? 'wait' : 'pointer',
-                  fontFamily: 'monospace',
-                  fontSize: '0.8rem',
-                }}
-              >
-                {exportLoading ? UI_LABELS.exportingData : UI_LABELS.downloadData}
-              </button>
-            </div>
-
-            {/* Account Deletion */}
-            <div style={{ padding: '16px', background: 'var(--accent-orange)05', border: '1px solid var(--accent-orange)' }}>
-              <div style={{ color: 'var(--accent-orange)', fontSize: '0.85rem', marginBottom: '8px' }}>
-                {"⚠️ " + UI_LABELS.deleteAccount}
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Permanently delete your account and all associated data. This action cannot be undone.
-                Your pings will remain visible as "[Deleted User]" for context in conversations.
-              </div>
-
-              {!showDeleteConfirm ? (
-                <button
-                  onClick={() => setShowDeleteConfirm(true)}
-                  style={{
-                    padding: '10px 20px',
-                    background: 'transparent',
-                    border: '1px solid var(--accent-orange)',
-                    color: 'var(--accent-orange)',
-                    cursor: 'pointer',
-                    fontFamily: 'monospace',
-                    fontSize: '0.8rem',
-                  }}
-                >
-                  DELETE MY ACCOUNT
-                </button>
-              ) : (
-                <div style={{ marginTop: '12px' }}>
-                  <div style={{ color: 'var(--accent-orange)', fontSize: '0.8rem', marginBottom: '12px', fontWeight: 'bold' }}>
-                    Are you sure? Enter your password to confirm:
-                  </div>
-                  <input
-                    type="password"
-                    value={deletePassword}
-                    onChange={(e) => setDeletePassword(e.target.value)}
-                    placeholder="Your password"
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      background: 'var(--bg-base)',
-                      border: '1px solid var(--accent-orange)',
-                      color: 'var(--text-primary)',
-                      fontFamily: 'monospace',
-                      marginBottom: '12px',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      onClick={handleDeleteAccount}
-                      disabled={deleteLoading || !deletePassword}
-                      style={{
-                        padding: '10px 20px',
-                        background: deletePassword ? 'var(--accent-orange)' : 'transparent',
-                        border: '1px solid var(--accent-orange)',
-                        color: deletePassword ? '#000' : 'var(--accent-orange)',
-                        cursor: deleteLoading || !deletePassword ? 'not-allowed' : 'pointer',
-                        fontFamily: 'monospace',
-                        fontSize: '0.8rem',
-                        fontWeight: 'bold',
-                      }}
-                    >
-                      {deleteLoading ? 'DELETING...' : CONFIRM.destructive.toUpperCase()}
-                    </button>
-                    <button
-                      onClick={() => { setShowDeleteConfirm(false); setDeletePassword(''); }}
-                      style={{
-                        padding: '10px 20px',
-                        background: 'transparent',
-                        border: '1px solid var(--border-primary)',
-                        color: 'var(--text-muted)',
-                        cursor: 'pointer',
-                        fontFamily: 'monospace',
-                        fontSize: '0.8rem',
-                      }}
-                    >
-                      {CONFIRM.cancel.toUpperCase()}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* Theme Customization Modal (v2.11.0) */}
       <ThemeCustomizationModal
