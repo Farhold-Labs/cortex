@@ -368,6 +368,7 @@ S3_SECRET_KEY=<application key>
 - **Keep the bucket private.** Cortex serves every file itself, at the same `/uploads/…` and `/api/media/…` addresses as local files, and checks wave membership on each request. The bucket's own links are never handed out. A public bucket would let anyone with a link skip that check.
 - **Scope the key to this one bucket** with read, write, list and delete. In B2: App Keys → Add a New Application Key → choose the bucket → Read and Write.
 - **Switching an existing node is safe.** Files already on disk keep being served from disk; only new uploads go to the bucket. Links in existing messages do not change.
+- **Moving existing files into the bucket:** `node tools/copy-uploads-to-s3.mjs` shows what it would copy, and `--apply` copies. It uses the same keys, checks each copy's MD5, skips files already there, and never deletes from disk. Once everything is in the bucket, a new server for this node needs no `uploads` directory: files that aren't on disk are served from the bucket.
 - **Deleting** removes every stored version. B2 keeps all versions by default, and a plain delete there only hides a file.
 - **Traffic.** Each view is fetched by the server from the bucket and sent on, so the server's bandwidth carries it as before. B2's egress to the server is free up to three times the stored amount per month.
 - **Large uploads.** Uploads still pass through the server, and are held in memory while they do; size the server's memory for the largest video you allow.
