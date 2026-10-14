@@ -17,7 +17,8 @@
 // reach a browser.
 
 import { EgressClient, EncodedFileOutput, EncodedFileType, S3Upload, EgressStatus } from 'livekit-server-sdk';
-import { S3Client, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { deleteAllVersions } from './s3-delete.js';
 
 /** Recording settings from the environment, or null when recording is not set up. */
 export function recordingConfigFromEnv(env = process.env) {
@@ -109,7 +110,8 @@ export class BroadcastRecorder {
   }
 
   async remove(key) {
-    await this.s3.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }));
+    // Every version (v2.117.0): on B2 a plain delete only hid the recording.
+    await deleteAllVersions(this.s3, this.config.bucket, key);
   }
 
   /**

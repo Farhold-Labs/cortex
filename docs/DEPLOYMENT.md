@@ -347,10 +347,32 @@ RECORDING_S3_SECRET_KEY=<application key>
 - **Keep the bucket private.** Viewers stream through `/api/recordings/:id/stream`, which checks wave membership on every request.
 - **Scope the key to this bucket.** LiveKit's servers upload with it, so restrict it to this one bucket with read, write and delete.
 - **Sharing a bucket.** Files land at `<FEDERATION_NODE_NAME>/broadcasts/<id>.mp4`, so several nodes can share one bucket.
-- **Deleting a recording** in Cortex removes the file from the bucket. If the bucket cannot be reached, the delete fails with "try again" and nothing changes.
+- **Deleting a recording** in Cortex removes the file from the bucket, every stored version of it (v2.117.0; before that, B2 kept a hidden copy). If the bucket cannot be reached, the delete fails with "try again" and nothing changes.
 - **Deleting a wave** (or its broadcast) queues its recording's file in `recording_deletions`, a database trigger. The server removes queued files from the bucket in the background, so a deleted conversation does not leave its video behind.
 
 Restart `cortex-api` after setting the variables. Settings take effect with no client rebuild.
+
+### Uploads in object storage (optional)
+
+By default uploads (pictures, files, voice and video messages, avatars) are stored on the server's disk under `server/uploads`. Since v2.117.0 they can live in a **private** S3-compatible bucket instead, such as Backblaze B2, so the server's disk does not have to grow with them.
+
+```bash
+STORAGE_PROVIDER=s3
+S3_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+S3_REGION=us-east-005
+S3_BUCKET=cortex-uploads
+S3_ACCESS_KEY=<key id>
+S3_SECRET_KEY=<application key>
+```
+
+- **Keep the bucket private.** Cortex serves every file itself, at the same `/uploads/…` and `/api/media/…` addresses as local files, and checks wave membership on each request. The bucket's own links are never handed out. A public bucket would let anyone with a link skip that check.
+- **Scope the key to this one bucket** with read, write, list and delete. In B2: App Keys → Add a New Application Key → choose the bucket → Read and Write.
+- **Switching an existing node is safe.** Files already on disk keep being served from disk; only new uploads go to the bucket. Links in existing messages do not change.
+- **Deleting** removes every stored version. B2 keeps all versions by default, and a plain delete there only hides a file.
+- **Traffic.** Each view is fetched by the server from the bucket and sent on, so the server's bandwidth carries it as before. B2's egress to the server is free up to three times the stored amount per month.
+- **Large uploads.** Uploads still pass through the server, and are held in memory while they do; size the server's memory for the largest video you allow.
+
+Restart `cortex-api` after setting the variables.
 
 ### Back Up Your Keys
 
