@@ -3512,6 +3512,55 @@ export class DatabaseSQLite {
       console.log('✅ attachment_tombstones created');
     }
 
+    // v2.116.2 — bind recorded voice and video messages to their waves.
+    //
+    // The video upload never wrote an attachments row, and /api/media checked
+    // only that someone was signed in, so a private wave's video messages were
+    // served to every account on the node. The ping says which wave a
+    // recording belongs to (media_url is stored in the clear, even in encrypted
+    // waves), so the binding can be recovered rather than left public.
+    //
+    // Only a file named for the ping's own author is bound. A ping can carry
+    // any media_url, and binding somebody else's profile video into a private
+    // wave would hide it from everyone outside that wave. Only local paths are
+    // considered: a federated ping's URL points at another node's file.
+    //
+    // Runs every boot and is silent when there is nothing to do, which is the
+    // expected state now that the upload binds.
+    const hasMediaUrl = this.db.prepare(`PRAGMA table_info(pings)`).all().some(c => c.name === 'media_url');
+    if (hasMediaUrl && this.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'`).get()) {
+      const localMedia = /^(?:\/api\/media\/|\/uploads\/media\/)([A-Za-z0-9_-]+-\d+\.(?:webm|m4a|ogg|mp3|wav|mp4|ogv))(?:\?.*)?$/;
+      const recordings = this.db.prepare(`
+        SELECT wave_id, author_id, media_url FROM pings
+        WHERE media_url IS NOT NULL AND wave_id IS NOT NULL AND author_id IS NOT NULL
+          AND wave_id IN (SELECT id FROM waves)
+        ORDER BY created_at
+      `).all();
+      const findRow = this.db.prepare('SELECT id, wave_id, uploaded_by FROM attachments WHERE path = ?');
+      const insertRow = this.db.prepare(`
+        INSERT INTO attachments (id, path, wave_id, uploaded_by, created_at, bound_at)
+        VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+      `);
+      const bindRow = this.db.prepare(`UPDATE attachments SET wave_id = ?, bound_at = datetime('now') WHERE id = ?`);
+      let bound = 0;
+      this.db.transaction(() => {
+        for (const r of recordings) {
+          const file = localMedia.exec(r.media_url)?.[1];
+          if (!file || !file.startsWith(`${r.author_id}-`)) continue;
+          const key = `media/${file}`;
+          const row = findRow.get(key);
+          if (!row) {
+            insertRow.run(uuidv4(), key, r.wave_id, r.author_id);
+            bound++;
+          } else if (!row.wave_id && (!row.uploaded_by || row.uploaded_by === r.author_id)) {
+            bindRow.run(r.wave_id, row.id);
+            bound++;
+          }
+        }
+      })();
+      if (bound) console.log(`🔒 Bound ${bound} recorded message file(s) to their waves (v2.116.2)`);
+    }
+
     const waveColsForCommunity = this.db.prepare(`PRAGMA table_info(waves)`).all();
     if (waveColsForCommunity.length && !waveColsForCommunity.some(c => c.name === 'community_id')) {
       console.log('📝 Adding wave container columns (v2.94.0)...');

@@ -1,6 +1,6 @@
 # Cortex Privacy Policy
 
-*Last updated: October 2026 — applies to Cortex v2.113.2+*
+*Last updated: October 2026 — applies to Cortex v2.116.2+*
 
 This policy describes what a Cortex instance actually does with your data. No legalese, no weasel words. If you can't verify a claim yourself, it shouldn't be in here.
 
@@ -75,7 +75,7 @@ End-to-end encryption (E2EE) is **set per wave**, using ECDH P-384 key exchange 
 These are **not end-to-end encrypted, even in an encrypted wave.** The encryption covers the message text. A file, a broadcast or a recording is stored or relayed in a form the server and its operator can read.
 
 - **Attached files** (pictures, documents, audio, video) are stored on the server, or in the operator's S3 storage, as uploaded.
-  - **Who can open them:** since v2.104.0, a file posted to a wave can be opened only by people who can read that wave, checked on every request. Files from before then, and profile pictures and videos, are readable by anyone who has the link.
+  - **Who can open them:** since v2.104.0, a file posted to a wave can be opened only by people who can read that wave, checked on every request. Recorded voice and video messages have had the same check since v2.116.2; before that, any account on the node could play them if it had the link. Files from before v2.104.0, and profile pictures and videos, are readable by anyone who has the link.
   - **When they're deleted:** a file posted to a wave is deleted with that wave (since v2.113.3). It is not deleted when the uploader's account is deleted, because it is part of a conversation other people are still in.
 - **Live broadcasts** (if the operator enables them) are relayed through LiveKit, a third-party media service the operator chooses (LiveKit Cloud or self-hosted).
   - Viewers are hidden from one another and cannot be seen or heard.
