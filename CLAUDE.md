@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.116.1**. Last brought current 2026-10-13.
+Current version: **2.116.2**. Last brought current 2026-10-14.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2116001 / versionName "2.116.1"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2116001 / MARKETING_VERSION 2.116.1
+client/android/app/build.gradle                  versionCode 2116002 / versionName "2.116.2"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2116002 / MARKETING_VERSION 2.116.2
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -174,6 +174,7 @@ Jellyfin/Plex playback requires an item-specific, **wave-scoped grant** (`media_
 
 - **The gate.** Files under `/uploads` are rows in `attachments`. A file **bound** to a wave is served only to people who can read that wave, checked on every request. Media elements authenticate with a 15-minute HttpOnly cookie from `POST /api/attachments/session`.
 - **Unbound files stay public:** avatars, profile media, pre-v2.104 uploads, and anything in a public wave.
+- **Recordings** (voice and video messages) are served from `/api/media`, which applies the same check through `attachmentRefusal()`, the one function both routes call (v2.116.2). Any new route that serves stored files must call it too.
 - **Uploads.** Every upload goes through `uploadFile()` (`client/src/utils/uploads.js`, which gives progress, the refresh guard and cancel) and sends `waveId`. Binding fails closed: if it can't be written, the file is deleted.
 - **Encrypted waves.** The client binds after decrypting, via `/api/attachments/bind`. Only the uploader may bind, because binding restricts the file.
 - **Deleted waves** cascade their `attachments` rows away. A trigger writes `attachment_tombstones`, `/uploads` refuses tombstoned paths, and a sweep deletes the files.

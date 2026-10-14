@@ -5,6 +5,41 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.116.2] - 2026-10-14
+
+**Security fix. No schema change; a start-up repair binds existing recordings. No new app build.**
+
+### Security
+
+- **Recorded video and voice messages in private waves were playable by any account on the node.** Two gaps combined:
+  - **`/api/media` checked only that the caller was signed in.** Recordings are served from there on nodes that store files locally (farhold and PMP both do), so the v2.104.0 rule that a wave's files are served only to people who can read that wave never applied to them.
+  - **The video upload never recorded its wave.** The video branch of `/api/uploads/media` converts the file with ffmpeg and returned without calling `bindUploadToWave`. The audio branch has bound since v2.104.0. With no binding, the same file under `/uploads/media/` was also treated as a public legacy file, readable with no session at all.
+  - File names are the uploader's id plus a millisecond timestamp, so a URL had to be known rather than guessed. Even so, a private wave's recordings were not behind the gate they were supposed to be behind.
+- **Fixes:**
+  - `/api/media` now applies the same check as `/uploads`. The check moved into one function, `attachmentRefusal()`, which both routes call so they cannot drift.
+  - Video uploads are bound to their wave, and fail closed like every other upload: if the binding can't be written, the file is deleted and the upload refused.
+  - Profile videos name no wave and stay public, as before.
+- **Existing recordings are repaired at start-up.**
+  - A recording's URL is stored in `pings.media_url` in the clear, even in encrypted waves, so the server knows which wave each one belongs to.
+  - At every boot, local recordings with no binding are bound to their ping's wave. This includes voice messages from before v2.104.0.
+  - Only files named for the ping's own author are bound. A ping can carry any `media_url`, and binding somebody else's profile video into a private wave would hide it from everyone outside it.
+  - The repair is silent once there is nothing left to bind, which is the expected state from now on (the v2.105.1 pattern).
+  - A read-only count before release: **prod has 17 recordings to bind** (12 video, 5 voice; 10 in non-public waves). None were skipped. PMP has none.
+- **Not covered:** a recording whose ping was deleted while its wave survived has no record of its wave, so it stays as it was (any signed-in account, by URL). Recordings stored in S3 are served by the bucket, not by Cortex. Neither production node uses S3 for uploads.
+
+### Tests
+
+`tests/media-access.test.cjs` (new, 7 tests), each with a counterfactual against a copy of the server with that part of the fix removed:
+
+- a voice message plays for members and is refused to an outsider; without the `/api/media` check the outsider gets it;
+- a video message is gated under both `/api/media` and `/uploads/media`; without the binding it is public under `/uploads` with no session;
+- a profile video stays public;
+- recordings planted before the server's first boot are bound by the repair, and a file not named for the ping's author is left alone; without the repair they stay open.
+
+The video tests need ffmpeg and skip without it. The CI runner may not have it; the voice and repair tests cover the gate either way.
+
+`tests/attachment-access.test.cjs`: the counterfactuals that strip the gate now look for it inside `attachmentRefusal()`.
+
 ## [2.116.1] - 2026-10-13
 
 **No database migration. No new app build.**
