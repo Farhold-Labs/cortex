@@ -5,6 +5,88 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.117.0] - 2026-10-14
+
+Uploads can live in a private S3-compatible bucket (Backblaze B2 on dev), served through Cortex behind the same wave check as files on disk. This is the first step towards moving video encoding off the VPS. **No database migration. No new app build.**
+
+### Added
+
+- **Private-bucket storage for uploads.** With `STORAGE_PROVIDER=s3`:
+  - **Same URLs as local storage.** Every URL handed out is a Cortex URL, `/uploads/<key>` or `/api/media/<file>`, never the bucket's. A file not on disk is streamed from the bucket by `storage.stream()`, which runs only after the access check. Before, S3 mode returned bucket links: with a private bucket they failed, and with a public one they skipped the v2.104.0 check entirely. So a node could not move to B2 without either breaking its files or publishing them.
+  - **Streaming.** One byte range is honoured, so players can seek. `If-None-Match` gives a 304. `Cache-Control: private, no-cache`, so the check runs on every view and no shared cache keeps a private wave's file.
+  - **Content type.** Cortex decides the type from the extension, never from the type stored with the object, which came from the uploader's browser. An HTML upload is still served as an inert download.
+  - **Switching storage on an existing node.** Files already on disk keep being served from disk, and links in existing messages don't change.
+  - **Direct uploads.** `/api/uploads/presign` now binds the file to its wave before the browser uploads, and returns a Cortex URL. No client uses it today.
+  - **Uploads no longer set `ACL: public-read`.**
+  - **`S3_PUBLIC_URL` is no longer used.**
+
+### Fixed
+
+- **Deleting from B2 only hid the file.** B2 keeps every version of an object unless a lifecycle rule says otherwise, and a plain S3 `DeleteObject` adds a "hide" marker. Deleted attachments and **deleted broadcast recordings** stayed in the bucket, billed, and readable by anyone with the bucket's keys. `server/lib/s3-delete.js` deletes every version of exactly that key. Uploads and recordings both use it. On a provider that cannot list versions, it falls back to a plain delete.
+  - **Measured.** A read-only count of PMP's recordings bucket found **2 deleted recordings still stored (3.8 MB)**. This release does not remove them; that is a separate, deliberate step.
+  - **Checked on real B2.** On dev, the hidden test files were removed, and an upload followed by deleting its wave left the bucket empty about 2 s later.
+- **Deleting two waves in quick succession left the second wave's files for up to 10 minutes.** The sweep ignored a request that arrived while it was running. It now runs again when it finishes.
+- **A failed file delete was marked done.** `storage.delete()` swallowed errors, so the sweep marked a file removed even when the bucket had refused the delete, and it was never retried. `delete()` now returns `false` when the file may still exist, and the sweep leaves that file queued.
+
+### Verified
+
+On dev against the real `cortex-dev` B2 bucket (private, key limited to that bucket):
+
+- an upload to a private wave landed in the bucket and not on disk;
+- the uploader got the exact bytes as `image/png`;
+- a throwaway account outside the wave got 404, no session got 401, and the bucket's own link got 401;
+- a voice message seeked (206, `bytes 0-99/3000`) for the uploader and was refused to the outsider;
+- deleting the waves removed the files from B2, with no hidden copy left.
+
+The throwaway account was deleted afterwards.
+
+### Tests
+
+`tests/s3-uploads.test.cjs` (new) runs Cortex against an in-process bucket that is versioned the way B2 is:
+
+- URLs and storage, member/outsider/no-session access, Range, 304, HTML served inert, public waves, files from before the switch, missing files and traversal, and voice messages;
+- **counterfactuals:**
+  - without the wave check, an outsider gets the S3 file;
+  - with the old sweep, a wave deleted mid-sweep keeps its file, and a refused delete is never retried;
+  - with a plain delete, a hidden version is left behind.
+
+486/486 tests pass.
+
+## [2.116.2] - 2026-10-14
+
+**Security fix. No schema change; a start-up repair binds existing recordings. No new app build.**
+
+### Security
+
+- **Recorded video and voice messages in private waves were playable by any account on the node.** Two gaps combined:
+  - **`/api/media` checked only that the caller was signed in.** Recordings are served from there on nodes that store files locally (farhold and PMP both do), so the v2.104.0 rule that a wave's files are served only to people who can read that wave never applied to them.
+  - **The video upload never recorded its wave.** The video branch of `/api/uploads/media` converts the file with ffmpeg and returned without calling `bindUploadToWave`. The audio branch has bound since v2.104.0. With no binding, the same file under `/uploads/media/` was also treated as a public legacy file, readable with no session at all.
+  - File names are the uploader's id plus a millisecond timestamp, so a URL had to be known rather than guessed. Even so, a private wave's recordings were not behind the gate they were supposed to be behind.
+- **Fixes:**
+  - `/api/media` now applies the same check as `/uploads`. The check moved into one function, `attachmentRefusal()`, which both routes call so they cannot drift.
+  - Video uploads are bound to their wave, and fail closed like every other upload: if the binding can't be written, the file is deleted and the upload refused.
+  - Profile videos name no wave and stay public, as before.
+- **Existing recordings are repaired at start-up.**
+  - A recording's URL is stored in `pings.media_url` in the clear, even in encrypted waves, so the server knows which wave each one belongs to.
+  - At every boot, local recordings with no binding are bound to their ping's wave. This includes voice messages from before v2.104.0.
+  - Only files named for the ping's own author are bound. A ping can carry any `media_url`, and binding somebody else's profile video into a private wave would hide it from everyone outside it.
+  - The repair is silent once there is nothing left to bind, which is the expected state from now on (the v2.105.1 pattern).
+  - A read-only count before release: **prod has 17 recordings to bind** (12 video, 5 voice; 10 in non-public waves). None were skipped. PMP has none.
+- **Not covered:** a recording whose ping was deleted while its wave survived has no record of its wave, so it stays as it was (any signed-in account, by URL). Recordings stored in S3 are served by the bucket, not by Cortex. Neither production node uses S3 for uploads.
+
+### Tests
+
+`tests/media-access.test.cjs` (new, 7 tests), each with a counterfactual against a copy of the server with that part of the fix removed:
+
+- a voice message plays for members and is refused to an outsider; without the `/api/media` check the outsider gets it;
+- a video message is gated under both `/api/media` and `/uploads/media`; without the binding it is public under `/uploads` with no session;
+- a profile video stays public;
+- recordings planted before the server's first boot are bound by the repair, and a file not named for the ping's author is left alone; without the repair they stay open.
+
+The video tests need ffmpeg and skip without it. The CI runner may not have it; the voice and repair tests cover the gate either way.
+
+`tests/attachment-access.test.cjs`: the counterfactuals that strip the gate now look for it inside `attachmentRefusal()`.
+
 ## [2.116.1] - 2026-10-13
 
 **No database migration. No new app build.**

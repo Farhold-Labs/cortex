@@ -53,16 +53,16 @@ async function startServer(temp, { disableGate = false, breakBinding = false, di
     // The counterfactual: the same server with the access check removed, to
     // show these tests fail without it rather than passing for some unrelated
     // reason (a 404 from a missing file would look just like a refusal).
-    const gate = source.match(/\n    if \(attachment && attachment\.wave_id\) \{[\s\S]*?\n    \}\n/);
+    const gate = source.match(/\n  if \(attachment && attachment\.wave_id\) \{[\s\S]*?\n  \}\n/);
     assert.ok(gate, 'could not find the attachment gate to disable');
     source = source.replace(gate[0], '\n');
   }
   if (disableTombstones) {
     // v2.113.3 counterfactual: the server as it was, with no tombstone check.
-    const check = source.match(/\n    if \(!attachment && db\.isAttachmentTombstoned\?\.\(relative\)\) \{[\s\S]*?\n    \}\n/);
+    const check = source.match(/\n  if \(!attachment && db\.isAttachmentTombstoned\?\.\(relative\)\) \{[\s\S]*?\n  \}\n/);
     assert.ok(check, 'could not find the tombstone check to disable');
     source = source.replace(check[0], '\n');
-    const sweep = '  if (sweepingAttachments || !db.getUnremovedAttachmentTombstones) return;';
+    const sweep = '  if (!db.getUnremovedAttachmentTombstones) return;';
     assert.ok(source.includes(sweep), 'could not find the tombstone sweep to disable');
     source = source.replace(sweep, '  return;');
   }

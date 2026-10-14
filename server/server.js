@@ -4968,6 +4968,59 @@ function attachmentViewer(req) {
   }
 }
 
+/**
+ * Whether a stored file may be served to this viewer (v2.104.0, CORTEX-COMM-009).
+ *
+ * Returns null to serve it, or [status, body] to refuse. Shared by /uploads and
+ * /api/media since v2.116.2: recorded voice and video messages are served from
+ * /api/media, which checked only that someone was signed in, so a private
+ * wave's recordings were open to every account on the node.
+ *
+ * `relative` is the path under the uploads directory ('media/x.mp4').
+ * `getViewer` is asked only when the file is private, and returns a user id or
+ * null.
+ *
+ * An UNBOUND path stays public. That covers avatars, profile media, and
+ * everything uploaded before this table existed: those URLs are already
+ * distributed, and withdrawing them would break images in existing
+ * conversations to close a gap on files that have already travelled.
+ */
+function attachmentRefusal(relative, getViewer) {
+  const attachment = db.getAttachmentByPath ? db.getAttachmentByPath(relative) : null;
+
+  // v2.113.3 — the file of a deleted wave. Its row is gone, which would
+  // otherwise read as "legacy upload, public"; the tombstone says otherwise.
+  if (!attachment && db.isAttachmentTombstoned?.(relative)) {
+    return [404, { error: 'Not found' }];
+  }
+
+  if (attachment && attachment.wave_id) {
+    const wave = db.getWave(attachment.wave_id);
+    if (!wave) return [404, { error: 'Not found' }];
+
+    // A public wave's files stay anonymously readable. The public portal
+    // renders published waves to visitors with no session at all, and those
+    // pages are full of /uploads images — demanding a cookie here would
+    // break every one of them to protect content that is already published.
+    if (wave.privacy !== 'public') {
+      const viewerId = getViewer();
+      if (!viewerId) {
+        return [401, { error: 'Attachment access required', code: 'ATTACHMENT_AUTH' }];
+      }
+      // The same predicate that decides whether this person may read the
+      // conversation itself. Membership of a crew wave is not recorded as
+      // participation, so asking about participants alone would hide a
+      // crew's own attachments from the crew.
+      if (!canAccessWaveFromCache(attachment.wave_id, viewerId)) {
+        // 404 rather than 403: confirming a file exists is most of what the
+        // holder of a forwarded URL wants to learn.
+        return [404, { error: 'Not found' }];
+      }
+    }
+  }
+  return null;
+}
+
 app.use('/uploads', (req, res, next) => {
   // Allow cross-origin access for images (needed when client runs on different port)
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -4987,45 +5040,10 @@ app.use('/uploads', (req, res, next) => {
 
   // CORTEX-COMM-009 — a file bound to a wave is readable only by people who
   // can read that wave, checked on every request rather than at upload.
-  //
-  // An UNBOUND path stays public. That covers avatars, profile media, and
-  // everything uploaded before this table existed: those URLs are already
-  // distributed, and withdrawing them would break images in existing
-  // conversations to close a gap on files that have already travelled.
   try {
     const relative = decodeURIComponent((req.path || '').replace(/^\/+/, ''));
-    const attachment = db.getAttachmentByPath ? db.getAttachmentByPath(relative) : null;
-
-    // v2.113.3 — the file of a deleted wave. Its row is gone, which would
-    // otherwise read as "legacy upload, public"; the tombstone says otherwise.
-    if (!attachment && db.isAttachmentTombstoned?.(relative)) {
-      return res.status(404).json({ error: 'Not found' });
-    }
-
-    if (attachment && attachment.wave_id) {
-      const wave = db.getWave(attachment.wave_id);
-      if (!wave) return res.status(404).json({ error: 'Not found' });
-
-      // A public wave's files stay anonymously readable. The public portal
-      // renders published waves to visitors with no session at all, and those
-      // pages are full of /uploads images — demanding a cookie here would
-      // break every one of them to protect content that is already published.
-      if (wave.privacy !== 'public') {
-        const viewerId = attachmentViewer(req);
-        if (!viewerId) {
-          return res.status(401).json({ error: 'Attachment access required', code: 'ATTACHMENT_AUTH' });
-        }
-        // The same predicate that decides whether this person may read the
-        // conversation itself. Membership of a crew wave is not recorded as
-        // participation, so asking about participants alone would hide a
-        // crew's own attachments from the crew.
-        if (!canAccessWaveFromCache(attachment.wave_id, viewerId)) {
-          // 404 rather than 403: confirming a file exists is most of what the
-          // holder of a forwarded URL wants to learn.
-          return res.status(404).json({ error: 'Not found' });
-        }
-      }
-    }
+    const refusal = attachmentRefusal(relative, () => attachmentViewer(req));
+    if (refusal) return res.status(refusal[0]).json(refusal[1]);
   } catch (err) {
     console.error('[attachments] access check failed:', err.message);
     return res.status(500).json({ error: 'Could not serve that file' });
@@ -5042,7 +5060,34 @@ app.use('/uploads', (req, res, next) => {
       res.setHeader('Content-Disposition', 'attachment');
     }
   },
-}));
+}), async (req, res, next) => {
+  // v2.117.0 — not on disk, so try the bucket. This runs only after the gate
+  // above has passed (express.static falls through to here on a miss), so the
+  // wave check applies to S3 files exactly as it does to local ones. Files
+  // stored before a node switched to S3 are still found on disk first.
+  if (!storage.isS3Enabled() || (req.method !== 'GET' && req.method !== 'HEAD')) return next();
+  let key;
+  try {
+    key = decodeURIComponent((req.path || '').replace(/^\/+/, ''));
+  } catch {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
+  if (!/^[A-Za-z0-9._\-/]+$/.test(key) || key.split('/').some(part => part === '..' || part === '')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const ext = path.extname(key).toLowerCase();
+  const contentType = RENDERABLE_UPLOAD_TYPES.has(ext)
+    ? express.static.mime.lookup(key)
+    : 'application/octet-stream'; // Content-Disposition was set by the gate
+  try {
+    if (await storage.stream(key, req, res, { contentType })) return;
+  } catch (err) {
+    console.error('[uploads] could not read from storage:', err.message);
+    if (!res.headersSent) return res.status(502).json({ error: 'Could not fetch that file' });
+    return res.destroy();
+  }
+  res.status(404).json({ error: 'Not found' });
+});
 
 
 
@@ -7608,15 +7653,20 @@ app.post('/api/uploads/media', authenticateToken, (req, res, next) => {
       const outputStats = fs.statSync(outputFilepath);
 
       // Upload to storage (local keeps file in place, S3 uploads then cleans up)
+      const storageKey = `media/${outputFilename}`;
       let mediaUrl;
       if (storage.isS3Enabled()) {
         const videoBuffer = fs.readFileSync(outputFilepath);
-        mediaUrl = await storage.upload(videoBuffer, `media/${outputFilename}`, 'video/mp4');
+        mediaUrl = await storage.upload(videoBuffer, storageKey, 'video/mp4');
         // Clean up local transcoded file after S3 upload
         try { fs.unlinkSync(outputFilepath); } catch (e) {}
       } else {
         mediaUrl = `/api/media/${outputFilename}`;
       }
+      // v2.116.2 — videos were never bound, so a private wave's video
+      // messages were served to anyone (audio, below, always was bound).
+      // Profile videos name no wave and stay public, as intended.
+      await bindUploadToWave(storageKey, req.body?.waveId, user.id);
 
       console.log(`🎬 Video transcoded by ${user.handle}: ${mediaUrl} (${Math.round(outputStats.size / 1024)}KB)`);
 
@@ -7705,6 +7755,11 @@ app.post('/api/uploads/presign', authenticateToken, async (req, res) => {
     const safeFilename = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
     const storageKey = `media/${user.id}-${timestamp}-${safeFilename}`;
 
+    // v2.117.0 — bind before the browser uploads, as every other upload
+    // does. The bucket is private and the file is served through /uploads,
+    // so an unbound file here would be served to anyone with the link.
+    await bindUploadToWave(storageKey, req.body?.waveId, user.id);
+
     // Get presigned URL from storage provider
     const presigned = await storage.getPresignedUploadUrl(storageKey, contentType);
 
@@ -7730,7 +7785,7 @@ app.post('/api/uploads/presign', authenticateToken, async (req, res) => {
 // ============ Media Streaming - v2.7.0 ============
 // Stream media file with HTTP Range support for seeking
 // Authentication accepts header or query tokens and checks session/account status.
-app.get('/api/media/:filename', authenticateToken, (req, res) => {
+app.get('/api/media/:filename', authenticateToken, async (req, res) => {
   try {
     const filename = req.params.filename;
 
@@ -7739,14 +7794,10 @@ app.get('/api/media/:filename', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Invalid filename' });
     }
 
-    const filepath = path.join(MEDIA_DIR, filename);
-
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({ error: 'Media not found' });
-    }
-
-    const stat = fs.statSync(filepath);
-    const fileSize = stat.size;
+    // v2.116.2 — the same wave check as /uploads. Signing in was all this
+    // asked for, so any account could play a private wave's recordings.
+    const refusal = attachmentRefusal(`media/${filename}`, () => req.user.userId);
+    if (refusal) return res.status(refusal[0]).json(refusal[1]);
 
     // Determine content type from extension
     const extToMime = {
@@ -7767,6 +7818,18 @@ app.get('/api/media/:filename', authenticateToken, (req, res) => {
       // For simplicity, webm could be either - browser will handle it
       contentType = 'video/webm';
     }
+
+    const filepath = path.join(MEDIA_DIR, filename);
+
+    if (!fs.existsSync(filepath)) {
+      // v2.117.0 — recordings made since the node switched to S3 are in the
+      // bucket. The wave check above has already run.
+      if (storage.isS3Enabled() && await storage.stream(`media/${filename}`, req, res, { contentType })) return;
+      return res.status(404).json({ error: 'Media not found' });
+    }
+
+    const stat = fs.statSync(filepath);
+    const fileSize = stat.size;
 
     const range = req.headers.range;
 
@@ -21057,17 +21120,30 @@ if (broadcastRecorder) setInterval(() => removeQueuedRecordings().catch(() => {}
 // already refuses those paths, and this deletes the files themselves. Like
 // removeQueuedRecordings, it acts only on what the trigger recorded — never on
 // "a file with no row", which also describes every legitimate legacy upload.
+//
+// v2.117.0: a request that arrives while a sweep is running is remembered and
+// run when it finishes. Deleting two waves in quick succession used to leave
+// the second wave's files for the 10-minute timer. And a file whose delete
+// failed (S3 can, mid-network) is left queued for the next sweep instead of
+// being marked removed.
 let sweepingAttachments = false;
+let sweepRequested = false;
 async function removeTombstonedAttachments() {
-  if (sweepingAttachments || !db.getUnremovedAttachmentTombstones) return;
+  if (!db.getUnremovedAttachmentTombstones) return;
+  if (sweepingAttachments) { sweepRequested = true; return; }
   sweepingAttachments = true;
   try {
-    const paths = db.getUnremovedAttachmentTombstones();
-    for (const p of paths) {
-      await storage.delete(p);
-      db.markAttachmentTombstoneRemoved(p);
-    }
-    if (paths.length) console.log(`🧹 Removed ${paths.length} attachment file(s) of deleted waves`);
+    do {
+      sweepRequested = false;
+      const paths = db.getUnremovedAttachmentTombstones();
+      let removed = 0;
+      for (const p of paths) {
+        if (await storage.delete(p) === false) continue;
+        db.markAttachmentTombstoneRemoved(p);
+        removed++;
+      }
+      if (removed) console.log(`🧹 Removed ${removed} attachment file(s) of deleted waves`);
+    } while (sweepRequested);
   } finally {
     sweepingAttachments = false;
   }
