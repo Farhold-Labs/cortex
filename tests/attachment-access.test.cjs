@@ -62,7 +62,7 @@ async function startServer(temp, { disableGate = false, breakBinding = false, di
     const check = source.match(/\n  if \(!attachment && db\.isAttachmentTombstoned\?\.\(relative\)\) \{[\s\S]*?\n  \}\n/);
     assert.ok(check, 'could not find the tombstone check to disable');
     source = source.replace(check[0], '\n');
-    const sweep = '  if (sweepingAttachments || !db.getUnremovedAttachmentTombstones) return;';
+    const sweep = '  if (!db.getUnremovedAttachmentTombstones) return;';
     assert.ok(source.includes(sweep), 'could not find the tombstone sweep to disable');
     source = source.replace(sweep, '  return;');
   }

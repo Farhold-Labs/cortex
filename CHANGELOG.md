@@ -5,6 +5,53 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.117.0] - 2026-10-14
+
+Uploads can live in a private S3-compatible bucket (Backblaze B2 on dev), served through Cortex behind the same wave check as files on disk. This is the first step towards moving video encoding off the VPS. **No database migration. No new app build.**
+
+### Added
+
+- **Private-bucket storage for uploads.** With `STORAGE_PROVIDER=s3`:
+  - **Same URLs as local storage.** Every URL handed out is a Cortex URL, `/uploads/<key>` or `/api/media/<file>`, never the bucket's. A file not on disk is streamed from the bucket by `storage.stream()`, which runs only after the access check. Before, S3 mode returned bucket links: with a private bucket they failed, and with a public one they skipped the v2.104.0 check entirely. So a node could not move to B2 without either breaking its files or publishing them.
+  - **Streaming.** One byte range is honoured, so players can seek. `If-None-Match` gives a 304. `Cache-Control: private, no-cache`, so the check runs on every view and no shared cache keeps a private wave's file.
+  - **Content type.** Cortex decides the type from the extension, never from the type stored with the object, which came from the uploader's browser. An HTML upload is still served as an inert download.
+  - **Switching storage on an existing node.** Files already on disk keep being served from disk, and links in existing messages don't change.
+  - **Direct uploads.** `/api/uploads/presign` now binds the file to its wave before the browser uploads, and returns a Cortex URL. No client uses it today.
+  - **Uploads no longer set `ACL: public-read`.**
+  - **`S3_PUBLIC_URL` is no longer used.**
+
+### Fixed
+
+- **Deleting from B2 only hid the file.** B2 keeps every version of an object unless a lifecycle rule says otherwise, and a plain S3 `DeleteObject` adds a "hide" marker. Deleted attachments and **deleted broadcast recordings** stayed in the bucket, billed, and readable by anyone with the bucket's keys. `server/lib/s3-delete.js` deletes every version of exactly that key. Uploads and recordings both use it. On a provider that cannot list versions, it falls back to a plain delete.
+  - **Measured.** A read-only count of PMP's recordings bucket found **2 deleted recordings still stored (3.8 MB)**. This release does not remove them; that is a separate, deliberate step.
+  - **Checked on real B2.** On dev, the hidden test files were removed, and an upload followed by deleting its wave left the bucket empty about 2 s later.
+- **Deleting two waves in quick succession left the second wave's files for up to 10 minutes.** The sweep ignored a request that arrived while it was running. It now runs again when it finishes.
+- **A failed file delete was marked done.** `storage.delete()` swallowed errors, so the sweep marked a file removed even when the bucket had refused the delete, and it was never retried. `delete()` now returns `false` when the file may still exist, and the sweep leaves that file queued.
+
+### Verified
+
+On dev against the real `cortex-dev` B2 bucket (private, key limited to that bucket):
+
+- an upload to a private wave landed in the bucket and not on disk;
+- the uploader got the exact bytes as `image/png`;
+- a throwaway account outside the wave got 404, no session got 401, and the bucket's own link got 401;
+- a voice message seeked (206, `bytes 0-99/3000`) for the uploader and was refused to the outsider;
+- deleting the waves removed the files from B2, with no hidden copy left.
+
+The throwaway account was deleted afterwards.
+
+### Tests
+
+`tests/s3-uploads.test.cjs` (new) runs Cortex against an in-process bucket that is versioned the way B2 is:
+
+- URLs and storage, member/outsider/no-session access, Range, 304, HTML served inert, public waves, files from before the switch, missing files and traversal, and voice messages;
+- **counterfactuals:**
+  - without the wave check, an outsider gets the S3 file;
+  - with the old sweep, a wave deleted mid-sweep keeps its file, and a refused delete is never retried;
+  - with a plain delete, a hidden version is left behind.
+
+486/486 tests pass.
+
 ## [2.116.2] - 2026-10-14
 
 **Security fix. No schema change; a start-up repair binds existing recordings. No new app build.**
