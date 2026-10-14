@@ -5,6 +5,19 @@ All notable changes to Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`tools/copy-uploads-to-s3.mjs`** copies a node's local uploads into its S3 bucket under the same keys, so a node that switched to S3 can move to a new server without its `uploads` directory.
+  - **Dry run by default;** `--apply` copies.
+  - **Checks each copy** against the file's MD5.
+  - **Safe to re-run:** files already in the bucket are skipped.
+  - **Never deletes from disk.**
+  - **Unservable names:** files the bucket route wouldn't serve are skipped and listed.
+  - **Used on farhold** (185 files, 105.5 MB, no mismatches) and on dev (86 files, 81 MB).
+  - **Verified on dev:** with an existing private picture's disk copy moved aside, Cortex served it from B2 as `image/webp`, byte-for-byte, and refused it without a session.
+
 ## [2.117.0] - 2026-10-14
 
 Uploads can live in a private S3-compatible bucket (Backblaze B2 on dev), served through Cortex behind the same wave check as files on disk. This is the first step towards moving video encoding off the VPS. **No database migration. No new app build.**
