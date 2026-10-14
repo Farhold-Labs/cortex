@@ -5060,7 +5060,34 @@ app.use('/uploads', (req, res, next) => {
       res.setHeader('Content-Disposition', 'attachment');
     }
   },
-}));
+}), async (req, res, next) => {
+  // v2.117.0 — not on disk, so try the bucket. This runs only after the gate
+  // above has passed (express.static falls through to here on a miss), so the
+  // wave check applies to S3 files exactly as it does to local ones. Files
+  // stored before a node switched to S3 are still found on disk first.
+  if (!storage.isS3Enabled() || (req.method !== 'GET' && req.method !== 'HEAD')) return next();
+  let key;
+  try {
+    key = decodeURIComponent((req.path || '').replace(/^\/+/, ''));
+  } catch {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
+  if (!/^[A-Za-z0-9._\-/]+$/.test(key) || key.split('/').some(part => part === '..' || part === '')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const ext = path.extname(key).toLowerCase();
+  const contentType = RENDERABLE_UPLOAD_TYPES.has(ext)
+    ? express.static.mime.lookup(key)
+    : 'application/octet-stream'; // Content-Disposition was set by the gate
+  try {
+    if (await storage.stream(key, req, res, { contentType })) return;
+  } catch (err) {
+    console.error('[uploads] could not read from storage:', err.message);
+    if (!res.headersSent) return res.status(502).json({ error: 'Could not fetch that file' });
+    return res.destroy();
+  }
+  res.status(404).json({ error: 'Not found' });
+});
 
 
 
@@ -7728,6 +7755,11 @@ app.post('/api/uploads/presign', authenticateToken, async (req, res) => {
     const safeFilename = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
     const storageKey = `media/${user.id}-${timestamp}-${safeFilename}`;
 
+    // v2.117.0 — bind before the browser uploads, as every other upload
+    // does. The bucket is private and the file is served through /uploads,
+    // so an unbound file here would be served to anyone with the link.
+    await bindUploadToWave(storageKey, req.body?.waveId, user.id);
+
     // Get presigned URL from storage provider
     const presigned = await storage.getPresignedUploadUrl(storageKey, contentType);
 
@@ -7753,7 +7785,7 @@ app.post('/api/uploads/presign', authenticateToken, async (req, res) => {
 // ============ Media Streaming - v2.7.0 ============
 // Stream media file with HTTP Range support for seeking
 // Authentication accepts header or query tokens and checks session/account status.
-app.get('/api/media/:filename', authenticateToken, (req, res) => {
+app.get('/api/media/:filename', authenticateToken, async (req, res) => {
   try {
     const filename = req.params.filename;
 
@@ -7766,15 +7798,6 @@ app.get('/api/media/:filename', authenticateToken, (req, res) => {
     // asked for, so any account could play a private wave's recordings.
     const refusal = attachmentRefusal(`media/${filename}`, () => req.user.userId);
     if (refusal) return res.status(refusal[0]).json(refusal[1]);
-
-    const filepath = path.join(MEDIA_DIR, filename);
-
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({ error: 'Media not found' });
-    }
-
-    const stat = fs.statSync(filepath);
-    const fileSize = stat.size;
 
     // Determine content type from extension
     const extToMime = {
@@ -7795,6 +7818,18 @@ app.get('/api/media/:filename', authenticateToken, (req, res) => {
       // For simplicity, webm could be either - browser will handle it
       contentType = 'video/webm';
     }
+
+    const filepath = path.join(MEDIA_DIR, filename);
+
+    if (!fs.existsSync(filepath)) {
+      // v2.117.0 — recordings made since the node switched to S3 are in the
+      // bucket. The wave check above has already run.
+      if (storage.isS3Enabled() && await storage.stream(`media/${filename}`, req, res, { contentType })) return;
+      return res.status(404).json({ error: 'Media not found' });
+    }
+
+    const stat = fs.statSync(filepath);
+    const fileSize = stat.size;
 
     const range = req.headers.range;
 
@@ -21085,17 +21120,30 @@ if (broadcastRecorder) setInterval(() => removeQueuedRecordings().catch(() => {}
 // already refuses those paths, and this deletes the files themselves. Like
 // removeQueuedRecordings, it acts only on what the trigger recorded — never on
 // "a file with no row", which also describes every legitimate legacy upload.
+//
+// v2.117.0: a request that arrives while a sweep is running is remembered and
+// run when it finishes. Deleting two waves in quick succession used to leave
+// the second wave's files for the 10-minute timer. And a file whose delete
+// failed (S3 can, mid-network) is left queued for the next sweep instead of
+// being marked removed.
 let sweepingAttachments = false;
+let sweepRequested = false;
 async function removeTombstonedAttachments() {
-  if (sweepingAttachments || !db.getUnremovedAttachmentTombstones) return;
+  if (!db.getUnremovedAttachmentTombstones) return;
+  if (sweepingAttachments) { sweepRequested = true; return; }
   sweepingAttachments = true;
   try {
-    const paths = db.getUnremovedAttachmentTombstones();
-    for (const p of paths) {
-      await storage.delete(p);
-      db.markAttachmentTombstoneRemoved(p);
-    }
-    if (paths.length) console.log(`🧹 Removed ${paths.length} attachment file(s) of deleted waves`);
+    do {
+      sweepRequested = false;
+      const paths = db.getUnremovedAttachmentTombstones();
+      let removed = 0;
+      for (const p of paths) {
+        if (await storage.delete(p) === false) continue;
+        db.markAttachmentTombstoneRemoved(p);
+        removed++;
+      }
+      if (removed) console.log(`🧹 Removed ${removed} attachment file(s) of deleted waves`);
+    } while (sweepRequested);
   } finally {
     sweepingAttachments = false;
   }
