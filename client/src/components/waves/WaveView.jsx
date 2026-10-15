@@ -207,17 +207,32 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     return decrypted;
   }, [e2ee]);
 
-  // E2EE: Helper to decrypt a tree of pings recursively
-  const decryptPingTree = useCallback(async (tree, waveId) => {
-    const decryptNode = async (node) => {
-      const decrypted = await decryptMessages([node], waveId);
-      const result = decrypted[0];
-      if (result.children && result.children.length > 0) {
-        result.children = await Promise.all(result.children.map(child => decryptNode(child)));
-      }
-      return result;
-    };
-    return Promise.all(tree.map(node => decryptNode(node)));
+  /**
+   * E2EE: decrypt a wave response's flat list and tree in ONE pass (v2.117.2).
+   *
+   * The tree holds the same pings as the flat list, so it used to be
+   * decrypted a second time, one node at a time. Now each ping is decrypted
+   * once and the tree takes its text from the flat result. A tree node that
+   * is somehow not in the flat list is still decrypted, never shown as
+   * ciphertext.
+   */
+  const decryptWavePings = useCallback(async (flat, tree, waveId) => {
+    const nodes = [];
+    const collect = (list) => { for (const n of list || []) { nodes.push(n); collect(n.children); } };
+    collect(tree);
+    const flatIds = new Set(flat.map(p => p.id));
+    const extra = nodes.filter(n => !flatIds.has(n.id)).map(({ children, ...n }) => n);
+    const decrypted = await decryptMessages([...flat, ...extra], waveId);
+    const byId = new Map(decrypted.map(p => [p.id, p]));
+    const overlay = (list) => list.map(n => {
+      const d = byId.get(n.id);
+      return {
+        ...n,
+        ...(d ? { content: d.content, _decrypted: d._decrypted, _decryptError: d._decryptError } : {}),
+        children: Array.isArray(n.children) ? overlay(n.children) : n.children,
+      };
+    });
+    return { flat: decrypted.slice(0, flat.length), tree: overlay(tree) };
   }, [decryptMessages]);
 
   // State for showing moderation menu
@@ -866,10 +881,10 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       // E2EE: Decrypt messages if wave is encrypted and E2EE is unlocked
       if (data.encrypted && e2ee.isUnlocked) {
         try {
-          // Decrypt all_messages flat list
-          data.all_messages = await decryptMessages(data.all_messages, wave.id);
-          // Decrypt the tree structure
-          data.messages = await decryptPingTree(data.messages, wave.id);
+          // Decrypt each ping once; the tree reuses the flat list's result
+          const { flat, tree } = await decryptWavePings(data.all_messages, data.messages, wave.id);
+          data.all_messages = flat;
+          data.messages = tree;
         } catch (decryptErr) {
           console.error('Failed to decrypt wave messages:', decryptErr);
         }
