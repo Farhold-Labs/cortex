@@ -461,6 +461,10 @@ sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com -d cortex.yourdomai
 sudo certbot renew --dry-run
 ```
 
+### Compressed wave reads
+
+The template compresses the wave and message read responses (`/api/waves`, `/api/waves/<id>` and `/api/waves/<id>/messages|pings`) and nothing else under `/api`. nginx compresses only `text/html` by default, and a page of a wave is tens of KB of JSON, which matters on a phone. Responses carrying session tokens or keys are deliberately left out: compressing a secret next to text an attacker can influence lets the response size leak it (BREACH). If your site file predates v2.117.2, copy that `location ~ ^/api/waves…` block from `landing/nginx.conf` above your `location /api`, keeping your own `proxy_pass` port and headers.
+
 ### Test and Reload
 
 ```bash

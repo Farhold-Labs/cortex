@@ -91,6 +91,18 @@ export function E2EEProvider({ children, token, API_URL }) {
 
   // Wave key cache (waveId -> { waveKey: CryptoKey, version: number })
   const waveKeyCacheRef = useRef(new Map());
+  // In-flight key work, shared (v2.117.2). Opening an encrypted wave decrypts
+  // its 50 pings in parallel, and with a cold cache each one fetched and
+  // unwrapped the key itself: farhold's logs showed 50 simultaneous
+  // /keys/all requests per open (100–150 on some), queued six at a time over
+  // HTTP/1.1. Now concurrent callers wait on the one request.
+  const waveKeyInFlightRef = useRef(new Map());     // waveId -> Promise<CryptoKey|null>
+  const versionKeyInFlightRef = useRef(new Map());  // `${waveId}:${v}` -> Promise<CryptoKey|null>
+  const keyListInFlightRef = useRef(new Map());     // waveId -> Promise<keys[]|null>
+  // Bumped whenever cached keys are dropped (sign-out, rotation,
+  // invalidation), so work that was already in flight can't write a key back
+  // into a cache that has just been cleared.
+  const keyGenerationRef = useRef(0);
   const sessionRestoreAttempted = useRef(false);
   // The unlocked key, readable from checkE2EEStatus without re-creating it.
   // The gate that calls checkE2EEStatus unmounts whenever the app leaves its
@@ -530,48 +542,104 @@ export function E2EEProvider({ children, token, API_URL }) {
       throw new Error('E2EE not unlocked');
     }
 
-    try {
-      // Fetch from server
-      const res = await fetchAPI(`/waves/${waveId}/key`);
+    const pending = waveKeyInFlightRef.current.get(waveId);
+    if (pending) return pending;
+    const generation = keyGenerationRef.current;
+    const work = (async () => {
+      try {
+        // Fetch from server
+        const res = await fetchAPI(`/waves/${waveId}/key`);
 
-      if (!res.ok) {
-        if (res.status === 404) {
-          // Encrypted wave but no key for this user — trigger redistribution from other participants
-          requestWaveKey(waveId);
-          return null;  // Temporarily unreadable; wave_key_granted WS event triggers reload
+        if (!res.ok) {
+          if (res.status === 404) {
+            // Encrypted wave but no key for this user — trigger redistribution from other participants
+            requestWaveKey(waveId);
+            return null;  // Temporarily unreadable; wave_key_granted WS event triggers reload
+          }
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to fetch wave key');
         }
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to fetch wave key');
+
+        const { encrypted, encryptedWaveKey, senderPublicKey, keyVersion } = await res.json();
+
+        if (!encrypted) {
+          return null;  // Wave not encrypted
+        }
+
+        // Parse the encrypted key (format: encryptedKey:nonce)
+        const [encKeyBase64, nonceBase64] = encryptedWaveKey.split(':');
+
+        // Import sender's public key
+        const senderPubKey = await crypto.importPublicKey(senderPublicKey);
+
+        // Decrypt wave key
+        const waveKey = await crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey);
+
+        // Cache it (with LRU eviction) — unless the cache was cleared meanwhile
+        if (generation === keyGenerationRef.current) {
+          if (waveKeyCacheRef.current.size >= WAVE_KEY_CACHE_MAX) {
+            const firstKey = waveKeyCacheRef.current.keys().next().value;
+            waveKeyCacheRef.current.delete(firstKey);
+          }
+          waveKeyCacheRef.current.set(waveId, { waveKey, version: keyVersion });
+        }
+
+        return waveKey;
+      } catch (err) {
+        console.error('Get wave key error:', err);
+        throw err;
       }
-
-      const { encrypted, encryptedWaveKey, senderPublicKey, keyVersion } = await res.json();
-
-      if (!encrypted) {
-        return null;  // Wave not encrypted
-      }
-
-      // Parse the encrypted key (format: encryptedKey:nonce)
-      const [encKeyBase64, nonceBase64] = encryptedWaveKey.split(':');
-
-      // Import sender's public key
-      const senderPubKey = await crypto.importPublicKey(senderPublicKey);
-
-      // Decrypt wave key
-      const waveKey = await crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey);
-
-      // Cache it (with LRU eviction)
-      if (waveKeyCacheRef.current.size >= WAVE_KEY_CACHE_MAX) {
-        const firstKey = waveKeyCacheRef.current.keys().next().value;
-        waveKeyCacheRef.current.delete(firstKey);
-      }
-      waveKeyCacheRef.current.set(waveId, { waveKey, version: keyVersion });
-
-      return waveKey;
-    } catch (err) {
-      console.error('Get wave key error:', err);
-      throw err;
-    }
+    })();
+    waveKeyInFlightRef.current.set(waveId, work);
+    work.finally(() => {
+      if (waveKeyInFlightRef.current.get(waveId) === work) waveKeyInFlightRef.current.delete(waveId);
+    }).catch(() => {}); // the caller handles the rejection; this chain must not
+    return work;
   }, [privateKey, fetchAPI, requestWaveKey]);
+
+  /**
+   * The key for one specific version of a wave's key (v2.117.2).
+   *
+   * Every ping carries the key version it was encrypted under, so this is the
+   * path nearly every decrypt takes. One /keys/all request per wave is shared
+   * by everyone waiting on it, and each version is unwrapped once.
+   * Resolves null when the server has no such version, and the caller falls
+   * back to the current key, as before.
+   */
+  const getVersionedWaveKey = useCallback((waveId, keyVersion) => {
+    const id = `${waveId}:${keyVersion}`;
+    const pending = versionKeyInFlightRef.current.get(id);
+    if (pending) return pending;
+    const generation = keyGenerationRef.current;
+    const work = (async () => {
+      let list = keyListInFlightRef.current.get(waveId);
+      if (!list) {
+        list = (async () => {
+          const res = await fetchAPI(`/waves/${waveId}/keys/all`);
+          return res.ok ? (await res.json()).keys || [] : null;
+        })();
+        keyListInFlightRef.current.set(waveId, list);
+        list.finally(() => {
+          if (keyListInFlightRef.current.get(waveId) === list) keyListInFlightRef.current.delete(waveId);
+        }).catch(() => {});
+      }
+      const keys = await list;
+      const versionKey = keys?.find(k => k.keyVersion === keyVersion);
+      if (!versionKey) return null;
+      const [encKeyBase64, nonceBase64] = versionKey.encryptedWaveKey.split(':');
+      const senderPubKey = await crypto.importPublicKey(versionKey.senderPublicKey);
+      const waveKey = await crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey);
+      if (generation === keyGenerationRef.current) {
+        waveKeyCacheRef.current.set(id, { waveKey, version: keyVersion });
+      }
+      return waveKey;
+    })();
+    versionKeyInFlightRef.current.set(id, work);
+    work.finally(() => {
+      if (versionKeyInFlightRef.current.get(id) === work) versionKeyInFlightRef.current.delete(id);
+    }).catch(() => {});
+    return work;
+  }, [fetchAPI, privateKey]);
 
   // Grant a pending wave key request from another participant (v2.47.4)
   const grantWaveKey = useCallback(async (waveId, requestId, requesterPublicKey) => {
@@ -674,21 +742,14 @@ export function E2EEProvider({ children, token, API_URL }) {
     if (keyVersion !== null) {
       // Fetch specific version
       const cached = waveKeyCacheRef.current.get(`${waveId}:${keyVersion}`);
+      const current = waveKeyCacheRef.current.get(waveId);
       if (cached) {
         waveKey = cached.waveKey;
+      } else if (current && current.version === keyVersion) {
+        // The ping was encrypted under the current key, which is already here
+        waveKey = current.waveKey;
       } else {
-        // Need to fetch old version from server
-        const res = await fetchAPI(`/waves/${waveId}/keys/all`);
-        if (res.ok) {
-          const { keys } = await res.json();
-          const versionKey = keys.find(k => k.keyVersion === keyVersion);
-          if (versionKey) {
-            const [encKeyBase64, nonceBase64] = versionKey.encryptedWaveKey.split(':');
-            const senderPubKey = await crypto.importPublicKey(versionKey.senderPublicKey);
-            waveKey = await crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey);
-            waveKeyCacheRef.current.set(`${waveId}:${keyVersion}`, { waveKey, version: keyVersion });
-          }
-        }
+        waveKey = await getVersionedWaveKey(waveId, keyVersion);
       }
     }
 
@@ -703,7 +764,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
 
     return crypto.decryptPing(ciphertext, nonce, waveKey);
-  }, [getWaveKey, fetchAPI, privateKey]);
+  }, [getWaveKey, getVersionedWaveKey]);
 
   // ============ Audio Encryption (v2.3.0) ============
 
@@ -985,6 +1046,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       const { newKeyVersion } = await res.json();
 
       // Invalidate cached key so new one is fetched
+      keyGenerationRef.current++;
       waveKeyCacheRef.current.delete(waveId);
 
       return { success: true, newKeyVersion };
@@ -1018,7 +1080,11 @@ export function E2EEProvider({ children, token, API_URL }) {
     setE2eeStatus(null);
     setNeedsPassphrase(false);
     setNeedsSetup(false);
+    keyGenerationRef.current++;
     waveKeyCacheRef.current.clear();
+    waveKeyInFlightRef.current.clear();
+    versionKeyInFlightRef.current.clear();
+    keyListInFlightRef.current.clear();
     clearSessionCache();
     sessionRestoreAttempted.current = false;
   }, [clearSessionCache]);
@@ -1035,6 +1101,12 @@ export function E2EEProvider({ children, token, API_URL }) {
 
   // ============ Invalidate wave key cache ============
   const invalidateWaveKey = useCallback((waveId) => {
+    keyGenerationRef.current++;
+    waveKeyInFlightRef.current.delete(waveId);
+    keyListInFlightRef.current.delete(waveId);
+    for (const key of [...versionKeyInFlightRef.current.keys()]) {
+      if (key.startsWith(`${waveId}:`)) versionKeyInFlightRef.current.delete(key);
+    }
     waveKeyCacheRef.current.delete(waveId);
     for (const key of [...waveKeyCacheRef.current.keys()]) {
       if (key.startsWith(`${waveId}:`)) waveKeyCacheRef.current.delete(key);
