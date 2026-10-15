@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.117.1] - 2026-10-15
+
+Collapsed list sections now show their unread count, plus the uploads copy tool used to move farhold and PMP to their new server.
+
+### Fixed
+
+- **Unread counts vanished when COMMUNITIES or WAVES was collapsed.** Folding either top-level section hid its rows, and the unread badges went with them, so a folded section looked quiet however much was waiting in it. The inner groups (each community, channel, category and PINNED) already carried a total; the two top-level headings did not.
+  - **The heading now shows the section's total while collapsed,** in the same pill as the group badges. Open, it shows nothing, because the rows show their own.
+  - **Same split as the list.** A wave filed in one of your community channels counts under COMMUNITIES unless it is pinned (PINNED sits in the waves section); everything else counts under WAVES. Each wave contributes the same number its row badge shows.
+  - **Verified headlessly** in the running app at 390 px and 1280 px, with `/api/waves` responses altered in the browser to give one community wave 3 unread and two of the user's own waves 2 and 4. COMMUNITIES showed 3 and WAVES showed 6 only while collapsed, matching the 9 on the WAVES tab, with no horizontal overflow.
+
 ### Added
 
 - **`tools/copy-uploads-to-s3.mjs`** copies a node's local uploads into its S3 bucket under the same keys, so a node that switched to S3 can move to a new server without its `uploads` directory.
@@ -15,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Safe to re-run:** files already in the bucket are skipped.
   - **Never deletes from disk.**
   - **Unservable names:** files the bucket route wouldn't serve are skipped and listed.
-  - **Used on farhold** (185 files, 105.5 MB, no mismatches) and on dev (86 files, 81 MB).
+  - **Used on farhold** (185 files, 105.5 MB, no mismatches), on dev (86 files, 81 MB) and on PMP (12 files, 39.7 MB). Both farhold and PMP then moved to a new server with no uploads directory at all.
   - **Verified on dev:** with an existing private picture's disk copy moved aside, Cortex served it from B2 as `image/webp`, byte-for-byte, and refused it without a session.
 
 ## [2.117.0] - 2026-10-14
