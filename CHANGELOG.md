@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.117.2] - 2026-10-15
+
+Encrypted waves open about three times faster. An encrypted private chat on farhold was slow to open on a phone, and the cause was not the number of messages: the first page was already capped at 50, and the server answered in about 13 ms. The time went on fetching the wave's key 50 times and on a response that carried every message six times.
+
+### Fixed
+
+- **The wave key was fetched once per message.** Every encrypted ping carries the key version it was encrypted under. With an empty cache, each of the page's 50 pings, decrypted in parallel, fetched `/keys/all` and unwrapped the key itself.
+  - **Measured on farhold:** nginx logs showed 50 simultaneous `/keys/all` requests per open of the chat, and 100 or 150 on some opens, going back to at least 2 October. Over HTTP/1.1 a browser sends six at a time, so on a phone that is several round trips before anything shows.
+  - **Now one request is shared.** Concurrent callers wait on the same fetch, and each key version is unwrapped once. A ping encrypted under the current key uses the already-cached current key. `getWaveKey` is shared the same way, so a missing key also asks for redistribution once, not once per ping.
+  - **Sign-out still clears keys.** A generation counter stops key work that was already in flight from writing a key back into a cache that sign-out, rotation or invalidation had just cleared. The previous code had the same race without the guard.
+- **Each ping was decrypted twice.** The flat list and the tree were decrypted separately, and the tree one node at a time. Each ping is now decrypted once, and the tree takes its text from the flat result. A tree node not in the flat list is still decrypted, never shown as ciphertext.
+- **The wave response carried each ping six times.** `GET /api/waves/:id` returned the tree and the flat list under the `pings`, `droplets` and `messages` names. It now sends `messages` (the tree) and `all_messages` (the flat list) once each: the names every shipped client reads and `docs/API.md` documents. The small scalar aliases stay. On farhold the chat's 50-ping page was 377 KB for 34 KB of content.
+- **"Load older" could skip a ping.** Older pages are cut by `created_at`, and a stable sort left same-millisecond pings oldest-first, so the one just older than the page boundary sorted ahead of it and was skipped. Ties now keep the exact reverse of the first page's order. This is rare in normal chat, but not for bots, imports or federation bursts.
+
+### Changed
+
+- **nginx compresses wave and message reads.** `landing/nginx.conf` gains a `location` for `/api/waves`, `/api/waves/<id>` and `/api/waves/<id>/messages|pings` with gzip on; nginx otherwise compresses only `text/html`. Nothing else under `/api` is compressed: responses carrying session tokens or keys stay uncompressed so their size can't leak them (BREACH). See `docs/DEPLOYMENT.md` § 8.
+
+### Verified
+
+- **Headlessly in the running dev app,** opening a 32-ping encrypted wave as `mal`, old build against new:
+
+  | | Before | After |
+  |---|---|---|
+  | `/keys/all` requests on open (dev counts CORS preflights too) | 128 | 2 |
+  | Wave response | 242 KB | 82 KB |
+  | Time to render, throttled to 1.5 Mbps / 150 ms | 4.8–5.7 s | 1.7–1.9 s |
+  | Pings shown as "Unable to decrypt" or ciphertext | 0 | 0 |
+
+- **Not exercised in the browser:** "load older" in an encrypted wave, because dev has no encrypted wave with more than one page for an account whose password is known. It decrypts through the same function the first page now uses.
+- **`tests/wave-payload.test.cjs`** (new, 4 tests): one copy of each ping, the low-bandwidth shape, "load older", and same-millisecond pings at a page boundary. Against the old `server.js`, the shape and tie tests fail.
+
 ## [2.117.1] - 2026-10-15
 
 Collapsed list sections now show their unread count, plus the uploads copy tool used to move farhold and PMP to their new server.

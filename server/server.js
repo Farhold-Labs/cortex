@@ -20485,10 +20485,6 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
       total_droplets: totalPings, // Legacy
       total_messages: totalPings, // Legacy
       // Signal to client that pings need to be fetched separately
-      pings: [],
-      droplets: [], // Legacy
-      all_pings: [],
-      all_droplets: [], // Legacy
       hasMorePings: totalPings > 0,
       hasMoreDroplets: totalPings > 0, // Legacy
       messages: [], // Legacy
@@ -20564,15 +20560,15 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     // v2.84.0 — per-user, so it cannot live in rowToWave
     muted: db.isWaveMuted ? db.isWaveMuted(req.user.userId, waveId) : false,
     parent_wave: parentWave, // Breadcrumb navigation for burst waves (v2.1.0)
-    // Ping fields
-    pings: buildPingTree(limitedPings),
-    all_pings: limitedPings,
+    // The pings, ONCE (v2.117.2). This response used to carry the same pings
+    // six times — the tree and the flat list under each of the pings,
+    // droplets and messages names — so a 50-ping page of an encrypted wave
+    // went out as 377 KB for 34 KB of content. `messages`/`all_messages` are
+    // the names every shipped client reads and API.md documents; the small
+    // scalar aliases stay because they cost nothing.
     total_pings: totalPings,
     hasMorePings: hasOlderMessages,
     hasNewerMessages,
-    // Legacy backward compatibility
-    droplets: buildPingTree(limitedPings),
-    all_droplets: limitedPings,
     total_droplets: totalPings,
     hasMoreDroplets: hasOlderMessages,
     messages: buildPingTree(limitedPings),
@@ -20683,8 +20679,13 @@ app.get('/api/waves/:id/messages', authenticateToken, (req, res) => {
     ? db.getPingsForBreakoutWave(wave.id, req.user.userId)
     : db.getMessagesForWave(wave.id, req.user.userId);
 
-  // Sort by created_at descending (newest first) for pagination
-  allMessages.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  // Sort by created_at descending (newest first) for pagination. Ties keep
+  // the exact reverse of the order the first page was cut from (v2.117.2): a
+  // stable sort left same-millisecond pings oldest-first, so the one just
+  // older than the page boundary sorted ahead of it and `before` skipped it.
+  const loadedOrder = new Map(allMessages.map((m, i) => [m.id, i]));
+  allMessages.sort((a, b) => (new Date(b.created_at) - new Date(a.created_at))
+    || (loadedOrder.get(b.id) - loadedOrder.get(a.id)));
 
   // If 'before' is specified, filter to only messages before that one
   if (before) {
