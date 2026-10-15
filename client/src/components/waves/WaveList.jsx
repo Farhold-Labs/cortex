@@ -614,7 +614,7 @@ const WaveCategoryList = ({ show = 'all', waves, categories, channels = [], sele
  * makes that readable at a glance; a menu whose first item is "New…" trains
  * people to open it for everything.
  */
-const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, menuTitle, isMobile, collapsed, onToggleCollapse }) => {
+const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, menuTitle, isMobile, collapsed, onToggleCollapse, unreadCount = 0 }) => {
   const [open, setOpen] = React.useState(false);
   const iconButton = (active) => ({
     padding: isMobile ? '8px 10px' : '4px 7px',
@@ -646,6 +646,17 @@ const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, men
           <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontFamily: 'monospace' }}>
             {collapsed ? '▸' : '▾'}
           </span>
+        )}
+        {/* Folded away, the section's rows (and their badges) are gone, so the
+            header carries their total. Open, the rows show it themselves. */}
+        {collapsed && unreadCount > 0 && (
+          <span title={`${unreadCount} unread`} style={{
+            minWidth: '18px', height: '18px', padding: '0 5px',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            background: titleColor || 'var(--accent-amber)', color: 'var(--bg-base)',
+            fontSize: '0.65rem', fontWeight: 700, fontFamily: 'monospace',
+            borderRadius: '9px', lineHeight: 1, flexShrink: 0,
+          }}>{unreadCount > 99 ? '99+' : unreadCount}</span>
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} onClick={(e) => e.stopPropagation()}>
@@ -722,6 +733,26 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
       return next;
     });
   };
+
+  /**
+   * Unread totals for the two sections, for their headers when collapsed.
+   *
+   * The split mirrors WaveCategoryList: a wave filed in one of your community
+   * channels is listed under COMMUNITIES unless it is pinned (PINNED sits in
+   * the waves section); everything else is under WAVES. The per-wave count is
+   * the same one the group badges use.
+   */
+  const sectionUnread = useMemo(() => {
+    const channelIds = new Set(channels.map(ch => ch.id));
+    let communities = 0, own = 0;
+    for (const wave of waves) {
+      const count = waveNotifications[wave.id]?.count || wave.unread_count || 0;
+      if (!wave.pinned && channelIds.has(wave.channelId)) communities += count;
+      else own += count;
+    }
+    return { communities, waves: own };
+  }, [waves, channels, waveNotifications]);
+
   return (
   <div style={{
     width: '100%',
@@ -739,6 +770,7 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
         isMobile={isMobile}
         collapsed={!!sectionCollapsed.communities}
         onToggleCollapse={() => toggleSection('communities')}
+        unreadCount={sectionUnread.communities}
         onCreate={onManageCommunities ? () => onManageCommunities('create') : undefined}
         createTitle="New community"
         menuTitle="Community options"
@@ -784,6 +816,7 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
       isMobile={isMobile}
       collapsed={!!sectionCollapsed.waves}
       onToggleCollapse={() => toggleSection('waves')}
+      unreadCount={sectionUnread.waves}
       onCreate={onNewWave}
       createTitle={`New ${T.wave}`}
       menuTitle={`${T.Wave} options`}
