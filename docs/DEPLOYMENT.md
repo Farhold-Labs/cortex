@@ -352,6 +352,20 @@ RECORDING_S3_SECRET_KEY=<application key>
 
 Restart `cortex-api` after setting the variables. Settings take effect with no client rebuild.
 
+### Voice channels and the LiveKit webhook (optional)
+
+Voice channels (v2.118.0) are Community channels people drop in and out of, with voice, video and screen sharing.
+
+**1. Turn them on.** Enable *VOICE CHANNELS* under Settings → ADMINISTRATION → INSTANCE DEFAULTS → FEATURES. They also need *COMMUNITIES* and the three `LIVEKIT_*` variables. They are off by default because every minute someone spends in one is billed by LiveKit.
+
+**2. Add the webhook** in the LiveKit project (LiveKit Cloud: project → Settings → Webhooks). Point it at `https://<your node>/api/livekit/webhook` and sign it with the same API key as `LIVEKIT_API_KEY`.
+- Cortex learns about joins and leaves as they happen, for voice channels and for the call indicators on waves.
+- Without the webhook, everything still works, just later: Cortex asks LiveKit every 10 seconds, once for the whole node.
+
+**3. Idle limits.** `VOICE_ALONE_MINUTES` (default 5) and `VOICE_IDLE_MINUTES` (default 60) disconnect people who have been left alone in a room, or have been sitting muted with nothing on.
+
+**One LiveKit project per node is still the rule**, but sharing one does no harm to voice channels: a node only acts on rooms whose channel it has, and ignores the rest.
+
 ### Uploads in object storage (optional)
 
 By default uploads (pictures, files, voice and video messages, avatars) are stored on the server's disk under `server/uploads`. Since v2.117.0 they can live in a **private** S3-compatible bucket instead, such as Backblaze B2, so the server's disk does not have to grow with them.

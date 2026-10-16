@@ -969,6 +969,17 @@ function MainApp({ sharePingId }) {
       if (user?.isAdmin) {
         showToastMsg(NOTIFICATION.federationRequest(data.request?.fromNodeName || 'unknown server'), 'info');
       }
+    } else if (data.type === 'call_presence') {
+      // Someone joined or left a wave call (v2.118.0).
+      setActiveCalls(prev => {
+        const next = { ...prev };
+        if (data.participantCount > 0) {
+          next[data.waveId] = { participantCount: data.participantCount, participants: data.participants || [] };
+        } else {
+          delete next[data.waveId];
+        }
+        return next;
+      });
     } else if (data.type === 'watch_party_created' || data.type === 'watch_party_started') {
       // Watch party started in a wave (v2.14.0)
       const party = data.party || data;
@@ -1356,13 +1367,13 @@ function MainApp({ sharePingId }) {
       .catch(() => setFederationEnabled(false));
   }, [loadWaves, loadCategories, loadContacts, loadGroups, loadContactRequests, loadGroupInvitations, loadBlockedMutedUsers, loadWaveNotifications, loadActiveCalls, loadActiveWatchParties]);
 
-  // Poll active calls every 10 seconds (v2.5.0 - call indicators in wave list)
+  // Call indicators follow `call_presence` pushes (v2.118.0). They used to be
+  // polled every 10 seconds, and every poll made the server ask LiveKit for its
+  // whole room list. A push sent while the socket was down is lost, so the full
+  // list is reloaded each time it (re)connects.
   useEffect(() => {
-    const interval = setInterval(() => {
-      loadActiveCalls();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [loadActiveCalls]);
+    if (wsConnected) loadActiveCalls();
+  }, [wsConnected, loadActiveCalls]);
 
   // Rotate footer tagline every 30 seconds
   useEffect(() => {

@@ -63,6 +63,14 @@ export const CAPABILITIES = {
 
   // Audit
   VIEW_AUDIT_LOG:    'audit.view',
+
+  // Voice channels (v2.118.0). Each maps onto what a LiveKit token may
+  // publish, so the token the server signs is the control, not the client.
+  VOICE_CONNECT:     'voice.connect',           // join the room and listen
+  VOICE_SPEAK:       'voice.speak',             // publish a microphone
+  VOICE_VIDEO:       'voice.video',             // publish a camera
+  VOICE_SCREEN:      'voice.screen',            // share a screen
+  VOICE_MODERATE:    'voice.moderate',          // mute, disconnect or move others
 };
 
 export const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
@@ -101,6 +109,7 @@ export const BUILT_IN_ROLES = Object.freeze([
       C.MANAGE_CHANNELS, C.VIEW_CHANNEL, C.CREATE_WAVE, C.MOVE_WAVE,
       C.MODERATE_CONTENT, C.MANAGE_EVENTS,
       C.VIEW_AUDIT_LOG,
+      C.VOICE_CONNECT, C.VOICE_SPEAK, C.VOICE_VIDEO, C.VOICE_SCREEN, C.VOICE_MODERATE,
     ],
   },
   {
@@ -114,6 +123,7 @@ export const BUILT_IN_ROLES = Object.freeze([
       C.VIEW_CHANNEL, C.CREATE_WAVE, C.MOVE_WAVE,
       C.MODERATE_CONTENT, C.MANAGE_EVENTS,
       C.VIEW_AUDIT_LOG,
+      C.VOICE_CONNECT, C.VOICE_SPEAK, C.VOICE_VIDEO, C.VOICE_SCREEN, C.VOICE_MODERATE,
     ],
   },
   {
@@ -131,8 +141,19 @@ export const BUILT_IN_ROLES = Object.freeze([
     // which does not protect anything: they can reach the same end state by
     // starting a new wave, and the only thing the restriction costs is the
     // history of the conversation they gave up on moving.
-    permissions: [C.VIEW_MEMBERS, C.VIEW_CHANNEL, C.CREATE_WAVE, C.MOVE_WAVE],
+    //
+    // Screen sharing is a member default (decided 2026-10-16): a Community that
+    // wants it staff-only takes it away with a role edit or a channel deny.
+    permissions: [
+      C.VIEW_MEMBERS, C.VIEW_CHANNEL, C.CREATE_WAVE, C.MOVE_WAVE,
+      C.VOICE_CONNECT, C.VOICE_SPEAK, C.VOICE_VIDEO, C.VOICE_SCREEN,
+    ],
   },
+]);
+
+/** The voice capabilities, for the one-time grant to Communities that predate them. */
+export const VOICE_CAPABILITIES = Object.freeze([
+  C.VOICE_CONNECT, C.VOICE_SPEAK, C.VOICE_VIDEO, C.VOICE_SCREEN, C.VOICE_MODERATE,
 ]);
 
 export const BUILT_IN_ROLE_NAMES = Object.freeze(BUILT_IN_ROLES.map(r => r.name));

@@ -1,7 +1,25 @@
 # Communities — voice channels
 
-Design sketch, 2026-10-16. **Nothing here is built.** Like the implementation
-plan, this is the thing to argue with before code exists.
+Design sketch, 2026-10-16. **Phase 1 (server) is built, in v2.118.0.** The
+client (Phase 2) is not, so nobody can join a voice channel from the app yet.
+
+What Phase 1 changed from the sketch:
+
+- **No limit on simultaneous video publishers yet.** A token is issued before
+  anyone turns a camera on, so the limit cannot go in the token; it needs the
+  server to watch cameras appear and mute the excess. Moved to Phase 3. The
+  per-room participant limit (25) is in, enforced by Cortex and set as the
+  LiveKit room's `maxParticipants`.
+- **Rooms of other nodes are ignored.** dev and farhold share one LiveKit
+  project, and `ListRooms` reports the whole project, so a node acts only on
+  voice rooms whose channel it has. Deleting a channel or Community therefore
+  closes its rooms explicitly; the re-check would otherwise take a deleted
+  channel's room for another node's.
+- **The fallback poll runs every 10 s,** matching the client poll it replaced.
+  Measured against LiveKit Cloud with no webhook: a join showed up after 18 s
+  with a 15 s poll, so the poll was shortened. With the webhook it is immediate.
+- **Moderators get mute and disconnect.** Moving someone to another channel
+  waits for the client.
 
 Discord-style voice channels: a channel you drop into and leave, showing who is
 in it before you join, with voice, video and screen sharing. Prompted by Root

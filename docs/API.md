@@ -4544,6 +4544,45 @@ For more information, see:
 
 See [Scoped Jellyfin/Plex media sharing](MEDIA-SECURITY.md) for the grant API, item authorization, proxied playback/HLS, revocation, and legacy-link migration.
 
+## Voice channels (v2.118.0)
+
+A Community channel of type `voice` is a LiveKit room that always exists, named `vc-<channelId>`. It holds no waves. Opt-in instance feature `voiceChannels` (403 `FEATURE_DISABLED` when off), on top of `communities`; it needs LiveKit. Design: `docs/communities/03-voice-channels.md`.
+
+**Channel type.** `POST /api/communities/:id/channels` accepts `type: "voice"`. It answers 403 when `voiceChannels` is off, 503 without LiveKit, and 400 for an unknown type. A channel cannot be converted to or from voice (`PATCH` → 400). Starting or filing a wave in a voice channel → 409.
+
+**Capabilities** (Community roles and channel overrides, deny wins):
+
+| Capability | Allows | Default roles |
+|---|---|---|
+| `voice.connect` | join and listen | all |
+| `voice.speak` | publish a microphone | all |
+| `voice.video` | publish a camera | all |
+| `voice.screen` | share a screen | all |
+| `voice.moderate` | server-mute, disconnect | owner, admin, moderator |
+
+Communities created before v2.118.0 had these added to their built-in roles once, at upgrade.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| POST | `/api/communities/:id/channels/:channelId/voice/token` | `voice.connect` in the channel | → `{ token, url, roomName, identity, userName, startMuted: true, can: { speak, video, screen, moderate } }`. The token's `canPublishSources` follows the capabilities; with none of speak/video/screen it has `canPublish: false`. TTL 10 min. 404 if the channel cannot be seen, 400 if not a voice channel, 409 when full (`limit`, 25) |
+| GET | `/api/communities/:id/voice` | `channel.view` | `{ channels: { <channelId>: [{ userId, displayName, handle, avatar, avatarUrl, sources }] } }` for every voice channel the caller can see |
+| POST | `/api/communities/:id/channels/:channelId/voice/participants/:userId/mute` | `voice.moderate` and rank over them | mutes their microphone in the room; they may unmute. Audited `voice.mute` |
+| DELETE | `/api/communities/:id/channels/:channelId/voice/participants/:userId` | `voice.moderate` and rank over them | disconnects them. Audited `voice.disconnect` |
+| POST | `/api/livekit/webhook` | LiveKit (signed) | `Content-Type: application/webhook+json`, verified with the API key and secret; 401 otherwise. Configure it in the LiveKit project as `https://<node>/api/livekit/webhook` |
+
+**Access is re-checked, not just checked at join.**
+- Every successful write to `/api/communities` or `/api/admin/communities`, every webhook join and every 10-second tick re-checks everyone in a voice room against `voice.connect`. A removed, banned or demoted member is disconnected.
+- Deleting a voice channel or a Community closes its rooms.
+- A room whose channel the node does not have is ignored. That is another node's room on a shared LiveKit project.
+
+**Idle disconnect.** Someone alone in a voice room for `VOICE_ALONE_MINUTES` (default 5), or with every track muted for `VOICE_IDLE_MINUTES` (default 60), is disconnected. Wave calls are not affected.
+
+WebSocket event `voice_presence`: `{ communityId, channelId, participants }`, the same shape as the GET above. It is sent to signed-in users who can see the channel, whenever someone joins, leaves, or publishes or unpublishes a track.
+
+**Wave calls use the same roster.**
+- `GET /api/waves/active-calls` → `{ calls: [{ waveId, participantCount, participants: [userId] }] }` for waves the caller can read. It is answered from the server's roster and no longer calls LiveKit per request. `participants` now holds real user ids; before v2.118.0 it was always empty.
+- WebSocket event `call_presence` → `{ waveId, participantCount, participants }`, sent to the wave's members on every join and leave. Clients load `active-calls` when the socket connects and follow the pushes after that. They no longer poll every 10 seconds.
+
 ## Live broadcasts (v2.109.0) and recording (v2.110.0)
 
 Opt-in instance feature `broadcasts` (403 `FEATURE_DISABLED` when off). Needs LiveKit; public links also need `publicPortal`; recording also needs the `RECORDING_S3_*` settings.

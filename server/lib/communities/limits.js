@@ -52,6 +52,12 @@ export const CAPS = Object.freeze({
   // unbounded channel would mean an unbounded per-request scan for every
   // member who opens the sidebar. Past this the count is reported as a floor.
   channelWaveScan: 500,
+
+  // People in one voice channel at once (v2.118.0). Also set as the LiveKit
+  // room's maxParticipants, so LiveKit enforces it as well as Cortex. Sized for
+  // a lively voice room, not a lecture: every participant receives every other
+  // participant's audio, and video multiplies that.
+  voiceParticipantsPerChannel: 25,
 });
 
 /**
