@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Encrypted offsite backups: `tools/offsite-backup.sh`.** Every backup a node took lived on that node, so a lost disk or a deleted VPS would have taken the backups with it. Since farhold and PMP share one VPS since 2026-10-15, one provider problem would have taken both.
+  - **What it sends:** a consistent snapshot of the live database, verified like a release backup (integrity check, `users` table present), plus `server/.env`, `ecosystem.config.cjs` and `firebase-service-account.json`. The `.env` is the point: it holds the field-encryption keys, and the database is unreadable without them. Uploads already live in B2 and are not included.
+  - **Encrypted to a public key.** The archive is zstd-compressed and GPG-encrypted to a public key before it leaves the box; the node holds nothing that can decrypt it. Someone with only the bucket credentials gets ciphertext, and someone who takes over the node gets the live data but not the history.
+  - **Verified, not just sent.** It exits non-zero unless the bucket reports the object at the size that was sent. It writes `~/.offsite-backup-last-ok` only on success. The config file holds the bucket key, so the script refuses to run if anyone but its owner can read it.
+  - **Never deletes.** Retention is a lifecycle rule on the bucket (30 days), not the script.
+  - **Live since 2026-10-16:** farhold to `farhold-backups` daily at 03:15 UTC, PMP to `pmp-backups` at 03:35 UTC. Each key is scoped to its own bucket. A restore was tested end to end: both first archives (4.0 MB and 309 KB) were downloaded from B2 and decrypted off the box. The databases passed `integrity_check` with live counts (13 users / 5,431 pings; 5 / 107), and the restored `.env` files hash-match the live ones.
+  - `tests/offsite-backup.test.cjs` runs the real script against a fake S3 endpoint. Four tests:
+    - a round trip decrypted with a key the node never had, with the `.env` absent from the ciphertext and the plaintext work directory removed;
+    - a world-readable config is refused;
+    - an unconfirmed upload fails and is not recorded as good;
+    - a non-Cortex database is not sent.
+
 ## [2.117.2] - 2026-10-15
 
 Encrypted waves open about three times faster. An encrypted private chat on farhold was slow to open on a phone, and the cause was not the number of messages: the first page was already capped at 50, and the server answered in about 13 ms. The time went on fetching the wave's key 50 times and on a response that carried every message six times.
