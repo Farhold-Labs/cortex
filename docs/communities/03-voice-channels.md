@@ -109,7 +109,7 @@ Showing who is in a channel before you join is the core of the feature.
 - **The channel row** in the wave list gets a speaker icon. Under it are the
   avatars of the people in the room, with a speaking indicator for those
   publishing audio.
-- **One tap joins**, reusing the docked call window, which already stays up
+- **One tap joins, muted**, reusing the docked call window, which already stays up
   while you move around the app. A persistent "Connected to #lounge" bar holds
   mute, deafen, camera, screen share and leave.
 - **One voice connection at a time.** Joining another channel, or a wave call,
@@ -156,12 +156,19 @@ Showing who is in a channel before you join is the core of the feature.
 
 Each phase is roughly the size of one Communities phase.
 
-## 7. Open decisions
+## 7. Decisions
 
-| Question | Options |
+Taken 2026-10-16:
+
+| Question | Decision |
 | --- | --- |
-| Microphone on joining | On (Discord) / muted / muted on phones only |
-| Screen sharing by default | every member / a granted role only |
-| Text beside the voice | none / one companion wave per voice channel |
-| Idle disconnect | how long alone or idle |
-| First node | farhold (Communities already on) |
+| Microphone on joining | **Muted.** Joining never broadcasts a room you didn't mean to. |
+| Screen sharing | **Every member.** `voice.screen` is in the default member role; a Community can still take it away with a role change or channel override. |
+| First node | **farhold.** Communities are already on there; `voiceChannels` stays off elsewhere. |
+
+Still open, with the defaults Phase 1 will build to unless changed:
+
+| Question | Default |
+| --- | --- |
+| Text beside the voice | **None at first.** A companion wave can be added later without changing the model. |
+| Idle disconnect | **Alone in the room for 5 minutes,** or **muted with no activity for 60 minutes.** Both are per-node settings. |
