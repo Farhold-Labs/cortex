@@ -1,7 +1,23 @@
 # Communities — voice channels
 
-Design sketch, 2026-10-16. **Phase 1 (server) is built, in v2.118.0.** The
-client (Phase 2) is not, so nobody can join a voice channel from the app yet.
+Design sketch, 2026-10-16. **Phases 1 (server) and 2 (client) are built, in
+v2.118.0.** Phase 3 (below) is not. Background audio in the Android app and
+screen sharing still need checking on a real device.
+
+Phase 2 as built:
+
+- **The channel row** is a compact section titled 🔊 with the occupants listed
+  beneath, plus an explicit JOIN / LEAVE button. Tapping the name folds the list.
+  The occupants show 📷 and 🖥️ for a published camera or screen. There is no
+  speaking indicator for people you are not connected to, since the server does
+  not see audio levels.
+- **The docked call window is the connected bar.** It is not a second
+  component: one LiveKit connection, as for wave calls. Closing it is not
+  offered for a voice channel, because closing hands a wave call to the wave's
+  call screen and a voice channel has none.
+- **Moderator actions** appear on rows only while you are in the channel,
+  because that is when this client knows (from the token's `can`) that you hold
+  `voice.moderate` there. The server re-checks capability and rank.
 
 What Phase 1 changed from the sketch:
 

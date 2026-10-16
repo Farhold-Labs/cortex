@@ -4582,6 +4582,7 @@ WebSocket event `voice_presence`: `{ communityId, channelId, participants }`, th
 **Wave calls use the same roster.**
 - `GET /api/waves/active-calls` → `{ calls: [{ waveId, participantCount, participants: [userId] }] }` for waves the caller can read. It is answered from the server's roster and no longer calls LiveKit per request. `participants` now holds real user ids; before v2.118.0 it was always empty.
 - WebSocket event `call_presence` → `{ waveId, participantCount, participants }`, sent to the wave's members on every join and leave. Clients load `active-calls` when the socket connects and follow the pushes after that. They no longer poll every 10 seconds.
+- `GET /api/waves/:waveId/call/status` → `{ active, participantCount, participants }`, also from the roster. `active` is true while anyone is in the call, and for 30 s after someone is issued a token for it, because they are still connecting.
 
 ## Live broadcasts (v2.109.0) and recording (v2.110.0)
 

@@ -52,6 +52,11 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defa
                 lineHeight: 1,
               }}>{unreadCount > 99 ? '99+' : unreadCount}</span>
             )}
+            {headerAction && (
+              // An action that is not "fold this" (e.g. JOIN on a voice
+              // channel). Its clicks must not also toggle the section.
+              <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex' }}>{headerAction}</span>
+            )}
             {menu && menu.length > 0 && (
               // The same three-dot affordance every wave row has, so "there are
               // actions here" looks identical everywhere rather than being a

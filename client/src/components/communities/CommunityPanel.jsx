@@ -20,7 +20,7 @@ import { useModalDismiss } from '../../hooks/useModalDismiss.js';
  *
  * Opened from the ⚙ on a channel group, or from the {T.wave} list options menu.
  */
-const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommunityId = null, focus = null }) => {
+const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommunityId = null, focus = null, voiceEnabled = false }) => {
   const [communities, setCommunities] = useState([]);
   const [selectedId, setSelectedId] = useState(initialCommunityId);
   const [detail, setDetail] = useState(null);
@@ -292,6 +292,7 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
                   community={detail.community}
                   capabilities={detail.capabilities}
                   focus={focus}
+                  voiceEnabled={voiceEnabled}
                   fetchAPI={fetchAPI}
                   showToast={showToast}
                   onChanged={() => { openCommunity(detail.community.id); onChanged && onChanged(); }}
