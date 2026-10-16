@@ -1299,28 +1299,6 @@ CREATE TABLE IF NOT EXISTS communities (
         );
 CREATE INDEX IF NOT EXISTS idx_communities_visibility ON communities(visibility, status);
 
-CREATE TABLE IF NOT EXISTS channels (
-          id           TEXT PRIMARY KEY,
-          community_id TEXT REFERENCES communities(id) ON DELETE CASCADE,
-          name         TEXT NOT NULL,
-          slug         TEXT NOT NULL,
-          description  TEXT,
-          type         TEXT NOT NULL DEFAULT 'text'
-                         CHECK(type IN ('text','announcement')),
-          -- Channel visibility gates DISCOVERY. Wave privacy still gates
-          -- CONTENT — a private wave inside a visible channel stays private and
-          -- is simply not listed for non-participants.
-          visibility   TEXT NOT NULL DEFAULT 'members'
-                         CHECK(visibility IN ('members','restricted')),
-          sort_order   INTEGER NOT NULL DEFAULT 0,
-          created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
-          created_at   TEXT NOT NULL,
-          updated_at   TEXT NOT NULL
-        );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_slug
-          ON channels(IFNULL(community_id, '~node~'), slug);
-CREATE INDEX IF NOT EXISTS idx_channels_community ON channels(community_id, sort_order);
-
 CREATE TABLE IF NOT EXISTS community_memberships (
           id           TEXT PRIMARY KEY,
           community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
@@ -1504,6 +1482,25 @@ CREATE TABLE IF NOT EXISTS attachment_tombstones (
           queued_at  TEXT NOT NULL,
           removed_at TEXT
         );
+
+CREATE TABLE IF NOT EXISTS "channels" (
+            id           TEXT PRIMARY KEY,
+            community_id TEXT REFERENCES communities(id) ON DELETE CASCADE,
+            name         TEXT NOT NULL,
+            slug         TEXT NOT NULL,
+            description  TEXT,
+            type         TEXT NOT NULL DEFAULT 'text'
+                           CHECK(type IN ('text','announcement','voice')),
+            visibility   TEXT NOT NULL DEFAULT 'members'
+                           CHECK(visibility IN ('members','restricted')),
+            sort_order   INTEGER NOT NULL DEFAULT 0,
+            created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+          );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_slug
+            ON channels(IFNULL(community_id, '~node~'), slug);
+CREATE INDEX IF NOT EXISTS idx_channels_community ON channels(community_id, sort_order);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN

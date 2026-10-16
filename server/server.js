@@ -7,7 +7,8 @@ import sanitizeHtml from 'sanitize-html';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import { AccessToken, RoomServiceClient, WebhookReceiver, TrackSource } from 'livekit-server-sdk';
+import { VoiceRoster, voiceRoomName, classifyRoom } from './lib/voice-roster.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import fs from 'fs';
@@ -7944,7 +7945,9 @@ const INSTANCE_FEATURES = ['videoFeed', 'crawlBar', 'calendar', 'publicPortal', 
 // operator turns it on when they mean to.
 // `broadcasts` (v2.109.0) likewise: every viewer is billed LiveKit minutes, and
 // a public watch link is an internet-facing surface.
-const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents', 'communities', 'broadcasts'];
+// `voiceChannels` (v2.118.0) too: people sit in a voice channel for hours, and
+// LiveKit bills every participant-minute.
+const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents', 'communities', 'broadcasts', 'voiceChannels'];
 const ALL_INSTANCE_FEATURES = [...INSTANCE_FEATURES, ...INSTANCE_OPT_IN_FEATURES];
 
 // Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
@@ -20364,37 +20367,20 @@ app.post('/api/profile/videos/:id/reply', authenticateToken, (req, res) => {
  * GET /api/waves/active-calls
  * IMPORTANT: Must come BEFORE /api/waves/:id to avoid parameter matching
  */
-app.get('/api/waves/active-calls', authenticateToken, async (req, res) => {
+app.get('/api/waves/active-calls', authenticateToken, (req, res) => {
   const userId = req.user.userId;
-
-  if (!livekitRoomService) {
-    return res.json({ calls: [] });
+  // From the server's roster (v2.118.0), not a LiveKit call per request: this
+  // used to run ListRooms for every open client every 10 seconds. Clients now
+  // load it once and follow `call_presence` over the WebSocket.
+  const calls = [];
+  for (const room of voiceRoster.roomNames()) {
+    const kind = classifyRoom(room);
+    if (kind?.kind !== 'wave') continue;
+    if (!db.getWave(kind.waveId) || !canAccessWaveFromCache(kind.waveId, userId)) continue;
+    const participants = voiceRoster.participants(room);
+    calls.push({ waveId: kind.waveId, participantCount: participants.length, participants: participants.map(p => p.identity) });
   }
-
-  try {
-    const rooms = await livekitRoomService.listRooms();
-    const activeCalls = [];
-    for (const room of rooms) {
-      try {
-        if (room.numParticipants > 0) {
-          const wave = db.getWave(room.name);
-          if (wave && canAccessWaveFromCache(room.name, userId)) {
-            activeCalls.push({
-              waveId: room.name,
-              participantCount: room.numParticipants,
-              participants: room.participants?.map(p => p.identity) || []
-            });
-          }
-        }
-      } catch (err) {
-        console.log(`Skipping room ${room.name} due to error:`, err.message);
-      }
-    }
-    res.json({ calls: activeCalls });
-  } catch (error) {
-    console.error('Error fetching active calls:', error);
-    res.json({ calls: [] });
-  }
+  res.json({ calls });
 });
 
 app.get('/api/waves', authenticateToken, (req, res) => {
@@ -21172,6 +21158,199 @@ app.post('/api/public/broadcasts/:token/token', broadcastViewerLimiter, async (r
   if (token) res.json({ token, url: LIVEKIT_URL, role: 'viewer' });
 });
 
+// ============ LIVEKIT ROOM ROSTER (v2.118.0) ============
+//
+// Who is in which room, held here and pushed to clients — see
+// lib/voice-roster.js for why this replaced per-client polling. Wave calls get
+// `call_presence`, voice channels `voice_presence`.
+
+const VOICE_ALONE_MS = Math.max(0, Number(process.env.VOICE_ALONE_MINUTES ?? 5)) * 60_000;
+const VOICE_IDLE_MS = Math.max(0, Number(process.env.VOICE_IDLE_MINUTES ?? 60)) * 60_000;
+// Undocumented: tests shorten it. 10 s matches the client poll it replaced, so a
+// node with no webhook configured is no slower than before (measured against
+// LiveKit Cloud on 2026-10-16: a join showed up within one tick).
+const VOICE_TICK_MS = Math.max(200, Number(process.env.VOICE_TICK_MS) || 10_000);
+// While webhooks are arriving the reconcile is a safety net; without them it is
+// the only source, so it runs every tick.
+const WEBHOOK_FRESH_MS = 10 * 60_000;
+
+const livekitWebhooks = (LIVEKIT_API_KEY && LIVEKIT_API_SECRET)
+  ? new WebhookReceiver(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+  : null;
+
+const voiceRoster = new VoiceRoster({
+  roomService: livekitRoomService,
+  onChange: (room) => {
+    try { publishRoomPresence(room); } catch (err) { console.error('[voice] presence push failed:', err.message); }
+  },
+});
+
+/** A roster entry as clients see it: who, never more than the wave/channel already shows. */
+function presenceView(room) {
+  return voiceRoster.participants(room).map(p => {
+    const u = db.findUserById(p.identity);
+    return {
+      userId: p.identity,
+      displayName: u?.displayName || p.name,
+      handle: u?.handle || null,
+      avatar: u?.avatar || null,
+      avatarUrl: u?.avatarUrl || null,
+      sources: p.sources,
+    };
+  });
+}
+
+function publishRoomPresence(room) {
+  const kind = classifyRoom(room);
+  if (kind?.kind === 'wave') {
+    const participants = voiceRoster.participants(room).map(p => p.identity);
+    broadcastToWave(kind.waveId, { type: 'call_presence', waveId: kind.waveId, participantCount: participants.length, participants });
+  } else if (kind?.kind === 'voice') {
+    const channel = db.getChannelById(kind.channelId);
+    if (!channel || !channel.community_id) return;
+    const message = {
+      type: 'voice_presence', communityId: channel.community_id, channelId: channel.id,
+      participants: presenceView(room),
+    };
+    // Only to people who may see the channel listed: a restricted channel's
+    // occupants are as private as its name.
+    const recipients = [...clients.keys()].filter(userId =>
+      communityAuthz.canInChannel(db, { kind: 'user', userId }, channel, CommunityCaps.VIEW_CHANNEL));
+    broadcast(message, recipients);
+  }
+}
+
+/** Disconnect someone from a room and drop them from the roster straight away. */
+async function ejectFromRoom(room, identity, why) {
+  if (!livekitRoomService) return false;
+  try {
+    await livekitRoomService.removeParticipant(room, identity);
+  } catch (err) {
+    // Already gone is the outcome we wanted.
+    if (!/not.?found|404/i.test(String(err?.message || err))) {
+      console.error(`[voice] removing ${identity} from ${room} failed:`, err.message);
+      return false;
+    }
+  }
+  console.log(`🔇 [voice] removed ${identity} from ${room} (${why})`);
+  voiceRoster.forget(room, identity);
+  return true;
+}
+
+/**
+ * Re-check everyone in a voice room against the rules as they are NOW.
+ *
+ * A LiveKit token only matters at the moment of joining, so on its own it would
+ * let a removed, banned or demoted member sit in the room indefinitely. This
+ * runs right after any Community change (see the hook on the Community routes)
+ * and on every tick, which also catches what no Community route sees: an
+ * unpaired home node, a deleted account, the feature switched off.
+ */
+function recheckVoiceAccess() {
+  const featureOn = isFeatureEnabled('communities') && isFeatureEnabled('voiceChannels');
+  for (const room of voiceRoster.roomNames()) {
+    const kind = classifyRoom(room);
+    if (kind?.kind !== 'voice') continue;
+    const channel = db.getChannelById(kind.channelId);
+    // Not a channel on this node. Two nodes can share one LiveKit project (dev
+    // and farhold do), and ListRooms reports the whole project, so a room this
+    // node does not recognise belongs to someone else and is left alone. A
+    // channel deleted here closes its own room (closeVoiceRooms) instead.
+    if (!channel) continue;
+    for (const p of voiceRoster.participants(room)) {
+      const allowed = featureOn && channel.type === 'voice' &&
+        communityAuthz.canInChannel(db, { kind: 'user', userId: p.identity }, channel, CommunityCaps.VOICE_CONNECT);
+      if (!allowed) ejectFromRoom(room, p.identity, 'access');
+    }
+  }
+}
+
+let voiceRecheckQueued = false;
+function queueVoiceRecheck() {
+  if (voiceRecheckQueued) return;
+  voiceRecheckQueued = true;
+  setImmediate(() => {
+    voiceRecheckQueued = false;
+    try { recheckVoiceAccess(); } catch (err) { console.error('[voice] access recheck failed:', err.message); }
+  });
+}
+
+/**
+ * End the rooms of voice channels that are about to stop existing. Called
+ * before the delete, while the channel ids are still known: once the rows are
+ * gone the re-check treats the room as another node's and leaves it be.
+ */
+function voiceChannelIdsOf({ communityId = null, channelId = null }) {
+  const rows = channelId ? [db.getChannelById(channelId)] : db.listChannels(communityId);
+  return rows.filter(c => c && c.type === 'voice').map(c => c.id);
+}
+function closeVoiceRooms(channelIds) {
+  for (const id of channelIds) {
+    const room = voiceRoomName(id);
+    if (livekitRoomService) {
+      livekitRoomService.deleteRoom(room).catch(err => {
+        if (!/not.?found|404/i.test(String(err?.message || err))) console.error(`[voice] closing ${room} failed:`, err.message);
+      });
+    }
+    for (const p of voiceRoster.participants(room)) voiceRoster.forget(room, p.identity);
+  }
+}
+
+let voiceTicks = 0;
+let voiceTickRunning = false;
+async function voiceTick() {
+  if (!livekitRoomService || voiceTickRunning) return;
+  voiceTickRunning = true;
+  try {
+    voiceTicks++;
+    const sweepDue = voiceTicks % 4 === 0;
+    const webhooksFresh = Date.now() - voiceRoster.lastWebhookAt < WEBHOOK_FRESH_MS;
+    if (!webhooksFresh || sweepDue) await voiceRoster.reconcile();
+    recheckVoiceAccess();
+    if (sweepDue) {
+      const removals = voiceRoster.idleRemovals({
+        aloneMs: VOICE_ALONE_MS, idleMs: VOICE_IDLE_MS,
+        // Our own voice rooms only — never another node's on a shared project.
+        applies: (room) => {
+          const kind = classifyRoom(room);
+          return kind?.kind === 'voice' && Boolean(db.getChannelById(kind.channelId));
+        },
+      });
+      for (const r of removals) await ejectFromRoom(r.room, r.identity, r.reason);
+    }
+  } catch (err) {
+    console.error('[voice] roster tick failed:', err.message);
+  } finally {
+    voiceTickRunning = false;
+  }
+}
+if (livekitRoomService) {
+  setInterval(voiceTick, VOICE_TICK_MS).unref();
+  setTimeout(voiceTick, 1000).unref();
+}
+
+/**
+ * LiveKit webhooks. Configure in the LiveKit project (Cloud: Settings →
+ * Webhooks) as https://<node>/api/livekit/webhook. Signed with the API secret;
+ * anything that does not verify is refused, and nothing in the body is trusted
+ * beyond "this person is or is not in this room".
+ */
+app.post('/api/livekit/webhook', express.text({ type: 'application/webhook+json', limit: '64kb' }), async (req, res) => {
+  if (!livekitWebhooks) return res.status(503).json({ error: 'LiveKit not configured' });
+  if (typeof req.body !== 'string' || !req.body) return res.status(400).json({ error: 'Expected a LiveKit webhook' });
+  let event;
+  try {
+    event = await livekitWebhooks.receive(req.body, req.get('Authorization'));
+  } catch {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+  voiceRoster.applyEvent(event);
+  // A join is the moment to apply the rules: someone holding a token minted
+  // before they were removed is turned away here, not on the next tick.
+  if (event.event === 'participant_joined' && classifyRoom(event.room?.name)?.kind === 'voice') queueVoiceRecheck();
+  res.json({ ok: true });
+});
+
 // ============ LIVEKIT VOICE CALLS (v2.4.0) ============
 
 /**
@@ -21374,6 +21553,9 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
       db, { kind: 'user', userId: req.user.userId }, targetChannel, CommunityCaps.CREATE_WAVE);
     if (!decision.allowed || !inChannel) {
       return res.status(403).json({ error: 'You cannot start a conversation in that channel' });
+    }
+    if (targetChannel.type === 'voice') {
+      return res.status(409).json({ error: 'A voice channel does not hold conversations' });
     }
   }
 
@@ -24258,6 +24440,19 @@ app.use('/api/admin/communities', (req, res, next) => {
   next();
 });
 
+// Any successful change to a Community may have taken someone's voice access
+// away — a removal, a ban, a role edit, a channel override, a channel deleted
+// or made restricted. Rather than remember to call this from each route, every
+// successful write here re-checks who is in the voice rooms (v2.118.0).
+const voiceRecheckOnWrite = (req, res, next) => {
+  if (req.method !== 'GET') {
+    res.on('finish', () => { if (res.statusCode < 400) queueVoiceRecheck(); });
+  }
+  next();
+};
+app.use('/api/communities', voiceRecheckOnWrite);
+app.use('/api/admin/communities', voiceRecheckOnWrite);
+
 /** Build the actor the evaluator expects. Local today, remote-shaped already. */
 function communityActor(req) {
   return { kind: 'user', userId: req.user.userId };
@@ -24568,10 +24763,12 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
 // Step-up re-auth: this disposes of a shared space and everyone's place in it.
 app.delete('/api/communities/:id', authenticateToken, requireStepUp, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.DELETE_COMMUNITY)) return;
+  const closingRooms = voiceChannelIdsOf({ communityId: req.params.id });
   inCommunityTransaction(() => {
     db.deleteCommunity(req.params.id);
     db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'community.delete' });
   });
+  closeVoiceRooms(closingRooms);
   res.json({ success: true });
 });
 
@@ -25057,6 +25254,15 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
   if (!name) return res.status(400).json({ error: 'Channel name is required' });
   const slug = communitySlug(req.body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
   if (!slug) return res.status(400).json({ error: 'Invalid channel address' });
+  if (!['text', 'announcement', 'voice', undefined].includes(req.body.type)) {
+    return res.status(400).json({ error: 'Unknown channel type' });
+  }
+  // A voice channel needs the node to offer voice at all. Refused here, not
+  // merely hidden, so a channel nobody can ever join is never created.
+  if (req.body.type === 'voice') {
+    if (!requireFeature('voiceChannels', res)) return;
+    if (!livekitRoomService) return res.status(503).json({ error: 'Voice is not configured on this server' });
+  }
   if (!requireRoomFor(res, db, 'channel', req.params.id)) return;
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
@@ -25068,7 +25274,7 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
       const channel = db.createChannel({
         communityId: req.params.id, name, slug,
         description: chDesc.value,
-        type: ['text', 'announcement'].includes(req.body.type) ? req.body.type : 'text',
+        type: req.body.type || 'text',
         visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
         sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
         createdBy: req.user.userId,
@@ -25100,7 +25306,19 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
     if (!desc.ok) return res.status(400).json({ error: 'Description is too long' });
     fields.description = desc.value;
   }
-  if (['text', 'announcement'].includes(req.body.type)) fields.type = req.body.type;
+  if (req.body.type !== undefined) {
+    // Text and announcement channels hold waves; a voice channel holds a room.
+    // Converting between them would strand one or the other, so a channel's
+    // voice-ness is fixed when it is created.
+    const current = db.getChannelById(req.params.channelId);
+    if (req.body.type === 'voice' || current?.type === 'voice') {
+      if (req.body.type !== current?.type) {
+        return res.status(400).json({ error: 'A channel cannot be converted to or from voice' });
+      }
+    } else if (['text', 'announcement'].includes(req.body.type)) {
+      fields.type = req.body.type;
+    }
+  }
   if (['members', 'restricted'].includes(req.body.visibility)) fields.visibility = req.body.visibility;
   if (Number.isInteger(req.body.sortOrder)) fields.sort_order = req.body.sortOrder;
 
@@ -25125,13 +25343,15 @@ app.delete('/api/communities/:id/channels/:channelId', authenticateToken, (req, 
     { resource: { type: 'channel', id: req.params.channelId } })) return;
 
   // Waves inside fall back to uncontained. Deleting a container must never
-  // delete the conversations in it.
+  // delete the conversations in it. A voice channel's room closes with it.
+  const closingRooms = voiceChannelIdsOf({ channelId: req.params.channelId });
   inCommunityTransaction(() => {
     db.deleteChannel(req.params.channelId);
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'channel.delete', targetType: 'channel', targetId: req.params.channelId,
     });
   });
+  closeVoiceRooms(closingRooms);
   res.json({ success: true });
 });
 
@@ -25214,6 +25434,9 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
 
   // And over the channel it is going into (CORTEX-COMM-011).
   const targetForFile = db.getChannelById(req.params.channelId);
+  if (targetForFile?.type === 'voice') {
+    return res.status(409).json({ error: 'A voice channel does not hold conversations' });
+  }
   if (!communityAuthz.canInChannel(db, communityActor(req), targetForFile, CommunityCaps.MOVE_WAVE)) {
     return res.status(403).json({ error: 'You cannot file into that channel' });
   }
@@ -25257,6 +25480,166 @@ app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticat
   res.json({ wave: updated });
 });
 
+
+// ----- Voice channels (v2.118.0) -----
+//
+// A voice channel is a LiveKit room that always exists, named vc-<channelId>.
+// Design: docs/communities/03-voice-channels.md.
+//
+// The token is the control. What a member may publish is decided here, from
+// the channel's effective capabilities, and written into the token as
+// canPublishSources — a client that offers a screen-share button to someone
+// without `voice.screen` gets a LiveKit refusal, not a screen share. And since a
+// token only matters at the moment of joining, losing access later is enforced
+// by recheckVoiceAccess(), which removes the person from the room.
+
+/**
+ * The voice channel named in the URL, if the caller may see it. Answers like
+ * the other Community routes: 404 for anything they may not know exists.
+ */
+function visibleVoiceChannel(req, res) {
+  if (!requireFeature('voiceChannels', res)) return null;
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_CHANNEL)) return null;
+  const channel = db.getChannelById(req.params.channelId);
+  if (!channel || channel.community_id !== req.params.id ||
+      !communityAuthz.canInChannel(db, communityActor(req), channel, CommunityCaps.VIEW_CHANNEL)) {
+    res.status(404).json({ error: 'Not found' });
+    return null;
+  }
+  if (channel.type !== 'voice') {
+    res.status(400).json({ error: 'That is not a voice channel' });
+    return null;
+  }
+  return channel;
+}
+
+app.post('/api/communities/:id/channels/:channelId/voice/token', authenticateToken, apiLimiter, async (req, res) => {
+  const channel = visibleVoiceChannel(req, res);
+  if (!channel) return;
+  if (!LIVEKIT_URL || !livekitRoomService) return res.status(503).json({ error: 'Voice is not configured on this server' });
+
+  const caps = communityAuthz.channelCapabilities(db, communityActor(req), channel);
+  if (!caps.has(CommunityCaps.VOICE_CONNECT)) return res.status(403).json({ error: 'You cannot join this voice channel' });
+
+  const room = voiceRoomName(channel.id);
+  const limit = communityLimits.CAPS.voiceParticipantsPerChannel;
+  if (!voiceRoster.has(room, req.user.userId) && voiceRoster.count(room) >= limit) {
+    return res.status(409).json({ error: `This voice channel is full (${limit} people)`, limit });
+  }
+
+  // Microphone, camera and screen each need their own capability. An EMPTY
+  // canPublishSources means "no restriction" to LiveKit, so someone allowed to
+  // publish nothing gets canPublish: false rather than an empty list.
+  const sources = [];
+  if (caps.has(CommunityCaps.VOICE_SPEAK)) sources.push(TrackSource.MICROPHONE);
+  if (caps.has(CommunityCaps.VOICE_VIDEO)) sources.push(TrackSource.CAMERA);
+  if (caps.has(CommunityCaps.VOICE_SCREEN)) sources.push(TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO);
+
+  const user = db.findUserById(req.user.userId);
+  const userName = user?.displayName || user?.handle || 'Unknown';
+  try {
+    // Ten minutes: long enough to connect. LiveKit refreshes the token on a
+    // live connection, and leaving the room is enforced by removal, not expiry.
+    const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, { identity: req.user.userId, name: userName, ttl: '10m' });
+    at.addGrant({
+      roomJoin: true, room,
+      canSubscribe: true,
+      canPublish: sources.length > 0,
+      ...(sources.length ? { canPublishSources: sources } : {}),
+      canPublishData: false,
+    });
+    const token = await at.toJwt();
+
+    // The room carries the participant limit too, so LiveKit enforces it even
+    // against a token issued just before the room filled. Best effort: LiveKit
+    // creates the room on first join anyway, and the check above still stands.
+    livekitRoomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: limit })
+      .catch(err => console.warn(`[voice] createRoom ${room}:`, err.message));
+
+    res.json({
+      token, url: LIVEKIT_URL, roomName: room, identity: req.user.userId, userName,
+      // Decided 2026-10-16: joining never broadcasts a room you did not mean to.
+      startMuted: true,
+      can: {
+        speak: caps.has(CommunityCaps.VOICE_SPEAK),
+        video: caps.has(CommunityCaps.VOICE_VIDEO),
+        screen: caps.has(CommunityCaps.VOICE_SCREEN),
+        moderate: caps.has(CommunityCaps.VOICE_MODERATE),
+      },
+    });
+  } catch (err) {
+    console.error('[voice] token failed:', err.message);
+    res.status(500).json({ error: 'Could not create a voice token' });
+  }
+});
+
+// Who is in each voice channel the caller may see — the initial state that
+// `voice_presence` messages then keep current.
+app.get('/api/communities/:id/voice', authenticateToken, (req, res) => {
+  if (!requireFeature('voiceChannels', res)) return;
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_CHANNEL)) return;
+  const channels = {};
+  for (const c of db.listChannels(req.params.id)) {
+    if (c.type !== 'voice') continue;
+    if (!communityAuthz.canInChannel(db, communityActor(req), c, CommunityCaps.VIEW_CHANNEL)) continue;
+    channels[c.id] = presenceView(voiceRoomName(c.id));
+  }
+  res.json({ channels });
+});
+
+/** The moderator side: `voice.moderate` in this channel, and rank over the target. */
+function voiceModerationTarget(req, res) {
+  const channel = visibleVoiceChannel(req, res);
+  if (!channel) return null;
+  if (!communityAuthz.canInChannel(db, communityActor(req), channel, CommunityCaps.VOICE_MODERATE)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  const rank = communityAuthz.canActOnMember(db, req.user.userId, req.params.userId, req.params.id);
+  if (!rank.allowed) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  const room = voiceRoomName(channel.id);
+  if (!voiceRoster.has(room, req.params.userId)) {
+    res.status(404).json({ error: 'They are not in this voice channel' });
+    return null;
+  }
+  return { channel, room };
+}
+
+// Server-side mute of someone's microphone. They can unmute themselves again —
+// this is "you were loud", not a sanction; disconnect or a channel deny is.
+app.post('/api/communities/:id/channels/:channelId/voice/participants/:userId/mute', authenticateToken, apiLimiter, async (req, res) => {
+  const target = voiceModerationTarget(req, res);
+  if (!target) return;
+  try {
+    const info = await livekitRoomService.getParticipant(target.room, req.params.userId);
+    const mics = (info?.tracks || []).filter(t => t.source === TrackSource.MICROPHONE && !t.muted);
+    for (const t of mics) await livekitRoomService.mutePublishedTrack(target.room, req.params.userId, t.sid, true);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'voice.mute', targetType: 'user', targetId: req.params.userId,
+      metadata: { channel: target.channel.id },
+    });
+    res.json({ success: true, muted: mics.length });
+  } catch (err) {
+    console.error('[voice] mute failed:', err.message);
+    res.status(502).json({ error: 'Could not mute them' });
+  }
+});
+
+app.delete('/api/communities/:id/channels/:channelId/voice/participants/:userId', authenticateToken, async (req, res) => {
+  const target = voiceModerationTarget(req, res);
+  if (!target) return;
+  if (!await ejectFromRoom(target.room, req.params.userId, `disconnected by ${req.user.userId}`)) {
+    return res.status(502).json({ error: 'Could not disconnect them' });
+  }
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'voice.disconnect', targetType: 'user', targetId: req.params.userId,
+    metadata: { channel: target.channel.id },
+  });
+  res.json({ success: true });
+});
 
 // ----- Remote membership (v2.97.0, Phase 4) -----
 //
@@ -25570,6 +25953,7 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
   // only appeared in a general-purpose activity feed.
   // Soft delete, and the waves inside are detached rather than destroyed — a
   // node admin closing a Community must not take conversations with it.
+  const closingRooms = voiceChannelIdsOf({ communityId: req.params.id });
   inCommunityTransaction(() => {
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'community.closed_by_node_admin',
@@ -25577,6 +25961,7 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
     });
     db.deleteCommunity(req.params.id);
   });
+  closeVoiceRooms(closingRooms);
   db.logActivity(req.user.userId, 'community_deleted', 'community', req.params.id, {});
   res.json({ success: true });
 });

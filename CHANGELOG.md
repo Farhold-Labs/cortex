@@ -7,9 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.118.0] - 2026-10-16
+
+Voice channels for Communities, server side (Phase 1 of `docs/communities/03-voice-channels.md`). This is a Discord-style channel you drop into and leave, with voice, video and screen sharing, and anyone who can see the channel can see who is in it. The app can't join one yet: that is Phase 2. As part of the work, wave call indicators stopped polling LiveKit from every open client.
+
 ### Added
 
-- **Encrypted offsite backups: `tools/offsite-backup.sh`.** Every backup a node took lived on that node, so a lost disk or a deleted VPS would have taken the backups with it. Since farhold and PMP share one VPS since 2026-10-15, one provider problem would have taken both.
+- **A `voice` channel type.** A voice channel holds no waves. It is a LiveKit room that always exists, named `vc-<channelId>`.
+  - **Opt-in.** It is behind the instance feature `voiceChannels`, off by default, because people sit in voice channels and LiveKit bills every participant-minute.
+  - **Fixed at creation.** A channel cannot be converted to or from voice, and starting or filing a wave in one is refused.
+  - **Schema.** `channels.type` had a CHECK constraint SQLite cannot alter, so the table is rebuilt once, with foreign keys off for the swap. Filed waves and channel overrides keep their references. Violations already in the database do not block the boot; only new ones would, and they roll the rebuild back.
+- **Five voice capabilities:** `voice.connect`, `speak`, `video`, `screen` and `moderate`.
+  - **Defaults:** members get everything but `moderate`. Screen sharing for everyone was decided on 2026-10-16, and a Community can still take it away.
+  - **Existing Communities** had them added to their built-in roles in the same one-time rebuild, so a capability a Community later removes is not put back on the next boot.
+- **The token is the control.** `POST …/channels/:channelId/voice/token` writes the caller's capabilities into LiveKit's `canPublishSources`.
+  - Someone without `voice.screen` gets a token that cannot share a screen, whatever the client shows.
+  - LiveKit reads an empty source list as "anything", so someone allowed to publish nothing gets `canPublish: false`. A test pins that.
+  - Tokens last 10 minutes, the room carries a 25-person `maxParticipants`, and the response tells the client to join muted.
+- **Access is re-checked after joining.** A LiveKit token is checked only at join, so on its own a removed or banned member could sit in the room indefinitely.
+  - **When:** after every successful write under `/api/communities` (a middleware, so no route can forget), on every webhook join, and on every tick. The tick also catches what no Community route sees: an unpaired home node, a deleted account, the feature switched off.
+  - **Tests:** removal and ban are tested end to end. The **counterfactual** empties `recheckVoiceAccess()` and shows the removed member stays in the room.
+  - **Deleting** a voice channel or a Community closes its rooms.
+- **Presence.** `GET /api/communities/:id/voice` and the `voice_presence` WebSocket push go only to people who can see the channel, so a restricted channel's occupants stay as private as its name.
+- **Moderation.** Server-mute a microphone, and disconnect, each needing `voice.moderate` and rank over the target, and audited.
+- **Idle disconnect.** Someone is disconnected after 5 minutes alone in a voice room (`VOICE_ALONE_MINUTES`), or 60 with everything muted (`VOICE_IDLE_MINUTES`). Wave calls are untouched.
+- **Encrypted offsite backups: `tools/offsite-backup.sh`.** Every backup a node took lived on that node, so a lost disk or a deleted VPS would have taken the backups with it. Since 2026-10-15 farhold and PMP share one VPS, so one provider problem would have taken both.
   - **What it sends:** a consistent snapshot of the live database, verified like a release backup (integrity check, `users` table present), plus `server/.env`, `ecosystem.config.cjs` and `firebase-service-account.json`. The `.env` is the point: it holds the field-encryption keys, and the database is unreadable without them. Uploads already live in B2 and are not included.
   - **Encrypted to a public key.** The archive is zstd-compressed and GPG-encrypted to a public key before it leaves the box; the node holds nothing that can decrypt it. Someone with only the bucket credentials gets ciphertext, and someone who takes over the node gets the live data but not the history.
   - **Verified, not just sent.** It exits non-zero unless the bucket reports the object at the size that was sent. It writes `~/.offsite-backup-last-ok` only on success. The config file holds the bucket key, so the script refuses to run if anyone but its owner can read it.
@@ -20,6 +42,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - a world-readable config is refused;
     - an unconfirmed upload fails and is not recorded as good;
     - a non-Cortex database is not sent.
+
+### Changed
+
+- **Wave call indicators are pushed, not polled.** Every open client asked `/api/waves/active-calls` every 10 seconds, and each request called LiveKit's `ListRooms` across the whole project, so ten people with the app open meant a LiveKit API call every second.
+  - **Now:** LiveKit's signed webhooks (`/api/livekit/webhook`) feed a server-side roster (`server/lib/voice-roster.js`), and clients follow the `call_presence` WebSocket event.
+  - **Fallback:** a reconcile asks LiveKit every 10 seconds, once per node, when no webhook has arrived recently. It also serves nodes with no webhook configured.
+  - **Measured against LiveKit Cloud from dev** (no webhook): a headless browser joined a wave call in 0.7 s. The roster listed it, and pushed it, on the next reconcile, and dropped it within one reconcile of leaving. The poll was 15 s then and was cut to 10 s so this is no slower than before.
+  - **`participants` now holds real user ids.** The old route read a field LiveKit's `Room` does not have, so it was always empty.
+- **A node ignores voice rooms that aren't its own.** dev and farhold share a LiveKit project, and `ListRooms` covers the whole project. Without this rule, each node's access check would have disconnected the other's users. A test covers it.
+
+### Verified
+
+- `tests/voice-channels.test.cjs`, 20 tests, runs against a fake LiveKit and webhooks signed with the real SDK. It covers:
+  - the migration;
+  - token grants;
+  - channel overrides;
+  - restricted channels;
+  - forged webhooks;
+  - presence targeting;
+  - moderation rank;
+  - removal, ban and the counterfactual;
+  - the room limit;
+  - channel deletion;
+  - idle and alone sweeps, leaving wave calls and other nodes' rooms alone;
+  - the feature switch.
+- Passed three times in parallel under load. Full suite and schema check pass.
+- The migration ran on dev's database: 28 built-in roles gained voice.
 
 ## [2.117.2] - 2026-10-15
 

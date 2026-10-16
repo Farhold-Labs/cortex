@@ -81,6 +81,11 @@ These are **not end-to-end encrypted, even in an encrypted wave.** The encryptio
   - Viewers are hidden from one another and cannot be seen or heard.
   - The performer can see how many people are watching, but not who.
   - A public link lets anyone watch without an account, until it is turned off or the broadcast ends.
+- **Voice channels** (if the operator enables them, v2.118.0) are Community channels you can drop into for voice, video and screen sharing. They go through LiveKit, like calls.
+  - **Who can see who is in one:** anyone who can see the channel in the Community's list, including people who have not joined it. In a restricted channel, only the people let into it.
+  - **Not end-to-end encrypted.** Audio, video and screens are encrypted between your device and LiveKit, and LiveKit's servers could technically access them. This is the same as calls. Voice channels are never recorded.
+  - **What Cortex keeps:** nothing about who was in a voice channel or for how long. The server tracks who is in a room only while they are in it, in memory. Moderator mutes and disconnects are written to the Community's audit log.
+  - **Idle disconnect:** you are disconnected after a while alone in a channel, or muted with nothing on. That keeps someone from sitting in a room for hours by accident.
 - **Recordings** are made only when the performer chooses to record.
   - **Where they're stored:** in the operator's S3-compatible bucket (for example Backblaze B2), written there by LiveKit.
   - **Who can watch:** members of the wave, through Cortex, which checks membership on every request. The bucket itself is private.
@@ -200,7 +205,7 @@ Even with full database access, the operator cannot see:
 - **No advertising** — no ads, no ad networks, no tracking pixels
 - **No third-party cookies.** Cortex uses JWT tokens in headers. Its only cookie is a first-party, 15-minute, HttpOnly cookie that lets your browser load private attachments. It is scoped to `/uploads` and is not a tracking cookie.
 - **GIF providers.** If enabled by the operator, GIF search queries are sent to GIPHY and/or Klipy. Tenor was shut down by Google in 2026.
-- **Calls and live broadcasts.** If enabled by the operator, audio and video go through LiveKit (LiveKit Cloud or the operator's own LiveKit server).
+- **Calls, voice channels and live broadcasts.** If enabled by the operator, audio and video go through LiveKit (LiveKit Cloud or the operator's own LiveKit server). LiveKit tells the server when people join and leave a room (a signed webhook), so others can see who is in a call or voice channel.
 - **Broadcast recordings** are stored in the operator's S3-compatible bucket.
 - **Email** is sent through the operator's mail provider, for example Resend or SMTP.
 

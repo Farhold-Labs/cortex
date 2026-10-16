@@ -24,7 +24,7 @@ import { CAPS as COMMUNITY_CAPS } from './lib/communities/limits.js';
 /** Shared with the HTTP admission paths — see lib/communities/limits.js. */
 const COMMUNITY_MEMBER_CAP = COMMUNITY_CAPS.membersPerCommunity;
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
-import { BUILT_IN_ROLES, isCapability, unionCapabilities } from './lib/communities/capabilities.js';
+import { BUILT_IN_ROLES, VOICE_CAPABILITIES, isCapability, unionCapabilities } from './lib/communities/capabilities.js';
 import { isReservedHandle } from './lib/reserved-handles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -3089,7 +3089,7 @@ export class DatabaseSQLite {
           slug         TEXT NOT NULL,
           description  TEXT,
           type         TEXT NOT NULL DEFAULT 'text'
-                         CHECK(type IN ('text','announcement')),
+                         CHECK(type IN ('text','announcement','voice')),
           -- Channel visibility gates DISCOVERY. Wave privacy still gates
           -- CONTENT — a private wave inside a visible channel stays private and
           -- is simply not listed for non-participants.
@@ -3299,6 +3299,82 @@ export class DatabaseSQLite {
       console.log('📝 Adding community_remote_invitations.expires_at (v2.105.0)...');
       this.db.exec(`ALTER TABLE community_remote_invitations ADD COLUMN expires_at TEXT;`);
       console.log('✅ community_remote_invitations.expires_at added');
+    }
+
+    // v2.118.0 — voice channels. `channels.type` gains 'voice'.
+    //
+    // SQLite cannot alter a CHECK constraint, so this is a rebuild, the same
+    // shape as the v2.90.0 event_rsvp one. Foreign keys are off for the swap so
+    // dropping the old table does not cascade into channel_permissions or set
+    // every wave's channel_id to NULL; the references are by name and resolve
+    // to the rebuilt table.
+    //
+    // The same one-time branch grants the voice capabilities to the built-in
+    // roles of Communities that predate them. It must run exactly once: run on
+    // every boot, it would put back a capability a Community had deliberately
+    // taken away. The CHECK constraint is what marks it as done.
+    const channelsSql = this.db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='channels'`
+    ).get()?.sql || '';
+    if (channelsSql && !channelsSql.includes("'voice'")) {
+      console.log('📝 Rebuilding channels for voice channels (v2.118.0)...');
+      const rebuild = () => {
+        // Violations already in the database (an orphan row elsewhere) must not
+        // block the boot; only ones this rebuild would introduce do.
+        const violationsBefore = this.db.pragma('foreign_key_check').length;
+        this.db.exec(`
+          CREATE TABLE channels_new (
+            id           TEXT PRIMARY KEY,
+            community_id TEXT REFERENCES communities(id) ON DELETE CASCADE,
+            name         TEXT NOT NULL,
+            slug         TEXT NOT NULL,
+            description  TEXT,
+            type         TEXT NOT NULL DEFAULT 'text'
+                           CHECK(type IN ('text','announcement','voice')),
+            visibility   TEXT NOT NULL DEFAULT 'members'
+                           CHECK(visibility IN ('members','restricted')),
+            sort_order   INTEGER NOT NULL DEFAULT 0,
+            created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+          );
+          INSERT INTO channels_new (id, community_id, name, slug, description, type, visibility, sort_order, created_by, created_at, updated_at)
+            SELECT id, community_id, name, slug, description, type, visibility, sort_order, created_by, created_at, updated_at
+            FROM channels;
+          DROP TABLE channels;
+          ALTER TABLE channels_new RENAME TO channels;
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_slug
+            ON channels(IFNULL(community_id, '~node~'), slug);
+          CREATE INDEX IF NOT EXISTS idx_channels_community ON channels(community_id, sort_order);
+        `);
+        const violationsAfter = this.db.pragma('foreign_key_check').length;
+        if (violationsAfter > violationsBefore) {
+          throw new Error(`channels rebuild would break ${violationsAfter - violationsBefore} references`);
+        }
+
+        const defaults = new Map(BUILT_IN_ROLES.map(r => [r.name, r.permissions]));
+        const roles = this.db.prepare(`SELECT id, name, permissions FROM community_roles WHERE managed = 1`).all();
+        const update = this.db.prepare(`UPDATE community_roles SET permissions = ? WHERE id = ?`);
+        let granted = 0;
+        for (const role of roles) {
+          const add = (defaults.get(role.name) || []).filter(c => VOICE_CAPABILITIES.includes(c));
+          if (!add.length) continue;
+          const held = [...unionCapabilities([role])];
+          const next = [...new Set([...held, ...add])];
+          if (next.length !== held.length) { update.run(JSON.stringify(next), role.id); granted++; }
+        }
+        return granted;
+      };
+      // foreign_keys cannot change inside a transaction, so it is switched
+      // outside one and the rebuild itself is atomic: a failed check rolls it
+      // back and the node boots on the old table.
+      this.db.pragma('foreign_keys = OFF');
+      try {
+        const granted = this.db.transaction(rebuild)();
+        console.log(`✅ channels accept 'voice'; voice capabilities granted to ${granted} built-in roles`);
+      } finally {
+        this.db.pragma('foreign_keys = ON');
+      }
     }
 
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
