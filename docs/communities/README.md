@@ -20,6 +20,7 @@ going the wrong way.
 | [00-existing-architecture.md](00-existing-architecture.md) | What Cortex actually does today, with file references |
 | [01-threat-model.md](01-threat-model.md) | What Communities would be exposed to, and what the current stack does and does not defend |
 | [02-implementation-plan.md](02-implementation-plan.md) | The proposed build, mapped onto real Cortex modules, in gated phases |
+| [03-voice-channels.md](03-voice-channels.md) | Voice channels on LiveKit: server and client built (Phases 1–2, v2.118.0); Phase 3 to come |
 
 ## Decisions taken 2026-09-18
 

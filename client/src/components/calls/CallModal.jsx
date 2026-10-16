@@ -189,9 +189,15 @@ const CallControls = ({ isMuted, isCameraOff, isScreenSharing, setParticipants, 
 const CallModal = ({ isOpen, onClose, wave, voiceCall, user, isMobile }) => {
   if (!isOpen || !wave || !user) return null;
 
-  const { connectionState, participants, isMuted, isCameraOff, isScreenSharing, audioLevel, error, livekitToken, livekitUrl, callActive, serverParticipantCount, checkCallStatus, setScreenSharing } = voiceCall;
-  const isConnected = connectionState === 'connected';
-  const isConnecting = connectionState === 'connecting';
+  const { connectionState, participants, isMuted, isCameraOff, isScreenSharing, audioLevel, error, callActive, serverParticipantCount, checkCallStatus, setScreenSharing } = voiceCall;
+  // A Community voice channel (v2.118.0) uses the same connection, but it is
+  // not this wave's call. Seen from here you are not in a call, and starting
+  // one moves you out of the voice channel.
+  const inVoiceChannel = Boolean(voiceCall.voiceChannel);
+  const livekitToken = inVoiceChannel ? null : voiceCall.livekitToken;
+  const livekitUrl = inVoiceChannel ? null : voiceCall.livekitUrl;
+  const isConnected = !inVoiceChannel && connectionState === 'connected';
+  const isConnecting = !inVoiceChannel && connectionState === 'connecting';
   const participantCount = participants.length;
 
   // Check if there are actual video tracks to determine window size

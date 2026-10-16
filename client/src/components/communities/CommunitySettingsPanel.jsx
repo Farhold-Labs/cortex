@@ -11,7 +11,7 @@ import { storage } from '../../utils/storage.js';
  * from "are they an admin" keeps the UI honest when a Community has custom
  * roles that do not map onto the four built-in ones.
  */
-const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, onChanged, focus = null }) => {
+const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, onChanged, focus = null, voiceEnabled = false }) => {
   const can = (c) => (capabilities || []).includes(c);
 
   const [members, setMembers] = useState([]);
@@ -19,6 +19,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
   const [invites, setInvites] = useState([]);
   const [mintedToken, setMintedToken] = useState(null);
   const [channelName, setChannelName] = useState('');
+  const [channelType, setChannelType] = useState('text'); // 'text' | 'voice' (v2.118.0)
   const [remoteAddress, setRemoteAddress] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -149,9 +150,12 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
     const name = channelName.trim();
     if (!name) return;
     try {
-      await fetchAPI(`/communities/${community.id}/channels`, { method: 'POST', body: { name } });
+      const type = voiceEnabled ? channelType : 'text';
+      await fetchAPI(`/communities/${community.id}/channels`, { method: 'POST', body: { name, type } });
       setChannelName('');
-      showToast('Channel created', 'success');
+      setChannelType('text');
+      showToast(type === 'voice' ? 'Voice channel created' : 'Channel created', 'success');
+      load();
       onChanged && onChanged();
     } catch (err) {
       showToast(err?.error || 'Could not create that channel', 'error');
@@ -253,8 +257,10 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
               ) : confirmDelete === ch.id ? (
                 <div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.25rem' }}>
-                    Delete #{ch.name}? The {T.waves} in it are not deleted — they go back to
-                    being ordinary {T.waves}.
+                    {ch.type === 'voice'
+                      ? <>Delete 🔊 {ch.name}? Anyone in it is disconnected.</>
+                      : <>Delete #{ch.name}? The {T.waves} in it are not deleted — they go back to
+                    being ordinary {T.waves}.</>}
                   </div>
                   <button onClick={() => deleteChannel(ch)} style={{ ...action, marginTop: 0, color: 'var(--accent-orange, var(--accent-amber))' }}>
                     Yes, delete the channel
@@ -263,7 +269,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
                 </div>
               ) : (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
-                  <span style={{ fontSize: '0.82rem', minWidth: 0 }}># {ch.name}</span>
+                  <span style={{ fontSize: '0.82rem', minWidth: 0 }}>{ch.type === 'voice' ? '🔊' : '#'} {ch.name}</span>
                   {can('channel.manage') && (
                     <span style={{ display: 'flex', gap: '0.3rem', flexShrink: 0 }}>
                       <button
@@ -293,9 +299,28 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
             maxLength={60}
             style={input}
           />
-          <button onClick={createChannel} style={action}>Create channel</button>
+          {voiceEnabled && (
+            <div role="radiogroup" aria-label="Channel type" style={{ display: 'flex', gap: '0.35rem', marginTop: '0.4rem' }}>
+              {[['text', '# Text'], ['voice', '🔊 Voice']].map(([value, text]) => (
+                <button
+                  key={value}
+                  role="radio"
+                  aria-checked={channelType === value}
+                  onClick={() => setChannelType(value)}
+                  style={{
+                    ...action, marginTop: 0,
+                    borderColor: channelType === value ? 'var(--accent-amber)' : 'var(--border-primary)',
+                    color: channelType === value ? 'var(--accent-amber)' : 'var(--text-primary)',
+                  }}
+                >{text}</button>
+              ))}
+            </div>
+          )}
+          <button onClick={createChannel} style={action}>{channelType === 'voice' && voiceEnabled ? 'Create voice channel' : 'Create channel'}</button>
           <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.3rem' }}>
-            A channel holds {T.waves}. It is not a conversation itself.
+            {channelType === 'voice' && voiceEnabled
+              ? 'A voice channel is a room people drop in and out of, with voice, video and screen sharing. It does not hold ' + T.waves + '.'
+              : <>A channel holds {T.waves}. It is not a conversation itself.</>}
           </div>
         </div>
       )}
