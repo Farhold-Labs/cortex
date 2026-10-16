@@ -21178,6 +21178,10 @@ const livekitWebhooks = (LIVEKIT_API_KEY && LIVEKIT_API_SECRET)
   ? new WebhookReceiver(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
   : null;
 
+// When each wave last had a call token issued, for /call/status's "connecting"
+// window. Bounded by the number of waves that have ever had a call.
+const callTokenIssuedAt = new Map();
+
 const voiceRoster = new VoiceRoster({
   roomService: livekitRoomService,
   onChange: (room) => {
@@ -21404,6 +21408,7 @@ app.post('/api/waves/:waveId/call/token', authenticateToken, async (req, res) =>
 
     // Generate JWT token
     const token = await at.toJwt();
+    callTokenIssuedAt.set(waveId, Date.now());
 
     console.log(`🎤 Generated LiveKit token for user ${userId} (${user.handle}) to join wave ${waveId}`);
 
@@ -21467,7 +21472,7 @@ app.get('/api/admin/livekit/rooms', authenticateToken, async (req, res) => {
  * Check if a wave has an active LiveKit call
  * GET /api/waves/:waveId/call/status
  */
-app.get('/api/waves/:waveId/call/status', authenticateToken, async (req, res) => {
+app.get('/api/waves/:waveId/call/status', authenticateToken, (req, res) => {
   const waveId = sanitizeInput(req.params.waveId);
   const userId = req.user.userId;
 
@@ -21482,37 +21487,20 @@ app.get('/api/waves/:waveId/call/status', authenticateToken, async (req, res) =>
     return res.status(403).json({ error: 'Access denied' });
   }
 
-  if (!livekitRoomService) {
-    return res.json({
-      active: false,
-      participantCount: 0
-    });
-  }
-
-  try {
-    // Check if this room exists and has participants
-    const rooms = await livekitRoomService.listRooms();
-    const room = rooms.find(r => r.name === waveId);
-
-    // Consider a room "active" if:
-    // 1. It has participants, OR
-    // 2. It exists and was created within the last 30 seconds (someone is connecting)
-    const roomAgeSeconds = room?.creationTime ? (Date.now() / 1000) - Number(room.creationTime) : Infinity;
-    const active = room && (room.numParticipants > 0 || roomAgeSeconds < 30);
-
-    res.json({
-      active,
-      participantCount: room?.numParticipants || 0,
-      participants: room?.participants?.map(p => p.identity) || []
-    });
-  } catch (error) {
-    console.error('Error checking LiveKit room status:', error);
-    // Don't fail hard - just return no active call
-    res.json({
-      active: false,
-      participantCount: 0
-    });
-  }
+  // From the roster (v2.118.0). Every open wave polls this every 5 seconds, and
+  // it used to call LiveKit's ListRooms each time.
+  //
+  // "Active" also covers the half-minute after someone asked for a token: they
+  // are connecting, and the person who opened the wave should see the call
+  // starting rather than offer to start a second one. The old code read that
+  // from the room's creation time.
+  const participants = voiceRoster.participants(waveId).map(p => p.identity);
+  const connecting = Date.now() - (callTokenIssuedAt.get(waveId) || 0) < 30_000;
+  res.json({
+    active: participants.length > 0 || connecting,
+    participantCount: participants.length,
+    participants,
+  });
 });
 
 app.post('/api/waves', authenticateToken, async (req, res) => {

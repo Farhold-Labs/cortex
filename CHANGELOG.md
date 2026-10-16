@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.118.0] - 2026-10-16
 
-Voice channels for Communities, server side (Phase 1 of `docs/communities/03-voice-channels.md`). This is a Discord-style channel you drop into and leave, with voice, video and screen sharing, and anyone who can see the channel can see who is in it. The app can't join one yet: that is Phase 2. As part of the work, wave call indicators stopped polling LiveKit from every open client.
+Voice channels for Communities (Phases 1 and 2 of `docs/communities/03-voice-channels.md`). A voice channel is a Discord-style channel you drop into and leave, with voice, video and screen sharing, and anyone who can see the channel can see who is in it. As part of the work, wave call indicators and call status stopped polling LiveKit from every open client.
 
 ### Added
 
@@ -43,8 +43,23 @@ Voice channels for Communities, server side (Phase 1 of `docs/communities/03-voi
     - an unconfirmed upload fails and is not recorded as good;
     - a non-Cortex database is not sent.
 
+- **Voice channels in the app (Phase 2).**
+  - **In the wave list:** each voice channel shows 🔊 with the people in it underneath, even before you join. It has a JOIN button, and LEAVE once you're in. Tapping the name only folds the list, so a tap while scrolling cannot put you in a room.
+  - **Joining reuses the docked call window.** It stays up while you move around the app. The minimised bar reads "🔊 Lounge • 2" and holds mute, deafen, camera and leave; opened, it adds screen sharing and the video tiles. Buttons appear only for what the server's token allows.
+  - **Joining is muted.** The microphone is not even published until you unmute. The dock used to connect with `audio={true}` and mute a moment later, which is a moment of open mic in a room full of people.
+  - **Deafen** silences everything you hear and mutes you. Unmuting undeafens.
+  - **Moderators** (with `voice.moderate`, while in the channel) can tap someone's row to MUTE MIC or DISCONNECT. A server-side mute now shows as muted in that person's dock, instead of a live-looking microphone nobody can hear.
+  - **Removed, disconnected or the channel deleted:** the dock closes and says so ("You were disconnected from the voice channel").
+  - **Wave calls stay separate.** Opening a wave's call screen while you're in a voice channel offers to start that wave's call, and starting it moves you out of the voice channel. It no longer shows the voice room as if it were the wave's call, and no longer hides the dock, which would have dropped you from the room silently.
+  - **Community settings** creates text or 🔊 voice channels; the voice option appears only when the node has voice channels on. Voice channels are left out of the "file this wave in…" menu.
+- **The call dock fits a phone.**
+  - **Minimised bar:** the label is one truncated line. A wrapping label had pushed the buttons off the edge at 390 px.
+  - **Opened dock:** the five buttons wrap. They overflowed, and a centred row that overflows is clipped at both ends.
+  - **The red buttons were never red.** `--accent-red` is not defined in any theme, so Leave and Muted had no colour. They now use `--accent-orange`, the theme's warning colour.
+
 ### Changed
 
+- **`GET /api/waves/:waveId/call/status` answers from the roster too.** Every open wave polls it every 5 seconds, and each request called LiveKit's `ListRooms`. "Active" still covers the 30 seconds after someone asks for a token. That came from the room's creation time; it now comes from when the token was issued.
 - **Wave call indicators are pushed, not polled.** Every open client asked `/api/waves/active-calls` every 10 seconds, and each request called LiveKit's `ListRooms` across the whole project, so ten people with the app open meant a LiveKit API call every second.
   - **Now:** LiveKit's signed webhooks (`/api/livekit/webhook`) feed a server-side roster (`server/lib/voice-roster.js`), and clients follow the `call_presence` WebSocket event.
   - **Fallback:** a reconcile asks LiveKit every 10 seconds, once per node, when no webhook has arrived recently. It also serves nodes with no webhook configured.
@@ -69,6 +84,15 @@ Voice channels for Communities, server side (Phase 1 of `docs/communities/03-voi
   - the feature switch.
 - Passed three times in parallel under load. Full suite and schema check pass.
 - The migration ran on dev's database: 28 built-in roles gained voice.
+- **Phase 2, in real browsers against LiveKit Cloud from dev** (no webhook, so presence comes from the 10 s reconcile). Two people at 390 px, each in an isolated browser context of a headless Chrome with fake camera and microphone:
+  - mal joined in 1 s, muted: the server saw no published microphone.
+  - The other person saw mal listed after 5–12 s, joined and unmuted, and the server saw their microphone within 7–8 s.
+  - mal's MUTE MIC showed as muted in their dock within 1 s. DISCONNECT closed their dock with the toast within 1 s.
+  - LEAVE emptied the roster within 6 s.
+  - A voice channel created through Community settings worked, and the camera published in 4 s.
+  - Starting a wave call from inside a voice channel moved mal to the wave call within 1 s.
+  - No page exceptions.
+- **Still needs a real phone:** background audio in the Android app, and screen sharing, which headless Chrome cannot do.
 
 ## [2.117.2] - 2026-10-15
 

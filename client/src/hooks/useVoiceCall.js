@@ -120,6 +120,11 @@ export function useVoiceCall(waveId) {
     isDocked: state.isDocked,
     dockMinimized: state.dockMinimized,
     dockPosition: state.dockPosition,
+    // Community voice channel (v2.118.0)
+    voiceChannel: state.voiceChannel,
+    can: state.can,
+    isDeafened: state.isDeafened,
+    endedBy: state.endedBy,
 
     // Actions
     startCall,
@@ -137,6 +142,12 @@ export function useVoiceCall(waveId) {
     hideDock,
     toggleDockSize,
     setDockPosition,
+    // Voice channel actions (v2.118.0)
+    joinVoiceChannel: voiceCallService.joinVoiceChannel.bind(voiceCallService),
+    toggleDeafen: voiceCallService.toggleDeafen.bind(voiceCallService),
+    clearEndedBy: voiceCallService.clearEndedBy.bind(voiceCallService),
+    handleRoomDisconnected: voiceCallService.handleRoomDisconnected.bind(voiceCallService),
+    setMutedByRoom: voiceCallService.setMutedByRoom.bind(voiceCallService),
 
     // Service methods for LiveKitCallRoom component
     setConnectionState: voiceCallService.setConnectionState.bind(voiceCallService),

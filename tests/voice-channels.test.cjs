@@ -440,6 +440,18 @@ test('Voice channels', { timeout: 180000 }, async (t) => {
         const calls = (await s.api('GET', '/api/waves/active-calls', { token: mod.token })).body.calls;
         assert.deepEqual(calls.find(c => c.waveId === waveId)?.participants, [owner.id]);
         assert.ok(!(await s.api('GET', '/api/waves/active-calls', { token: outsider.token })).body.calls.some(c => c.waveId === waveId));
+        // /call/status, which every open wave polls every 5 s, also answers
+        // from the roster now.
+        const status = (await s.api('GET', `/api/waves/${waveId}/call/status`, { token: mod.token })).body;
+        assert.deepEqual(status, { active: true, participantCount: 1, participants: [owner.id] });
+        await s.webhook({ event: 'participant_left', room: { name: waveId }, participant: { identity: owner.id } });
+        assert.equal((await s.api('GET', `/api/waves/${waveId}/call/status`, { token: mod.token })).body.active, false);
+        // Someone asking for a token counts as the call starting, for 30 s.
+        assert.equal((await s.api('POST', `/api/waves/${waveId}/call/token`, { token: owner.token })).status, 200);
+        const starting = (await s.api('GET', `/api/waves/${waveId}/call/status`, { token: mod.token })).body;
+        assert.equal(starting.active, true);
+        assert.equal(starting.participantCount, 0);
+        assert.equal((await s.api('GET', `/api/waves/${waveId}/call/status`, { token: outsider.token })).status, 403);
         assert.equal(lk.calls.filter(c => c.method === 'ListRooms').length, listRoomsBefore, 'no LiveKit call per request');
       } finally { listener.close(); }
     });

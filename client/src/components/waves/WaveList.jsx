@@ -4,6 +4,7 @@ import { PRIVACY_LEVELS, NOTIFICATION_BADGE_COLORS, WAVE_DENSITY, DEFAULT_WAVE_D
 import { EMPTY, GHOST_PROTOCOL } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
+import VoiceChannelSection from './VoiceChannelSection.jsx';
 import { T } from '../../config/terminology.js';
 
 // v2.84.1 — one row menu, used by BOTH wave-list layouts.
@@ -12,7 +13,10 @@ import { T } from '../../config/terminology.js';
 // the categorised one ever had this menu, so anyone who had not created a
 // category saw no ⋮ at all: Pin was unreachable, and Mute (v2.84.0) never
 // appeared for them. Extracted rather than copied so the two cannot drift.
-const WaveRowMenu = ({ wave, categories = [], channels = [], isOpen, onToggle, onWavePin, onWaveMute, onWaveMove, onWaveFile }) => (
+const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen, onToggle, onWavePin, onWaveMute, onWaveMove, onWaveFile }) => {
+  // A voice channel holds no waves (v2.118.0), so it is not somewhere to file one.
+  const channels = allChannels.filter(ch => ch.type !== 'voice');
+  return (
   <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
     <button
       onClick={(e) => {
@@ -194,9 +198,10 @@ const WaveRowMenu = ({ wave, categories = [], channels = [], isOpen, onToggle, o
       </div>
     )}
   </div>
-);
+  );
+};
 
-const WaveCategoryList = ({ show = 'all', waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, onManageCategories, onNewWaveIn, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef }) => {
+const WaveCategoryList = ({ show = 'all', waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, onManageCategories, onNewWaveIn, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef, voice = {} }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
@@ -495,6 +500,29 @@ const WaveCategoryList = ({ show = 'all', waves, categories, channels = [], sele
                 </div>
               )}
               {group.channels.map(channel => {
+                if (channel.type === 'voice') {
+                  return (
+                    <VoiceChannelSection
+                      key={channel.id}
+                      channel={channel}
+                      participants={voice.presence?.[channel.id] || []}
+                      isOpen={!collapsedKeys[`ch:${channel.id}`]}
+                      onToggle={() => toggleCollapsed(`ch:${channel.id}`)}
+                      isMobile={isMobile}
+                      connected={voice.currentChannelId === channel.id}
+                      connecting={voice.connecting}
+                      canModerate={voice.canModerate}
+                      myUserId={voice.myUserId}
+                      onJoin={voice.onJoin}
+                      onLeave={voice.onLeave}
+                      onModerate={voice.onModerate}
+                      menu={onManageCommunity ? [
+                        { label: '✎ Rename Channel', onClick: () => onManageCommunity(channel, 'channels') },
+                        { label: '⚙ Manage Community', onClick: () => onManageCommunity(channel) },
+                      ] : undefined}
+                    />
+                  );
+                }
                 const chWaves = groupedWaves.byChannel[channel.id] || [];
                 return (
                   <CollapsibleSection
@@ -699,7 +727,13 @@ const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, men
   );
 };
 
-const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, onNewWaveIn, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh }) => {
+const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, onNewWaveIn, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh,
+  voicePresence = {}, currentVoiceChannelId = null, voiceConnecting = false, canModerateVoice = false, onJoinVoice = null, onLeaveVoice, onModerateVoice, myUserId }) => {
+  // Voice channels (v2.118.0), bundled so the two category lists get one prop.
+  const voice = useMemo(() => ({
+    presence: voicePresence, currentChannelId: currentVoiceChannelId, connecting: voiceConnecting,
+    canModerate: canModerateVoice, onJoin: onJoinVoice, onLeave: onLeaveVoice, onModerate: onModerateVoice, myUserId,
+  }), [voicePresence, currentVoiceChannelId, voiceConnecting, canModerateVoice, onJoinVoice, onLeaveVoice, onModerateVoice, myUserId]);
   // Pull down at the top of the list to reload it (v2.77.0). Additive: the list
   // already refreshes itself on websocket events; this is for the moments when
   // someone wants to be sure.
@@ -785,6 +819,7 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
     {communitiesEnabled && !sectionCollapsed.communities && (
       channels.length > 0 ? (
         <WaveCategoryList
+          voice={voice}
           show="communities"
           waves={waves}
           categories={categories}
@@ -833,6 +868,7 @@ const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelec
 
     {sectionCollapsed.waves ? null : (categories.length > 0 || channels.length > 0) ? (
       <WaveCategoryList
+          voice={voice}
         show="waves"
         scrollRef={listScrollRef}
         waves={waves}

@@ -58,7 +58,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       return;
     }
     setShowCallModal(true);
-    if (voiceCall.isDocked) {
+    // The modal takes over a wave call's connection from the dock. A voice
+    // channel's stays in the dock: hiding it would drop you from the room.
+    if (voiceCall.isDocked && !voiceCall.voiceChannel) {
       voiceCall.hideDock(); // Hide dock when opening modal
     }
   };
@@ -2819,7 +2821,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         isOpen={showCallModal}
         onClose={() => {
           // Auto-dock if connected, otherwise just close
-          if (voiceCall.connectionState === 'connected') {
+          if (voiceCall.connectionState === 'connected' && !voiceCall.voiceChannel) {
             voiceCall.showDock();
           }
           setShowCallModal(false);
