@@ -607,17 +607,65 @@ Pick the depth from the disk, not from a habit. As of 2026-09-25 farhold keeps 6
 buys headroom; it does not replace a disk that is simply too small for the
 history it is being asked to hold.
 
-### Offsite Backup (Optional)
+### Offsite Backup
 
-Copy encrypted backups to a remote location. Since they're GPG-encrypted, they're safe to store on untrusted storage:
+A backup that lives on the node goes down with the node. `tools/offsite-backup.sh` sends an encrypted, verified copy to S3-compatible storage (Backblaze B2 here).
+
+**What goes in it:**
+- a consistent snapshot of the live database, verified the same way as a release backup;
+- `server/.env`, which holds the field-encryption keys (without them the database cannot be restored);
+- `ecosystem.config.cjs`;
+- `firebase-service-account.json`, when present.
+
+Uploads are not included. On S3 storage they already live in a bucket.
+
+**Encryption is to a public key.** Generate the keypair somewhere other than the node and copy only the public half there:
 
 ```bash
-# Rsync to remote server
-rsync -az /opt/cortex/backups/ backup-user@remote-server:/backups/cortex/
-
-# Or upload to S3-compatible storage
-aws s3 sync /opt/cortex/backups/ s3://your-bucket/cortex-backups/ --storage-class STANDARD_IA
+G=$(mktemp -d)
+gpg --homedir $G --batch --passphrase '' --quick-gen-key "Cortex offsite backups" ed25519 sign never
+FPR=$(gpg --homedir $G --list-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+gpg --homedir $G --batch --passphrase '' --quick-add-key $FPR cv25519 encr never
+gpg --homedir $G --armor --export $FPR > offsite-backup.pub.asc            # goes to the node
+gpg --homedir $G --batch --pinentry-mode loopback --passphrase '' \
+    --armor --export-secret-keys $FPR > offsite-backup.SECRET.asc         # stays OFF the node
 ```
+
+The node can then write backups but never read one. Keep the secret key in a password manager as well as on the machine you restore from: lose it and every backup is unreadable.
+
+**Configure** `~/.config/cortex/offsite-backup.env`, `chmod 600` (the script refuses anything looser):
+
+```bash
+OFFSITE_S3_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+OFFSITE_S3_REGION=us-east-005
+OFFSITE_S3_BUCKET=your-backups-bucket
+OFFSITE_S3_ACCESS_KEY=…
+OFFSITE_S3_SECRET_KEY=…
+OFFSITE_RECIPIENT=$HOME/.config/cortex/offsite-backup.pub.asc
+OFFSITE_PREFIX=yournode
+```
+
+Give the key access to **that bucket only**. The script needs only `writeFiles` (plus `readFiles` for its size check), so a key without `deleteFiles` is better where you can make one.
+
+**Retention is a lifecycle rule on the bucket.** The script never deletes. For 30 days of dailies, set the rule on the prefix to hide after 30 days and delete 1 day after hiding.
+
+**Schedule** it daily:
+
+```bash
+(crontab -l 2>/dev/null; echo "15 3 * * * \$HOME/cortex/tools/offsite-backup.sh >> \$HOME/offsite-backup.log 2>&1") | crontab -
+```
+
+`~/.offsite-backup-last-ok` holds the time of the last verified upload, for anything that watches.
+
+**Restore:**
+
+```bash
+gpg --import offsite-backup.SECRET.asc        # once, on the restore machine
+gpg --decrypt yournode-20261016-031500.tar.zst.gpg | zstd -d | tar -x -C restore/
+# restore/server/data/farhold.db, restore/server/.env, restore/ecosystem.config.cjs
+```
+
+Test a restore after setting this up. A backup nobody has decrypted is a hope, not a backup.
 
 ---
 
