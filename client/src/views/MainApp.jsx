@@ -547,7 +547,7 @@ function MainApp({ sharePingId }) {
         try {
           const res = await fetchAPI(`/communities/${c.id}/channels`);
           return (res.channels || []).map(ch => ({
-            id: ch.id, name: ch.name, communityId: c.id, communityName: c.name,
+            id: ch.id, name: ch.name, communityId: c.id, communityName: c.name, type: ch.type || 'text',
           }));
         } catch { complete = false; return []; }
       }));
@@ -564,6 +564,58 @@ function MainApp({ sharePingId }) {
   }, [fetchAPI, instanceFeatures.communities, instanceFeaturesLoaded, user?.id]);
 
   useEffect(() => { loadCommunityChannels(); }, [loadCommunityChannels]);
+
+  // ----- Voice channels (v2.118.0) -----
+  // Who is in each voice channel, by channel id. Loaded per Community when the
+  // socket (re)connects, then kept current by `voice_presence` pushes.
+  const voiceEnabled = instanceFeatures.communities === true && instanceFeatures.voiceChannels === true;
+  const [voicePresence, setVoicePresence] = useState({});
+  const voiceCommunityIds = useMemo(() => [...new Set(
+    communityChannels.filter(ch => ch.type === 'voice').map(ch => ch.communityId)
+  )], [communityChannels]);
+
+  const loadVoicePresence = useCallback(async () => {
+    if (!voiceEnabled || !voiceCommunityIds.length) return;
+    const results = await Promise.all(voiceCommunityIds.map(id =>
+      fetchAPI(`/communities/${id}/voice`).then(r => r.channels || {}).catch(() => null)));
+    setVoicePresence(prev => {
+      const next = { ...prev };
+      for (const r of results) if (r) Object.assign(next, r);
+      return next;
+    });
+  }, [fetchAPI, voiceEnabled, voiceCommunityIds]);
+
+  const handleJoinVoice = useCallback(async (channel) => {
+    if (globalVoiceCall.voiceChannel?.channelId === channel.id) return;
+    const result = await globalVoiceCall.joinVoiceChannel({
+      communityId: channel.communityId, channelId: channel.id, name: channel.name,
+    });
+    if (result?.error) showToastMsg(result.error, 'error');
+  }, [globalVoiceCall, showToastMsg]);
+
+  const handleModerateVoice = useCallback(async (channel, participant, action) => {
+    const base = `/communities/${channel.communityId}/channels/${channel.id}/voice/participants/${participant.userId}`;
+    try {
+      if (action === 'mute') {
+        await fetchAPI(`${base}/mute`, { method: 'POST' });
+        showToastMsg(`${participant.displayName || 'They'} muted`, 'success');
+      } else if (action === 'disconnect') {
+        await fetchAPI(base, { method: 'DELETE' });
+        showToastMsg(`${participant.displayName || 'They'} disconnected`, 'success');
+      }
+    } catch (err) {
+      showToastMsg(err?.error || 'That did not work', 'error');
+    }
+  }, [fetchAPI, showToastMsg]);
+
+  // The server ended our voice connection: say so, once.
+  useEffect(() => {
+    if (!globalVoiceCall.endedBy) return;
+    showToastMsg(globalVoiceCall.endedBy === 'closed'
+      ? 'The voice channel was closed'
+      : 'You were disconnected from the voice channel', 'info');
+    globalVoiceCall.clearEndedBy();
+  }, [globalVoiceCall.endedBy, globalVoiceCall, showToastMsg]);
 
   /**
    * File a wave into a channel, or out of one with `channel = null`.
@@ -969,6 +1021,20 @@ function MainApp({ sharePingId }) {
       if (user?.isAdmin) {
         showToastMsg(NOTIFICATION.federationRequest(data.request?.fromNodeName || 'unknown server'), 'info');
       }
+    } else if (data.type === 'voice_presence') {
+      // Someone joined or left a Community voice channel (v2.118.0).
+      setVoicePresence(prev => ({ ...prev, [data.channelId]: data.participants || [] }));
+    } else if (data.type === 'call_presence') {
+      // Someone joined or left a wave call (v2.118.0).
+      setActiveCalls(prev => {
+        const next = { ...prev };
+        if (data.participantCount > 0) {
+          next[data.waveId] = { participantCount: data.participantCount, participants: data.participants || [] };
+        } else {
+          delete next[data.waveId];
+        }
+        return next;
+      });
     } else if (data.type === 'watch_party_created' || data.type === 'watch_party_started') {
       // Watch party started in a wave (v2.14.0)
       const party = data.party || data;
@@ -1356,13 +1422,16 @@ function MainApp({ sharePingId }) {
       .catch(() => setFederationEnabled(false));
   }, [loadWaves, loadCategories, loadContacts, loadGroups, loadContactRequests, loadGroupInvitations, loadBlockedMutedUsers, loadWaveNotifications, loadActiveCalls, loadActiveWatchParties]);
 
-  // Poll active calls every 10 seconds (v2.5.0 - call indicators in wave list)
+  // Call indicators follow `call_presence` pushes (v2.118.0). They used to be
+  // polled every 10 seconds, and every poll made the server ask LiveKit for its
+  // whole room list. A push sent while the socket was down is lost, so the full
+  // list is reloaded each time it (re)connects.
   useEffect(() => {
-    const interval = setInterval(() => {
-      loadActiveCalls();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [loadActiveCalls]);
+    if (wsConnected) loadActiveCalls();
+  }, [wsConnected, loadActiveCalls]);
+  useEffect(() => {
+    if (wsConnected) loadVoicePresence();
+  }, [wsConnected, loadVoicePresence]);
 
   // Rotate footer tagline every 30 seconds
   useEffect(() => {
@@ -1852,6 +1921,14 @@ function MainApp({ sharePingId }) {
                   onManageCategories={() => setCategoryManagementOpen(true)}
                   onWaveFile={handleWaveFile}
                   communitiesEnabled={instanceFeatures.communities === true}
+                  voicePresence={voicePresence}
+                  currentVoiceChannelId={globalVoiceCall.voiceChannel?.channelId || null}
+                  voiceConnecting={globalVoiceCall.connectionState === 'connecting'}
+                  canModerateVoice={Boolean(globalVoiceCall.voiceChannel && globalVoiceCall.can?.moderate)}
+                  onJoinVoice={voiceEnabled ? handleJoinVoice : null}
+                  onLeaveVoice={() => globalVoiceCall.leaveCall()}
+                  onModerateVoice={handleModerateVoice}
+                  myUserId={user?.id}
                   onManageCommunities={(focus) => setCommunityPanelFor({ communityId: null, focus })}
                   onManageCommunity={(channel, focus) =>
                     setCommunityPanelFor({ communityId: channel.communityId, focus })}
@@ -2227,6 +2304,7 @@ function MainApp({ sharePingId }) {
           showToast={showToastMsg}
           initialCommunityId={communityPanelFor.communityId}
           focus={communityPanelFor.focus}
+          voiceEnabled={voiceEnabled}
           onClose={() => setCommunityPanelFor(null)}
           onChanged={() => { loadCommunityChannels(); loadWaves(); }}
         />

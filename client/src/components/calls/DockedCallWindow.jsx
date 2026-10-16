@@ -17,9 +17,10 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
     voiceCallRef.current.setConnectionState('connected');
   }, [roomName]);
 
-  const handleDisconnected = useCallback(() => {
-    console.log('🎤 Disconnected from LiveKit room');
-    voiceCallRef.current.setConnectionState('disconnected');
+  const handleDisconnected = useCallback((reason) => {
+    console.log('🎤 Disconnected from LiveKit room', reason);
+    // The service decides what an ending means: for a voice channel it is final.
+    voiceCallRef.current.handleRoomDisconnected(reason);
   }, []);
 
   const handleError = useCallback((error) => {
@@ -38,7 +39,10 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
       token={token}
       serverUrl={url}
       connect={true}
-      audio={true}
+      // Only publish a microphone that is meant to be live. A voice channel is
+      // joined muted, and with audio={true} the mic went out until the mute
+      // effect caught up — a moment of open mic in a room full of people.
+      audio={voiceCall.can.speak && !voiceCall.isMuted}
       video={!voiceCall.isCameraOff}
       onConnected={handleConnected}
       onDisconnected={handleDisconnected}
@@ -56,8 +60,10 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
         }
       }}
     >
-      <RoomAudioRenderer />
+      <RoomAudioRenderer muted={voiceCall.isDeafened} />
       <CallControls
+        canSpeak={voiceCall.can.speak}
+        onMutedByRoom={voiceCall.setMutedByRoom}
         isMuted={voiceCall.isMuted}
         isCameraOff={voiceCall.isCameraOff}
         isScreenSharing={voiceCall.isScreenSharing}
@@ -72,7 +78,7 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
 });
 
 // Call controls that sync with LiveKit
-const CallControls = ({ isMuted, isCameraOff, isScreenSharing, setParticipants, setAudioLevel, setRoom, setScreenSharing }) => {
+const CallControls = ({ canSpeak = true, onMutedByRoom, isMuted, isCameraOff, isScreenSharing, setParticipants, setAudioLevel, setRoom, setScreenSharing }) => {
   const participants = useParticipants();
   const { localParticipant } = useLocalParticipant();
 
@@ -97,11 +103,24 @@ const CallControls = ({ isMuted, isCameraOff, isScreenSharing, setParticipants, 
     return () => clearInterval(interval);
   }, [localParticipant, setAudioLevel]);
 
+  // A moderator's server-side mute arrives as a mute of our own track. Without
+  // this the dock would go on showing a live microphone that nobody can hear.
   React.useEffect(() => {
-    if (localParticipant) {
-      localParticipant.setMicrophoneEnabled(!isMuted);
+    if (!localParticipant || !onMutedByRoom) return;
+    const onMuted = (publication) => {
+      if (publication?.source === Track.Source.Microphone) onMutedByRoom();
+    };
+    localParticipant.on('trackMuted', onMuted);
+    return () => { localParticipant.off('trackMuted', onMuted); };
+  }, [localParticipant, onMutedByRoom]);
+
+  React.useEffect(() => {
+    // Without voice.speak the token cannot publish a microphone; asking would
+    // only produce a permissions error.
+    if (localParticipant && canSpeak) {
+      localParticipant.setMicrophoneEnabled(!isMuted).catch?.(err => console.error('🎤 Microphone change failed:', err));
     }
-  }, [isMuted, localParticipant]);
+  }, [isMuted, localParticipant, canSpeak]);
 
   React.useEffect(() => {
     if (!localParticipant) return;
@@ -199,6 +218,10 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
     voiceCall.toggleCamera();
   }, [voiceCall]);
 
+  const handleToggleDeafen = useCallback(() => {
+    voiceCall.toggleDeafen();
+  }, [voiceCall]);
+
   const handleToggleScreenShare = useCallback(() => {
     voiceCall.setScreenSharing(!voiceCall.isScreenSharing);
   }, [voiceCall]);
@@ -286,6 +309,15 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
     ...buttonStyle,
     fontSize: isMobile ? '1rem' : '0.85rem',
     padding: isMobile ? '8px 12px' : '6px 12px',
+    whiteSpace: 'nowrap',
+  };
+  // The minimised bar's buttons, narrower on a phone so four fit beside the
+  // label at 360 px. Still a 40 px touch target in height.
+  const barButtonStyle = {
+    ...controlButtonStyle,
+    marginLeft: 0,
+    padding: isMobile ? '8px 9px' : '6px 12px',
+    flexShrink: 0,
   };
 
   // Single LiveKitRoom instance that persists across minimize/maximize/hide states
@@ -304,38 +336,63 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
           style={headerStyle}
           onMouseDown={isMobile ? undefined : handleMouseDown}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-            <span style={{ color: 'var(--accent-teal)', fontSize: isMobile ? '0.9rem' : '0.85rem' }}>
-              {voiceCall.dockMinimized ? '🎤 In Call' : '📞 Call'} • {voiceCall.participants.length || 0} participant{voiceCall.participants.length !== 1 ? 's' : ''}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+            {/* One line, truncated: on a phone the minimised bar also holds four
+                buttons, and a wrapping label pushed them off the edge. */}
+            <span style={{
+              color: 'var(--accent-teal)', fontSize: isMobile ? '0.9rem' : '0.85rem',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
+            }}>
+              {voiceCall.voiceChannel
+                ? <>🔊 {voiceCall.voiceChannel.name}</>
+                : <>{voiceCall.dockMinimized ? '🎤 In Call' : '📞 Call'}</>} • {voiceCall.participants.length || 0}{voiceCall.voiceChannel ? '' : ` participant${voiceCall.participants.length !== 1 ? 's' : ''}`}
             </span>
             {voiceCall.audioLevel > 0.3 && (
               <span style={{ color: 'var(--accent-green)', fontSize: '0.7rem' }}>●</span>
             )}
           </div>
-          <div style={{ display: 'flex', gap: voiceCall.dockMinimized ? '6px' : '4px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: voiceCall.dockMinimized ? (isMobile ? '4px' : '6px') : '4px', alignItems: 'center', flexShrink: 0 }}>
             {voiceCall.dockMinimized && (
               <>
+                {voiceCall.can.speak && (
+                  <button
+                    style={barButtonStyle}
+                    onClick={handleToggleMute}
+                    data-draggable="false"
+                    title={voiceCall.isMuted ? 'Unmute' : 'Mute'}
+                    aria-label={voiceCall.isMuted ? 'Unmute' : 'Mute'}
+                  >
+                    {voiceCall.isMuted ? '🔇' : '🎤'}
+                  </button>
+                )}
+                {voiceCall.voiceChannel && (
+                  <button
+                    style={barButtonStyle}
+                    onClick={handleToggleDeafen}
+                    data-draggable="false"
+                    title={voiceCall.isDeafened ? 'Undeafen' : 'Deafen'}
+                    aria-label={voiceCall.isDeafened ? 'Undeafen' : 'Deafen'}
+                  >
+                    {voiceCall.isDeafened ? '🙉' : '🎧'}
+                  </button>
+                )}
+                {voiceCall.can.video && (
+                  <button
+                    style={barButtonStyle}
+                    onClick={handleToggleCamera}
+                    data-draggable="false"
+                    title={voiceCall.isCameraOff ? 'Turn camera on' : 'Turn camera off'}
+                    aria-label={voiceCall.isCameraOff ? 'Turn camera on' : 'Turn camera off'}
+                  >
+                    {voiceCall.isCameraOff ? '📹' : '📷'}
+                  </button>
+                )}
                 <button
-                  style={controlButtonStyle}
-                  onClick={handleToggleMute}
-                  data-draggable="false"
-                  title={voiceCall.isMuted ? 'Unmute' : 'Mute'}
-                >
-                  {voiceCall.isMuted ? '🔇' : '🎤'}
-                </button>
-                <button
-                  style={controlButtonStyle}
-                  onClick={handleToggleCamera}
-                  data-draggable="false"
-                  title={voiceCall.isCameraOff ? 'Turn camera on' : 'Turn camera off'}
-                >
-                  {voiceCall.isCameraOff ? '📹' : '📷'}
-                </button>
-                <button
-                  style={controlButtonStyle}
+                  style={barButtonStyle}
                   onClick={handleLeaveCall}
                   data-draggable="false"
-                  title="Leave call"
+                  title={voiceCall.voiceChannel ? 'Leave voice channel' : 'Leave call'}
+                  aria-label={voiceCall.voiceChannel ? 'Leave voice channel' : 'Leave call'}
                 >
                   📞
                 </button>
@@ -361,14 +418,19 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
                 {voiceCall.dockMinimized ? '□' : '_'}
               </button>
             )}
-            <button
-              style={buttonStyle}
-              onClick={isFullscreen ? handleToggleFullscreen : handleClose}
-              data-draggable="false"
-              title={isFullscreen ? 'Exit fullscreen' : 'Close dock'}
-            >
-              ×
-            </button>
+            {/* A wave call hands its connection to the wave's call screen when the
+                dock closes. A voice channel has no such screen, so closing the
+                dock would silently drop you from the room: it minimises instead. */}
+            {(isFullscreen || !voiceCall.voiceChannel) && (
+              <button
+                style={buttonStyle}
+                onClick={isFullscreen ? handleToggleFullscreen : handleClose}
+                data-draggable="false"
+                title={isFullscreen ? 'Exit fullscreen' : 'Close dock'}
+              >
+                ×
+              </button>
+            )}
           </div>
         </div>
 
@@ -395,20 +457,36 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
               borderTop: '1px solid var(--accent-teal)',
               display: 'flex',
               justifyContent: 'center',
+              // Wraps: five buttons do not fit a phone, and a centred row that
+              // overflows is clipped at BOTH ends, beyond reach of scrolling.
+              flexWrap: 'wrap',
               gap: '8px',
             }}>
-              <button
+              {voiceCall.can.speak && <button
                 style={{
                   ...controlButtonStyle,
-                  background: voiceCall.isMuted ? 'var(--accent-red)' : 'transparent',
-                  borderColor: voiceCall.isMuted ? 'var(--accent-red)' : 'var(--accent-teal)',
+                  background: voiceCall.isMuted ? 'var(--accent-orange)' : 'transparent',
+                  borderColor: voiceCall.isMuted ? 'var(--accent-orange)' : 'var(--accent-teal)',
                   color: voiceCall.isMuted ? 'var(--text-primary)' : 'var(--accent-teal)',
                 }}
                 onClick={handleToggleMute}
               >
                 {voiceCall.isMuted ? '🔇 Muted' : '🎤 Mute'}
-              </button>
-              <button
+              </button>}
+              {voiceCall.voiceChannel && (
+                <button
+                  style={{
+                    ...controlButtonStyle,
+                    background: voiceCall.isDeafened ? 'var(--accent-orange)' : 'transparent',
+                    borderColor: voiceCall.isDeafened ? 'var(--accent-orange)' : 'var(--accent-teal)',
+                    color: voiceCall.isDeafened ? 'var(--text-primary)' : 'var(--accent-teal)',
+                  }}
+                  onClick={handleToggleDeafen}
+                >
+                  {voiceCall.isDeafened ? '🙉 Deafened' : '🎧 Deafen'}
+                </button>
+              )}
+              {voiceCall.can.video && <button
                 style={{
                   ...controlButtonStyle,
                   background: voiceCall.isCameraOff ? 'var(--accent-amber)' : 'transparent',
@@ -418,8 +496,8 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
                 onClick={handleToggleCamera}
               >
                 {voiceCall.isCameraOff ? '📹 Camera Off' : '📷 Camera On'}
-              </button>
-              <button
+              </button>}
+              {voiceCall.can.screen && <button
                 style={{
                   ...controlButtonStyle,
                   background: voiceCall.isScreenSharing ? 'var(--accent-green)' : 'transparent',
@@ -429,12 +507,12 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
                 onClick={handleToggleScreenShare}
               >
                 {voiceCall.isScreenSharing ? '🖥️ Stop Share' : '🖥️ Share'}
-              </button>
+              </button>}
               <button
                 style={{
                   ...controlButtonStyle,
-                  background: 'var(--accent-red)',
-                  borderColor: 'var(--accent-red)',
+                  background: 'var(--accent-orange)',
+                  borderColor: 'var(--accent-orange)',
                   color: 'var(--text-primary)',
                 }}
                 onClick={handleLeaveCall}

@@ -352,6 +352,20 @@ RECORDING_S3_SECRET_KEY=<application key>
 
 Restart `cortex-api` after setting the variables. Settings take effect with no client rebuild.
 
+### Voice channels and the LiveKit webhook (optional)
+
+Voice channels (v2.118.0) are Community channels people drop in and out of, with voice, video and screen sharing.
+
+**1. Turn them on.** Enable *VOICE CHANNELS* under Settings → ADMINISTRATION → INSTANCE DEFAULTS → FEATURES. They also need *COMMUNITIES* and the three `LIVEKIT_*` variables. They are off by default because every minute someone spends in one is billed by LiveKit.
+
+**2. Add the webhook** in the LiveKit project (LiveKit Cloud: project → Settings → Webhooks). Point it at `https://<your node>/api/livekit/webhook` and sign it with the same API key as `LIVEKIT_API_KEY`.
+- Cortex learns about joins and leaves as they happen, for voice channels and for the call indicators on waves.
+- Without the webhook, everything still works, just later: Cortex asks LiveKit every 10 seconds, once for the whole node.
+
+**3. Idle limits.** `VOICE_ALONE_MINUTES` (default 5) and `VOICE_IDLE_MINUTES` (default 60) disconnect people who have been left alone in a room, or have been sitting muted with nothing on.
+
+**One LiveKit project per node is still the rule**, but sharing one does no harm to voice channels: a node only acts on rooms whose channel it has, and ignores the rest.
+
 ### Uploads in object storage (optional)
 
 By default uploads (pictures, files, voice and video messages, avatars) are stored on the server's disk under `server/uploads`. Since v2.117.0 they can live in a **private** S3-compatible bucket instead, such as Backblaze B2, so the server's disk does not have to grow with them.
@@ -607,17 +621,65 @@ Pick the depth from the disk, not from a habit. As of 2026-09-25 farhold keeps 6
 buys headroom; it does not replace a disk that is simply too small for the
 history it is being asked to hold.
 
-### Offsite Backup (Optional)
+### Offsite Backup
 
-Copy encrypted backups to a remote location. Since they're GPG-encrypted, they're safe to store on untrusted storage:
+A backup that lives on the node goes down with the node. `tools/offsite-backup.sh` sends an encrypted, verified copy to S3-compatible storage (Backblaze B2 here).
+
+**What goes in it:**
+- a consistent snapshot of the live database, verified the same way as a release backup;
+- `server/.env`, which holds the field-encryption keys (without them the database cannot be restored);
+- `ecosystem.config.cjs`;
+- `firebase-service-account.json`, when present.
+
+Uploads are not included. On S3 storage they already live in a bucket.
+
+**Encryption is to a public key.** Generate the keypair somewhere other than the node and copy only the public half there:
 
 ```bash
-# Rsync to remote server
-rsync -az /opt/cortex/backups/ backup-user@remote-server:/backups/cortex/
-
-# Or upload to S3-compatible storage
-aws s3 sync /opt/cortex/backups/ s3://your-bucket/cortex-backups/ --storage-class STANDARD_IA
+G=$(mktemp -d)
+gpg --homedir $G --batch --passphrase '' --quick-gen-key "Cortex offsite backups" ed25519 sign never
+FPR=$(gpg --homedir $G --list-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+gpg --homedir $G --batch --passphrase '' --quick-add-key $FPR cv25519 encr never
+gpg --homedir $G --armor --export $FPR > offsite-backup.pub.asc            # goes to the node
+gpg --homedir $G --batch --pinentry-mode loopback --passphrase '' \
+    --armor --export-secret-keys $FPR > offsite-backup.SECRET.asc         # stays OFF the node
 ```
+
+The node can then write backups but never read one. Keep the secret key in a password manager as well as on the machine you restore from: lose it and every backup is unreadable.
+
+**Configure** `~/.config/cortex/offsite-backup.env`, `chmod 600` (the script refuses anything looser):
+
+```bash
+OFFSITE_S3_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+OFFSITE_S3_REGION=us-east-005
+OFFSITE_S3_BUCKET=your-backups-bucket
+OFFSITE_S3_ACCESS_KEY=…
+OFFSITE_S3_SECRET_KEY=…
+OFFSITE_RECIPIENT=$HOME/.config/cortex/offsite-backup.pub.asc
+OFFSITE_PREFIX=yournode
+```
+
+Give the key access to **that bucket only**. The script needs only `writeFiles` (plus `readFiles` for its size check), so a key without `deleteFiles` is better where you can make one.
+
+**Retention is a lifecycle rule on the bucket.** The script never deletes. For 30 days of dailies, set the rule on the prefix to hide after 30 days and delete 1 day after hiding.
+
+**Schedule** it daily:
+
+```bash
+(crontab -l 2>/dev/null; echo "15 3 * * * \$HOME/cortex/tools/offsite-backup.sh >> \$HOME/offsite-backup.log 2>&1") | crontab -
+```
+
+`~/.offsite-backup-last-ok` holds the time of the last verified upload, for anything that watches.
+
+**Restore:**
+
+```bash
+gpg --import offsite-backup.SECRET.asc        # once, on the restore machine
+gpg --decrypt yournode-20261016-031500.tar.zst.gpg | zstd -d | tar -x -C restore/
+# restore/server/data/farhold.db, restore/server/.env, restore/ecosystem.config.cjs
+```
+
+Test a restore after setting this up. A backup nobody has decrypted is a hope, not a backup.
 
 ---
 

@@ -44,6 +44,10 @@ const FEATURES = [
   // public watch link is an internet-facing surface.
   { key: 'broadcasts', label: 'LIVE BROADCASTS', defaultOff: true,
     hint: 'Lets members broadcast a camera to a wave — one performer, many viewers, full screen. Public watch links also need Public Portal. Needs LiveKit; each viewer uses LiveKit minutes. Off by default.' },
+  // Defaults OFF (v2.118.0): people sit in voice channels for hours, and every
+  // minute each person spends in one is billed by LiveKit.
+  { key: 'voiceChannels', label: 'VOICE CHANNELS', defaultOff: true,
+    hint: 'Lets Communities have voice channels people drop in and out of, with video and screen sharing. Needs Communities and LiveKit; every minute someone spends in one uses LiveKit minutes. Off by default.' },
 ];
 
 // Notification defaults. `always | app_closed | never` for the per-type ones, matching

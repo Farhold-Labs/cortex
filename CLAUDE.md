@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.117.2**. Last brought current 2026-10-14.
+Current version: **2.118.0**. Last brought current 2026-10-16.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2117002 / versionName "2.117.2"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2117002 / MARKETING_VERSION 2.117.2
+client/android/app/build.gradle                  versionCode 2118000 / versionName "2.118.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2118000 / MARKETING_VERSION 2.118.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -314,6 +314,13 @@ A member streams to a wave through LiveKit; viewers get hidden, subscribe-only t
 - **Deleted broadcasts:** a trigger queues their files in `recording_deletions`.
 - **The studio** (`BroadcastStudio.jsx`) publishes the moment it opens. So orientation is chosen in the Go Live dialog, locked inside the START tap, and carried as `?orientation=`. Camera zoom uses the track's `zoom` capability.
 
+### LiveKit rooms and voice channels (v2.118.0)
+
+- **Three kinds of room:** a wave call is named after the wave, a broadcast `broadcast-<id>`, and a Community voice channel `vc-<channelId>`.
+- **One roster.** `server/lib/voice-roster.js` holds who is in each room. LiveKit's signed webhooks (`/api/livekit/webhook`) feed it, and a reconcile every 10 s rebuilds it. Clients follow the `call_presence` and `voice_presence` WebSocket pushes; nothing polls LiveKit per client.
+- **Voice access is re-checked after the fact.** The token is checked only at join, so every successful write under `/api/communities` re-checks everyone in voice rooms and disconnects whoever lost `voice.connect`. A route that changes access outside that prefix must call `queueVoiceRecheck()`.
+- **Rooms whose channel a node does not have are ignored.** They belong to another node on a shared LiveKit project.
+
 ### Federation
 
 Node-to-node, **push-only and opt-in**. There is no discovery, join or subscribe path by design: a receiving node cannot request a wave. Consequences worth remembering — a port allied after a wave was promoted never received it (hence the v2.83.0 re-broadcast action), and settings that don't travel with the broadcast payload arrive at permissive defaults on the far side.
@@ -344,7 +351,7 @@ if (canAccess(user, 'moderator')) { … }
 
 Preferences resolve in **three layers: code default ← instance default ← user override**. Store **only explicit overrides** — `null` clears an override, and `false` is a real value, not an absence. Feature switches (videoFeed, crawlBar, calendar, publicPortal, registration) are enforced **server-side with 403**; hiding the UI is not the control. Public read via `GET /api/instance-config`.
 
-**Opt-in instance features** (off unless an admin enables them) are listed in `INSTANCE_OPT_IN_FEATURES`: `publicServerEvents`, `communities` and `broadcasts`.
+**Opt-in instance features** (off unless an admin enables them) are listed in `INSTANCE_OPT_IN_FEATURES`: `publicServerEvents`, `communities`, `broadcasts` and `voiceChannels`.
 
 Instance-level settings also cover branding, terminology, notification defaults, security policy and **timezone** — naive event times are interpreted in the instance zone, not the server's, because a UTC box rolls "today" over at the wrong moment for its users.
 

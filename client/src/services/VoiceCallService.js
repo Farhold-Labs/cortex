@@ -4,6 +4,9 @@
 
 import { BASE_URL } from '../config/constants.js';
 
+// A wave call has no per-person publishing rules.
+const ALL_ALLOWED = Object.freeze({ speak: true, video: true, screen: true, moderate: false });
+
 class VoiceCallService {
   constructor() {
     // LiveKit connection
@@ -22,6 +25,15 @@ class VoiceCallService {
     this.isCameraOff = true; // Camera off by default
     this.isScreenSharing = false;
     this.audioLevel = 0;
+
+    // Community voice channel (v2.118.0). Null for a wave call. A voice
+    // channel has no wave: the room is the channel's, and what you may publish
+    // in it comes from the token's grants, mirrored in `can`.
+    this.voiceChannel = null; // { communityId, channelId, name }
+    this.can = { ...ALL_ALLOWED };
+    this.isDeafened = false;
+    // Why the last voice connection ended, if the server ended it.
+    this.endedBy = null; // 'removed' | 'closed' | null
 
     // Server call status
     this.callActive = false;
@@ -96,6 +108,10 @@ class VoiceCallService {
       isDocked: this.isDocked,
       dockMinimized: this.dockMinimized,
       dockPosition: this.dockPosition,
+      voiceChannel: this.voiceChannel,
+      can: this.can,
+      isDeafened: this.isDeafened,
+      endedBy: this.endedBy,
     };
   }
 
@@ -207,6 +223,9 @@ class VoiceCallService {
 
     this.connectionState = 'connecting';
     this.currentWaveId = waveId;
+    this.voiceChannel = null;
+    this.can = { ...ALL_ALLOWED };
+    this.endedBy = null;
     this.error = null;
 
     // Set camera state before connecting
@@ -241,6 +260,98 @@ class VoiceCallService {
     this.startStatusPolling(waveId);
   }
 
+  /**
+   * Join a Community voice channel (v2.118.0).
+   *
+   * Always joins MUTED with the camera off (decided 2026-10-16): dropping into
+   * a room must never broadcast you before you meant to. The server says so in
+   * `startMuted`, and the token decides what may be published at all — `can`
+   * only mirrors it so the dock does not offer a button LiveKit would refuse.
+   *
+   * Returns { ok } or { error } so the caller can show why a join failed (a
+   * full channel, access removed).
+   */
+  async joinVoiceChannel({ communityId, channelId, name }) {
+    if (!this.authToken) return { error: 'Not signed in' };
+    if (this.connectionState !== 'disconnected' || this.livekitToken) {
+      await this.leaveCall();
+    }
+
+    this.connectionState = 'connecting';
+    this.voiceChannel = { communityId, channelId, name };
+    this.currentWaveId = null;
+    this.error = null;
+    this.endedBy = null;
+    this.notifySubscribers();
+
+    let data;
+    try {
+      const response = await fetch(`${BASE_URL}/api/communities/${communityId}/channels/${channelId}/voice/token`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.authToken}`, 'Content-Type': 'application/json' },
+      });
+      data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not join the voice channel');
+    } catch (err) {
+      this.connectionState = 'disconnected';
+      this.voiceChannel = null;
+      this.error = err.message;
+      this.notifySubscribers();
+      return { error: err.message };
+    }
+
+    this.can = { ...ALL_ALLOWED, ...(data.can || {}) };
+    this.isMuted = data.startMuted !== false || !this.can.speak;
+    this.isCameraOff = true;
+    this.isScreenSharing = false;
+    this.isDeafened = false;
+    this.currentWaveId = data.roomName;
+    this.isDocked = true;
+    this.dockMinimized = true;
+    this.livekitToken = data.token;
+    this.livekitUrl = data.url;
+    this.notifySubscribers();
+    return { ok: true };
+  }
+
+  /**
+   * The room ended the connection. For a voice channel that is final — the
+   * person was removed, the channel was deleted, or they sat idle — so tidy up
+   * instead of leaving a dead dock, and remember why for the toast.
+   */
+  handleRoomDisconnected(reason) {
+    if (!this.voiceChannel) {
+      this.setConnectionState('disconnected');
+      return;
+    }
+    // livekit-client DisconnectReason: 1 CLIENT_INITIATED, 4 PARTICIPANT_REMOVED, 5 ROOM_DELETED
+    this.endedBy = reason === 4 ? 'removed' : reason === 5 ? 'closed' : null;
+    const endedBy = this.endedBy;
+    this.leaveCall().then(() => {
+      this.endedBy = endedBy;
+      this.notifySubscribers();
+    });
+  }
+
+  /** The room muted our microphone (a moderator did it). Show it as muted. */
+  setMutedByRoom() {
+    if (this.isMuted) return;
+    this.isMuted = true;
+    this.notifySubscribers();
+  }
+
+  toggleDeafen() {
+    this.isDeafened = !this.isDeafened;
+    // Deafened means you hear nothing, and nobody hears you either.
+    if (this.isDeafened) this.isMuted = true;
+    this.notifySubscribers();
+  }
+
+  clearEndedBy() {
+    this.endedBy = null;
+    this.notifySubscribers();
+  }
+
   async leaveCall() {
     if (this.room) {
       await this.room.disconnect();
@@ -251,6 +362,9 @@ class VoiceCallService {
     this.livekitToken = null;
     this.livekitUrl = null;
     this.currentWaveId = null;
+    this.voiceChannel = null;
+    this.can = { ...ALL_ALLOWED };
+    this.isDeafened = false;
     this.participants = [];
     this.audioLevel = 0;
     this.isScreenSharing = false;
@@ -267,7 +381,10 @@ class VoiceCallService {
 
   // ============ AUDIO/VIDEO CONTROLS ============
   toggleMute() {
+    if (this.isMuted && !this.can.speak) return;
     this.isMuted = !this.isMuted;
+    // Speaking again means hearing again.
+    if (!this.isMuted) this.isDeafened = false;
     this.notifySubscribers();
     console.log(`🎤 [Service] Mute toggled: ${this.isMuted ? 'MUTED' : 'UNMUTED'}`);
     // Note: Actual mute/unmute happens in LiveKitCallRoom component via LiveKit API
