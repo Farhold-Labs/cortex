@@ -83,6 +83,8 @@ function MainApp({ sharePingId }) {
   // life every flag reads as "not disabled". Anything that would hit a
   // feature-gated endpoint has to wait for this rather than fire and take a 403.
   const [instanceFeaturesLoaded, setInstanceFeaturesLoaded] = useState(() => !!cachedFeatures);
+  // Bumped to re-read the flags after an admin changes them (v2.118.1).
+  const [instanceConfigVersion, setInstanceConfigVersion] = useState(0);
   const [apiConnected, setApiConnected] = useState(false);
   const [waves, setWaves] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -1021,6 +1023,8 @@ function MainApp({ sharePingId }) {
       if (user?.isAdmin) {
         showToastMsg(NOTIFICATION.federationRequest(data.request?.fromNodeName || 'unknown server'), 'info');
       }
+    } else if (data.type === 'instance_config_changed') {
+      setInstanceConfigVersion(v => v + 1);
     } else if (data.type === 'voice_presence') {
       // Someone joined or left a Community voice channel (v2.118.0).
       setVoicePresence(prev => ({ ...prev, [data.channelId]: data.participants || [] }));
@@ -1432,6 +1436,13 @@ function MainApp({ sharePingId }) {
   useEffect(() => {
     if (wsConnected) loadVoicePresence();
   }, [wsConnected, loadVoicePresence]);
+  // A reconnect, not the first connect: the flags were just fetched at start.
+  const wsConnectedBefore = useRef(false);
+  useEffect(() => {
+    if (!wsConnected) return;
+    if (wsConnectedBefore.current) setInstanceConfigVersion(v => v + 1);
+    wsConnectedBefore.current = true;
+  }, [wsConnected]);
 
   // Rotate footer tagline every 30 seconds
   useEffect(() => {
@@ -1605,10 +1616,12 @@ function MainApp({ sharePingId }) {
     }
   };
 
-  // Instance feature flags (v2.65.0)
+  // Instance feature flags (v2.65.0). Re-read when an admin changes them
+  // (`instance_config_changed`, v2.118.1) and whenever the socket reconnects,
+  // which also catches a change made while this app was asleep.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_URL}/instance-config`)
+    fetch(`${API_URL}/instance-config`, { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data || cancelled) return;
@@ -1621,7 +1634,7 @@ function MainApp({ sharePingId }) {
       .catch(() => { /* keep defaults — every feature stays available */ })
       .finally(() => { if (!cancelled) setInstanceFeaturesLoaded(true); });
     return () => { cancelled = true; };
-  }, []);
+  }, [instanceConfigVersion]);
 
   // v2.65.0: the 'settings' view is the former 'profile' view — it was always mostly
   // settings, with profile editing as its first section. Feed is hidden when the admin

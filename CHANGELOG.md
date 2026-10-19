@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.118.1] - 2026-10-19
+
+Two fixes from first use of voice channels on farhold.
+
+### Fixed
+
+- **Switching a feature on now takes effect in open apps straight away.** The app read the instance's feature switches only when it started. An admin who turned on VOICE CHANNELS and then went to create a channel saw no Text/Voice choice, and everyone else's open app showed voice channels only after a restart.
+  - Saving instance configuration now sends every connected app an `instance_config_changed` push. The push carries nothing; each app re-reads the public `GET /api/instance-config`, so no admin-only setting travels over it.
+  - The app also re-reads the switches whenever its WebSocket reconnects, which catches a change made while a phone was asleep.
+- **A voice channel is one row.** It folded like a text channel, and an empty room showed a "Nobody here" line beneath it, so every voice channel cost two rows. It no longer folds (no ▸/▾), and only the people in the room are listed under it. `CollapsibleSection` gained `collapsible={false}` for this.
+
+### Verified
+
+- `tests/voice-channels.test.cjs`: a member's open WebSocket receives exactly one `instance_config_changed` when the admin saves, none for a refused save, and the push holds no config. Full suite passes.
+
 ## [2.118.0] - 2026-10-16
 
 Voice channels for Communities (Phases 1 and 2 of `docs/communities/03-voice-channels.md`). A voice channel is a Discord-style channel you drop into and leave, with voice, video and screen sharing, and anyone who can see the channel can see who is in it. As part of the work, wave call indicators and call status stopped polling LiveKit from every open client.

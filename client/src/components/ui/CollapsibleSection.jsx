@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false, headerAction }) => {
+const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false, headerAction, collapsible = true }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const isOpen = onToggle ? controlledIsOpen : internalIsOpen;
-  const handleToggle = onToggle || (() => setInternalIsOpen(!internalIsOpen));
+  // collapsible={false} (compact only): a fixed header that always shows its
+  // children, e.g. a voice channel row, where folding hides nothing useful.
+  const isOpen = !collapsible || (onToggle ? controlledIsOpen : internalIsOpen);
+  const handleToggle = !collapsible ? undefined : (onToggle || (() => setInternalIsOpen(!internalIsOpen)));
 
   if (compact) {
     return (
@@ -19,7 +21,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defa
             alignItems: 'center',
             padding: '6px 12px',
             paddingLeft: `${12 + indent * 12}px`,
-            cursor: 'pointer',
+            cursor: collapsible ? 'pointer' : 'default',
             userSelect: 'none',
             borderTop: '1px solid var(--bg-hover)',
           }}
@@ -107,9 +109,11 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defa
                 )}
               </div>
             )}
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace' }}>
-              {isOpen ? '▾' : '▸'}
-            </span>
+            {collapsible && (
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace' }}>
+                {isOpen ? '▾' : '▸'}
+              </span>
+            )}
           </div>
         </div>
         {isOpen && children}
