@@ -7,8 +7,12 @@ import { Avatar } from '../ui/SimpleComponents.jsx';
  *
  * Who is in the room is listed under the channel whether or not you have
  * joined — that is the point of a voice channel. Joining is an explicit JOIN
- * button rather than a tap on the row: the row folds the list like every other
- * channel, and a stray tap while scrolling must not put you in a room.
+ * button rather than a tap on the row, so a stray tap while scrolling cannot
+ * put you in a room.
+ *
+ * v2.118.1: the row does not fold, and an empty room shows nothing beneath it.
+ * The occupant list is at most a few lines, so folding it saved nothing and
+ * cost a row under every channel.
  *
  * Moderator actions appear on other people's rows only while you are in the
  * channel yourself, because that is when the server has told this client it
@@ -18,7 +22,7 @@ import { Avatar } from '../ui/SimpleComponents.jsx';
 const SOURCE_ICONS = { camera: '📷', screen_share: '🖥️' };
 
 const VoiceChannelSection = ({
-  channel, participants = [], isOpen, onToggle, isMobile, menu,
+  channel, participants = [], isMobile, menu,
   connected, connecting, canModerate, myUserId, onJoin, onLeave, onModerate,
 }) => {
   const [actionsFor, setActionsFor] = useState(null);
@@ -48,8 +52,7 @@ const VoiceChannelSection = ({
     <CollapsibleSection
       title={`🔊 ${channel.name}`}
       badge={participants.length ? String(participants.length) : undefined}
-      isOpen={isOpen}
-      onToggle={onToggle}
+      collapsible={false}
       titleColor={connected ? 'var(--accent-teal)' : 'var(--text-primary)'}
       isMobile={isMobile}
       compact
@@ -58,11 +61,7 @@ const VoiceChannelSection = ({
       menu={menu}
       headerAction={headerAction}
     >
-      {participants.length === 0 ? (
-        <div style={{ padding: '6px 32px 8px', color: 'var(--text-muted)', fontSize: '0.72rem' }}>
-          Nobody here
-        </div>
-      ) : participants.map(p => {
+      {participants.map(p => {
         const isMe = p.userId === myUserId;
         const canAct = canModerate && connected && !isMe;
         return (

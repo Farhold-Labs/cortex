@@ -11437,6 +11437,10 @@ app.put('/api/admin/instance-config', authenticateToken, requireStepUp, (req, re
     if (db.logActivity) db.logActivity(admin.id, 'instance_config_updated', 'instance_config', '1', { namespaces: Object.keys(patch) });
     console.log(`⚙️  Instance config updated by @${admin.handle}: ${Object.keys(patch).join(', ')}`);
     res.json(updated);
+    // v2.118.1: open apps read the public config only at start, so a feature
+    // switched on stayed invisible until each one restarted. Tell them to
+    // re-read it. The message carries nothing; they fetch the public view.
+    broadcast({ type: 'instance_config_changed' }, [...clients.keys()]);
   } catch (error) {
     console.error('Failed to update instance config:', error);
     res.status(500).json({ error: 'Failed to update instance configuration' });

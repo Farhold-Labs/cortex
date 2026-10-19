@@ -506,8 +506,6 @@ const WaveCategoryList = ({ show = 'all', waves, categories, channels = [], sele
                       key={channel.id}
                       channel={channel}
                       participants={voice.presence?.[channel.id] || []}
-                      isOpen={!collapsedKeys[`ch:${channel.id}`]}
-                      onToggle={() => toggleCollapsed(`ch:${channel.id}`)}
                       isMobile={isMobile}
                       connected={voice.currentChannelId === channel.id}
                       connecting={voice.connecting}

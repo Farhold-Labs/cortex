@@ -4173,6 +4173,8 @@ Feature switches answer *"on unless switched off"*, with one exception: **`publi
 
 Switching a feature off hides it in the client **and** refuses the matching API calls with `403 { "code": "FEATURE_DISABLED" }` — users cannot re-enable it for themselves.
 
+A successful `PUT` sends every connected client the WebSocket event `instance_config_changed` (v2.118.1). It carries no fields; clients re-read the public `GET /api/instance-config`. Clients also re-read it when their socket reconnects.
+
 ---
 
 ## Invitations Endpoints
