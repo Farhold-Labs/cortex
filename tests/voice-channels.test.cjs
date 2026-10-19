@@ -525,16 +525,29 @@ test('idle voice rooms empty themselves; wave calls are left alone', { timeout: 
   }
 });
 
-test('voice is opt-in: off, there are no voice channels and no tokens', { timeout: 60000 }, async () => {
+test('voice is opt-in: off, there are no voice channels and no tokens, and open apps are told', { timeout: 60000 }, async () => {
   const lk = await fakeLiveKit();
   const s = await startServer(lk.url);
   try {
     const { owner, member, communityId, voice } = await setupCommunity(s);
+    // A member with the app open; it must hear that the switch changed
+    // (v2.118.1), or the feature stays as it was until the app restarts.
+    const open = await s.socket(member.token);
+    const pushes = () => open.messages.filter(m => m.type === 'instance_config_changed').length;
     // Turn it off the way an operator would, through the admin route.
     const admin = (await s.api('POST', '/api/auth/login', { body: { handle: owner.handle, password } })).body;
     const stepUp = (await s.api('POST', '/api/auth/step-up', { token: admin.token, body: { password } })).body.stepUpToken;
+    const refused = await s.api('PUT', '/api/admin/instance-config', { token: member.token, headers: { 'X-Step-Up-Token': stepUp }, body: { features: { voiceChannels: false } } });
+    assert.notEqual(refused.status, 200);
     const off = await s.api('PUT', '/api/admin/instance-config', { token: admin.token, headers: { 'X-Step-Up-Token': stepUp }, body: { features: { voiceChannels: false } } });
     assert.equal(off.status, 200, `the first user is the node admin: ${JSON.stringify(off.body)}`);
+    for (let i = 0; i < 40 && pushes() === 0; i++) await sleep(50);
+    assert.equal(pushes(), 1, 'open apps are told once, and only for the save that happened');
+    const pushed = open.messages.find(m => m.type === 'instance_config_changed');
+    assert.deepEqual(Object.keys(pushed), ['type'], 'the push carries no config; apps re-read the public view');
+    open.close();
+    const publicView = await s.api('GET', '/api/instance-config');
+    assert.equal(publicView.body.features.voiceChannels, false);
     const token = await s.api('POST', `/api/communities/${communityId}/channels/${voice.id}/voice/token`, { token: member.token });
     assert.equal(token.status, 403);
     assert.equal(token.body.feature, 'voiceChannels');
