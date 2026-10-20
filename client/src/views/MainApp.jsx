@@ -61,6 +61,9 @@ function MainApp({ sharePingId }) {
 
   // Global voice call hook for docked call window (v2.6.1)
   const globalVoiceCall = useVoiceCall(null);
+  // For the WebSocket handler, which must not be rebuilt on every call update.
+  const globalVoiceCallRef = useRef(globalVoiceCall);
+  globalVoiceCallRef.current = globalVoiceCall;
 
   // Check if this is a pop-out call window
   const urlParams = new URLSearchParams(window.location.search);
@@ -550,6 +553,7 @@ function MainApp({ sharePingId }) {
           const res = await fetchAPI(`/communities/${c.id}/channels`);
           return (res.channels || []).map(ch => ({
             id: ch.id, name: ch.name, communityId: c.id, communityName: c.name, type: ch.type || 'text',
+            stage: Boolean(ch.stage),
           }));
         } catch { complete = false; return []; }
       }));
@@ -572,6 +576,9 @@ function MainApp({ sharePingId }) {
   // socket (re)connects, then kept current by `voice_presence` pushes.
   const voiceEnabled = instanceFeatures.communities === true && instanceFeatures.voiceChannels === true;
   const [voicePresence, setVoicePresence] = useState({});
+  // channel id → whether it is a stage (v2.119.0). Pushed with presence, so a
+  // channel switched to a stage changes for everyone without a reload.
+  const [voiceStage, setVoiceStage] = useState({});
   const voiceCommunityIds = useMemo(() => [...new Set(
     communityChannels.filter(ch => ch.type === 'voice').map(ch => ch.communityId)
   )], [communityChannels]);
@@ -579,10 +586,15 @@ function MainApp({ sharePingId }) {
   const loadVoicePresence = useCallback(async () => {
     if (!voiceEnabled || !voiceCommunityIds.length) return;
     const results = await Promise.all(voiceCommunityIds.map(id =>
-      fetchAPI(`/communities/${id}/voice`).then(r => r.channels || {}).catch(() => null)));
+      fetchAPI(`/communities/${id}/voice`).catch(() => null)));
     setVoicePresence(prev => {
       const next = { ...prev };
-      for (const r of results) if (r) Object.assign(next, r);
+      for (const r of results) if (r) Object.assign(next, r.channels || {});
+      return next;
+    });
+    setVoiceStage(prev => {
+      const next = { ...prev };
+      for (const r of results) if (r) Object.assign(next, r.stages || {});
       return next;
     });
   }, [fetchAPI, voiceEnabled, voiceCommunityIds]);
@@ -604,6 +616,14 @@ function MainApp({ sharePingId }) {
       } else if (action === 'disconnect') {
         await fetchAPI(base, { method: 'DELETE' });
         showToastMsg(`${participant.displayName || 'They'} disconnected`, 'success');
+      } else if (action === 'speaker' || action === 'audience') {
+        await fetchAPI(`${base}/speaker`, { method: 'POST', body: { speaker: action === 'speaker' } });
+        showToastMsg(action === 'speaker'
+          ? `${participant.displayName || 'They'} can speak now`
+          : `${participant.displayName || 'They'} moved to the audience`, 'success');
+      } else if (action?.moveTo) {
+        await fetchAPI(`${base}/move`, { method: 'POST', body: { channelId: action.moveTo.id } });
+        showToastMsg(`${participant.displayName || 'They'} moved to 🔊 ${action.moveTo.name}`, 'success');
       }
     } catch (err) {
       showToastMsg(err?.error || 'That did not work', 'error');
@@ -613,9 +633,13 @@ function MainApp({ sharePingId }) {
   // The server ended our voice connection: say so, once.
   useEffect(() => {
     if (!globalVoiceCall.endedBy) return;
-    showToastMsg(globalVoiceCall.endedBy === 'closed'
-      ? 'The voice channel was closed'
-      : 'You were disconnected from the voice channel', 'info');
+    if (globalVoiceCall.endedBy === 'unsupported') {
+      showToastMsg(globalVoiceCall.error || 'This browser cannot join encrypted voice channels', 'error');
+    } else {
+      showToastMsg(globalVoiceCall.endedBy === 'closed'
+        ? 'The voice channel was closed'
+        : 'You were disconnected from the voice channel', 'info');
+    }
     globalVoiceCall.clearEndedBy();
   }, [globalVoiceCall.endedBy, globalVoiceCall, showToastMsg]);
 
@@ -1028,6 +1052,26 @@ function MainApp({ sharePingId }) {
     } else if (data.type === 'voice_presence') {
       // Someone joined or left a Community voice channel (v2.118.0).
       setVoicePresence(prev => ({ ...prev, [data.channelId]: data.participants || [] }));
+      if (typeof data.stage === 'boolean') setVoiceStage(prev => ({ ...prev, [data.channelId]: data.stage }));
+    } else if (data.type === 'voice_notice') {
+      // Something happened to us in a voice channel (v2.119.0).
+      const message = {
+        video_full: 'The cameras in this channel are full, so yours was turned off',
+        speaker: 'You can speak now. Unmute when you are ready',
+        audience: 'You are back in the audience',
+      }[data.notice];
+      if (message && globalVoiceCallRef.current?.voiceChannel?.channelId === data.channelId) {
+        if (data.notice === 'speaker') globalVoiceCallRef.current.setHandRaised(false);
+        showToastMsg(message, 'info');
+      }
+    } else if (data.type === 'voice_move') {
+      // A moderator moved us to another voice channel (v2.119.0). The app does
+      // the move: a fresh join, checked by the server like any other.
+      const vc = globalVoiceCallRef.current;
+      if (vc?.voiceChannel?.channelId === data.fromChannelId) {
+        vc.joinVoiceChannel({ communityId: data.communityId, channelId: data.channelId, name: data.name })
+          .then(r => showToastMsg(r?.error || `A moderator moved you to 🔊 ${data.name}`, r?.error ? 'error' : 'info'));
+      }
     } else if (data.type === 'call_presence') {
       // Someone joined or left a wave call (v2.118.0).
       setActiveCalls(prev => {
@@ -1935,6 +1979,7 @@ function MainApp({ sharePingId }) {
                   onWaveFile={handleWaveFile}
                   communitiesEnabled={instanceFeatures.communities === true}
                   voicePresence={voicePresence}
+                  voiceStage={voiceStage}
                   currentVoiceChannelId={globalVoiceCall.voiceChannel?.channelId || null}
                   voiceConnecting={globalVoiceCall.connectionState === 'connecting'}
                   canModerateVoice={Boolean(globalVoiceCall.voiceChannel && globalVoiceCall.can?.moderate)}

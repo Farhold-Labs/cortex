@@ -3098,7 +3098,10 @@ export class DatabaseSQLite {
           sort_order   INTEGER NOT NULL DEFAULT 0,
           created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
           created_at   TEXT NOT NULL,
-          updated_at   TEXT NOT NULL
+          updated_at   TEXT NOT NULL,
+          -- v2.119.0: a voice channel run as a stage — hosts speak, everyone
+          -- else listens until brought up. Meaningless for other types.
+          stage        INTEGER NOT NULL DEFAULT 0
         );
         -- IFNULL rather than UNIQUE(community_id, slug), because in SQLite two
         -- NULLs are distinct in a unique constraint — which would let a node
@@ -3375,6 +3378,21 @@ export class DatabaseSQLite {
       } finally {
         this.db.pragma('foreign_keys = ON');
       }
+    }
+
+    // v2.119.0 — stage voice channels, and the node's voice settings. After the
+    // v2.118.0 rebuild above, which recreates channels without this column.
+    const channelColsV2119 = this.db.prepare(`PRAGMA table_info(channels)`).all();
+    if (channelColsV2119.length > 0 && !channelColsV2119.some(c => c.name === 'stage')) {
+      console.log('📝 Adding channels.stage (v2.119.0)...');
+      this.db.exec(`ALTER TABLE channels ADD COLUMN stage INTEGER NOT NULL DEFAULT 0;`);
+      console.log('✅ channels.stage added');
+    }
+    const instColsV2119 = this.db.prepare(`PRAGMA table_info(instance_config)`).all();
+    if (instColsV2119.length > 0 && !instColsV2119.some(c => c.name === 'voice')) {
+      console.log('📝 Adding instance_config.voice (v2.119.0)...');
+      this.db.exec(`ALTER TABLE instance_config ADD COLUMN voice TEXT NOT NULL DEFAULT '{}';`);
+      console.log('✅ instance_config.voice added');
     }
 
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
@@ -9818,6 +9836,8 @@ export class DatabaseSQLite {
       security: parse(config.security),
       // Instance locale (v2.79.0) — currently just `timezone`.
       locale: localeNs,
+      // Voice channel settings (v2.119.0): idle limits.
+      voice: parse(config.voice),
       createdAt: config.created_at,
       updatedAt: config.updated_at,
       updatedBy: config.updated_by || null,
@@ -9830,7 +9850,7 @@ export class DatabaseSQLite {
     const current = this.getInstanceConfig();
     const merged = {};
 
-    for (const ns of ['defaults', 'notificationDefaults', 'features', 'branding', 'security', 'locale']) {
+    for (const ns of ['defaults', 'notificationDefaults', 'features', 'branding', 'security', 'locale', 'voice']) {
       if (patch[ns] === undefined) {
         merged[ns] = current[ns];
         continue;
@@ -9845,7 +9865,7 @@ export class DatabaseSQLite {
 
     this.db.prepare(`
       UPDATE instance_config
-      SET defaults = ?, notification_defaults = ?, features = ?, branding = ?, security = ?, locale = ?, updated_at = ?, updated_by = ?
+      SET defaults = ?, notification_defaults = ?, features = ?, branding = ?, security = ?, locale = ?, voice = ?, updated_at = ?, updated_by = ?
       WHERE id = 1
     `).run(
       JSON.stringify(merged.defaults),
@@ -9854,6 +9874,7 @@ export class DatabaseSQLite {
       JSON.stringify(merged.branding),
       JSON.stringify(merged.security),
       JSON.stringify(merged.locale),
+      JSON.stringify(merged.voice),
       new Date().toISOString(),
       updatedBy
     );
@@ -14479,13 +14500,13 @@ export class DatabaseSQLite {
    * `communityId` of null creates a NODE-LEVEL channel. Whether the caller is
    * allowed to do that (admins only) is Phase 2's decision, not this method's.
    */
-  createChannel({ communityId = null, name, slug, description = null, type = 'text', visibility = 'members', sortOrder = 0, createdBy = null }) {
+  createChannel({ communityId = null, name, slug, description = null, type = 'text', visibility = 'members', sortOrder = 0, createdBy = null, stage = false }) {
     const now = new Date().toISOString();
     const id = uuidv4();
     this.db.prepare(`
-      INSERT INTO channels (id, community_id, name, slug, description, type, visibility, sort_order, created_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, communityId, name, String(slug || '').trim().toLowerCase(), description, type, visibility, sortOrder, createdBy, now, now);
+      INSERT INTO channels (id, community_id, name, slug, description, type, visibility, sort_order, created_by, created_at, updated_at, stage)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, communityId, name, String(slug || '').trim().toLowerCase(), description, type, visibility, sortOrder, createdBy, now, now, stage ? 1 : 0);
     return this.getChannelById(id);
   }
 
@@ -14721,7 +14742,7 @@ export class DatabaseSQLite {
   }
 
   updateChannel(id, fields = {}) {
-    const allowed = ['name', 'description', 'type', 'visibility', 'sort_order'];
+    const allowed = ['name', 'description', 'type', 'visibility', 'sort_order', 'stage'];
     const sets = [], values = [];
     for (const [key, value] of Object.entries(fields)) {
       if (!allowed.includes(key)) continue;

@@ -50,6 +50,14 @@ const FEATURES = [
     hint: 'Lets Communities have voice channels people drop in and out of, with video and screen sharing. Needs Communities and LiveKit; every minute someone spends in one uses LiveKit minutes. Off by default.' },
 ];
 
+// Voice channel idle limits (v2.119.0). Blank means the server's default.
+const VOICE_FIELDS = [
+  { key: 'aloneMinutes', label: 'ALONE IN A CHANNEL',
+    hint: 'Someone left on their own in a voice channel is disconnected after this long.' },
+  { key: 'idleMinutes', label: 'NOBODY SPEAKING',
+    hint: 'A channel where every microphone, camera and screen has been off this long is emptied. Listening while others talk does not count as idle.' },
+];
+
 // Notification defaults. `always | app_closed | never` for the per-type ones, matching
 // the user-facing notification settings.
 const NOTIF_MODE_OPTIONS = [['always', 'Always'], ['app_closed', 'App closed'], ['never', 'Never']];
@@ -124,6 +132,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
   const [branding, setBranding] = useState({});
   const [terminology, setTerminology] = useState({ preset: 'firefly', terms: {} });
   const [security, setSecurity] = useState({});
+  const [voice, setVoice] = useState({});
   const [timezone, setTimezone] = useState('');
 
   const load = useCallback(async () => {
@@ -135,6 +144,7 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
       setBranding(data.branding || {});
       setTerminology((data.branding && data.branding.terminology) || { preset: 'firefly', terms: {} });
       setSecurity(data.security || {});
+      setVoice(data.voice || {});
       setTimezone((data.locale && data.locale.timezone) || '');
     } catch (err) {
       showToast(err.message || 'Failed to load instance configuration', 'error');
@@ -366,6 +376,52 @@ const InstanceConfigAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onTog
               );
             })}
           </CollapsibleSection>
+
+          {/* ---- Voice channel idle limits (v2.119.0) ---- */}
+          {config.features?.voiceChannels === true && (
+            <CollapsibleSection title="VOICE CHANNELS" isOpen={openGroup === 'voice'} onToggle={() => toggleGroup('voice')} isMobile={isMobile}>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '12px', lineHeight: 1.5 }}>
+                LiveKit bills every minute each person spends in a voice channel, so rooms nobody is
+                using are emptied. 0 turns a rule off.
+              </div>
+              {VOICE_FIELDS.map(({ key, label, hint }) => (
+                <div key={key} style={{ marginBottom: '12px' }}>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '4px' }}>{label}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input
+                      type="number" min="0" max={config.voiceMaxMinutes || 1440} step="1"
+                      value={voice[key] ?? ''}
+                      placeholder={String(config.voiceDefaults?.[key] ?? '')}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setVoice(prev => ({ ...prev, [key]: raw === '' ? undefined : Number(raw) }));
+                      }}
+                      style={{
+                        width: '110px', padding: '6px 8px', background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-primary)', color: 'var(--text-primary)',
+                        fontFamily: 'monospace', fontSize: '0.8rem',
+                      }}
+                    />
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>minutes</span>
+                  </div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '4px', lineHeight: 1.5 }}>{hint}</div>
+                </div>
+              ))}
+              <button
+                disabled={saving}
+                onClick={() => {
+                  const patch = {};
+                  for (const { key } of VOICE_FIELDS) {
+                    patch[key] = voice[key] === undefined || Number.isNaN(voice[key]) ? null : voice[key];
+                  }
+                  save({ voice: patch }, 'Voice settings saved');
+                }}
+                style={{ ...pillStyle(true, 'var(--accent-amber)'), padding: '8px 20px' }}
+              >
+                {saving ? 'SAVING…' : 'SAVE VOICE SETTINGS'}
+              </button>
+            </CollapsibleSection>
+          )}
 
           {/* ---- Branding ---- */}
           <CollapsibleSection title="BRANDING" isOpen={openGroup === 'branding'} onToggle={() => toggleGroup('branding')} isMobile={isMobile}>

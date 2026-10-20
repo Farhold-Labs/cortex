@@ -1,8 +1,39 @@
 # Communities — voice channels
 
 Design sketch, 2026-10-16. **Phases 1 (server) and 2 (client) are built, in
-v2.118.0.** Phase 3 (below) is not. Background audio in the Android app and
+v2.118.0; Phase 3 in v2.119.0.** Background audio in the Android app and
 screen sharing still need checking on a real device.
+
+Phase 3 as built (v2.119.0):
+
+- **One publish rule, applied live.** `voiceSourcesFor()` decides what someone
+  may publish from their capabilities, the stage and the camera limit. It goes
+  into the token and is re-applied with LiveKit's UpdateParticipant whenever it
+  could have changed, so LiveKit, not the client, enforces it.
+- **Camera limit: 6 per channel.** With six on, nobody else may start one. A
+  seventh that slips in is taken down (the latest goes) and its owner is told.
+  Turning a camera off now unpublishes it; it used to stay published, muted,
+  still showing 📷 and still holding a place.
+- **Stage channels** are voice channels with `stage` set, at creation or later.
+  Hosts are whoever holds `voice.moderate`; they bring people up and send them
+  back. The audience raises hands. The flags live in LiveKit participant
+  metadata, which only the server writes, so a restart loses nothing.
+- **Move to another channel.** The person's app rejoins, with a token checked
+  like any other and the other room's key. If it has not left within 15 s it
+  is removed, so a move is never weaker than a disconnect.
+- **End-to-end encryption against LiveKit.** Every voice channel. The key is an
+  HMAC of the room's LiveKit session id under a secret derived from
+  `JWT_SECRET`: it changes with each room session, survives a restart, and
+  LiveKit never sees it. The host node can derive it; the point is to keep the
+  media provider out. Browsers that cannot encrypt are not let in. Verified
+  against LiveKit Cloud: it reports the tracks as encrypted (`encryption: 1`,
+  GCM), and the other side decodes them.
+- **Idle is per room.** A muted listener in a room where someone is talking
+  stays; a room where nobody has anything on is emptied. Both limits are admin
+  settings.
+- **Found on the way: removed people could never rejoin.** The LiveKit SDK
+  dates tokens 0, and LiveKit refuses a token dated before a removal. All
+  tokens are now signed with `livekitJwt()`, dated now.
 
 Phase 2 as built:
 
@@ -185,8 +216,8 @@ Showing who is in a channel before you join is the core of the feature.
    - tests, including counterfactuals for the authorization and removal paths.
 2. **Client:** the channel row with presence, the connected bar, and moderator
    actions. CDP-tested at phone size; background audio checked on a device.
-3. **Later:** idle-disconnect tuning, a stage mode (a few speakers, many
-   listeners), and end-to-end encryption.
+3. **Built in v2.119.0:** the camera limit, moving people, stage mode,
+   end-to-end encryption and idle tuning (see the top of this document).
 
 Each phase is roughly the size of one Communities phase.
 

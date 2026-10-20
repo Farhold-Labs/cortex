@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.118.1**. Last brought current 2026-10-19.
+Current version: **2.119.0**. Last brought current 2026-10-20.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2118001 / versionName "2.118.1"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2118001 / MARKETING_VERSION 2.118.1
+client/android/app/build.gradle                  versionCode 2119000 / versionName "2.119.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2119000 / MARKETING_VERSION 2.119.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -320,6 +320,9 @@ A member streams to a wave through LiveKit; viewers get hidden, subscribe-only t
 - **One roster.** `server/lib/voice-roster.js` holds who is in each room. LiveKit's signed webhooks (`/api/livekit/webhook`) feed it, and a reconcile every 10 s rebuilds it. Clients follow the `call_presence` and `voice_presence` WebSocket pushes; nothing polls LiveKit per client.
 - **Voice access is re-checked after the fact.** The token is checked only at join, so every successful write under `/api/communities` re-checks everyone in voice rooms and disconnects whoever lost `voice.connect`. A route that changes access outside that prefix must call `queueVoiceRecheck()`.
 - **Rooms whose channel a node does not have are ignored.** They belong to another node on a shared LiveKit project.
+- **What someone may publish is one rule** (v2.119.0), `voiceSourcesFor()`: capabilities, the stage, the camera limit. It goes into the token and is re-applied to live connections with UpdateParticipant whenever it could change. Stage flags live in LiveKit participant metadata.
+- **Voice channel media is end-to-end encrypted against LiveKit** (v2.119.0); the key is derived from the room's session id and `JWT_SECRET`.
+- **Sign LiveKit tokens with `livekitJwt(at)`, never `at.toJwt()`.** The SDK dates tokens 0, and LiveKit refuses a token dated before someone's removal, so a removed person could never rejoin (v2.119.0).
 
 ### Federation
 
