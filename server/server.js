@@ -73,6 +73,29 @@ const livekitRoomService = (LIVEKIT_API_KEY && LIVEKIT_API_SECRET)
   ? new RoomServiceClient(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
   : null;
 
+/**
+ * Sign a LiveKit access token, dated now. Use this, never `at.toJwt()`.
+ *
+ * livekit-server-sdk signs with `nbf: 0` and no issue time. LiveKit refuses a
+ * token dated before someone's removal from a room ("invalid token: revoked"),
+ * and a token dated 0 is older than every removal. So once a moderator, the
+ * idle sweep or the access re-check had removed someone from a voice channel,
+ * every token we issued them for it afterwards was refused, for days: they
+ * could never rejoin (found 2026-10-20; checked against LiveKit Cloud with
+ * /rtc/validate — the same token re-signed with nbf = now is accepted).
+ *
+ * The SDK builds the claims; this re-signs them with iat and nbf set to now.
+ */
+async function livekitJwt(at) {
+  const sdkToken = await at.toJwt();
+  const payload = JSON.parse(Buffer.from(sdkToken.split('.')[1], 'base64url').toString());
+  const now = Math.floor(Date.now() / 1000);
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const unsigned = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ ...payload, iat: now, nbf: now })}`;
+  const signature = crypto.createHmac('sha256', at.apiSecret ?? LIVEKIT_API_SECRET).update(unsigned).digest('base64url');
+  return `${unsigned}.${signature}`;
+}
+
 // v2.110.0 — broadcast recording (LiveKit Egress → S3-compatible bucket).
 // Needs LiveKit AND all five RECORDING_S3_* settings; otherwise recording is
 // simply not offered.
@@ -11262,6 +11285,9 @@ app.get('/api/admin/instance-config', authenticateToken, (req, res) => {
       // effective value before overriding it (v2.79.0).
       effectiveTimezone: db.getInstanceTimezone ? db.getInstanceTimezone() : null,
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      // Voice channel idle limits (v2.119.0): what applies until overridden.
+      voiceDefaults: VOICE_SETTING_DEFAULTS,
+      voiceMaxMinutes: VOICE_SETTING_MAX_MINUTES,
     });
   } catch (error) {
     console.error('Failed to read instance config:', error);
@@ -11275,7 +11301,7 @@ app.put('/api/admin/instance-config', authenticateToken, requireStepUp, (req, re
   const admin = db.findUserById(req.user.userId);
   if (!requireRole(admin, ROLES.ADMIN, res)) return;
 
-  const { defaults, notificationDefaults, features, branding, security, locale } = req.body || {};
+  const { defaults, notificationDefaults, features, branding, security, locale, voice } = req.body || {};
   const patch = {};
 
   // Whitelist every incoming key — never trust the client to stay inside the schema
@@ -11424,6 +11450,19 @@ app.put('/api/admin/instance-config', authenticateToken, requireStepUp, (req, re
         }
         patch.locale.timezone = tz;
       }
+    }
+  }
+
+  // Voice channel idle limits (v2.119.0): whole minutes, 0 turns a rule off.
+  if (voice && typeof voice === 'object') {
+    patch.voice = {};
+    for (const [key, value] of Object.entries(voice)) {
+      if (!(key in VOICE_SETTING_DEFAULTS)) continue;
+      if (value === null) { patch.voice[key] = null; continue; }
+      if (!Number.isInteger(value) || value < 0 || value > VOICE_SETTING_MAX_MINUTES) {
+        return res.status(400).json({ error: `'${key}' must be a whole number of minutes from 0 to ${VOICE_SETTING_MAX_MINUTES}` });
+      }
+      patch.voice[key] = value;
     }
   }
 
@@ -20771,7 +20810,7 @@ async function broadcastToken(b, { identity, name, publisher }) {
     // list — an audience, not a meeting.
     hidden: !publisher,
   });
-  return at.toJwt();
+  return livekitJwt(at);
 }
 
 /** How many people are in the room now. Fails open (null) if LiveKit is unreachable. */
@@ -21168,8 +21207,18 @@ app.post('/api/public/broadcasts/:token/token', broadcastViewerLimiter, async (r
 // lib/voice-roster.js for why this replaced per-client polling. Wave calls get
 // `call_presence`, voice channels `voice_presence`.
 
-const VOICE_ALONE_MS = Math.max(0, Number(process.env.VOICE_ALONE_MINUTES ?? 5)) * 60_000;
-const VOICE_IDLE_MS = Math.max(0, Number(process.env.VOICE_IDLE_MINUTES ?? 60)) * 60_000;
+// Idle limits. An admin sets them under Settings → Administration (v2.119.0);
+// these env values are only the fallback until they do. 0 turns a rule off.
+const VOICE_SETTING_DEFAULTS = Object.freeze({
+  aloneMinutes: Math.max(0, Number(process.env.VOICE_ALONE_MINUTES ?? 5)),
+  idleMinutes: Math.max(0, Number(process.env.VOICE_IDLE_MINUTES ?? 60)),
+});
+const VOICE_SETTING_MAX_MINUTES = 24 * 60;
+function voiceSettings() {
+  const stored = db.getInstanceConfig().voice || {};
+  const minutes = (key) => (Number.isFinite(stored[key]) ? stored[key] : VOICE_SETTING_DEFAULTS[key]);
+  return { aloneMs: minutes('aloneMinutes') * 60_000, idleMs: minutes('idleMinutes') * 60_000 };
+}
 // Undocumented: tests shorten it. 10 s matches the client poll it replaced, so a
 // node with no webhook configured is no slower than before (measured against
 // LiveKit Cloud on 2026-10-16: a join showed up within one tick).
@@ -21190,13 +21239,22 @@ const voiceRoster = new VoiceRoster({
   roomService: livekitRoomService,
   onChange: (room) => {
     try { publishRoomPresence(room); } catch (err) { console.error('[voice] presence push failed:', err.message); }
+    // Who is in the room decides what each of them may publish (the camera
+    // limit, the stage), so every change re-applies it.
+    queueVoicePermissions(room);
   },
 });
 
 /** A roster entry as clients see it: who, never more than the wave/channel already shows. */
 function presenceView(room) {
+  const kind = classifyRoom(room);
+  const channel = kind?.kind === 'voice' ? db.getChannelById(kind.channelId) : null;
   return voiceRoster.participants(room).map(p => {
     const u = db.findUserById(p.identity);
+    // On a stage, who is up there: hosts (voice.moderate) and whoever they
+    // brought up. Everyone is "on stage" in an ordinary channel.
+    const onStage = !channel?.stage || p.speaker ||
+      communityAuthz.canInChannel(db, { kind: 'user', userId: p.identity }, channel, CommunityCaps.VOICE_MODERATE);
     return {
       userId: p.identity,
       displayName: u?.displayName || p.name,
@@ -21204,6 +21262,10 @@ function presenceView(room) {
       avatar: u?.avatar || null,
       avatarUrl: u?.avatarUrl || null,
       sources: p.sources,
+      // Stage channels (v2.119.0).
+      onStage,
+      speaker: p.speaker,
+      hand: p.hand,
     };
   });
 }
@@ -21218,6 +21280,7 @@ function publishRoomPresence(room) {
     if (!channel || !channel.community_id) return;
     const message = {
       type: 'voice_presence', communityId: channel.community_id, channelId: channel.id,
+      stage: Boolean(channel.stage),
       participants: presenceView(room),
     };
     // Only to people who may see the channel listed: a restricted channel's
@@ -21270,7 +21333,156 @@ function recheckVoiceAccess() {
         communityAuthz.canInChannel(db, { kind: 'user', userId: p.identity }, channel, CommunityCaps.VOICE_CONNECT);
       if (!allowed) ejectFromRoom(room, p.identity, 'access');
     }
+    // Losing voice.speak or voice.video is not losing the room, but it must
+    // still reach a live connection, not only the next token.
+    if (featureOn && channel.type === 'voice') queueVoicePermissions(room);
   }
+}
+
+// ----- What each person may publish (v2.119.0) -----
+//
+// One rule, used for the token and re-applied to live connections whenever it
+// could have changed: someone joined or left, a camera went on or off, a role
+// or override changed, a host brought someone up, the channel became a stage.
+// It is applied with LiveKit's UpdateParticipant, which unpublishes anything
+// the new permission no longer covers — so the limit is LiveKit's to enforce,
+// not a request the client may ignore.
+
+// The roster's source names, as LiveKit's TrackSource.
+const VOICE_TRACK_SOURCES = Object.freeze({
+  microphone: TrackSource.MICROPHONE, camera: TrackSource.CAMERA,
+  screen_share: TrackSource.SCREEN_SHARE, screen_share_audio: TrackSource.SCREEN_SHARE_AUDIO,
+});
+
+/** Cameras in a room, in the order they went on: the first ones keep their place. */
+function voiceCameraOrder(room) {
+  return voiceRoster.participants(room)
+    .filter(p => p.sources.includes('camera'))
+    .sort((a, b) => (a.cameraSince - b.cameraSince) || (a.joinedAt - b.joinedAt));
+}
+
+function voiceSourcesFor(channel, userId, room) {
+  const caps = communityAuthz.channelCapabilities(db, { kind: 'user', userId }, channel);
+  const hosting = caps.has(CommunityCaps.VOICE_MODERATE);
+  const me = voiceRoster.get(room, userId);
+  // On a stage the hosts (voice.moderate) speak; everyone else listens until a
+  // host brings them up.
+  const onStage = !channel.stage || hosting || me?.speaker === true;
+
+  const limit = communityLimits.CAPS.voiceCamerasPerChannel;
+  const cameras = voiceCameraOrder(room);
+  const myPlace = cameras.findIndex(p => p.identity === userId);
+  const cameraRoom = myPlace >= 0 ? myPlace < limit : cameras.length < limit;
+
+  const sources = [];
+  if (onStage && caps.has(CommunityCaps.VOICE_SPEAK)) sources.push(TrackSource.MICROPHONE);
+  if (onStage && caps.has(CommunityCaps.VOICE_VIDEO) && cameraRoom) sources.push(TrackSource.CAMERA);
+  if (onStage && caps.has(CommunityCaps.VOICE_SCREEN)) sources.push(TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO);
+  return { caps, sources, hosting, onStage, cameraRoom };
+}
+
+/**
+ * A LiveKit permission from a source list. An EMPTY canPublishSources means
+ * "no restriction" to LiveKit, so publishing nothing is canPublish: false.
+ */
+function voicePublishPermission(sources) {
+  return {
+    canSubscribe: true,
+    canPublish: sources.length > 0,
+    ...(sources.length ? { canPublishSources: sources } : {}),
+    canPublishData: false,
+  };
+}
+
+// room + identity → the source list LiveKit was last given for them.
+const voiceAppliedSources = new Map();
+const voiceAppliedKey = (room, identity) => `${room}\n${identity}`;
+
+/** Tell one person something happened to them in a voice channel. */
+function voiceNotice(userId, channel, notice) {
+  broadcast({ type: 'voice_notice', communityId: channel.community_id, channelId: channel.id, notice }, [userId]);
+}
+
+async function applyVoicePermissions(room) {
+  const kind = classifyRoom(room);
+  if (kind?.kind !== 'voice' || !livekitRoomService) return;
+  const channel = db.getChannelById(kind.channelId);
+  if (!channel || channel.type !== 'voice') return; // not ours (shared project)
+
+  const present = new Set();
+  for (const p of voiceRoster.participants(room)) {
+    present.add(p.identity);
+    const key = voiceAppliedKey(room, p.identity);
+    const { caps, sources, onStage, cameraRoom } = voiceSourcesFor(channel, p.identity, room);
+    const want = JSON.stringify(sources);
+    const had = voiceAppliedSources.get(key);
+    // Something published that the rules do not allow — a camera that went on
+    // in the instant before the limit reached them — is re-applied even when
+    // our answer has not changed, so LiveKit takes it down.
+    const unpermitted = p.sources.some(src => !sources.includes(VOICE_TRACK_SOURCES[src]));
+    if (had === want && !unpermitted) continue;
+    try {
+      await livekitRoomService.updateParticipant(room, p.identity, { permission: voicePublishPermission(sources) });
+    } catch (err) {
+      // Gone already, or LiveKit unreachable: the next change or tick retries.
+      if (!/not.?found|404/i.test(String(err?.message || err))) console.error(`[voice] permissions for ${p.identity} in ${room}:`, err.message);
+      continue;
+    }
+    voiceAppliedSources.set(key, want);
+    if (p.sources.includes('camera') && onStage && caps.has(CommunityCaps.VOICE_VIDEO) && !cameraRoom) {
+      voiceNotice(p.identity, channel, 'video_full');
+    }
+  }
+  for (const key of voiceAppliedSources.keys()) {
+    const [r, identity] = key.split('\n');
+    if (r === room && !present.has(identity)) voiceAppliedSources.delete(key);
+  }
+}
+
+// One pass per room at a time, and a burst of changes collapses into one.
+const voicePermissionRuns = new Map(); // room → { running, again }
+function queueVoicePermissions(room) {
+  if (classifyRoom(room)?.kind !== 'voice') return;
+  const state = voicePermissionRuns.get(room);
+  if (state) { state.again = true; return; }
+  const run = { again: false };
+  voicePermissionRuns.set(room, run);
+  setImmediate(async () => {
+    try {
+      do {
+        run.again = false;
+        await applyVoicePermissions(room);
+      } while (run.again);
+    } catch (err) {
+      console.error('[voice] permissions failed:', err.message);
+    } finally {
+      voicePermissionRuns.delete(room);
+    }
+  });
+}
+
+/** Write our stage flags into someone's LiveKit metadata, then the roster. */
+async function setVoiceMeta(room, identity, changes) {
+  const current = voiceRoster.get(room, identity);
+  if (!current) return false;
+  const meta = { speaker: current.speaker, hand: current.hand, ...changes };
+  await livekitRoomService.updateParticipant(room, identity, { metadata: JSON.stringify(meta) });
+  voiceRoster.setMeta(room, identity, meta);
+  return true;
+}
+
+// The media key for a voice room (v2.119.0).
+//
+// Voice channel media is end-to-end encrypted against LiveKit: the SFU, and
+// LiveKit Cloud with it, forwards packets it cannot read. The key is derived
+// from the room's LiveKit session id under a secret LiveKit never sees, so it
+// survives a restart of this server, changes every time the room empties and
+// starts again, and needs no storage. This node can derive it — a Community
+// lives on its host node, which already decides who is in the room. What it
+// keeps out is the media provider.
+const VOICE_MEDIA_SECRET = crypto.createHash('sha256').update('cortex-voice-media-key\n' + JWT_SECRET).digest();
+function voiceMediaKey(roomSid) {
+  return crypto.createHmac('sha256', VOICE_MEDIA_SECRET).update(String(roomSid)).digest('base64');
 }
 
 let voiceRecheckQueued = false;
@@ -21317,7 +21529,7 @@ async function voiceTick() {
     recheckVoiceAccess();
     if (sweepDue) {
       const removals = voiceRoster.idleRemovals({
-        aloneMs: VOICE_ALONE_MS, idleMs: VOICE_IDLE_MS,
+        ...voiceSettings(),
         // Our own voice rooms only — never another node's on a shared project.
         applies: (room) => {
           const kind = classifyRoom(room);
@@ -21411,7 +21623,7 @@ app.post('/api/waves/:waveId/call/token', authenticateToken, async (req, res) =>
     });
 
     // Generate JWT token
-    const token = await at.toJwt();
+    const token = await livekitJwt(at);
     callTokenIssuedAt.set(waveId, Date.now());
 
     console.log(`🎤 Generated LiveKit token for user ${userId} (${user.handle}) to join wave ${waveId}`);
@@ -25267,6 +25479,7 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
         communityId: req.params.id, name, slug,
         description: chDesc.value,
         type: req.body.type || 'text',
+        stage: req.body.type === 'voice' && req.body.stage === true,
         visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
         sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
         createdBy: req.user.userId,
@@ -25313,6 +25526,13 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
   }
   if (['members', 'restricted'].includes(req.body.visibility)) fields.visibility = req.body.visibility;
   if (Number.isInteger(req.body.sortOrder)) fields.sort_order = req.body.sortOrder;
+  if (req.body.stage !== undefined) {
+    if (typeof req.body.stage !== 'boolean') return res.status(400).json({ error: 'stage must be true or false' });
+    if (db.getChannelById(req.params.channelId)?.type !== 'voice') {
+      return res.status(400).json({ error: 'Only a voice channel can be a stage' });
+    }
+    fields.stage = req.body.stage ? 1 : 0;
+  }
 
   const channel = inCommunityTransaction(() => {
     const channel = db.updateChannel(req.params.channelId, fields);
@@ -25327,6 +25547,13 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
     });
     return channel;
   });
+  if (fields.stage !== undefined && channel?.type === 'voice') {
+    // Everyone in the room is re-permissioned, and everyone watching the
+    // channel learns it is (or is no longer) a stage.
+    const room = voiceRoomName(channel.id);
+    queueVoicePermissions(room);
+    publishRoomPresence(room);
+  }
   res.json({ channel });
 });
 
@@ -25510,54 +25737,59 @@ app.post('/api/communities/:id/channels/:channelId/voice/token', authenticateTok
   if (!channel) return;
   if (!LIVEKIT_URL || !livekitRoomService) return res.status(503).json({ error: 'Voice is not configured on this server' });
 
-  const caps = communityAuthz.channelCapabilities(db, communityActor(req), channel);
+  const room = voiceRoomName(channel.id);
+  const { caps, sources, hosting, onStage } = voiceSourcesFor(channel, req.user.userId, room);
   if (!caps.has(CommunityCaps.VOICE_CONNECT)) return res.status(403).json({ error: 'You cannot join this voice channel' });
 
-  const room = voiceRoomName(channel.id);
   const limit = communityLimits.CAPS.voiceParticipantsPerChannel;
   if (!voiceRoster.has(room, req.user.userId) && voiceRoster.count(room) >= limit) {
     return res.status(409).json({ error: `This voice channel is full (${limit} people)`, limit });
   }
 
-  // Microphone, camera and screen each need their own capability. An EMPTY
-  // canPublishSources means "no restriction" to LiveKit, so someone allowed to
-  // publish nothing gets canPublish: false rather than an empty list.
-  const sources = [];
-  if (caps.has(CommunityCaps.VOICE_SPEAK)) sources.push(TrackSource.MICROPHONE);
-  if (caps.has(CommunityCaps.VOICE_VIDEO)) sources.push(TrackSource.CAMERA);
-  if (caps.has(CommunityCaps.VOICE_SCREEN)) sources.push(TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO);
-
   const user = db.findUserById(req.user.userId);
   const userName = user?.displayName || user?.handle || 'Unknown';
   try {
+    // The room has to exist before the token is useful, because its session id
+    // is what the media key is made from. CreateRoom on a live room returns
+    // that room. The room carries the participant limit too, so LiveKit
+    // enforces it even against a token issued just before the room filled.
+    const roomInfo = await livekitRoomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: limit });
+    if (!roomInfo?.sid) throw new Error('LiveKit did not return a room id');
+
     // Ten minutes: long enough to connect. LiveKit refreshes the token on a
     // live connection, and leaving the room is enforced by removal, not expiry.
+    // What it may publish is voiceSourcesFor()'s answer, the same one applied
+    // to live connections afterwards.
     const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, { identity: req.user.userId, name: userName, ttl: '10m' });
-    at.addGrant({
-      roomJoin: true, room,
-      canSubscribe: true,
-      canPublish: sources.length > 0,
-      ...(sources.length ? { canPublishSources: sources } : {}),
-      canPublishData: false,
-    });
-    const token = await at.toJwt();
-
-    // The room carries the participant limit too, so LiveKit enforces it even
-    // against a token issued just before the room filled. Best effort: LiveKit
-    // creates the room on first join anyway, and the check above still stands.
-    livekitRoomService.createRoom({ name: room, emptyTimeout: 60, maxParticipants: limit })
-      .catch(err => console.warn(`[voice] createRoom ${room}:`, err.message));
+    at.addGrant({ roomJoin: true, room, ...voicePublishPermission(sources) });
+    const token = await livekitJwt(at);
+    voiceAppliedSources.set(voiceAppliedKey(room, req.user.userId), JSON.stringify(sources));
 
     res.json({
       token, url: LIVEKIT_URL, roomName: room, identity: req.user.userId, userName,
       // Decided 2026-10-16: joining never broadcasts a room you did not mean to.
       startMuted: true,
+      // What the client may offer now. It changes during the call (a host
+      // brings you up, the camera limit is reached) and the client follows
+      // LiveKit's permission updates from here on.
       can: {
+        speak: sources.includes(TrackSource.MICROPHONE),
+        video: sources.includes(TrackSource.CAMERA),
+        screen: sources.includes(TrackSource.SCREEN_SHARE),
+        moderate: hosting,
+      },
+      // What the member's roles allow at all, so the client can tell "the
+      // cameras are full" from "you may not use a camera here".
+      rights: {
         speak: caps.has(CommunityCaps.VOICE_SPEAK),
         video: caps.has(CommunityCaps.VOICE_VIDEO),
         screen: caps.has(CommunityCaps.VOICE_SCREEN),
-        moderate: caps.has(CommunityCaps.VOICE_MODERATE),
       },
+      stage: Boolean(channel.stage),
+      onStage,
+      cameraLimit: communityLimits.CAPS.voiceCamerasPerChannel,
+      // The client encrypts and decrypts all media with this; LiveKit never has it.
+      e2ee: { key: voiceMediaKey(roomInfo.sid), roomSid: roomInfo.sid },
     });
   } catch (err) {
     console.error('[voice] token failed:', err.message);
@@ -25571,12 +25803,14 @@ app.get('/api/communities/:id/voice', authenticateToken, (req, res) => {
   if (!requireFeature('voiceChannels', res)) return;
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_CHANNEL)) return;
   const channels = {};
+  const stages = {};
   for (const c of db.listChannels(req.params.id)) {
     if (c.type !== 'voice') continue;
     if (!communityAuthz.canInChannel(db, communityActor(req), c, CommunityCaps.VIEW_CHANNEL)) continue;
     channels[c.id] = presenceView(voiceRoomName(c.id));
+    stages[c.id] = Boolean(c.stage);
   }
-  res.json({ channels });
+  res.json({ channels, stages });
 });
 
 /** The moderator side: `voice.moderate` in this channel, and rank over the target. */
@@ -25629,6 +25863,104 @@ app.delete('/api/communities/:id/channels/:channelId/voice/participants/:userId'
   db.logCommunityAudit(req.params.id, {
     actorId: req.user.userId, action: 'voice.disconnect', targetType: 'user', targetId: req.params.userId,
     metadata: { channel: target.channel.id },
+  });
+  res.json({ success: true });
+});
+
+// ----- Stage channels (v2.119.0) -----
+//
+// Hosts (voice.moderate) speak; everyone else listens, can raise a hand, and
+// speaks once a host brings them up. Being brought up is recorded in the
+// person's LiveKit metadata and turned into a publish permission by
+// applyVoicePermissions(), like every other rule.
+
+// Raise or lower your own hand.
+app.post('/api/communities/:id/channels/:channelId/voice/hand', authenticateToken, apiLimiter, async (req, res) => {
+  const channel = visibleVoiceChannel(req, res);
+  if (!channel) return;
+  if (!channel.stage) return res.status(400).json({ error: 'Hands are for stage channels' });
+  const room = voiceRoomName(channel.id);
+  if (!voiceRoster.has(room, req.user.userId)) {
+    // Joined moments ago, before the webhook or the next reconcile said so.
+    // A node with no webhook configured would otherwise refuse every hand
+    // raised in the first ten seconds.
+    const info = await livekitRoomService.getParticipant(room, req.user.userId).catch(() => null);
+    if (!info || !voiceRoster.noteJoined(room, info)) return res.status(409).json({ error: 'Join the channel first' });
+  }
+  const raised = req.body?.raised === true;
+  try {
+    await setVoiceMeta(room, req.user.userId, { hand: raised });
+    res.json({ success: true, raised });
+  } catch (err) {
+    console.error('[voice] hand failed:', err.message);
+    res.status(502).json({ error: 'Could not do that just now' });
+  }
+});
+
+// Bring someone up to speak, or back to the audience.
+app.post('/api/communities/:id/channels/:channelId/voice/participants/:userId/speaker', authenticateToken, apiLimiter, async (req, res) => {
+  const target = voiceModerationTarget(req, res);
+  if (!target) return;
+  if (!target.channel.stage) return res.status(400).json({ error: 'Only a stage channel has an audience' });
+  const speaker = req.body?.speaker === true;
+  try {
+    await setVoiceMeta(target.room, req.params.userId, { speaker, hand: false });
+  } catch (err) {
+    console.error('[voice] speaker change failed:', err.message);
+    return res.status(502).json({ error: 'Could not do that just now' });
+  }
+  queueVoicePermissions(target.room);
+  voiceNotice(req.params.userId, target.channel, speaker ? 'speaker' : 'audience');
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: speaker ? 'voice.speaker' : 'voice.audience', targetType: 'user', targetId: req.params.userId,
+    metadata: { channel: target.channel.id },
+  });
+  res.json({ success: true, speaker });
+});
+
+// ----- Moving someone to another voice channel (v2.119.0) -----
+//
+// The person's app does the moving: it leaves and joins the other channel with
+// a token of its own, which is checked like any join and carries that room's
+// media key. A moderator cannot move someone into a channel they could not
+// join themselves. If the app does not follow within MOVE_GRACE_MS, they are
+// removed from the channel they were moved out of, so a move is never weaker
+// than a disconnect.
+const VOICE_MOVE_GRACE_MS = Math.max(1000, Number(process.env.VOICE_MOVE_GRACE_MS) || 15_000);
+
+app.post('/api/communities/:id/channels/:channelId/voice/participants/:userId/move', authenticateToken, apiLimiter, async (req, res) => {
+  const target = voiceModerationTarget(req, res);
+  if (!target) return;
+  const dest = db.getChannelById(String(req.body?.channelId || ''));
+  if (!dest || dest.community_id !== req.params.id || dest.type !== 'voice' ||
+      !communityAuthz.canInChannel(db, communityActor(req), dest, CommunityCaps.VIEW_CHANNEL)) {
+    return res.status(404).json({ error: 'No such voice channel' });
+  }
+  if (dest.id === target.channel.id) return res.status(400).json({ error: 'They are already there' });
+  if (!communityAuthz.canInChannel(db, communityActor(req), dest, CommunityCaps.VOICE_MODERATE)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!communityAuthz.canInChannel(db, { kind: 'user', userId: req.params.userId }, dest, CommunityCaps.VOICE_CONNECT)) {
+    return res.status(409).json({ error: 'They cannot join that channel' });
+  }
+  const destRoom = voiceRoomName(dest.id);
+  if (voiceRoster.count(destRoom) >= communityLimits.CAPS.voiceParticipantsPerChannel) {
+    return res.status(409).json({ error: 'That channel is full' });
+  }
+
+  broadcast({
+    type: 'voice_move', communityId: req.params.id,
+    fromChannelId: target.channel.id, channelId: dest.id, name: dest.name,
+  }, [req.params.userId]);
+  setTimeout(() => {
+    if (voiceRoster.has(target.room, req.params.userId)) {
+      ejectFromRoom(target.room, req.params.userId, 'moved, app did not follow');
+    }
+  }, VOICE_MOVE_GRACE_MS).unref();
+
+  db.logCommunityAudit(req.params.id, {
+    actorId: req.user.userId, action: 'voice.move', targetType: 'user', targetId: req.params.userId,
+    metadata: { from: target.channel.id, to: dest.id },
   });
   res.json({ success: true });
 });

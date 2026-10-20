@@ -146,15 +146,31 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
     }
   };
 
+  // A stage is a voice channel run differently (v2.119.0), so it is a third
+  // choice here and a switch on the channel afterwards, not a separate type.
+  const toggleStage = async (channel) => {
+    try {
+      await fetchAPI(`/communities/${community.id}/channels/${channel.id}`, {
+        method: 'PATCH', body: { stage: !channel.stage },
+      });
+      showToast(channel.stage ? `${channel.name} is an ordinary voice channel` : `${channel.name} is a stage`, 'success');
+      load();
+      onChanged && onChanged();
+    } catch (err) {
+      showToast(err?.error || 'Could not change that channel', 'error');
+    }
+  };
+
   const createChannel = async () => {
     const name = channelName.trim();
     if (!name) return;
     try {
-      const type = voiceEnabled ? channelType : 'text';
-      await fetchAPI(`/communities/${community.id}/channels`, { method: 'POST', body: { name, type } });
+      const choice = voiceEnabled ? channelType : 'text';
+      const type = choice === 'stage' ? 'voice' : choice;
+      await fetchAPI(`/communities/${community.id}/channels`, { method: 'POST', body: { name, type, stage: choice === 'stage' } });
       setChannelName('');
       setChannelType('text');
-      showToast(type === 'voice' ? 'Voice channel created' : 'Channel created', 'success');
+      showToast(choice === 'stage' ? 'Stage created' : type === 'voice' ? 'Voice channel created' : 'Channel created', 'success');
       load();
       onChanged && onChanged();
     } catch (err) {
@@ -269,9 +285,16 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
                 </div>
               ) : (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
-                  <span style={{ fontSize: '0.82rem', minWidth: 0 }}>{ch.type === 'voice' ? '🔊' : '#'} {ch.name}</span>
+                  <span style={{ fontSize: '0.82rem', minWidth: 0 }}>{ch.type === 'voice' ? (ch.stage ? '🎤' : '🔊') : '#'} {ch.name}</span>
                   {can('channel.manage') && (
-                    <span style={{ display: 'flex', gap: '0.3rem', flexShrink: 0 }}>
+                    <span style={{ display: 'flex', gap: '0.3rem', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {ch.type === 'voice' && (
+                        <button
+                          onClick={() => toggleStage(ch)}
+                          style={{ ...action, marginTop: 0 }}
+                          title={ch.stage ? 'Let everyone speak' : 'Only hosts speak; others raise a hand'}
+                        >{ch.stage ? 'Not a stage' : 'Make stage'}</button>
+                      )}
                       <button
                         onClick={() => { setRenaming(ch.id); setRenameTo(ch.name); setConfirmDelete(null); }}
                         style={{ ...action, marginTop: 0 }}
@@ -301,7 +324,7 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
           />
           {voiceEnabled && (
             <div role="radiogroup" aria-label="Channel type" style={{ display: 'flex', gap: '0.35rem', marginTop: '0.4rem' }}>
-              {[['text', '# Text'], ['voice', '🔊 Voice']].map(([value, text]) => (
+              {[['text', '# Text'], ['voice', '🔊 Voice'], ['stage', '🎤 Stage']].map(([value, text]) => (
                 <button
                   key={value}
                   role="radio"
@@ -316,11 +339,13 @@ const CommunitySettingsPanel = ({ community, capabilities, fetchAPI, showToast, 
               ))}
             </div>
           )}
-          <button onClick={createChannel} style={action}>{channelType === 'voice' && voiceEnabled ? 'Create voice channel' : 'Create channel'}</button>
+          <button onClick={createChannel} style={action}>{!voiceEnabled || channelType === 'text' ? 'Create channel' : channelType === 'stage' ? 'Create stage' : 'Create voice channel'}</button>
           <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.3rem' }}>
             {channelType === 'voice' && voiceEnabled
               ? 'A voice channel is a room people drop in and out of, with voice, video and screen sharing. It does not hold ' + T.waves + '.'
-              : <>A channel holds {T.waves}. It is not a conversation itself.</>}
+              : channelType === 'stage' && voiceEnabled
+                ? 'A stage is a voice channel where the hosts (moderators) speak and everyone else listens, raising a hand to be brought up.'
+                : <>A channel holds {T.waves}. It is not a conversation itself.</>}
           </div>
         </div>
       )}

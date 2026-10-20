@@ -58,6 +58,10 @@ export const CAPS = Object.freeze({
   // a lively voice room, not a lecture: every participant receives every other
   // participant's audio, and video multiplies that.
   voiceParticipantsPerChannel: 25,
+  // Cameras on at once in one voice channel (v2.119.0). Each camera goes to
+  // everyone in the room, so this bounds the bandwidth a room can use, and six
+  // tiles is as many as a phone can usefully show. Screen shares are separate.
+  voiceCamerasPerChannel: 6,
 });
 
 /**

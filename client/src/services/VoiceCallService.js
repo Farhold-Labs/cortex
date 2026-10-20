@@ -31,6 +31,13 @@ class VoiceCallService {
     // in it comes from the token's grants, mirrored in `can`.
     this.voiceChannel = null; // { communityId, channelId, name }
     this.can = { ...ALL_ALLOWED };
+    // v2.119.0, voice channels only:
+    this.rights = { ...ALL_ALLOWED }; // what the member's roles allow at all
+    this.stage = false;               // the channel is a stage
+    this.onStage = true;              // ...and we are up on it
+    this.handRaised = false;
+    this.cameraLimit = null;
+    this.e2ee = null;                 // { key, roomSid }: media is encrypted against LiveKit
     this.isDeafened = false;
     // Why the last voice connection ended, if the server ended it.
     this.endedBy = null; // 'removed' | 'closed' | null
@@ -110,6 +117,12 @@ class VoiceCallService {
       dockPosition: this.dockPosition,
       voiceChannel: this.voiceChannel,
       can: this.can,
+      rights: this.rights,
+      stage: this.stage,
+      onStage: this.onStage,
+      handRaised: this.handRaised,
+      cameraLimit: this.cameraLimit,
+      e2ee: this.e2ee,
       isDeafened: this.isDeafened,
       endedBy: this.endedBy,
     };
@@ -225,6 +238,11 @@ class VoiceCallService {
     this.currentWaveId = waveId;
     this.voiceChannel = null;
     this.can = { ...ALL_ALLOWED };
+    this.rights = { ...ALL_ALLOWED };
+    this.stage = false;
+    this.onStage = true;
+    this.handRaised = false;
+    this.e2ee = null;
     this.endedBy = null;
     this.error = null;
 
@@ -301,6 +319,12 @@ class VoiceCallService {
     }
 
     this.can = { ...ALL_ALLOWED, ...(data.can || {}) };
+    this.rights = { ...ALL_ALLOWED, ...(data.rights || data.can || {}) };
+    this.stage = data.stage === true;
+    this.onStage = data.onStage !== false;
+    this.handRaised = false;
+    this.cameraLimit = data.cameraLimit || null;
+    this.e2ee = data.e2ee || null;
     this.isMuted = data.startMuted !== false || !this.can.speak;
     this.isCameraOff = true;
     this.isScreenSharing = false;
@@ -331,6 +355,71 @@ class VoiceCallService {
       this.endedBy = endedBy;
       this.notifySubscribers();
     });
+  }
+
+  /**
+   * LiveKit changed what we may publish (v2.119.0): a host brought us up or
+   * sent us back, the cameras filled up, a role changed. Follow it, and switch
+   * off whatever is no longer allowed rather than leave a control that fails.
+   */
+  setLivePermissions({ speak, video, screen }) {
+    const can = { ...this.can, speak, video, screen };
+    if (JSON.stringify(can) === JSON.stringify(this.can)) return;
+    this.can = can;
+    if (this.stage) this.onStage = speak || video || screen;
+    if (!speak) this.isMuted = true;
+    if (!video) this.isCameraOff = true;
+    if (!screen) this.isScreenSharing = false;
+    if (this.onStage) this.handRaised = false;
+    this.notifySubscribers();
+  }
+
+  /** Raise or lower our hand on a stage. */
+  async raiseHand(raised) {
+    if (!this.voiceChannel || !this.authToken) return { error: 'Not in a voice channel' };
+    const { communityId, channelId } = this.voiceChannel;
+    try {
+      const response = await fetch(`${BASE_URL}/api/communities/${communityId}/channels/${channelId}/voice/hand`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raised }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return { error: data.error || 'That did not work' };
+      this.handRaised = raised;
+      this.notifySubscribers();
+      return { ok: true };
+    } catch {
+      return { error: 'That did not work' };
+    }
+  }
+
+  setHandRaised(raised) {
+    if (this.handRaised === raised) return;
+    this.handRaised = raised;
+    this.notifySubscribers();
+  }
+
+  /** Something stopped this voice channel being joinable here (an old browser). */
+  failVoice(message) {
+    const channel = this.voiceChannel;
+    this.leaveCall().then(() => {
+      this.error = message;
+      this.endedBy = channel ? 'unsupported' : null;
+      this.notifySubscribers();
+    });
+  }
+
+  /** The media key no longer matches the room (it restarted between token and join): join again. */
+  async rejoinVoiceChannel() {
+    const channel = this.voiceChannel;
+    if (!channel || this.rejoining) return;
+    this.rejoining = true;
+    try {
+      await this.joinVoiceChannel(channel);
+    } finally {
+      this.rejoining = false;
+    }
   }
 
   /** The room muted our microphone (a moderator did it). Show it as muted. */
@@ -364,6 +453,12 @@ class VoiceCallService {
     this.currentWaveId = null;
     this.voiceChannel = null;
     this.can = { ...ALL_ALLOWED };
+    this.rights = { ...ALL_ALLOWED };
+    this.stage = false;
+    this.onStage = true;
+    this.handRaised = false;
+    this.cameraLimit = null;
+    this.e2ee = null;
     this.isDeafened = false;
     this.participants = [];
     this.audioLevel = 0;
@@ -391,10 +486,18 @@ class VoiceCallService {
   }
 
   toggleCamera() {
+    if (this.isCameraOff && !this.can.video) return;
     this.isCameraOff = !this.isCameraOff;
     this.notifySubscribers();
     console.log(`🎥 [Service] Camera toggled: ${this.isCameraOff ? 'OFF' : 'ON'}`);
     // Note: Actual camera on/off happens in LiveKitCallRoom component via LiveKit API
+  }
+
+  /** The camera could not be turned on (refused by the room): show it off. */
+  cameraFailed() {
+    if (this.isCameraOff) return;
+    this.isCameraOff = true;
+    this.notifySubscribers();
   }
 
   setScreenSharing(isSharing) {
