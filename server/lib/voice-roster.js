@@ -20,6 +20,11 @@
  * Mute state is not in any webhook, so idle detection reads it from the
  * reconcile pass, which is why the idle sweep always reconciles first.
  *
+ * Stage state (v2.119.0) — who has been brought up to speak, whose hand is up —
+ * lives in each participant's LiveKit metadata, which only the server can set.
+ * LiveKit is then the store: a restart rebuilds it with everything else, and a
+ * speaker is not silently sent back to the audience by a deploy.
+ *
  * PROCESS-LOCAL, like the HLS sessions in media-proxy.js. A restart loses the
  * roster and the first reconcile rebuilds it.
  */
@@ -55,6 +60,16 @@ function sourceName(source) {
   return null;
 }
 
+/** Our part of a participant's LiveKit metadata. Anything unreadable is "nothing". */
+export function parseVoiceMeta(raw) {
+  try {
+    const m = JSON.parse(raw || '{}');
+    return { speaker: m?.speaker === true, hand: m?.hand === true };
+  } catch {
+    return { speaker: false, hand: false };
+  }
+}
+
 const toMs = (seconds) => {
   const n = Number(seconds);
   return Number.isFinite(n) && n > 0 ? n * 1000 : null;
@@ -84,7 +99,25 @@ export class VoiceRoster {
     if (!map) return [];
     return [...map.values()]
       .sort((a, b) => a.joinedAt - b.joinedAt)
-      .map(p => ({ identity: p.identity, name: p.name, joinedAt: p.joinedAt, sources: [...p.sources] }));
+      .map(p => ({
+        identity: p.identity, name: p.name, joinedAt: p.joinedAt, sources: [...p.sources],
+        cameraSince: p.cameraSince, speaker: p.meta.speaker, hand: p.meta.hand,
+      }));
+  }
+
+  /** Set our metadata flags for someone, as just written to LiveKit. */
+  setMeta(room, identity, meta) {
+    const p = this.rooms.get(room)?.get(identity);
+    if (!p) return false;
+    const next = { ...p.meta, ...meta };
+    if (next.speaker === p.meta.speaker && next.hand === p.meta.hand) return false;
+    p.meta = next;
+    this.onChange(room);
+    return true;
+  }
+
+  get(room, identity) {
+    return this.participants(room).find(p => p.identity === identity) || null;
   }
 
   /** Every occupied room's name. */
@@ -123,7 +156,13 @@ export class VoiceRoster {
     if (map.has(identity)) return false;
     const now = this.now();
     // Joining counts as activity: the idle clock starts at the join.
-    map.set(identity, { identity, name: name || identity, joinedAt: joinedAt || now, lastActiveAt: now, sources: new Set() });
+    map.set(identity, {
+      identity, name: name || identity, joinedAt: joinedAt || now, lastActiveAt: now, sources: new Set(),
+      // When their camera went on: the earliest cameras keep their place when
+      // a room has more than it allows (see the video limit in server.js).
+      cameraSince: null,
+      meta: { speaker: false, hand: false },
+    });
     this._settle(room);
     return true;
   }
@@ -132,6 +171,19 @@ export class VoiceRoster {
     const map = this.rooms.get(room);
     if (!map || !map.delete(identity)) return false;
     this._settle(room);
+    return true;
+  }
+
+  /**
+   * Someone LiveKit says is in a room, learned by asking it directly. Not a
+   * webhook, so it does not count as webhooks flowing.
+   */
+  noteJoined(room, info) {
+    if (!info?.identity) return false;
+    const added = this._join(room, info.identity, info.name, toMs(info.joinedAt));
+    const p = this.rooms.get(room).get(info.identity);
+    if (info.metadata !== undefined) p.meta = parseVoiceMeta(info.metadata);
+    if (added) this.onChange(room);
     return true;
   }
 
@@ -175,9 +227,11 @@ export class VoiceRoster {
         if (!p || !source) break;
         if (event.event === 'track_published') {
           p.sources.add(source);
+          if (source === 'camera' && !p.cameraSince) p.cameraSince = this.now();
           if (!event.track?.muted) p.lastActiveAt = this.now();
         } else {
           p.sources.delete(source);
+          if (source === 'camera') p.cameraSince = null;
         }
         changed = true;
         break;
@@ -222,6 +276,9 @@ export class VoiceRoster {
           if (!t.muted) active = true;
         }
         p.sources = sources;
+        if (!sources.has('camera')) p.cameraSince = null;
+        else if (!p.cameraSince) p.cameraSince = this.now();
+        if (info.metadata !== undefined) p.meta = parseVoiceMeta(info.metadata);
         if (active) p.lastActiveAt = this.now();
       }
       for (const identity of [...map.keys()]) if (!seen.has(identity)) map.delete(identity);
@@ -243,7 +300,13 @@ export class VoiceRoster {
    * wave calls keep their existing behaviour.
    *
    *   aloneMs  — the only person in the room for this long
-   *   idleMs   — every track muted or absent for this long
+   *   idleMs   — nobody in the room has had a live track for this long, and
+   *              then everyone goes
+   *
+   * Idle is a property of the ROOM (v2.119.0). It was per person, which
+   * disconnected a muted listener after an hour while others were still talking
+   * — and in a stage channel listening muted is the whole point. What costs
+   * money for nothing is a room where nobody is saying anything.
    */
   idleRemovals({ aloneMs, idleMs, applies = () => true }) {
     const now = this.now();
@@ -256,8 +319,9 @@ export class VoiceRoster {
         continue;
       }
       if (idleMs > 0) {
-        for (const p of map.values()) {
-          if (now - p.lastActiveAt >= idleMs) out.push({ room, identity: p.identity, reason: 'idle' });
+        const lastActive = Math.max(...[...map.values()].map(p => p.lastActiveAt));
+        if (now - lastActive >= idleMs) {
+          for (const p of map.values()) out.push({ room, identity: p.identity, reason: 'idle' });
         }
       }
     }

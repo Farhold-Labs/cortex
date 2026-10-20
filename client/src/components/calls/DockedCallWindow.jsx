@@ -1,6 +1,8 @@
-import React, { useRef, useCallback, useState } from 'react';
-import { LiveKitRoom, useParticipants, useLocalParticipant, RoomAudioRenderer, ParticipantTile, useTracks } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import React, { useRef, useCallback, useState, useEffect } from 'react';
+import { LiveKitRoom, useParticipants, useLocalParticipant, useRoomContext, RoomAudioRenderer, ParticipantTile, useTracks } from '@livekit/components-react';
+import { Track, Room, ExternalE2EEKeyProvider, isE2EESupported } from 'livekit-client';
+// The media encryption worker (v2.119.0), bundled as its own file by Vite.
+import E2EEWorker from 'livekit-client/e2ee-worker?worker';
 import { useDraggable } from '../../hooks/useDraggable.js';
 import { Avatar } from '../ui/SimpleComponents.jsx';
 
@@ -28,10 +30,28 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
     voiceCallRef.current.setConnectionState('disconnected');
   }, []);
 
-  if (!token || !url) return null;
-
   const audioDeviceId = voiceCall.selectedMic !== 'default' ? voiceCall.selectedMic : undefined;
   const videoDeviceId = voiceCall.selectedCamera !== 'default' ? voiceCall.selectedCamera : undefined;
+  const roomOptions = {
+    audioCaptureDefaults: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      deviceId: audioDeviceId
+    },
+    videoCaptureDefaults: {
+      resolution: { width: 1280, height: 720, frameRate: 30 },
+      deviceId: videoDeviceId
+    }
+  };
+
+  // Voice channels encrypt their media end to end against LiveKit (v2.119.0).
+  // The key comes with the join token; the Room is built with it before it
+  // connects, so not one packet leaves unencrypted.
+  const encrypted = useEncryptedRoom(token, voiceCall.e2ee, roomOptions, voiceCallRef);
+
+  if (!token || !url) return null;
+  if (voiceCall.e2ee && !encrypted) return null; // still setting up, or refused
 
   return (
     <LiveKitRoom
@@ -39,6 +59,7 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
       token={token}
       serverUrl={url}
       connect={true}
+      room={encrypted || undefined}
       // Only publish a microphone that is meant to be live. A voice channel is
       // joined muted, and with audio={true} the mic went out until the mute
       // effect caught up — a moment of open mic in a room full of people.
@@ -47,22 +68,16 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
       onConnected={handleConnected}
       onDisconnected={handleDisconnected}
       onError={handleError}
-      options={{
-        audioCaptureDefaults: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          deviceId: audioDeviceId
-        },
-        videoCaptureDefaults: {
-          resolution: { width: 1280, height: 720, frameRate: 30 },
-          deviceId: videoDeviceId
-        }
-      }}
+      options={roomOptions}
     >
       <RoomAudioRenderer muted={voiceCall.isDeafened} />
       <CallControls
         canSpeak={voiceCall.can.speak}
+        isVoiceChannel={Boolean(voiceCall.voiceChannel)}
+        expectedRoomSid={voiceCall.e2ee?.roomSid || null}
+        onWrongRoom={voiceCall.rejoinVoiceChannel}
+        onPermissions={voiceCall.setLivePermissions}
+        onCameraFailed={voiceCall.cameraFailed}
         onMutedByRoom={voiceCall.setMutedByRoom}
         isMuted={voiceCall.isMuted}
         isCameraOff={voiceCall.isCameraOff}
@@ -77,10 +92,85 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
   );
 });
 
+/**
+ * A LiveKit Room set up for end-to-end encrypted media, or null while it is
+ * being made. A browser without the encoded-transform APIs cannot take part —
+ * it would send clear media and hear noise — so it is refused with a reason.
+ */
+function useEncryptedRoom(token, e2ee, roomOptions, voiceCallRef) {
+  const [room, setRoom] = useState(null);
+  const optionsRef = useRef(roomOptions);
+  optionsRef.current = roomOptions;
+  useEffect(() => {
+    setRoom(null);
+    if (!token || !e2ee?.key) return undefined;
+    if (!isE2EESupported()) {
+      voiceCallRef.current.failVoice('This browser cannot join encrypted voice channels. Update it, or use the Cortex app.');
+      return undefined;
+    }
+    let cancelled = false;
+    const keyProvider = new ExternalE2EEKeyProvider();
+    const worker = new E2EEWorker();
+    const r = new Room({ ...optionsRef.current, e2ee: { keyProvider, worker } });
+    (async () => {
+      await keyProvider.setKey(e2ee.key);
+      await r.setE2EEEnabled(true);
+      if (!cancelled) setRoom(r);
+    })().catch(err => {
+      console.error('🔒 Media encryption setup failed:', err);
+      if (!cancelled) voiceCallRef.current.failVoice('Could not set up encryption for this voice channel');
+    });
+    return () => {
+      cancelled = true;
+      r.disconnect().catch(() => {});
+      worker.terminate();
+    };
+  }, [token, e2ee?.key, voiceCallRef]);
+  return room;
+}
+
+// LiveKit's TrackSource numbers, as they appear in a participant's permissions.
+const PERMISSION_SOURCE = { camera: 1, microphone: 2, screen: 3 };
+
 // Call controls that sync with LiveKit
-const CallControls = ({ canSpeak = true, onMutedByRoom, isMuted, isCameraOff, isScreenSharing, setParticipants, setAudioLevel, setRoom, setScreenSharing }) => {
+const CallControls = ({ canSpeak = true, isVoiceChannel = false, expectedRoomSid = null, onWrongRoom, onPermissions, onCameraFailed, onMutedByRoom, isMuted, isCameraOff, isScreenSharing, setParticipants, setAudioLevel, setRoom, setScreenSharing }) => {
   const participants = useParticipants();
   const { localParticipant } = useLocalParticipant();
+  const room = useRoomContext();
+
+  // The key is made from the room's session. If the room closed and opened
+  // again between the token and the join, everyone else has the new session's
+  // key and we have the old one: join again for a fresh token.
+  useEffect(() => {
+    if (!expectedRoomSid || !room || !onWrongRoom) return undefined;
+    let done = false;
+    const check = async () => {
+      if (done) return;
+      try {
+        const sid = await room.getSid();
+        if (!done && sid && sid !== expectedRoomSid) { done = true; onWrongRoom(); }
+      } catch { /* not connected yet */ }
+    };
+    room.on('connected', check);
+    if (room.state === 'connected') check();
+    return () => { done = true; room.off('connected', check); };
+  }, [room, expectedRoomSid, onWrongRoom]);
+
+  // What we may publish can change during a voice channel call (v2.119.0): a
+  // host brings us up, the cameras fill, a role changes. LiveKit tells us.
+  useEffect(() => {
+    if (!isVoiceChannel || !localParticipant || !onPermissions) return undefined;
+    const update = () => {
+      const perm = localParticipant.permissions;
+      if (!perm) return;
+      const list = perm.canPublishSources || [];
+      const may = (src) => Boolean(perm.canPublish) && (list.length === 0 || list.includes(src));
+      onPermissions({ speak: may(PERMISSION_SOURCE.microphone), video: may(PERMISSION_SOURCE.camera), screen: may(PERMISSION_SOURCE.screen) });
+    };
+    localParticipant.on('participantPermissionsChanged', update);
+    update();
+    return () => { localParticipant.off('participantPermissionsChanged', update); };
+  }, [isVoiceChannel, localParticipant, onPermissions]);
 
   React.useEffect(() => {
     const participantIds = participants.map(p => p.identity);
@@ -136,18 +226,23 @@ const CallControls = ({ canSpeak = true, onMutedByRoom, isMuted, isCameraOff, is
             await localParticipant.setCameraEnabled(true);
           }
         } else {
+          // Off means unpublished, not muted (v2.119.0). A muted camera was
+          // still a published one: it went on showing as 📷 in the channel
+          // list, and it held one of the room's camera places.
           const cameraPub = localParticipant.getTrackPublication(Track.Source.Camera);
-          if (cameraPub) {
-            await cameraPub.mute();
+          if (cameraPub?.track) {
+            await localParticipant.unpublishTrack(cameraPub.track);
           }
         }
       } catch (err) {
         console.error('🎥 Failed to change camera state:', err);
+        // Refused (the cameras are full, or no permission): show it as off.
+        if (!isCameraOff && onCameraFailed) onCameraFailed();
       }
     };
 
     updateCamera();
-  }, [isCameraOff, localParticipant]);
+  }, [isCameraOff, localParticipant, onCameraFailed]);
 
   // Sync screen share state with LiveKit
   React.useEffect(() => {
@@ -228,6 +323,10 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
 
   const handleLeaveCall = useCallback(() => {
     voiceCall.leaveCall();
+  }, [voiceCall]);
+
+  const handleToggleHand = useCallback(() => {
+    voiceCall.raiseHand(!voiceCall.handRaised);
   }, [voiceCall]);
 
   // No token means no active call - don't render anything
@@ -320,6 +419,11 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
     flexShrink: 0,
   };
 
+  // A stage listener: no microphone, a hand to raise instead (v2.119.0).
+  const inAudience = Boolean(voiceCall.voiceChannel && voiceCall.stage && !voiceCall.onStage);
+  // Allowed a camera, but the room's camera places are taken.
+  const camerasFull = Boolean(voiceCall.voiceChannel && voiceCall.onStage && voiceCall.rights?.video && !voiceCall.can.video);
+
   // Single LiveKitRoom instance that persists across minimize/maximize/hide states
   // Wrap everything in LiveKitRoom so we have ONE connection only
   return (
@@ -344,7 +448,7 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
             }}>
               {voiceCall.voiceChannel
-                ? <>🔊 {voiceCall.voiceChannel.name}</>
+                ? <>{!voiceCall.dockMinimized && voiceCall.e2ee ? <span title="Encrypted end to end: LiveKit cannot hear or see it">🔒 </span> : null}{voiceCall.stage ? '🎤' : '🔊'} {voiceCall.voiceChannel.name}</>
                 : <>{voiceCall.dockMinimized ? '🎤 In Call' : '📞 Call'}</>} • {voiceCall.participants.length || 0}{voiceCall.voiceChannel ? '' : ` participant${voiceCall.participants.length !== 1 ? 's' : ''}`}
             </span>
             {voiceCall.audioLevel > 0.3 && (
@@ -363,6 +467,17 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
                     aria-label={voiceCall.isMuted ? 'Unmute' : 'Mute'}
                   >
                     {voiceCall.isMuted ? '🔇' : '🎤'}
+                  </button>
+                )}
+                {inAudience && (
+                  <button
+                    style={{ ...barButtonStyle, ...(voiceCall.handRaised ? { background: 'var(--accent-amber)', color: 'var(--bg-base)' } : {}) }}
+                    onClick={handleToggleHand}
+                    data-draggable="false"
+                    title={voiceCall.handRaised ? 'Lower your hand' : 'Raise your hand to speak'}
+                    aria-label={voiceCall.handRaised ? 'Lower hand' : 'Raise hand'}
+                  >
+                    ✋
                   </button>
                 )}
                 {voiceCall.voiceChannel && (
@@ -473,6 +588,19 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
               >
                 {voiceCall.isMuted ? '🔇 Muted' : '🎤 Mute'}
               </button>}
+              {inAudience && (
+                <button
+                  style={{
+                    ...controlButtonStyle,
+                    background: voiceCall.handRaised ? 'var(--accent-amber)' : 'transparent',
+                    borderColor: voiceCall.handRaised ? 'var(--accent-amber)' : 'var(--accent-teal)',
+                    color: voiceCall.handRaised ? 'var(--bg-base)' : 'var(--accent-teal)',
+                  }}
+                  onClick={handleToggleHand}
+                >
+                  {voiceCall.handRaised ? '✋ Hand raised' : '✋ Raise hand'}
+                </button>
+              )}
               {voiceCall.voiceChannel && (
                 <button
                   style={{
@@ -497,6 +625,12 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
               >
                 {voiceCall.isCameraOff ? '📹 Camera Off' : '📷 Camera On'}
               </button>}
+              {camerasFull && (
+                <button style={{ ...controlButtonStyle, opacity: 0.5, cursor: 'default' }} disabled
+                  title={`This channel allows ${voiceCall.cameraLimit || 'a few'} cameras at once`}>
+                  📹 Cameras full
+                </button>
+              )}
               {voiceCall.can.screen && <button
                 style={{
                   ...controlButtonStyle,

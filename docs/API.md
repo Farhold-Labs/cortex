@@ -4550,7 +4550,7 @@ See [Scoped Jellyfin/Plex media sharing](MEDIA-SECURITY.md) for the grant API, i
 
 A Community channel of type `voice` is a LiveKit room that always exists, named `vc-<channelId>`. It holds no waves. Opt-in instance feature `voiceChannels` (403 `FEATURE_DISABLED` when off), on top of `communities`; it needs LiveKit. Design: `docs/communities/03-voice-channels.md`.
 
-**Channel type.** `POST /api/communities/:id/channels` accepts `type: "voice"`. It answers 403 when `voiceChannels` is off, 503 without LiveKit, and 400 for an unknown type. A channel cannot be converted to or from voice (`PATCH` → 400). Starting or filing a wave in a voice channel → 409.
+**Channel type.** `POST /api/communities/:id/channels` accepts `type: "voice"`, and with it `stage: true` (v2.119.0). It answers 403 when `voiceChannels` is off, 503 without LiveKit, and 400 for an unknown type. A channel cannot be converted to or from voice (`PATCH` → 400), but `PATCH { stage: true|false }` switches a voice channel to or from a stage (400 for other channels or a non-boolean). Channels carry `stage` (0/1). Starting or filing a wave in a voice channel → 409.
 
 **Capabilities** (Community roles and channel overrides, deny wins):
 
@@ -4566,10 +4566,13 @@ Communities created before v2.118.0 had these added to their built-in roles once
 
 | Method | Path | Who | Notes |
 |---|---|---|---|
-| POST | `/api/communities/:id/channels/:channelId/voice/token` | `voice.connect` in the channel | → `{ token, url, roomName, identity, userName, startMuted: true, can: { speak, video, screen, moderate } }`. The token's `canPublishSources` follows the capabilities; with none of speak/video/screen it has `canPublish: false`. TTL 10 min. 404 if the channel cannot be seen, 400 if not a voice channel, 409 when full (`limit`, 25) |
-| GET | `/api/communities/:id/voice` | `channel.view` | `{ channels: { <channelId>: [{ userId, displayName, handle, avatar, avatarUrl, sources }] } }` for every voice channel the caller can see |
+| POST | `/api/communities/:id/channels/:channelId/voice/token` | `voice.connect` in the channel | → `{ token, url, roomName, identity, userName, startMuted: true, can: { speak, video, screen, moderate }, rights: { speak, video, screen }, stage, onStage, cameraLimit, e2ee: { key, roomSid } }`. `can` is what may be published now (stage and camera limit applied), `rights` what the member's roles allow. The token's `canPublishSources` matches `can`; with nothing it has `canPublish: false`. TTL 10 min, dated now. 404 if the channel cannot be seen, 400 if not a voice channel, 409 when full (`limit`, 25) |
+| GET | `/api/communities/:id/voice` | `channel.view` | `{ channels: { <channelId>: [{ userId, displayName, handle, avatar, avatarUrl, sources, onStage, speaker, hand }] }, stages: { <channelId>: bool } }` for every voice channel the caller can see |
 | POST | `/api/communities/:id/channels/:channelId/voice/participants/:userId/mute` | `voice.moderate` and rank over them | mutes their microphone in the room; they may unmute. Audited `voice.mute` |
 | DELETE | `/api/communities/:id/channels/:channelId/voice/participants/:userId` | `voice.moderate` and rank over them | disconnects them. Audited `voice.disconnect` |
+| POST | `/api/communities/:id/channels/:channelId/voice/participants/:userId/move` | `voice.moderate` in both channels and rank over them | `{ channelId }`: another voice channel in the same Community. 409 if they lack `voice.connect` there or it is full. Their app gets `voice_move` and rejoins; if it has not left within 15 s it is removed. Audited `voice.move` (v2.119.0) |
+| POST | `/api/communities/:id/channels/:channelId/voice/participants/:userId/speaker` | `voice.moderate` and rank over them | stage only: `{ speaker: true }` brings them up, `false` sends them to the audience; lowers their hand. Audited `voice.speaker` / `voice.audience` (v2.119.0) |
+| POST | `/api/communities/:id/channels/:channelId/voice/hand` | in the room | stage only: `{ raised: true|false }` for yourself (v2.119.0) |
 | POST | `/api/livekit/webhook` | LiveKit (signed) | `Content-Type: application/webhook+json`, verified with the API key and secret; 401 otherwise. Configure it in the LiveKit project as `https://<node>/api/livekit/webhook` |
 
 **Access is re-checked, not just checked at join.**
@@ -4577,9 +4580,18 @@ Communities created before v2.118.0 had these added to their built-in roles once
 - Deleting a voice channel or a Community closes its rooms.
 - A room whose channel the node does not have is ignored. That is another node's room on a shared LiveKit project.
 
-**Idle disconnect.** Someone alone in a voice room for `VOICE_ALONE_MINUTES` (default 5), or with every track muted for `VOICE_IDLE_MINUTES` (default 60), is disconnected. Wave calls are not affected.
+**What each person may publish is re-applied live** (v2.119.0), with LiveKit's UpdateParticipant, whenever it could change: a join or leave, a camera on or off, a role or override change, a stage change. LiveKit unpublishes anything no longer allowed.
+- **Camera limit:** 6 cameras at once per channel (`voiceCamerasPerChannel`). With six on, nobody else may start one; a seventh that slips in is taken down (the latest goes), and its owner gets `voice_notice` `video_full`.
+- **Stage:** hosts (`voice.moderate`) and people they bring up publish; the audience publishes nothing. Speaker and raised-hand flags live in the participant's LiveKit metadata, which only the server writes.
 
-WebSocket event `voice_presence`: `{ communityId, channelId, participants }`, the same shape as the GET above. It is sent to signed-in users who can see the channel, whenever someone joins, leaves, or publishes or unpublishes a track.
+**Encryption.** Voice channel media is end-to-end encrypted against LiveKit. `e2ee.key` is an HMAC of the room's LiveKit session id (`roomSid`) under a secret derived from `JWT_SECRET`; LiveKit never receives it. A new room session means a new key. Clients that cannot encrypt (`isE2EESupported()` false) do not join.
+
+**Idle disconnect.** Someone alone in a voice room for *aloneMinutes* is disconnected, and a room where nobody has had an unmuted track for *idleMinutes* is emptied (v2.119.0: per room; it was per person). Set under `PUT /api/admin/instance-config` `{ voice: { aloneMinutes, idleMinutes } }`, whole minutes 0–1440, `null` to fall back to `VOICE_ALONE_MINUTES` / `VOICE_IDLE_MINUTES` (defaults 5 and 60). 0 turns a rule off. Wave calls are not affected.
+
+WebSocket events:
+- `voice_presence`: `{ communityId, channelId, stage, participants }`, the participants in the same shape as the GET above. Sent to signed-in users who can see the channel, whenever someone joins, leaves, publishes or unpublishes a track, or raises a hand or is brought up.
+- `voice_notice` (to one person): `{ communityId, channelId, notice }`, notice `video_full`, `speaker` or `audience` (v2.119.0).
+- `voice_move` (to one person): `{ communityId, fromChannelId, channelId, name }` (v2.119.0).
 
 **Wave calls use the same roster.**
 - `GET /api/waves/active-calls` → `{ calls: [{ waveId, participantCount, participants: [userId] }] }` for waves the caller can read. It is answered from the server's roster and no longer calls LiveKit per request. `participants` now holds real user ids; before v2.118.0 it was always empty.

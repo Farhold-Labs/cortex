@@ -506,6 +506,9 @@ const WaveCategoryList = ({ show = 'all', waves, categories, channels = [], sele
                       key={channel.id}
                       channel={channel}
                       participants={voice.presence?.[channel.id] || []}
+                      stage={voice.stage?.[channel.id] ?? channel.stage === true}
+                      // Where a moderator can move someone: this Community's other voice channels.
+                      moveTargets={group.channels.filter(ch => ch.type === 'voice' && ch.id !== channel.id)}
                       isMobile={isMobile}
                       connected={voice.currentChannelId === channel.id}
                       connecting={voice.connecting}
@@ -726,12 +729,12 @@ const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, men
 };
 
 const WaveList = ({ waves, categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, onNewWaveIn, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh,
-  voicePresence = {}, currentVoiceChannelId = null, voiceConnecting = false, canModerateVoice = false, onJoinVoice = null, onLeaveVoice, onModerateVoice, myUserId }) => {
+  voicePresence = {}, voiceStage = {}, currentVoiceChannelId = null, voiceConnecting = false, canModerateVoice = false, onJoinVoice = null, onLeaveVoice, onModerateVoice, myUserId }) => {
   // Voice channels (v2.118.0), bundled so the two category lists get one prop.
   const voice = useMemo(() => ({
-    presence: voicePresence, currentChannelId: currentVoiceChannelId, connecting: voiceConnecting,
+    presence: voicePresence, stage: voiceStage, currentChannelId: currentVoiceChannelId, connecting: voiceConnecting,
     canModerate: canModerateVoice, onJoin: onJoinVoice, onLeave: onLeaveVoice, onModerate: onModerateVoice, myUserId,
-  }), [voicePresence, currentVoiceChannelId, voiceConnecting, canModerateVoice, onJoinVoice, onLeaveVoice, onModerateVoice, myUserId]);
+  }), [voicePresence, voiceStage, currentVoiceChannelId, voiceConnecting, canModerateVoice, onJoinVoice, onLeaveVoice, onModerateVoice, myUserId]);
   // Pull down at the top of the list to reload it (v2.77.0). Additive: the list
   // already refreshes itself on websocket events; this is for the moments when
   // someone wants to be sure.

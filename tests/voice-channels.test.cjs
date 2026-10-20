@@ -29,6 +29,11 @@ const sdk = () => import(path.join(root, 'server/node_modules/livekit-server-sdk
 function fakeLiveKit() {
   // room → Map(identity → { identity, name, joinedAt, tracks: [{ sid, source, muted }] })
   const rooms = new Map();
+  // room name → LiveKit's session id. A room keeps its id until it is deleted.
+  const sids = new Map();
+  // room + identity → when they were removed. LiveKit refuses ("invalid token:
+  // revoked") any later token for them there that is dated before that.
+  const removedAt = new Map();
   const calls = [];
   const server = http.createServer((req, res) => {
     let body = '';
@@ -56,12 +61,25 @@ function fakeLiveKit() {
           // them in the roster so the room can be full.
           if (String(data.identity).startsWith('filler-')) { res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end('{"code":"internal","msg":"no"}'); }
           rooms.get(data.room)?.delete(data.identity);
+          removedAt.set(`${data.room}|${data.identity}`, Date.now());
           if (rooms.get(data.room)?.size === 0) rooms.delete(data.room);
           return json({});
         case 'MutePublishedTrack':
           return json({ track: { sid: data.trackSid, muted: data.muted } });
         case 'CreateRoom':
-          return json({ name: data.name, maxParticipants: data.maxParticipants });
+          if (!sids.has(data.name)) sids.set(data.name, `RM_${crypto.randomBytes(6).toString('hex')}`);
+          return json({ name: data.name, sid: sids.get(data.name), maxParticipants: data.maxParticipants });
+        case 'DeleteRoom':
+          rooms.delete(data.room);
+          sids.delete(data.room);
+          return json({});
+        case 'UpdateParticipant': {
+          const p = rooms.get(data.room)?.get(data.identity);
+          if (!p) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ code: 'not_found', msg: 'participant not found' })); }
+          if (data.metadata !== undefined) p.metadata = data.metadata;
+          if (data.permission) p.permission = data.permission;
+          return json(p);
+        }
         default:
           return json({});
       }
@@ -76,6 +94,19 @@ function fakeLiveKit() {
     },
     removed(room, identity) {
       return calls.some(c => c.method === 'RemoveParticipant' && c.data.room === room && c.data.identity === identity);
+    },
+    /** The last publish permission LiveKit was given for someone, or undefined. */
+    permission(room, identity) {
+      const c = calls.filter(c => c.method === 'UpdateParticipant' && c.data.room === room && c.data.identity === identity && c.data.permission).pop();
+      return c?.data.permission;
+    },
+    sids,
+    /** Would LiveKit let this token join? Its signature, and LiveKit's revocation rule. */
+    async accepts(token) {
+      const { TokenVerifier } = await sdk();
+      const claims = await new TokenVerifier(KEY, SECRET).verify(token);
+      const removed = removedAt.get(`${claims.video.room}|${claims.sub}`);
+      return !(removed && (Number(claims.nbf) || 0) * 1000 < removed);
     },
   })));
 }
@@ -307,7 +338,7 @@ test('Voice channels', { timeout: 180000 }, async (t) => {
       assert.equal(res.status, 200);
       const g = grants(res.body.token);
       assert.equal(g.video.canPublish, false);
-      assert.equal(g.video.canPublishSources, undefined);
+      assert.ok(!g.video.canPublishSources?.length, 'no list at all, never an empty one standing for "anything"');
       await s.api('DELETE', `/api/communities/${communityId}/channels/${voice.id}/roles/${role('member').id}`, { token: owner.token });
     });
 
@@ -487,7 +518,7 @@ test('voice access is re-checked against current rules (counterfactual: without 
   }
 });
 
-test('idle voice rooms empty themselves; wave calls are left alone', { timeout: 120000 }, async () => {
+test('idle voice rooms empty themselves; a listener in a live room stays; wave calls are left alone', { timeout: 120000 }, async () => {
   const lk = await fakeLiveKit();
   // A 200 ms tick, so the sweep (every 4th tick) runs every 0.8 s. 0.01 min = 600 ms.
   const s = await startServer(lk.url, { env: { VOICE_TICK_MS: '200', VOICE_ALONE_MINUTES: '0.01', VOICE_IDLE_MINUTES: '0.03' } });
@@ -495,13 +526,21 @@ test('idle voice rooms empty themselves; wave calls are left alone', { timeout: 
     const { owner, member, mod, communityId } = await setupCommunity(s);
     const second = await s.api('POST', `/api/communities/${communityId}/channels`, { token: owner.token, body: { name: 'Second', type: 'voice' } });
     const lonely = `vc-${second.body.channel.id}`;
+    const third = await s.api('POST', `/api/communities/${communityId}/channels`, { token: owner.token, body: { name: 'Third', type: 'voice' } });
+    const silentRoom = `vc-${third.body.channel.id}`;
     const busy = (await s.api('GET', `/api/communities/${communityId}/voice`, { token: owner.token })).body.channels;
-    const busyRoom = `vc-${Object.keys(busy).find(id => id !== second.body.channel.id)}`;
+    const busyRoom = `vc-${Object.keys(busy).find(id => id !== second.body.channel.id && id !== third.body.channel.id)}`;
+    const listener = await s.makeUser('listener1');
+    await s.api('POST', `/api/communities/${communityId}/members`, { token: owner.token, body: { userId: listener.id } });
 
     lk.put(lonely, owner.id, [{ sid: 'TR_a', source: 2, muted: false }]);
-    // Two people: one talking, one sitting muted.
+    // Someone talking and someone listening muted: a live room. Listening is
+    // not idling (v2.119.0; it was per person, and the listener was removed).
     lk.put(busyRoom, member.id, [{ sid: 'TR_b', source: 2, muted: true }]);
     lk.put(busyRoom, mod.id, [{ sid: 'TR_c', source: 2, muted: false }]);
+    // Two people, both muted: nobody is saying anything, so both go.
+    lk.put(silentRoom, listener.id, [{ sid: 'TR_d', source: 2, muted: true }]);
+    lk.put(silentRoom, member.id, []);
     // A wave call with one person in it, for far longer than the limits.
     lk.put('wave-not-a-voice-room', owner.id, []);
     // Another node's voice room on a shared LiveKit project (dev and farhold
@@ -509,14 +548,14 @@ test('idle voice rooms empty themselves; wave calls are left alone', { timeout: 
     lk.put('vc-another-nodes-channel', 'someone-elsewhere', [{ sid: 'TR_x', source: 2, muted: true }]);
 
     // Generous: under the full suite's load the server ticks late.
-    const done = () => lk.removed(lonely, owner.id) && lk.removed(busyRoom, member.id) &&
-      s.output().includes(`(idle)`) && s.output().includes(`(alone)`);
+    const done = () => lk.removed(lonely, owner.id) && lk.removed(silentRoom, listener.id) && lk.removed(silentRoom, member.id);
     for (let i = 0; i < 200 && !done(); i++) await sleep(100);
     assert.ok(lk.removed(lonely, owner.id), 'alone in a voice room past the limit');
-    assert.ok(lk.removed(busyRoom, member.id), 'muted past the idle limit');
-    assert.match(s.output(), new RegExp(`removed ${member.id} from ${busyRoom} \\(idle\\)`));
+    assert.ok(lk.removed(silentRoom, listener.id) && lk.removed(silentRoom, member.id), 'a room nobody speaks in empties');
+    assert.match(s.output(), new RegExp(`removed ${listener.id} from ${silentRoom} \\(idle\\)`));
     assert.match(s.output(), new RegExp(`removed ${owner.id} from ${lonely} \\(alone\\)`));
-    assert.ok(!s.output().includes(`removed ${mod.id} from ${busyRoom} (idle)`), 'someone talking is not idle');
+    assert.ok(!lk.removed(busyRoom, member.id), 'a muted listener in a room where someone is talking stays');
+    assert.ok(!lk.removed(busyRoom, mod.id), 'someone talking is not idle');
     assert.ok(!lk.removed('wave-not-a-voice-room', owner.id), 'wave calls keep their behaviour');
     assert.ok(!lk.removed('vc-another-nodes-channel', 'someone-elsewhere'), 'another node\'s room is left alone');
   } finally {
@@ -557,4 +596,203 @@ test('voice is opt-in: off, there are no voice channels and no tokens, and open 
     s.stop();
     lk.server.close();
   }
+});
+
+// ---------------------------------------------------------------- Phase 3 (v2.119.0)
+
+const published = (room, identity, source) => ({ event: 'track_published', room: { name: room }, participant: { identity, name: identity }, track: { sid: `TR_${identity}_${source}`, source, muted: false } });
+const unpublished = (room, identity, source) => ({ event: 'track_unpublished', room: { name: room }, participant: { identity, name: identity }, track: { sid: `TR_${identity}_${source}`, source } });
+// LiveKit's JSON names sources in capitals; the JWT in lower case.
+const sourcesOf = (permission) => (permission?.canPublish ? (permission.canPublishSources || []).map(x => String(x).toLowerCase()) : []);
+const waitFor = async (cond, ms = 5000) => { for (let i = 0; i < ms / 50 && !cond(); i++) await sleep(50); return cond(); };
+
+test('Voice channels, phase 3', { timeout: 240000 }, async (t) => {
+  const lk = await fakeLiveKit();
+  const s = await startServer(lk.url, { env: { VOICE_MOVE_GRACE_MS: '1500' } });
+  try {
+    const { owner, member, mod, communityId, voice, role } = await setupCommunity(s);
+    const room = `vc-${voice.id}`;
+    const tokenFor = (u, channelId = voice.id) => s.api('POST', `/api/communities/${communityId}/channels/${channelId}/voice/token`, { token: u.token });
+
+    await t.test('media is encrypted with a key LiveKit never sees, one per room session', async () => {
+      const a = (await tokenFor(member)).body;
+      const b = (await tokenFor(mod)).body;
+      assert.ok(a.e2ee?.key && a.e2ee.roomSid, 'the token response carries the media key');
+      assert.equal(a.e2ee.key, b.e2ee.key, 'everyone in the same room session gets the same key');
+      assert.equal(Buffer.from(a.e2ee.key, 'base64').length, 32);
+      assert.ok(!JSON.stringify(lk.calls).includes(a.e2ee.key), 'nothing sent to LiveKit contains the key');
+      assert.ok(!a.token.includes(a.e2ee.key) && !JSON.stringify(grants(a.token)).includes(a.e2ee.key), 'nor does the LiveKit token');
+      // The room empties and closes; the next session has a new key.
+      lk.sids.delete(room);
+      const c = (await tokenFor(member)).body;
+      assert.notEqual(c.e2ee.roomSid, a.e2ee.roomSid);
+      assert.notEqual(c.e2ee.key, a.e2ee.key);
+    });
+
+    await t.test('camera limit: the seventh camera is refused by LiveKit, and returns when one goes off', async () => {
+      const crowd = [member, mod, owner];
+      for (let i = 0; i < 5; i++) {
+        const u = await s.makeUser(`cam${i}`);
+        await s.api('POST', `/api/communities/${communityId}/members`, { token: owner.token, body: { userId: u.id } });
+        crowd.push(u);
+      }
+      const late = crowd[7];
+      const lateSocket = await s.socket(late.token);
+      for (const u of crowd) {
+        await tokenFor(u);
+        lk.put(room, u.id, []);
+        await s.webhook(joined(room, u.id));
+      }
+      for (const u of crowd.slice(0, 6)) await s.webhook(published(room, u.id, 1));
+      // Six cameras: someone without one may not start a seventh.
+      assert.ok(await waitFor(() => lk.permission(room, late.id) && !sourcesOf(lk.permission(room, late.id)).includes('camera')),
+        'with six cameras on, the others lose camera permission');
+      assert.ok(sourcesOf(lk.permission(room, late.id)).includes('microphone'), 'and keep everything else');
+      assert.ok(!lk.permission(room, crowd[0].id), 'the six with cameras are not touched');
+
+      // A seventh anyway (published in the instant before the update landed):
+      // the latest camera is the one that goes.
+      await s.webhook(published(room, late.id, 1));
+      assert.ok(await waitFor(() => lateSocket.messages.some(m => m.type === 'voice_notice' && m.notice === 'video_full')),
+        'the person whose camera was refused is told why');
+      assert.ok(!lk.permission(room, crowd[0].id), 'the earlier cameras keep their place');
+
+      // One camera goes off: there is room again.
+      await s.webhook(unpublished(room, crowd[0].id, 1));
+      await s.webhook(unpublished(room, late.id, 1));
+      assert.ok(await waitFor(() => sourcesOf(lk.permission(room, late.id)).includes('camera')), 'camera permission comes back');
+      lateSocket.close();
+      for (const u of crowd) { lk.rooms.get(room)?.delete(u.id); await s.webhook({ event: 'participant_left', room: { name: room }, participant: { identity: u.id } }); }
+    });
+
+    await t.test('stage: hosts speak, the audience listens, raises hands and is brought up', async () => {
+      const created = await s.api('POST', `/api/communities/${communityId}/channels`, { token: owner.token, body: { name: 'Town Hall', type: 'voice', stage: true } });
+      assert.equal(created.status, 201);
+      assert.equal(created.body.channel.stage, 1);
+      const stage = created.body.channel;
+      const stageRoom = `vc-${stage.id}`;
+
+      const listen = (await tokenFor(member, stage.id)).body;
+      assert.equal(listen.stage, true);
+      assert.equal(listen.onStage, false);
+      assert.equal(grants(listen.token).video.canPublish, false, 'the audience cannot publish anything');
+      assert.equal(listen.rights.speak, true, 'though their roles would let them speak once brought up');
+      const host = (await tokenFor(mod, stage.id)).body;
+      assert.equal(host.onStage, true);
+      assert.ok(grants(host.token).video.canPublishSources.includes('microphone'), 'a host (voice.moderate) speaks');
+
+      const memberSocket = await s.socket(member.token);
+      const watcher = await s.socket(owner.token);
+      for (const u of [member, mod]) { lk.put(stageRoom, u.id, []); await s.webhook(joined(stageRoom, u.id)); }
+
+      const hand = await s.api('POST', `/api/communities/${communityId}/channels/${stage.id}/voice/hand`, { token: member.token, body: { raised: true } });
+      assert.equal(hand.status, 200);
+      assert.deepEqual(JSON.parse(lk.rooms.get(stageRoom).get(member.id).metadata), { speaker: false, hand: true },
+        'kept in LiveKit metadata, which only the server can write');
+      assert.ok(await waitFor(() => watcher.messages.some(m => m.type === 'voice_presence' && m.stage === true &&
+        m.participants.some(p => p.userId === member.id && p.hand === true))), 'hosts see the hand');
+
+      const self = await s.api('POST', `/api/communities/${communityId}/channels/${stage.id}/voice/participants/${member.id}/speaker`, { token: member.token, body: { speaker: true } });
+      assert.equal(self.status, 403, 'nobody brings themselves up');
+
+      const up = await s.api('POST', `/api/communities/${communityId}/channels/${stage.id}/voice/participants/${member.id}/speaker`, { token: mod.token, body: { speaker: true } });
+      assert.equal(up.status, 200);
+      assert.ok(await waitFor(() => sourcesOf(lk.permission(stageRoom, member.id)).includes('microphone')), 'brought up: may publish');
+      assert.deepEqual(JSON.parse(lk.rooms.get(stageRoom).get(member.id).metadata), { speaker: true, hand: false }, 'and the hand comes down');
+      assert.ok(memberSocket.messages.some(m => m.type === 'voice_notice' && m.notice === 'speaker'));
+
+      const down = await s.api('POST', `/api/communities/${communityId}/channels/${stage.id}/voice/participants/${member.id}/speaker`, { token: mod.token, body: { speaker: false } });
+      assert.equal(down.status, 200);
+      assert.ok(await waitFor(() => sourcesOf(lk.permission(stageRoom, member.id)).length === 0), 'back in the audience: nothing to publish');
+
+      // Turning the stage off lets the audience speak; it is a channel setting.
+      const off = await s.api('PATCH', `/api/communities/${communityId}/channels/${stage.id}`, { token: owner.token, body: { stage: false } });
+      assert.equal(off.status, 200);
+      assert.ok(await waitFor(() => sourcesOf(lk.permission(stageRoom, member.id)).includes('microphone')));
+      const textStage = await s.api('PATCH', `/api/communities/${communityId}/channels/${voice.id}`, { token: owner.token, body: { stage: 'yes' } });
+      assert.equal(textStage.status, 400);
+      const hands = await s.api('POST', `/api/communities/${communityId}/channels/${voice.id}/voice/hand`, { token: member.token, body: { raised: true } });
+      assert.equal(hands.status, 400, 'hands are for stages');
+      memberSocket.close(); watcher.close();
+      for (const u of [member, mod]) { lk.rooms.get(stageRoom)?.delete(u.id); await s.webhook({ event: 'participant_left', room: { name: stageRoom }, participant: { identity: u.id } }); }
+    });
+
+    await t.test('move: a moderator sends someone to another channel they may join; the app follows or they are removed', async () => {
+      const other = (await s.api('POST', `/api/communities/${communityId}/channels`, { token: owner.token, body: { name: 'Side Room', type: 'voice' } })).body.channel;
+      const locked = (await s.api('POST', `/api/communities/${communityId}/channels`, { token: owner.token, body: { name: 'Staff Voice', type: 'voice' } })).body.channel;
+      await s.api('PUT', `/api/communities/${communityId}/channels/${locked.id}/roles/${role('member').id}`, { token: owner.token, body: { allow: [], deny: ['voice.connect'] } });
+
+      const memberSocket = await s.socket(member.token);
+      lk.put(room, member.id, []);
+      await s.webhook(joined(room, member.id));
+      const move = (by, to) => s.api('POST', `/api/communities/${communityId}/channels/${voice.id}/voice/participants/${member.id}/move`, { token: by.token, body: { channelId: to } });
+
+      assert.equal((await move(member, other.id)).status, 403, 'a member cannot move people');
+      assert.equal((await move(mod, locked.id)).status, 409, 'not into a channel they could not join');
+      assert.equal((await move(mod, 'no-such-channel')).status, 404);
+      assert.equal((await move(mod, voice.id)).status, 400);
+
+      const ok = await move(mod, other.id);
+      assert.equal(ok.status, 200);
+      const told = memberSocket.messages.find(m => m.type === 'voice_move');
+      assert.ok(told, 'their app is told where to go');
+      assert.equal(told.channelId, other.id);
+      assert.equal(told.fromChannelId, voice.id);
+      // Their app never followed: after the grace period they are out anyway.
+      assert.ok(await waitFor(() => lk.removed(room, member.id), 6000), 'a move is never weaker than a disconnect');
+      memberSocket.close();
+    });
+
+    await t.test('idle limits are admin settings, checked on the way in', async () => {
+      const stepUp = (await s.api('POST', '/api/auth/step-up', { token: owner.token, body: { password } })).body.stepUpToken;
+      const put = (voiceBody) => s.api('PUT', '/api/admin/instance-config', { token: owner.token, headers: { 'X-Step-Up-Token': stepUp }, body: { voice: voiceBody } });
+      assert.equal((await put({ aloneMinutes: 3, idleMinutes: 0 })).status, 200);
+      const got = (await s.api('GET', '/api/admin/instance-config', { token: owner.token })).body;
+      assert.deepEqual(got.voice, { aloneMinutes: 3, idleMinutes: 0 });
+      assert.ok(got.voiceDefaults && 'idleMinutes' in got.voiceDefaults);
+      assert.equal((await put({ aloneMinutes: -1 })).status, 400);
+      assert.equal((await put({ idleMinutes: 2.5 })).status, 400);
+      assert.equal((await put({ idleMinutes: 100000 })).status, 400);
+      assert.equal((await put({ aloneMinutes: null })).status, 200);
+      assert.deepEqual((await s.api('GET', '/api/admin/instance-config', { token: owner.token })).body.voice, { idleMinutes: 0 });
+    });
+  } finally {
+    s.stop();
+    lk.server.close();
+  }
+});
+
+test('someone removed from a voice channel can come back with a new token (counterfactual: an undated token is refused as revoked)', { timeout: 120000 }, async () => {
+  // The bug (v2.118.0–v2.118.1): the SDK signs tokens with nbf 0, LiveKit
+  // refuses a token dated before a removal, so after any removal — moderator,
+  // idle sweep, access re-check — that person could never rejoin the channel.
+  const scenario = async (mutate) => {
+    const lk = await fakeLiveKit();
+    const s = await startServer(lk.url, { mutate });
+    try {
+      const { member, mod, communityId, voice } = await setupCommunity(s);
+      const room = `vc-${voice.id}`;
+      const tokenFor = () => s.api('POST', `/api/communities/${communityId}/channels/${voice.id}/voice/token`, { token: member.token });
+      const first = await tokenFor();
+      assert.ok(await lk.accepts(first.body.token), 'a first token works either way');
+      lk.put(room, member.id, []);
+      await s.webhook(joined(room, member.id));
+      const out = await s.api('DELETE', `/api/communities/${communityId}/channels/${voice.id}/voice/participants/${member.id}`, { token: mod.token });
+      assert.equal(out.status, 200);
+      await sleep(1100); // a later second than the removal
+      const again = await tokenFor();
+      assert.equal(again.status, 200);
+      return await lk.accepts(again.body.token);
+    } finally {
+      s.stop();
+      lk.server.close();
+    }
+  };
+  assert.equal(await scenario(), true, 'a token issued after the removal lets them back in');
+  const undated = (src) => {
+    const marker = 'const token = await livekitJwt(at);\n    voiceAppliedSources.set(';
+    assert.ok(src.includes(marker), 'the call this counterfactual reverts must exist');
+    return src.replace(marker, 'const token = await at.toJwt();\n    voiceAppliedSources.set(');
+  };
+  assert.equal(await scenario(undated), false, 'signed the SDK way, the same token is refused: the bug');
 });

@@ -1071,7 +1071,7 @@ CREATE TABLE IF NOT EXISTS instance_config (
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
-        , security TEXT NOT NULL DEFAULT '{}', locale TEXT NOT NULL DEFAULT '{}');
+        , security TEXT NOT NULL DEFAULT '{}', locale TEXT NOT NULL DEFAULT '{}', voice TEXT NOT NULL DEFAULT '{}');
 
 CREATE TABLE IF NOT EXISTS user_invitations (
           id         TEXT PRIMARY KEY,
@@ -1497,7 +1497,7 @@ CREATE TABLE IF NOT EXISTS "channels" (
             created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
             created_at   TEXT NOT NULL,
             updated_at   TEXT NOT NULL
-          );
+          , stage INTEGER NOT NULL DEFAULT 0);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_slug
             ON channels(IFNULL(community_id, '~node~'), slug);
 CREATE INDEX IF NOT EXISTS idx_channels_community ON channels(community_id, sort_order);

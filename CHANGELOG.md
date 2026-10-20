@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.119.0] - 2026-10-20
+
+Voice channels, Phase 3 (`docs/communities/03-voice-channels.md`): a camera limit, moving people between channels, stage channels, end-to-end encryption against LiveKit, and idle limits an admin can set. Also a fix for something already live: people removed from a voice channel could never rejoin it.
+
+### Fixed
+
+- **Someone removed from a voice channel could never come back.** livekit-server-sdk signs tokens with `nbf: 0` and no issue time, and LiveKit refuses a token dated before that person's removal from the room ("invalid token: revoked"). An undated token is older than every removal, so after a moderator's disconnect, the idle sweep or the access re-check, every later token for that person and channel was refused, for days. Found on dev, where a test account removed on 2026-10-16 was still refused on 2026-10-20; LiveKit's `/rtc/validate` refused the SDK's token and accepted the same claims re-signed with `nbf` = now. All LiveKit tokens (wave calls, broadcasts, voice) are now signed by `livekitJwt()`, dated now. Counterfactual test: with the voice route reverted to `at.toJwt()`, the token after a removal is refused.
+
+### Added
+
+- **One publish rule, applied live.** `voiceSourcesFor()` decides from capabilities, the stage and the camera limit what someone may publish. It is written into the token and re-applied to live connections with LiveKit's `UpdateParticipant` on every change that could affect it: a join or leave, a camera on or off, a role or override change, a stage change. LiveKit unpublishes whatever is no longer allowed, so none of it depends on the client. Losing `voice.speak` or `voice.video` now reaches a live connection; before, only `voice.connect` did.
+- **Camera limit, 6 per channel** (`voiceCamerasPerChannel`). With six on, nobody else may start one. A seventh that slips in (published in the instant before the limit reached them) is taken down, latest first, and its owner gets `voice_notice` `video_full`. Screen shares are separate.
+- **Stage channels.** A voice channel with `stage` set, chosen at creation (🎤 Stage) or switched in Community settings. Hosts, whoever holds `voice.moderate`, speak; everyone else listens and can raise a hand (✋). Hosts bring people up and send them back from the row menu. Speaker and hand flags live in the participant's LiveKit metadata, which only the server writes, so a server restart does not send speakers back to the audience.
+- **Move to another voice channel** (MOVE TO… in the row menu). Needs `voice.moderate` in both channels, and the person must be allowed into the other one. Their app rejoins with its own token; if it has not left within 15 s, they are removed.
+- **End-to-end encryption against LiveKit for voice channels.** Each client encrypts its media with a key from the join token (LiveKit's insertable-streams E2EE, worker bundled by Vite). The key is an HMAC of the room's LiveKit session id under a secret derived from `JWT_SECRET`, so it needs no storage, survives a restart, changes with each room session, and is never sent to LiveKit. The token route now creates the room first to learn its session id; a client that finds itself in a different session than its key rejoins. Browsers without the encoded-transform APIs are told they cannot join. Wave calls are unchanged.
+- **Idle limits in Settings → ADMINISTRATION** (`voice` in instance config: `aloneMinutes`, `idleMinutes`, whole minutes 0–1440). The env variables are now only the defaults.
+- `instance_config.voice` and `channels.stage` columns.
+
+### Changed
+
+- **Idle is a property of the room.** It was per person: a muted listener was disconnected after an hour even while others talked. Now a room where nobody has had a live track for the limit is emptied, and listening is not idle.
+- **Turning a camera off unpublishes it** (calls and voice channels). It used to mute it: the 📷 stayed in the channel list, and it would have held a place under the camera limit.
+- **A raised hand is not refused in the first seconds after joining** on a node without the webhook: the server asks LiveKit before saying "join first".
+
+### Verified
+
+- `tests/voice-channels.test.cjs`: key per room session and never sent to LiveKit; camera limit (six keep their cameras, the seventh is refused and told, permission returns when one goes off); stage (audience token cannot publish, hand in metadata, only hosts bring people up, permission follows, stage off lets everyone speak); move (403/409/404/400 cases, `voice_move` pushed, removed after the grace period); idle per room; admin settings bounds; the rejoin fix with its counterfactual.
+- Full suite 521/521 (run file by file). Two headless browsers at phone width on dev against LiveKit Cloud: LiveKit reports the camera track as encrypted (`encryption: 1`) and the other browser decodes it (1280×720); 🔒 shown in the open dock; camera off unpublished it; a move switched the other person's dock to the new channel in 1 s; on a stage the listener had no microphone and a ✋, the host saw the hand, BRING UP gave a microphone in about a second and TO AUDIENCE took it away. No page errors. Real phones not yet checked.
+
 ## [2.118.1] - 2026-10-19
 
 Two fixes from first use of voice channels on farhold.
