@@ -56,5 +56,8 @@
     "typescript": "^5.9.3",
     "vite": "^6.4.2",
     "vite-plugin-compression": "^0.5.1"
+  },
+  "overrides": {
+    "global-agent": "^4.1.3"
   }
 }

@@ -25,6 +25,11 @@ Voice channels, Phase 3 (`docs/communities/03-voice-channels.md`): a camera limi
 - **Idle limits in Settings → ADMINISTRATION** (`voice` in instance config: `aloneMinutes`, `idleMinutes`, whole minutes 0–1440). The env variables are now only the defaults.
 - `instance_config.voice` and `channels.stage` columns.
 
+### Security
+
+- **sanitize-html 2.18.1** (GHSA-x3q4-9hxx-gx8m, moderate: content inside a discarded tag such as `<noscript>` could end the discard early on an implied close and be rendered). It is the message sanitizer, so it was updated rather than assessed; Cortex's allow-list does not include `noscript`. Sanitization tests pass.
+- **Client build tools:** `npm audit fix` for brace-expansion, fast-uri, http-cache-semantics and source-map-js, and an override to `global-agent` 4. Version 3 pulled in sprintf-js, which has no fixed release (GHSA-hp3w-g68c-fv3c, DoS); the Electron packager only calls its `bootstrap()` when downloading Electron through a proxy, and v4 still provides it. None of these ship to browsers. Both `npm audit` runs are clean again; CI's audit job failed on these advisories, published since v2.118.1.
+
 ### Changed
 
 - **Idle is a property of the room.** It was per person: a muted listener was disconnected after an hour even while others talked. Now a room where nobody has had a live track for the limit is emptied, and listening is not idle.
