@@ -123,6 +123,12 @@ export function useVoiceCall(waveId) {
     // Community voice channel (v2.118.0)
     voiceChannel: state.voiceChannel,
     can: state.can,
+    rights: state.rights,
+    stage: state.stage,
+    onStage: state.onStage,
+    handRaised: state.handRaised,
+    cameraLimit: state.cameraLimit,
+    e2ee: state.e2ee,
     isDeafened: state.isDeafened,
     endedBy: state.endedBy,
 
@@ -146,6 +152,12 @@ export function useVoiceCall(waveId) {
     joinVoiceChannel: voiceCallService.joinVoiceChannel.bind(voiceCallService),
     toggleDeafen: voiceCallService.toggleDeafen.bind(voiceCallService),
     clearEndedBy: voiceCallService.clearEndedBy.bind(voiceCallService),
+    setLivePermissions: voiceCallService.setLivePermissions.bind(voiceCallService),
+    raiseHand: voiceCallService.raiseHand.bind(voiceCallService),
+    cameraFailed: voiceCallService.cameraFailed.bind(voiceCallService),
+    setHandRaised: voiceCallService.setHandRaised.bind(voiceCallService),
+    failVoice: voiceCallService.failVoice.bind(voiceCallService),
+    rejoinVoiceChannel: voiceCallService.rejoinVoiceChannel.bind(voiceCallService),
     handleRoomDisconnected: voiceCallService.handleRoomDisconnected.bind(voiceCallService),
     setMutedByRoom: voiceCallService.setMutedByRoom.bind(voiceCallService),
 

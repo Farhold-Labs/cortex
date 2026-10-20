@@ -362,7 +362,9 @@ Voice channels (v2.118.0) are Community channels people drop in and out of, with
 - Cortex learns about joins and leaves as they happen, for voice channels and for the call indicators on waves.
 - Without the webhook, everything still works, just later: Cortex asks LiveKit every 10 seconds, once for the whole node.
 
-**3. Idle limits.** `VOICE_ALONE_MINUTES` (default 5) and `VOICE_IDLE_MINUTES` (default 60) disconnect people who have been left alone in a room, or have been sitting muted with nothing on.
+**3. Idle limits.** Set under Settings → ADMINISTRATION → INSTANCE DEFAULTS → VOICE CHANNELS (v2.119.0): *alone in a channel* (default 5 minutes) disconnects someone left on their own, and *nobody speaking* (default 60) empties a room where every microphone, camera and screen has been off that long. 0 turns a rule off. `VOICE_ALONE_MINUTES` and `VOICE_IDLE_MINUTES` in `.env` only change the defaults.
+
+**Encryption needs nothing from you.** Voice channel media is encrypted end to end against LiveKit (v2.119.0) with keys derived from `JWT_SECRET`. Changing `JWT_SECRET` while people are in a voice channel splits them onto different keys until they rejoin.
 
 **One LiveKit project per node is still the rule**, but sharing one does no harm to voice channels: a node only acts on rooms whose channel it has, and ignores the rest.
 
