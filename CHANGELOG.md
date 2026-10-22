@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.120.0] - 2026-10-22
+
+### Added
+
+- **The crawl can show temperatures in °C, or in both scales.** Settings → CRAWL BAR → TEMPERATURE: °F, °C, °C / °F or °F / °C. With both, the first is the one you chose to read by; asked for by someone getting used to Celsius before travelling while still wanting Fahrenheit alongside. The crawl only ever showed °F before, and that stays the default (`crawlBar.tempUnits`, `'F'` when unset). The weather providers are still asked for Fahrenheit; the server adds `tempC`, converted from the unrounded reading (WeatherAPI's own Celsius where it gives one), so the two figures agree to the degree. A reading cached from before the upgrade is converted on the client. Both preference routes validate the value and keep the existing choice when it is missing or unknown.
+
+### Fixed
+
+- `docs/API.md` described the `PUT /api/profile/crawl-preferences` response as a whole `preferences` object; it returns `{ success, crawlBar }`.
+
+### Verified
+
+- `tests/crawl-temperature.test.cjs` (6): the four formats and the fallbacks, and through a real server: each choice saved, unknown values (`'K'`, markup, a number, `null`) refused without losing the choice, another crawl setting leaves it alone, and the older route keeps and validates it too.
+
 ## [2.119.0] - 2026-10-20
 
 Voice channels, Phase 3 (`docs/communities/03-voice-channels.md`): a camera limit, moving people between channels, stage channels, end-to-end encryption against LiveKit, and idle limits an admin can set. Also a fix for something already live: people removed from a voice channel could never rejoin it.

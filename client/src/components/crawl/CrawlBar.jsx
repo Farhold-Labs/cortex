@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { plainText } from '../../utils/plainText.js';
+import { formatTemperature } from '../../utils/temperature.js';
 
 const CRAWL_SCROLL_SPEEDS = {
   slow: 60,     // seconds for full scroll - leisurely pace
@@ -406,7 +407,7 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
           <span style={{ color: 'var(--text-primary)' }}>{location?.name || 'Weather'}</span>
           {': '}
           <span style={{ color: 'var(--text-secondary)' }}>
-            {weather.temp}°F, {weather.description}
+            {formatTemperature(weather, userPrefs.tempUnits)}, {weather.description}
           </span>
         </a>
       ),

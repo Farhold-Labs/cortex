@@ -4270,6 +4270,7 @@ Get weather data for user's location.
   "enabled": true,
   "weather": {
     "temp": 72,
+    "tempC": 22,
     "description": "Partly cloudy",
     "location": "New York, NY"
   },
@@ -4382,6 +4383,7 @@ Update user's crawl bar preferences.
     "showWeather": true,
     "showNews": true,
     "scrollSpeed": "normal",
+    "tempUnits": "CF",
     "location": {
       "lat": 40.7128,
       "lon": -74.0060,
@@ -4400,6 +4402,7 @@ Update user's crawl bar preferences.
 | `showWeather` | boolean | Show weather section |
 | `showNews` | boolean | Show news section |
 | `scrollSpeed` | string | "slow", "normal", or "fast" |
+| `tempUnits` | string | "F" (default), "C", "CF" (°C then °F) or "FC" (°F then °C), v2.120.0. Anything else keeps the current choice |
 | `location` | object | Custom location override (optional) |
 | `location.lat` | number | Latitude |
 | `location.lon` | number | Longitude |
@@ -4410,19 +4413,19 @@ Update user's crawl bar preferences.
 ```json
 {
   "success": true,
-  "preferences": {
-    "theme": "firefly",
-    "fontSize": "medium",
-    "crawlBar": {
-      "enabled": true,
-      "showStocks": true,
-      "showWeather": true,
-      "showNews": true,
-      "scrollSpeed": "normal"
-    }
+  "crawlBar": {
+    "enabled": true,
+    "location": null,
+    "showStocks": true,
+    "showWeather": true,
+    "showNews": true,
+    "scrollSpeed": "normal",
+    "tempUnits": "CF"
   }
 }
 ```
+
+`PUT /api/profile/preferences` accepts the same `crawlBar` object, with the same validation.
 
 ---
 

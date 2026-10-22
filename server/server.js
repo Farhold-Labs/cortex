@@ -1488,6 +1488,11 @@ const crawlCache = {
   geolocation: new Map(), // key: ip, value: {data, timestamp}
 };
 
+// How a person's crawl shows temperatures: one scale, or both with the first
+// one leading (v2.120.0). 'F' is the default because it is what the crawl
+// always showed.
+const CRAWL_TEMP_UNITS = ['F', 'C', 'CF', 'FC'];
+
 const CRAWL_CACHE_TTL = {
   stocks: 60 * 1000,           // 1 minute
   weather: 5 * 60 * 1000,      // 5 minutes
@@ -1611,6 +1616,12 @@ async function geocodeLocation(locationName) {
   }
 }
 
+// Providers are asked for Fahrenheit. Celsius is converted from the unrounded
+// reading, so it is not off by a degree from converting an already-rounded one.
+function fahrenheitToCelsius(f) {
+  return Math.round((f - 32) * 5 / 9);
+}
+
 // Fetch weather from OpenWeatherMap
 async function fetchWeatherFromOpenWeatherMap(lat, lon) {
   if (!crawlKey('openweathermap')) return null;
@@ -1650,6 +1661,7 @@ async function fetchWeatherFromOpenWeatherMap(lat, lon) {
 
     return {
       temp: Math.round(currentData.main.temp),
+      tempC: fahrenheitToCelsius(currentData.main.temp),
       feelsLike: Math.round(currentData.main.feels_like),
       description: currentData.weather[0]?.description || '',
       icon: currentData.weather[0]?.icon || '',
@@ -1685,6 +1697,7 @@ async function fetchWeatherFromWeatherAPI(lat, lon) {
 
     return {
       temp: Math.round(current.temp_f),
+      tempC: Math.round(current.temp_c ?? fahrenheitToCelsius(current.temp_f)),
       feelsLike: Math.round(current.feelslike_f),
       description: current.condition?.text || '',
       icon: current.condition?.icon || '',
@@ -1733,6 +1746,7 @@ async function fetchWeatherFromTomorrowIO(lat, lon) {
 
     return {
       temp: Math.round(values.temperature),
+      tempC: fahrenheitToCelsius(values.temperature),
       feelsLike: Math.round(values.temperatureApparent),
       description: weatherCodes[values.weatherCode] || 'Unknown',
       icon: '', // Tomorrow.io uses weather codes, not icons
@@ -8172,6 +8186,7 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
       showWeather: typeof req.body.crawlBar.showWeather === 'boolean' ? req.body.crawlBar.showWeather : (existingCrawlBar.showWeather ?? true),
       showNews: typeof req.body.crawlBar.showNews === 'boolean' ? req.body.crawlBar.showNews : (existingCrawlBar.showNews ?? true),
       scrollSpeed: validScrollSpeeds.includes(req.body.crawlBar.scrollSpeed) ? req.body.crawlBar.scrollSpeed : (existingCrawlBar.scrollSpeed || 'normal'),
+      tempUnits: CRAWL_TEMP_UNITS.includes(req.body.crawlBar.tempUnits) ? req.body.crawlBar.tempUnits : (existingCrawlBar.tempUnits || 'F'),
     };
   }
   // Handle videoFeed preferences (v2.8.0)
@@ -11981,7 +11996,7 @@ app.get('/api/crawl/all', authenticateToken, crawlLimiter, async (req, res) => {
 app.put('/api/profile/crawl-preferences', authenticateToken, (req, res) => {
   // Support both nested crawlBar object and flat properties
   const input = req.body.crawlBar || req.body;
-  const { enabled, location, showStocks, showWeather, showNews, scrollSpeed } = input;
+  const { enabled, location, showStocks, showWeather, showNews, scrollSpeed, tempUnits } = input;
 
   const userId = req.user.userId;
   const user = db.findUserById(userId);
@@ -11994,6 +12009,7 @@ app.put('/api/profile/crawl-preferences', authenticateToken, (req, res) => {
     showWeather: showWeather !== undefined ? showWeather : (prefs.crawlBar?.showWeather ?? true),
     showNews: showNews !== undefined ? showNews : (prefs.crawlBar?.showNews ?? true),
     scrollSpeed: scrollSpeed || prefs.crawlBar?.scrollSpeed || 'normal',
+    tempUnits: CRAWL_TEMP_UNITS.includes(tempUnits) ? tempUnits : (prefs.crawlBar?.tempUnits || 'F'),
   };
 
   const updatedPrefs = { ...prefs, crawlBar };
