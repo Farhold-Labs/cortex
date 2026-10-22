@@ -1567,6 +1567,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                   onChange={(e) => setCrawlBarLocation(e.target.value)}
                   style={{
                     flex: 1,
+                    // An input will not shrink below its default 20-character
+                    // width otherwise, which pushed SAVE off a phone screen.
+                    minWidth: 0,
                     padding: isMobile ? '12px' : '10px',
                     minHeight: isMobile ? '44px' : 'auto',
                     background: 'var(--bg-base)',
@@ -1582,6 +1585,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                   }}
                   disabled={crawlBarLocation === (user?.preferences?.crawlBar?.locationName || '')}
                   style={{
+                    flexShrink: 0,
                     padding: isMobile ? '10px 12px' : '8px 12px',
                     minHeight: isMobile ? '44px' : 'auto',
                     background: crawlBarLocation !== (user?.preferences?.crawlBar?.locationName || '') ? 'var(--accent-amber)20' : 'transparent',
@@ -1601,6 +1605,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                       handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, locationName: null, location: null } });
                     }}
                     style={{
+                      flexShrink: 0,
                       padding: isMobile ? '10px 12px' : '8px 12px',
                       minHeight: isMobile ? '44px' : 'auto',
                       background: 'transparent',

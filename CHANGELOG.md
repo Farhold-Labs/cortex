@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.120.1] - 2026-10-22
+
+### Fixed
+
+- **Settings → CRAWL BAR → LOCATION OVERRIDE ran off a phone screen.** The text box is `flex: 1`, but an input will not shrink below its default 20-character width unless told it may (`min-width: 0`), so at 390 px SAVE was cut off at the right edge and CLEAR, when shown, was off screen entirely. The box now shrinks and the buttons keep their size.
+
 ## [2.120.0] - 2026-10-22
 
 ### Added
