@@ -1504,6 +1504,35 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
               </div>
             </div>
 
+            {(user?.preferences?.crawlBar?.showWeather !== false) && (
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>TEMPERATURE</label>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {[['F', '°F'], ['C', '°C'], ['CF', '°C / °F'], ['FC', '°F / °C']].map(([units, label]) => {
+                    const selected = (user?.preferences?.crawlBar?.tempUnits || 'F') === units;
+                    return (
+                      <button
+                        key={units}
+                        onClick={() => handleUpdatePreferences({ crawlBar: { ...user?.preferences?.crawlBar, tempUnits: units } })}
+                        style={{
+                          padding: isMobile ? '10px 16px' : '8px 16px',
+                          minHeight: isMobile ? '44px' : 'auto',
+                          background: selected ? 'var(--accent-teal)20' : 'transparent',
+                          border: `1px solid ${selected ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                          color: selected ? 'var(--accent-teal)' : 'var(--text-dim)',
+                          cursor: 'pointer',
+                          fontFamily: 'monospace',
+                          fontSize: isMobile ? '0.9rem' : '0.85rem',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div style={{ marginBottom: '16px' }}>
               <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SCROLL SPEED</label>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
