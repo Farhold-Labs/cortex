@@ -11992,6 +11992,34 @@ app.get('/api/crawl/all', authenticateToken, crawlLimiter, async (req, res) => {
   res.json(result);
 });
 
+// Personal list order (v2.121.0): the order of someone's waves and of their
+// Communities in the sidebar. Each list is the whole order, replacing the last.
+const LIST_ORDER_MAX = { waves: 5000, communities: 500 };
+app.put('/api/profile/list-order', authenticateToken, apiLimiter, (req, res) => {
+  const next = {};
+  for (const key of ['waves', 'communities']) {
+    const list = req.body?.[key];
+    if (list === undefined) continue;
+    if (!Array.isArray(list) || list.length > LIST_ORDER_MAX[key]
+        || !list.every(id => typeof id === 'string' && id.length > 0 && id.length <= 128)) {
+      return res.status(400).json({ error: `${key} must be a list of ids` });
+    }
+    next[key] = [...new Set(list)];
+  }
+  if (!next.waves && !next.communities) return res.status(400).json({ error: 'Nothing to order' });
+  // Only what this person can actually see is kept, so the stored order never
+  // grows with ids that mean nothing to them.
+  if (next.waves) next.waves = next.waves.filter(id => canAccessWaveFromCache(id, req.user.userId));
+  if (next.communities) {
+    const mine = new Set(db.listUserCommunities(req.user.userId).map(c => c.id));
+    next.communities = next.communities.filter(id => mine.has(id));
+  }
+  const saved = db.setUserListOrder(req.user.userId, next);
+  // The person's other devices re-read their list.
+  broadcast({ type: 'list_order_changed' }, [req.user.userId]);
+  res.json({ waves: saved.waves.length, communities: saved.communities.length });
+});
+
 // Update user's crawl bar preferences
 app.put('/api/profile/crawl-preferences', authenticateToken, (req, res) => {
   // Support both nested crawlBar object and flat properties
@@ -20460,6 +20488,12 @@ app.get('/api/waves', authenticateToken, (req, res) => {
     ? db.getWavesForUserMinimal(req.user.userId, includeArchived, showHidden, participation)
     : db.getWavesForUser(req.user.userId, includeArchived, showHidden, participation);
 
+  // Personal list order (v2.121.0). The client sorts by it; an unplaced wave
+  // has no position and lists after the placed ones, oldest first.
+  const { waves: waveOrder } = db.getUserListOrder(req.user.userId);
+  const positionOf = new Map(waveOrder.map((id, i) => [id, i]));
+  for (const wave of waves) wave.position = positionOf.has(wave.id) ? positionOf.get(wave.id) : null;
+
   // Log unread counts for debugging
   const wavesWithUnread = waves.filter(w => w.unread_count > 0);
   if (wavesWithUnread.length > 0) {
@@ -24912,7 +24946,14 @@ app.get('/api/communities/ownership-offers', authenticateToken, (req, res) => {
 });
 
 app.get('/api/communities/mine', authenticateToken, (req, res) => {
-  res.json({ communities: db.listUserCommunities(req.user.userId) });
+  // In the person's own order (v2.121.0); unplaced ones after, by name.
+  const { communities: order } = db.getUserListOrder(req.user.userId);
+  const rank = new Map(order.map((id, i) => [id, i]));
+  const communities = db.listUserCommunities(req.user.userId)
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => (rank.get(a.c.id) ?? Infinity) - (rank.get(b.c.id) ?? Infinity) || a.i - b.i)
+    .map(({ c }) => c);
+  res.json({ communities });
 });
 
 app.get('/api/communities/:id', authenticateToken, (req, res) => {
@@ -25462,9 +25503,14 @@ app.get('/api/communities/:id/channels', authenticateToken, (req, res) => {
     // opens the sidebar (CORTEX-COMM-013).
     const rows = db.listChannelWaveContainment(c.id, scan);
     const waveCount = rows.filter(w => canAccessWaveFromCache(w.id, req.user.userId)).length;
-    return { ...c, waveCount, waveCountCapped: rows.length >= scan };
+    // Whether this person may arrange the channel's waves (v2.121.0), so the
+    // client offers it only where the server will accept it.
+    const canManage = communityAuthz.canInChannel(db, communityActor(req), c, CommunityCaps.MANAGE_CHANNELS);
+    return { ...c, waveCount, waveCountCapped: rows.length >= scan, canManage };
   });
-  res.json({ channels });
+  const canManageChannels = communityAuthz.effectiveCapabilities(db, communityActor(req), req.params.id)
+    .has(CommunityCaps.MANAGE_CHANNELS);
+  res.json({ channels, canManageChannels });
 });
 
 app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, res) => {
@@ -25497,7 +25543,9 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
         type: req.body.type || 'text',
         stage: req.body.type === 'voice' && req.body.stage === true,
         visibility: ['members', 'restricted'].includes(req.body.visibility) ? req.body.visibility : 'members',
-        sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : 0,
+        // After every existing channel unless placed (v2.121.0); 0 put each
+        // new channel at the top of an arranged list.
+        sortOrder: Number.isInteger(req.body.sortOrder) ? req.body.sortOrder : db.nextChannelSortOrder(req.params.id),
         createdBy: req.user.userId,
       });
       db.logCommunityAudit(req.params.id, {
@@ -25510,6 +25558,62 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
     if (/UNIQUE/.test(err.message)) return res.status(409).json({ error: 'That channel address is taken' });
     throw err;
   }
+});
+
+/**
+ * Shared order (v2.121.0): the order of a Community's channels, and of the
+ * waves in a channel. One order everyone in the Community sees, set by whoever
+ * may manage channels. Members are told so their sidebars re-read it.
+ */
+function pushCommunityOrderChanged(communityId) {
+  const members = db.db.prepare(
+    "SELECT user_id FROM community_memberships WHERE community_id = ? AND state = 'active'"
+  ).all(communityId).map(r => r.user_id);
+  broadcast({ type: 'community_order_changed', communityId }, members);
+}
+
+const isIdList = (list, max) => Array.isArray(list) && list.length <= max
+  && list.every(id => typeof id === 'string' && id.length > 0 && id.length <= 128);
+
+app.put('/api/communities/:id/channel-order', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS)) return;
+  if (!isIdList(req.body?.channelIds, communityLimits.CAPS.channelsPerCommunity)) {
+    return res.status(400).json({ error: 'channelIds must be a list of channel ids' });
+  }
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
+  const order = inCommunityTransaction(() => {
+    const order = db.setChannelOrder(req.params.id, req.body.channelIds);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.reorder', targetType: 'community', targetId: req.params.id,
+    });
+    return order;
+  });
+  pushCommunityOrderChanged(req.params.id);
+  res.json({ channelIds: order });
+});
+
+app.put('/api/communities/:id/channels/:channelId/wave-order', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_CHANNELS,
+    { resource: { type: 'channel', id: req.params.channelId } })) return;
+  const channel = db.getChannelById(req.params.channelId);
+  if (!channel || channel.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
+  if (!isIdList(req.body?.waveIds, communityLimits.CAPS.channelWaveScan)) {
+    return res.status(400).json({ error: 'waveIds must be a list of wave ids' });
+  }
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
+  // Only waves this manager can read are placed: arranging a channel must not
+  // become a way to learn about, or touch, waves they are not in. Anything
+  // else in the channel lists after what they placed.
+  const readable = [...new Set(req.body.waveIds)].filter(id => canAccessWaveFromCache(id, req.user.userId));
+  const placed = inCommunityTransaction(() => {
+    const placed = db.setChannelWaveOrder(channel.id, readable);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'channel.reorder_waves', targetType: 'channel', targetId: channel.id,
+    });
+    return placed;
+  });
+  pushCommunityOrderChanged(req.params.id);
+  res.json({ placed: placed.length });
 });
 
 app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimiter, (req, res) => {
