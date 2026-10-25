@@ -27,6 +27,7 @@ const SOURCE_ICONS = { camera: '📷', screen_share: '🖥️' };
 const VoiceChannelSection = ({
   channel, participants = [], stage = false, moveTargets = [], isMobile, menu,
   connected, connecting, canModerate, myUserId, onJoin, onLeave, onModerate,
+  reorderControls = null,
 }) => {
   const [actionsFor, setActionsFor] = useState(null);
   const [movingFor, setMovingFor] = useState(null);
@@ -136,8 +137,10 @@ const VoiceChannelSection = ({
       compact
       indent={1}
       menuTitle={`${channel.name} options`}
-      menu={menu}
-      headerAction={headerAction}
+      // While the list is being rearranged (v2.121.0) the header carries the
+      // ▲ ▼ controls instead of JOIN and the menu.
+      menu={reorderControls ? undefined : menu}
+      headerAction={reorderControls || headerAction}
     >
       {onStage.map(renderRow)}
       {stage && audience.length > 0 && (

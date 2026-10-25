@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.121.0] - 2026-10-25
+
+The wave list keeps the order you give it. It was sorted by last activity, so a wave jumped to the top every time someone posted in it; with unread counts on every heading (v2.117.1) the jump no longer earned its keep, and it made the list impossible to arrange.
+
+### Added
+
+- **Reorder mode.** **↕ Reorder** in the ⋮ menu of WAVES or COMMUNITIES puts ▲ ▼ on each row until you tap DONE. While it is on, a tap on a row does nothing, so a missed arrow cannot open a wave. Buttons rather than dragging: a drag on a phone fights the list's own scrolling. Not offered in the archived or hidden lists, which hold only some of your waves.
+  - **Your own order:** your waves (within PINNED, each category and UNCATEGORIZED), your categories, and your Communities. One order across all your waves, so a wave keeps its place when it is filed elsewhere.
+  - **A Community's order, for everyone:** whoever may manage channels (`channel.manage`) arranges the channels and the waves in each channel. Members see the change straight away (`community_order_changed`).
+  - Anything not yet placed lists after what was arranged, oldest first, so a new wave arrives at the bottom (chosen over the top). New channels also go last; until now each was created at position 0 and sorted by name.
+- `PUT /api/profile/list-order`, `PUT /api/communities/:id/channel-order`, `PUT /api/communities/:id/channels/:channelId/wave-order`; `position` and `channelPosition` on wave lists; `canManage` / `canManageChannels` on the channel list. Details in `docs/API.md`.
+
+### Changed
+
+- **Unread counts are always on the headings.** COMMUNITIES and WAVES show their total open or folded (it was folded only). A pinned wave in a Community channel now counts toward its channel and Community as well as PINNED; before, its unread pings showed only under PINNED.
+- The wave list is no longer reordered by activity, on the server or the client.
+
+### Fixed
+
+- The low-bandwidth wave list (`minimal=true`, used by the app) never included `createdAt`, so anything ordered by age fell back to id order. Its query names its columns, the trap noted there in v2.100.0; `created_at` and `channel_position` are now selected, and a test compares it field by field with the full list.
+
+### Security and privacy
+
+- **Your order is encrypted.** The ids of the waves you arrange are a list of the waves you are in, which `WAVE_PARTICIPATION_KEY` exists to hide, so the order is one AES-256-GCM row per person (`user_list_order`) under that key, removed with the account. A row that will not decrypt reads as no order: the cost is the arrangement, never the waves.
+- **Arranging a channel reveals nothing.** A manager can only place waves they can read; ids they cannot read, or that are elsewhere, are ignored silently, so the call cannot be used to ask where a wave is. Both guards have counterfactual runs: with either filter removed, its test fails.
+
+- **Dependency advisories published since v2.120.1** (CI's audit job failed on this PR), all by `npm audit fix` within range:
+  - server: body-parser 1.20.9 (GHSA-27r3-jxmh-p828, high, denial of service via trailing bytes after a compressed body), multer 2.5.0 (GHSA-q7qp-rjg7-q26m, high, denial of service via a pending fileFilter after teardown), nodemailer 10.2.1 (three moderate address-parser advisories where quoting or comments could turn display text into a recipient);
+  - client: DOMPurify 3.4.17 (critical, three bypasses; `utils/html.js` calls `sanitize` without `SAFE_FOR_TEMPLATES`, `IN_PLACE` or an XHTML parser type, so none of the three paths was in use, but it is a sanitizer and was updated rather than assessed), Electron 42.11.18 (desktop build only), body-parser 2.4.0 (build tooling).
+  - Upload, mail and sanitization suites re-run after the update: attachment-access, attachment-registration, s3-uploads, review, followers, event-attendance all pass.
+
+### Database
+
+- `waves.channel_position` (nullable) and table `user_list_order`. Additive; verified backup before upgrading as always.
+
+### Verified
+
+- Whole suite run file by file: 42 files, all pass.
+- `tests/list-order.test.cjs` (9): moving within a section of one list; through a real server, the personal order (stored without plaintext ids, unreadable and repeated ids dropped, new waves unplaced), validation, Community order, channel order (member refused, new channels last, the rest keep their order), wave order in a channel (member refused, an unreadable private wave not placed, another channel's wave not placed, a moved wave unplaced), the low-bandwidth list matching the full one, and one person's order not reaching another. Fails on develop without the feature.
+- In the running app on dev at 390 px: WAVES → Reorder → ▲ on the third uncategorised wave moved it up, and the order survived a reload; COMMUNITIES → Reorder moved a Community, a channel and a channel's wave, each saved; with an unread ping in a pinned channel wave, the open COMMUNITIES header, the Community, the channel and PINNED each show 1. No console errors.
+
 ## [2.120.1] - 2026-10-22
 
 ### Fixed
