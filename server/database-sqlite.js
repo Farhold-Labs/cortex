@@ -29,6 +29,12 @@ import { isReservedHandle } from './lib/reserved-handles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// The participation key also protects list order (v2.121.0): see getUserListOrder.
+function listOrderKey() {
+  const hex = process.env.WAVE_PARTICIPATION_KEY;
+  return hex && /^[0-9a-f]{64}$/i.test(hex) ? Buffer.from(hex, 'hex') : null;
+}
+
 // ============ Privacy Hardening: Email Encryption (v2.16.0) ============
 // These functions mirror those in server.js but are needed here for database operations
 
@@ -3395,6 +3401,29 @@ export class DatabaseSQLite {
       console.log('✅ instance_config.voice added');
     }
 
+    // v2.121.0 — list order. The order a channel's managers give its waves
+    // (shared, so a column on the wave), and each person's own order for their
+    // waves and Communities (private, so one encrypted row per person: a
+    // plaintext (user, wave) list would be the participation graph that
+    // wave_user_metadata exists to hide).
+    const waveColsV2121 = this.db.prepare(`PRAGMA table_info(waves)`).all();
+    if (waveColsV2121.length > 0 && !waveColsV2121.some(c => c.name === 'channel_position')) {
+      console.log('📝 Adding waves.channel_position (v2.121.0)...');
+      this.db.exec(`ALTER TABLE waves ADD COLUMN channel_position INTEGER;`);
+      console.log('✅ waves.channel_position added');
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_list_order (
+        user_id    TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        -- AES-256-GCM under WAVE_PARTICIPATION_KEY (ciphertext + tag, base64),
+        -- or plain JSON when no key is configured, like the other
+        -- participation data.
+        data       TEXT NOT NULL,
+        iv         TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
     //
     // A remote person's standing here is borrowed, and until now it was borrowed
@@ -6334,6 +6363,7 @@ export class DatabaseSQLite {
       // channel holds it.
       communityId: visibleCommunities.has(r.community_id) ? (r.community_id || null) : null,
       channelId: visibleCommunities.has(r.community_id) ? (r.channel_id || null) : null,
+      channelPosition: visibleCommunities.has(r.community_id) && r.channel_id && r.channel_position != null ? r.channel_position : null,
       muted: mutedWaveIds.has(r.id),
     }));
   }
@@ -6391,6 +6421,8 @@ export class DatabaseSQLite {
         -- the value gone. Anyone on a slow connection saw all their community
         -- channels as empty, and no test noticed because tests are never slow.
         w.community_id, w.channel_id,
+        -- v2.121.0: the list's order needs both, and the same trap applies.
+        w.created_at, w.channel_position,
         (SELECT COUNT(*) FROM pings WHERE wave_id = w.id AND deleted = 0) as ping_count,
         (SELECT COUNT(*) FROM wave_participants WHERE wave_id = w.id) as participant_count
       FROM waves w
@@ -6485,8 +6517,12 @@ export class DatabaseSQLite {
       // channel holds it.
       communityId: visibleCommunities.has(r.community_id) ? (r.community_id || null) : null,
       channelId: visibleCommunities.has(r.community_id) ? (r.channel_id || null) : null,
+      channelPosition: visibleCommunities.has(r.community_id) && r.channel_id && r.channel_position != null ? r.channel_position : null,
       muted: mutedWaveIds.has(r.id),
       updatedAt: r.updated_at,
+      // The list keeps its own order since v2.121.0, and an unplaced wave is
+      // placed by when it was made, so the low-bandwidth list needs this too.
+      createdAt: r.created_at,
       encrypted: r.encrypted === 1,
       ping_count: r.ping_count,
       unread_count: unreadMap.get(r.id) || 0,
@@ -6539,6 +6575,9 @@ export class DatabaseSQLite {
       // them is a documented trap (CLAUDE.md) that has cost time before.
       communityId: row.community_id || null,
       channelId: row.channel_id || null,
+      // Where the channel's managers placed it (v2.121.0); null = not placed,
+      // listed after the placed ones.
+      channelPosition: row.channel_id && row.channel_position != null ? row.channel_position : null,
     };
   }
 
@@ -6715,7 +6754,108 @@ export class DatabaseSQLite {
     ).get(userId, waveId);
   }
 
-  getMutedWaveIds(userId) {
+// ----- List order (v2.121.0) -----
+
+  /**
+   * Someone's own order for their wave list and their Communities:
+   * `{ waves: [waveId…], communities: [communityId…] }`, each in display order.
+   * Anything not listed goes after, oldest first — so a new wave lands at the
+   * bottom rather than jumping above what they arranged.
+   *
+   * Encrypted under WAVE_PARTICIPATION_KEY when one is configured. The wave
+   * ids a person has arranged are a list of the waves they are in, which is
+   * exactly what the participation encryption hides. A row that will not
+   * decrypt (a changed key) reads as no order: the cost is the arrangement,
+   * never the waves.
+   */
+  getUserListOrder(userId) {
+    const empty = { waves: [], communities: [] };
+    const row = this.db.prepare('SELECT data, iv FROM user_list_order WHERE user_id = ?').get(userId);
+    if (!row) return empty;
+    try {
+      let json = row.data;
+      if (row.iv) {
+        const key = listOrderKey();
+        if (!key) return empty;
+        const raw = Buffer.from(row.data, 'base64');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(row.iv, 'base64'));
+        decipher.setAuthTag(raw.subarray(raw.length - 16));
+        json = Buffer.concat([decipher.update(raw.subarray(0, raw.length - 16)), decipher.final()]).toString('utf8');
+      }
+      const parsed = JSON.parse(json);
+      return {
+        waves: Array.isArray(parsed.waves) ? parsed.waves : [],
+        communities: Array.isArray(parsed.communities) ? parsed.communities : [],
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  /** Replace either or both lists; a list left undefined is kept. */
+  setUserListOrder(userId, { waves, communities } = {}) {
+    const current = this.getUserListOrder(userId);
+    const next = {
+      waves: waves !== undefined ? waves : current.waves,
+      communities: communities !== undefined ? communities : current.communities,
+    };
+    const json = JSON.stringify(next);
+    const key = listOrderKey();
+    let data = json, iv = null;
+    if (key) {
+      const ivBuf = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv('aes-256-gcm', key, ivBuf);
+      data = Buffer.concat([cipher.update(json, 'utf8'), cipher.final(), cipher.getAuthTag()]).toString('base64');
+      iv = ivBuf.toString('base64');
+    }
+    this.db.prepare(`
+      INSERT INTO user_list_order (user_id, data, iv, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, iv = excluded.iv, updated_at = excluded.updated_at
+    `).run(userId, data, iv, new Date().toISOString());
+    return next;
+  }
+
+  /**
+   * The order a channel's managers give its waves. `waveIds` are placed
+   * 0..n-1; the channel's other waves (ones the manager cannot see, or did not
+   * send) lose their place and list after them. Ids not in this channel are
+   * ignored, silently, so the call cannot be used to ask where a wave is.
+   */
+  setChannelWaveOrder(channelId, waveIds) {
+    const inChannel = new Set(this.db.prepare('SELECT id FROM waves WHERE channel_id = ?').all(channelId).map(r => r.id));
+    const placed = waveIds.filter(id => inChannel.has(id));
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE waves SET channel_position = NULL WHERE channel_id = ?').run(channelId);
+      const set = this.db.prepare('UPDATE waves SET channel_position = ? WHERE id = ? AND channel_id = ?');
+      placed.forEach((id, i) => set.run(i, id, channelId));
+    })();
+    return placed;
+  }
+
+  /**
+   * Channel order within a Community. Listed channels first, in the order
+   * given; the rest keep their relative order after them. Ids from another
+   * Community are ignored.
+   */
+  setChannelOrder(communityId, channelIds) {
+    const current = this.listChannels(communityId).map(c => c.id);
+    const known = new Set(current);
+    const listed = [...new Set(channelIds)].filter(id => known.has(id));
+    const order = [...listed, ...current.filter(id => !listed.includes(id))];
+    this.db.transaction(() => {
+      const set = this.db.prepare('UPDATE channels SET sort_order = ? WHERE id = ? AND community_id = ?');
+      order.forEach((id, i) => set.run(i, id, communityId));
+    })();
+    return order;
+  }
+
+  /** Where a new channel goes: after every existing one. */
+  nextChannelSortOrder(communityId) {
+    const row = this.db.prepare('SELECT MAX(sort_order) AS max FROM channels WHERE community_id = ?').get(communityId);
+    return row && row.max != null ? row.max + 1 : 0;
+  }
+
+    getMutedWaveIds(userId) {
     return this.db.prepare('SELECT wave_id FROM wave_mutes WHERE user_id = ?')
       .all(userId).map(r => r.wave_id);
   }
@@ -14593,7 +14733,9 @@ export class DatabaseSQLite {
   setWaveChannel(waveId, channelId) {
     const channel = channelId ? this.getChannelById(channelId) : null;
     if (channelId && !channel) throw new Error('Channel not found');
-    this.db.prepare('UPDATE waves SET community_id = ?, channel_id = ?, updated_at = ? WHERE id = ?')
+    // A wave arriving in (or leaving) a channel has no place in its order yet,
+    // so it goes after the waves the channel's managers have placed.
+    this.db.prepare('UPDATE waves SET community_id = ?, channel_id = ?, channel_position = NULL, updated_at = ? WHERE id = ?')
       .run(channel ? channel.community_id : null, channelId || null, new Date().toISOString(), waveId);
     return this.db.prepare('SELECT id, title, privacy, community_id, channel_id FROM waves WHERE id = ?').get(waveId);
   }

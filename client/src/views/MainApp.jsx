@@ -554,6 +554,10 @@ function MainApp({ sharePingId }) {
           return (res.channels || []).map(ch => ({
             id: ch.id, name: ch.name, communityId: c.id, communityName: c.name, type: ch.type || 'text',
             stage: Boolean(ch.stage),
+            // Who may arrange what (v2.121.0): the waves in this channel, and
+            // the Community's channels.
+            canManage: ch.canManage === true,
+            canManageChannels: res.canManageChannels === true,
           }));
         } catch { complete = false; return []; }
       }));
@@ -570,6 +574,9 @@ function MainApp({ sharePingId }) {
   }, [fetchAPI, instanceFeatures.communities, instanceFeaturesLoaded, user?.id]);
 
   useEffect(() => { loadCommunityChannels(); }, [loadCommunityChannels]);
+  // For the socket handler, which is defined with its own dependencies.
+  const loadCommunityChannelsRef = useRef(null);
+  loadCommunityChannelsRef.current = loadCommunityChannels;
 
   // ----- Voice channels (v2.118.0) -----
   // Who is in each voice channel, by channel id. Loaded per Community when the
@@ -777,6 +784,80 @@ function MainApp({ sharePingId }) {
       showToastMsg(formatError(`Failed to update ${T.wave}`), 'error');
     }
   }, [fetchAPI, showToastMsg]);
+
+  // ----- List order (v2.121.0) -----
+  // Each change is applied on screen at once, then saved. Saves run one at a
+  // time, in order, so a quick run of taps cannot land out of sequence.
+  const lastLocalReorderRef = useRef(0);
+  const reorderChainRef = useRef(Promise.resolve());
+  const saveOrder = useCallback((request, onFailure) => {
+    lastLocalReorderRef.current = Date.now();
+    reorderChainRef.current = reorderChainRef.current
+      .then(() => request())
+      .then(() => { lastLocalReorderRef.current = Date.now(); })
+      .catch((err) => {
+        showToastMsg(err?.message || 'Could not save that order', 'error');
+        lastLocalReorderRef.current = 0;
+        onFailure?.();
+      });
+  }, [showToastMsg]);
+
+  const handleReorderWaves = useCallback((ids) => {
+    const at = new Map(ids.map((id, i) => [id, i]));
+    setWaves(prev => prev.map(w => ({ ...w, position: at.has(w.id) ? at.get(w.id) : null })));
+    saveOrder(() => fetchAPI('/profile/list-order', { method: 'PUT', body: { waves: ids } }), loadWaves);
+  }, [fetchAPI, saveOrder, loadWaves]);
+
+  // Communities and channels are ordered by the channel list itself, which is
+  // grouped by Community in order; re-sorting it is the whole client change.
+  const reorderChannelList = useCallback((rank) => {
+    setCommunityChannels(prev => {
+      const next = prev.map((ch, i) => ({ ch, i }))
+        .sort((a, b) => rank(a.ch, a.i) - rank(b.ch, b.i) || a.i - b.i)
+        .map(({ ch }) => ch);
+      cacheCommunityChannels(next, user?.id);
+      return next;
+    });
+  }, [user?.id]);
+
+  const handleReorderCommunities = useCallback((ids) => {
+    const at = new Map(ids.map((id, i) => [id, i]));
+    reorderChannelList((ch) => at.get(ch.communityId) ?? Infinity);
+    saveOrder(() => fetchAPI('/profile/list-order', { method: 'PUT', body: { communities: ids } }),
+      () => loadCommunityChannelsRef.current?.());
+  }, [fetchAPI, saveOrder, reorderChannelList]);
+
+  const handleReorderChannels = useCallback((communityId, ids) => {
+    const at = new Map(ids.map((id, i) => [id, i]));
+    // Only this Community's channels move, within the places they already
+    // occupy in the list, so the Communities keep their order.
+    setCommunityChannels(prev => {
+      const mine = prev.filter(ch => ch.communityId === communityId)
+        .sort((a, b) => (at.get(a.id) ?? 1e6) - (at.get(b.id) ?? 1e6));
+      let k = 0;
+      const next = prev.map(ch => (ch.communityId === communityId ? mine[k++] : ch));
+      cacheCommunityChannels(next, user?.id);
+      return next;
+    });
+    saveOrder(() => fetchAPI(`/communities/${communityId}/channel-order`, { method: 'PUT', body: { channelIds: ids } }),
+      () => loadCommunityChannelsRef.current?.());
+  }, [fetchAPI, saveOrder, user?.id]);
+
+  const handleReorderChannelWaves = useCallback((communityId, channelId, ids) => {
+    const at = new Map(ids.map((id, i) => [id, i]));
+    setWaves(prev => prev.map(w => w.channelId === channelId
+      ? { ...w, channelPosition: at.has(w.id) ? at.get(w.id) : null } : w));
+    saveOrder(() => fetchAPI(`/communities/${communityId}/channels/${channelId}/wave-order`, { method: 'PUT', body: { waveIds: ids } }),
+      loadWaves);
+  }, [fetchAPI, saveOrder, loadWaves]);
+
+  const handleReorderCategories = useCallback((ids) => {
+    const at = new Map(ids.map((id, i) => [id, i]));
+    setWaveCategories(prev => [...prev].sort((a, b) => (at.get(a.id) ?? 1e6) - (at.get(b.id) ?? 1e6)));
+    saveOrder(() => fetchAPI('/wave-categories/reorder', {
+      method: 'PUT', body: { categories: ids.map((id, i) => ({ id, sortOrder: i })) },
+    }), loadCategories);
+  }, [fetchAPI, saveOrder, loadCategories]);
 
   const handleWSMessage = useCallback((data) => {
     // Log ALL incoming WebSocket messages (for debugging)
@@ -1049,6 +1130,15 @@ function MainApp({ sharePingId }) {
       }
     } else if (data.type === 'instance_config_changed') {
       setInstanceConfigVersion(v => v + 1);
+    } else if (data.type === 'list_order_changed' || data.type === 'community_order_changed') {
+      // Someone rearranged the list: this person on another device, or a
+      // Community's manager (v2.121.0). Not while this device is mid-arrange:
+      // its own saves echo back here, and re-reading between two quick taps
+      // could briefly undo the second.
+      if (Date.now() - lastLocalReorderRef.current > 4000) {
+        loadWaves();
+        loadCommunityChannelsRef.current?.();
+      }
     } else if (data.type === 'voice_presence') {
       // Someone joined or left a Community voice channel (v2.118.0).
       setVoicePresence(prev => ({ ...prev, [data.channelId]: data.participants || [] }));
@@ -1960,6 +2050,11 @@ function MainApp({ sharePingId }) {
               }}>
                 <WaveList
                   onRefresh={loadWaves}
+                  onReorderWaves={handleReorderWaves}
+                  onReorderCommunities={handleReorderCommunities}
+                  onReorderChannels={handleReorderChannels}
+                  onReorderChannelWaves={handleReorderChannelWaves}
+                  onReorderCategories={handleReorderCategories}
                   waves={waves}
                   categories={waveCategories}
                   channels={communityChannels}

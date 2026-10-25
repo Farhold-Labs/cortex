@@ -4545,6 +4545,20 @@ For more information, see:
 - [GitHub Repository](https://github.com/Farhold-Labs/cortex)
 
 
+## List order (v2.121.0)
+
+The sidebar keeps the order people give it rather than sorting by last activity. Anything not placed lists after the placed items, oldest first, so a new wave arrives at the bottom.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| PUT | `/api/profile/list-order` | yourself | `{ waves?: [waveId…], communities?: [communityId…] }`, each the whole order (up to 5000 / 500). A list left out is kept. Waves you cannot read and Communities you are not in are dropped. → `{ waves, communities }` (how many were kept). Stored encrypted under `WAVE_PARTICIPATION_KEY`. Your other devices get `list_order_changed` |
+| PUT | `/api/communities/:id/channel-order` | `channel.manage` | `{ channelIds: [...] }`: those first, in that order; the Community's other channels keep their relative order after them. Ids from elsewhere are ignored. Audited `channel.reorder` |
+| PUT | `/api/communities/:id/channels/:channelId/wave-order` | `channel.manage` in the channel | `{ waveIds: [...] }` (up to 500): placed 0…n-1. Waves you cannot read, or that are not in this channel, are ignored without saying so, so the call cannot be used to ask where a wave is; the channel's other waves lose their place and list after. → `{ placed }`. Audited `channel.reorder_waves` |
+
+Both shared routes push `community_order_changed` (`{ communityId }`) to the Community's members.
+
+**Fields.** `GET /api/waves` (full and `minimal=true`) gives each wave `position` (your order, or `null`) and `channelPosition` (its channel's order, or `null`). `GET /api/communities/mine` returns your Communities in your order, then the rest by name. `GET /api/communities/:id/channels` adds `canManage` to each channel and `canManageChannels` to the response. A new channel goes after the existing ones unless `sortOrder` is given, and a wave moved into a channel starts unplaced.
+
 ## Scoped external media sharing
 
 See [Scoped Jellyfin/Plex media sharing](MEDIA-SECURITY.md) for the grant API, item authorization, proxied playback/HLS, revocation, and legacy-link migration.

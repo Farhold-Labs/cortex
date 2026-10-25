@@ -118,6 +118,7 @@ Encrypting messages is table stakes. Cortex also protects the metadata around yo
 - **User-Agent strings** — truncated to browser and OS only; full fingerprint data is discarded
 - **Timestamps** — activity timestamps rounded to 15-minute windows, session timestamps to 5-minute windows; precise timing cannot be reconstructed
 - **Wave participation** — encrypted at rest; the database cannot reveal who is in which wave without the server's runtime key
+- **Your list order** — the order you arrange your waves and Communities in is encrypted at rest with the same key, because a list of your waves is a list of the waves you are in (v2.121.0). The order of a Community's channels, and of the waves in a channel, is shared with its members and is not encrypted
 - **Push subscriptions** — encrypted at rest; subscription endpoints are not stored in plaintext
 - **Crew membership** — encrypted at rest; group associations cannot be determined from the database alone
 - **Contact lists** — client-side encrypted; only you can decrypt your own contact list; the server never sees it in plaintext
