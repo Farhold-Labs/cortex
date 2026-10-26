@@ -5257,6 +5257,48 @@ function attachmentRelativePath(input) {
   return value;
 }
 
+// ============ Expiring pings (v2.122.0) ============
+//
+// The timers on offer, in seconds: 5 minutes, 1 hour, 8 hours, 1 day, 1 week,
+// 4 weeks. A wave's timer is a ceiling — every new ping gets it, and a sender
+// may pick a shorter one but never a longer one or none, which would defeat
+// the reason the wave has one.
+const PING_TTLS = [300, 3600, 28800, 86400, 604800, 2419200];
+
+/**
+ * When a new ping should expire: `requested` is the sender's choice in
+ * seconds (absent = the wave's timer). Returns { expiresAt } or { error }.
+ */
+function resolvePingExpiry(wave, requested, now = Date.now()) {
+  let ttl = wave?.pingTtl || null;
+  if (requested !== undefined && requested !== null && requested !== '') {
+    const asked = Number(requested);
+    if (!PING_TTLS.includes(asked)) return { error: `expiresIn must be one of ${PING_TTLS.join(', ')}` };
+    ttl = ttl ? Math.min(ttl, asked) : asked;
+  }
+  return { expiresAt: ttl ? new Date(now + ttl * 1000).toISOString() : null };
+}
+
+/**
+ * The stored files a ping carries: its recording, any upload it links, and —
+ * in an encrypted wave, whose content the server cannot read — the paths the
+ * client names. Returned as attachment paths; the caller keeps only files the
+ * author uploaded.
+ */
+function pingFilePaths({ content, encrypted, mediaUrl, declared }) {
+  const found = [];
+  const add = (value) => { const rel = attachmentRelativePath(value); if (rel) found.push(rel); };
+  if (mediaUrl) {
+    const m = String(mediaUrl).match(/\/api\/media\/([A-Za-z0-9_.-]+)/);
+    if (m) found.push(`media/${m[1]}`); else add(mediaUrl);
+  }
+  if (!encrypted && content) {
+    for (const m of String(content).matchAll(/\/uploads\/([^\s"'<>)?#]+)/g)) add(`uploads/${m[1]}`);
+  }
+  if (Array.isArray(declared)) declared.slice(0, 50).forEach(add);
+  return found;
+}
+
 // ============ Auth Middleware ============
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -18093,6 +18135,7 @@ async function sendWaveInvite(targetNode, wave, participants, invitedUserHandle)
       privacy: wave.privacy || 'cross-server',
       createdBy: wave.createdBy,
       createdAt: wave.createdAt,
+      pingTtl: wave.pingTtl || null,   // v2.122.0
     },
     participants: participantList,
     invitedUserHandle,
@@ -18893,6 +18936,7 @@ app.post('/api/admin/federation/waves/:waveId/resync', authenticateToken, async 
             createdAt: d.createdAt,
             editedAt: d.editedAt,
             reactions: d.reactions,
+            expiresAt: d.expiresAt,
           });
           cached++;
         } catch (e) {
@@ -19224,6 +19268,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         // an existing copy into line. Without this a re-broadcast could never
         // repair a wave that arrived before the settings were federated, and
         // tightening the origin would silently leave other ports permissive.
+        if (localWave) syncFederatedPingTtl(localWave, wave);
         if (localWave && db.updateWaveAnnouncementSettings) {
           db.updateWaveAnnouncementSettings(localWave.id, {
             postPolicy: ['all', 'staff'].includes(wave.postPolicy) ? wave.postPolicy : 'all',
@@ -19247,6 +19292,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             allowReplies: wave.allowReplies,
             allowReactions: wave.allowReactions,
           });
+          syncFederatedPingTtl(localWave, wave);
 
           // Cache any remote participants
           if (participants) {
@@ -19319,6 +19365,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         // existing copy into line on every broadcast. Without this, a wave that
         // arrived before the settings were federated could never be repaired,
         // and tightening the origin would leave other ports still permissive.
+        if (localWave) syncFederatedPingTtl(localWave, wave);
         if (localWave && db.updateWaveAnnouncementSettings) {
           db.updateWaveAnnouncementSettings(localWave.id, {
             postPolicy: ['all', 'staff'].includes(wave.postPolicy) ? wave.postPolicy : 'all',
@@ -19355,6 +19402,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             allowReplies: wave.allowReplies,
             allowReactions: wave.allowReactions,
           });
+          syncFederatedPingTtl(localWave, wave);
 
           // Cache any remote participants
           if (participants) {
@@ -19411,6 +19459,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
                   createdAt: d.createdAt,
                   editedAt: d.editedAt,
                   reactions,
+                  expiresAt: d.expiresAt,
                 });
                 cachedCount++;
               } catch (pingErr) {
@@ -19539,6 +19588,8 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           createdAt: fedPing.createdAt,
           editedAt: fedPing.editedAt,
           reactions: fedPing.reactions,
+          // v2.122.0 — this node erases its copy at the same time.
+          expiresAt: fedPing.expiresAt,
         });
 
         if (cachedPing.applied === false) {
@@ -19635,6 +19686,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             createdAt: existingPing.createdAt,
             editedAt,
             reactions: existingPing.reactions,
+            expiresAt: existingPing.expiresAt,
           });
 
           // Broadcast to local clients
@@ -21231,6 +21283,39 @@ async function removeTombstonedAttachments() {
 setTimeout(() => removeTombstonedAttachments().catch(err => console.error('[attachments] sweep failed:', err.message)), 15_000).unref?.();
 setInterval(() => removeTombstonedAttachments().catch(err => console.error('[attachments] sweep failed:', err.message)), 10 * 60_000).unref?.();
 
+// ============ Expiring pings (v2.122.0) ============
+//
+// Every few seconds, erase what has run out and tell the waves concerned. The
+// reads already hide an expired ping before this reaches it, and each client
+// runs its own timer, so the interval only bounds how long the bytes outlive
+// their time on disk. Federated copies are swept by each node on its own,
+// from the expiry that travelled with them; nothing needs to be sent.
+const PING_EXPIRY_SWEEP_MS = Math.max(1000, parseInt(process.env.PING_EXPIRY_SWEEP_MS || '15000', 10) || 15000);
+function sweepExpiredPings() {
+  if (!db.expireDuePings) return;
+  try {
+    let result;
+    do {
+      result = db.expireDuePings();
+      if (!result.pings.length) break;
+      const byWave = new Map();
+      for (const p of result.pings) {
+        if (!byWave.has(p.waveId)) byWave.set(p.waveId, []);
+        byWave.get(p.waveId).push(p.id);
+      }
+      for (const [waveId, pingIds] of byWave) {
+        broadcastToWave(waveId, { type: 'pings_expired', waveId, pingIds });
+      }
+      if (result.files) removeTombstonedAttachments().catch(err => console.error('[attachments] sweep failed:', err.message));
+      console.log(`⏳ Expired ${result.pings.length} ping(s)${result.files ? `, ${result.files} file(s)` : ''}`);
+    } while (result.pings.length >= 500);
+  } catch (err) {
+    console.error('[expiry] sweep failed:', err.message);
+  }
+}
+setTimeout(sweepExpiredPings, 2000).unref?.();
+setInterval(sweepExpiredPings, PING_EXPIRY_SWEEP_MS).unref?.();
+
 // ----- Public viewing (no account) -----
 
 app.get('/api/public/broadcasts/:token', (req, res) => {
@@ -21957,10 +22042,25 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
 // of it. Newest history is the part people actually scroll.
 const BROADCAST_PING_LIMIT = 1000;
 
+/**
+ * Bring a participant copy's ping timer into line with its origin
+ * (v2.122.0). The origin decides, as it does for who may post.
+ */
+function syncFederatedPingTtl(localWave, originWave) {
+  // A sender from before v2.122.0 says nothing, which is not "no timer".
+  if (!localWave || !db.setWavePingTtl || !originWave || !('pingTtl' in originWave)) return;
+  const ttl = PING_TTLS.includes(Number(originWave?.pingTtl)) ? Number(originWave.pingTtl) : null;
+  if ((localWave.pingTtl || null) === ttl) return;
+  db.setWavePingTtl(localWave.id, ttl);
+  localWave.pingTtl = ttl;
+  broadcastToWave(localWave.id, { type: 'wave_settings_changed', waveId: localWave.id, pingTtl: ttl });
+}
+
 function buildWaveBroadcastPayload(wave) {
   const ourNodeName = db.getServerIdentity()?.nodeName;
   const localParticipants = db.getWaveParticipants(wave.id);
-  const allPings = db.getPingsForWave(wave.id) || [];
+  // v2.122.0 — an expired ping is not history to hand on.
+  const allPings = (db.getPingsForWave(wave.id) || []).filter(d => !d.expired);
   const existingPings = allPings.length > BROADCAST_PING_LIMIT
     ? allPings.slice(-BROADCAST_PING_LIMIT)
     : allPings;
@@ -21981,6 +22081,8 @@ function buildWaveBroadcastPayload(wave) {
       postPolicy: wave.postPolicy || 'all',
       allowReplies: wave.allowReplies !== false,
       allowReactions: wave.allowReactions !== false,
+      // v2.122.0 — so pings sent from other ports expire on the same terms.
+      pingTtl: wave.pingTtl || null,
     },
     participants: localParticipants.map(p => ({
       id: p.id, handle: p.handle, displayName: p.name, avatar: p.avatar, nodeName: ourNodeName,
@@ -21997,6 +22099,7 @@ function buildWaveBroadcastPayload(wave) {
         createdAt: d.createdAt || d.created_at,
         editedAt: d.editedAt || d.edited_at,
         reactions,
+        expiresAt: d.expiresAt || null,
         author: {
           id: d.authorId || d.author_id,
           handle: d.sender_handle,
@@ -22056,6 +22159,14 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
   // instance-wide moderator. Deleting the wave stays owner-only, on its own route.
   if (!canManageWave(wave, req.user.userId)) {
     return res.status(403).json({ error: 'Only the wave owner or a wave admin can modify' });
+  }
+
+  // v2.122.0 — validated before anything is saved, so a bad timer cannot
+  // leave half of a settings change applied.
+  const pingTtlUpdate = req.body.pingTtl === undefined ? undefined
+    : (req.body.pingTtl === null || req.body.pingTtl === 0 ? null : Number(req.body.pingTtl));
+  if (pingTtlUpdate != null && !PING_TTLS.includes(pingTtlUpdate)) {
+    return res.status(400).json({ error: `pingTtl must be null or one of ${PING_TTLS.join(', ')}`, code: 'INVALID_EXPIRY' });
   }
 
   const privacy = req.body.privacy;
@@ -22118,6 +22229,23 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
         && updated.federationState === 'origin') {
       broadcastWaveToAlliedNodes(updated);
       console.log(`📢 Syncing announcement settings for ${waveId} to allied ports`);
+    }
+  }
+
+  // v2.122.0 — the wave's ping timer. It applies to pings sent from now on;
+  // what was already sent keeps the expiry it was sent with, because people
+  // wrote those under the old terms.
+  if (pingTtlUpdate !== undefined) {
+    const ttl = pingTtlUpdate;
+    if ((wave.pingTtl || null) !== ttl) {
+      const updated = db.setWavePingTtl(waveId, ttl);
+      broadcastToWave(waveId, { type: 'wave_settings_changed', waveId, pingTtl: updated?.pingTtl || null });
+      if (db.logActivity) db.logActivity(req.user.userId, 'set_ping_ttl', 'wave', waveId, { ...getRequestMeta(req), pingTtl: ttl });
+      if (FEDERATION_ENABLED && updated
+          && (updated.privacy === 'crossServer' || updated.privacy === 'cross-server')
+          && updated.federationState === 'origin') {
+        broadcastWaveToAlliedNodes(updated);
+      }
     }
   }
 
@@ -23985,6 +24113,10 @@ app.post('/api/pings', authenticateToken, (req, res) => {
     parentId = rootId;
   }
 
+  // v2.122.0 — expiring pings: the wave's timer, or a shorter one chosen.
+  const expiry = resolvePingExpiry(wave, req.body.expiresIn);
+  if (expiry.error) return res.status(400).json({ error: expiry.error, code: 'INVALID_EXPIRY' });
+
   const ping = db.createMessage({
     waveId,
     parentId,
@@ -24000,7 +24132,15 @@ app.post('/api/pings', authenticateToken, (req, res) => {
     mediaDuration: mediaDuration || null,
     // Threading (v2.38.0)
     isThreadReply: !!req.body.isThreadReply,
+    expiresAt: expiry.expiresAt,
   });
+
+  // Its files go when it does.
+  if (ping.expiresAt && db.recordPingExpiryFiles) {
+    db.recordPingExpiryFiles(ping.id, req.user.userId, pingFilePaths({
+      content, encrypted: !!req.body.encrypted, mediaUrl, declared: req.body.attachments,
+    }));
+  }
 
   // Create in-app notifications for mentions, replies, and wave activity
   const author = db.findUserById(req.user.userId);
@@ -24028,6 +24168,8 @@ app.post('/api/pings', authenticateToken, (req, res) => {
         createdAt: ping.createdAt,
         editedAt: ping.editedAt,
         reactions: ping.reactions,
+        // v2.122.0 — each node erases its own copy at this time.
+        expiresAt: ping.expiresAt || null,
       },
       originWaveId: wave.federationState === 'origin' ? waveId : wave.originWaveId,
       author: author ? {
@@ -24081,6 +24223,8 @@ app.put('/api/pings/:id', authenticateToken, (req, res) => {
   const ping = db.getMessage(pingId);
   if (!ping) return res.status(404).json({ error: 'Message not found' });
   if (ping.authorId !== req.user.userId) return res.status(403).json({ error: 'Not authorized' });
+  // v2.122.0 — an expired ping is gone, even before the sweep has erased it.
+  if (ping.expired) return res.status(404).json({ error: 'Message not found' });
 
   const content = req.body.content;
   const encrypted = !!req.body.encrypted;
@@ -24097,6 +24241,10 @@ app.put('/api/pings/:id', authenticateToken, (req, res) => {
   }
 
   const updated = db.updateMessage(pingId, content, { encrypted, nonce, keyVersion });
+  // A file added in an edit expires with the ping too.
+  if (ping.expiresAt && db.recordPingExpiryFiles) {
+    db.recordPingExpiryFiles(pingId, req.user.userId, pingFilePaths({ content, encrypted, declared: req.body.attachments }));
+  }
   broadcastToWave(ping.waveId, { type: 'ping_edited', data: updated });
   broadcastToWave(ping.waveId, { type: 'droplet_edited', data: updated }); // Legacy
   broadcastToWave(ping.waveId, { type: 'message_edited', data: updated }); // Legacy

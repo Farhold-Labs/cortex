@@ -15,6 +15,7 @@ import EventCard from '../calendar/EventCard.jsx';
 import AudioPlayer from '../media/AudioPlayer.jsx';
 import VideoPlayer from '../media/VideoPlayer.jsx';
 import { T } from '../../config/terminology.js';
+import ExpiryBadge from './ExpiryBadge.jsx';
 
 const getFirstLine = (content) => {
   if (!content) return '';
@@ -365,6 +366,11 @@ const Message = ({
 
         {/* Content column */}
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* A ping without a header (not first in its group) still shows how
+              long it has left (v2.122.0). */}
+          {!isFirstInGroup && !isDeleted && message.expiresAt && (
+            <span style={{ float: 'right', marginLeft: '6px', lineHeight: 1.6 }}><ExpiryBadge expiresAt={message.expiresAt} /></span>
+          )}
           {/* Pinned marker (v2.74.0) */}
           {message.pinned_at && !isDeleted && (
             <div style={{
@@ -400,6 +406,7 @@ const Message = ({
                   title="Read by"
                 >✓{message.readBy.length}</span>
               )}
+              {!isDeleted && message.expiresAt && <ExpiryBadge expiresAt={message.expiresAt} />}
               {wave?.privacy !== message.privacy && <PrivacyBadge level={message.privacy} compact />}
               {showReaderList && message.readBy?.length > 0 && (
                 <div
@@ -445,8 +452,9 @@ const Message = ({
             >
               <span style={{ color: 'var(--accent-teal)', flexShrink: 0 }}>↩</span>
               <span style={{ color: config.color, flexShrink: 0, fontWeight: 600 }}>{parentPing.sender_name}:</span>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.65 }}>
-                {truncateForQuote(parentPing.content)}
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.65, fontStyle: parentPing.deleted ? 'italic' : undefined }}>
+                {/* v2.122.0 — the quote must not outlive what it quotes. */}
+                {parentPing.expired ? `⏳ ${T.ping} expired` : parentPing.deleted ? '[deleted]' : truncateForQuote(parentPing.content)}
               </span>
             </div>
           )}
@@ -534,7 +542,9 @@ const Message = ({
               color: 'var(--text-muted)', fontSize: isMobile ? '0.95rem' : '0.85rem',
               fontStyle: 'italic', marginBottom: '2px',
             }}>
-              [Message deleted]
+              {/* v2.122.0 — an expired ping stays only as this, and only when
+                  replies need it to hang from (like a deleted one). */}
+              {message.expired ? `⏳ ${T.Ping} expired` : '[Message deleted]'}
             </div>
           ) : isContentCollapsed ? (
             <div

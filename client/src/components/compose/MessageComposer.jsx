@@ -4,6 +4,8 @@ import { Avatar } from '../ui/SimpleComponents.jsx';
 import { searchEmoji, resolveEmojiShortcodes, EMOJI_MAP } from '../../config/emojiData.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import { renderMarkdown } from '../../utils/markdown.js';
+import { ttlChoices, ttlLabel, effectiveTtl } from '../../utils/expiry.js';
+import { T } from '../../config/terminology.js';
 
 const MessageComposer = forwardRef(({
   participants = [],
@@ -33,6 +35,12 @@ const MessageComposer = forwardRef(({
   onPlexClick,
   compact = false,
   fetchAPI,
+  // Expiring pings (v2.122.0). Offered only when the caller passes
+  // onExpiryChange; `expiry` is the sender's choice in seconds (null = none,
+  // or the wave's own timer), `waveTtl` the wave's timer, a ceiling.
+  expiry = null,
+  waveTtl = null,
+  onExpiryChange,
 }, ref) => {
   const [newMessage, setNewMessage] = useState('');
   const [showMentionPicker, setShowMentionPicker] = useState(false);
@@ -45,6 +53,7 @@ const MessageComposer = forwardRef(({
   const [emojiStartPos, setEmojiStartPos] = useState(null);
   const [serverMentionResults, setServerMentionResults] = useState([]);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showExpiryPicker, setShowExpiryPicker] = useState(false);
   const [showFormatBar, setShowFormatBar] = useState(false); // markdown toolbar (off by default)
   const [poppedOut, setPoppedOut] = useState(false); // large pop-out editor with preview
   const [showGifPicker, setShowGifPicker] = useState(false);
@@ -336,6 +345,52 @@ const MessageComposer = forwardRef(({
         </div>
       )}
 
+      {/* Expiring pings (v2.122.0): what the next ping will get, and the choice. */}
+      {onExpiryChange && (effectiveTtl(expiry, waveTtl) || showExpiryPicker) && (
+        <div data-testid="expiry-bar" style={{
+          marginBottom: '8px', padding: '6px 10px',
+          background: 'var(--bg-hover)', border: '1px solid var(--border-subtle)',
+          borderLeft: '3px solid var(--accent-teal)',
+          fontFamily: 'monospace', fontSize: '0.72rem', color: 'var(--text-secondary)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              ⏳ {effectiveTtl(expiry, waveTtl)
+                ? <>Disappears after <strong style={{ color: 'var(--accent-teal)' }}>{ttlLabel(effectiveTtl(expiry, waveTtl))}</strong>{waveTtl && (!expiry || expiry >= waveTtl) ? ` (this ${T.wave}'s timer)` : ''}</>
+                : 'Choose when it disappears'}
+            </span>
+            <button onClick={() => setShowExpiryPicker(v => !v)} aria-expanded={showExpiryPicker}
+              style={{ padding: '3px 8px', background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.68rem', flexShrink: 0 }}
+            >{showExpiryPicker ? 'DONE' : 'CHANGE'}</button>
+            {expiry && !waveTtl && (
+              <button onClick={() => { onExpiryChange(null); setShowExpiryPicker(false); }} aria-label="Stop disappearing" title="Stop disappearing"
+                style={{ padding: '3px 8px', background: 'transparent', border: '1px solid var(--text-dim)', color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.68rem', flexShrink: 0 }}
+              >✕</button>
+            )}
+          </div>
+          {showExpiryPicker && (
+            <div role="group" aria-label="Disappear after" style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
+              {[...(waveTtl ? [] : [{ seconds: null, short: 'OFF' }]), ...ttlChoices(waveTtl)].map(opt => {
+                const active = waveTtl ? (effectiveTtl(expiry, waveTtl) === opt.seconds) : (expiry || null) === opt.seconds;
+                return (
+                  <button key={opt.short}
+                    onClick={() => { onExpiryChange(waveTtl && opt.seconds === waveTtl ? null : opt.seconds); setShowExpiryPicker(false); }}
+                    aria-pressed={active}
+                    style={{
+                      minWidth: isMobile ? '40px' : '34px', minHeight: isMobile ? '34px' : '26px', padding: '3px 8px',
+                      background: active ? 'var(--accent-teal)20' : 'var(--bg-elevated)',
+                      border: `1px solid ${active ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                      color: active ? 'var(--accent-teal)' : 'var(--text-secondary)',
+                      cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.72rem',
+                    }}
+                  >{opt.short}</button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Media upload status */}
       {uploadingMedia && mediaUploadStatus && (
         <div style={{
@@ -455,6 +510,13 @@ const MessageComposer = forwardRef(({
                   onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                 >🎥 Record Video</button>
+              )}
+              {onExpiryChange && (
+                <button onClick={() => { setShowAttachMenu(false); setShowExpiryPicker(true); }}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--accent-teal)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >⏳ Disappearing</button>
               )}
               {plexConnections.length > 0 && onPlexClick && (
                 <button onClick={() => { setShowAttachMenu(false); onPlexClick(); }}

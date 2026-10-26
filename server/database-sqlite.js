@@ -35,6 +35,27 @@ function listOrderKey() {
   return hex && /^[0-9a-f]{64}$/i.test(hex) ? Buffer.from(hex, 'hex') : null;
 }
 
+/**
+ * Expiring pings (v2.122.0). The sweep erases a ping shortly after its time;
+ * until it does, every read shows it as already gone, so nobody can catch the
+ * content in the gap between the expiry and the sweep.
+ */
+function normaliseExpiry(value) {
+  if (!value) return null;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+function hideIfExpired(ping, now) {
+  if (!ping.expiresAt || ping.deleted || ping.expiresAt > now) return ping;
+  return {
+    ...ping,
+    content: '', deleted: true, expired: true, reactions: {}, readBy: [], is_unread: false,
+    nonce: null, media_type: null, media_url: null, media_duration: null,
+    event_id: null, pinned_at: null, pinned_by: null,
+  };
+}
+
 // ============ Privacy Hardening: Email Encryption (v2.16.0) ============
 // These functions mirror those in server.js but are needed here for database operations
 
@@ -3424,6 +3445,39 @@ export class DatabaseSQLite {
       );
     `);
 
+    // v2.122.0 — expiring pings. `expires_at` is fixed when the ping is sent;
+    // the sweep erases it once that time has passed. `ping_ttl` (seconds) is
+    // the wave's timer: every new ping gets it, and a sender may choose a
+    // shorter one but never a longer one or none.
+    const pingColsV2122 = this.db.prepare(`PRAGMA table_info(pings)`).all();
+    if (pingColsV2122.length > 0 && !pingColsV2122.some(c => c.name === 'expires_at')) {
+      console.log('📝 Adding pings.expires_at (v2.122.0)...');
+      this.db.exec(`ALTER TABLE pings ADD COLUMN expires_at TEXT;`);
+      console.log('✅ pings.expires_at added');
+    }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pings_expires ON pings(expires_at) WHERE expires_at IS NOT NULL AND deleted = 0;`);
+    const remotePingColsV2122 = this.db.prepare(`PRAGMA table_info(remote_pings)`).all();
+    if (remotePingColsV2122.length > 0 && !remotePingColsV2122.some(c => c.name === 'expires_at')) {
+      this.db.exec(`ALTER TABLE remote_pings ADD COLUMN expires_at TEXT;`);
+      console.log('✅ remote_pings.expires_at added');
+    }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_pings_expires ON remote_pings(expires_at) WHERE expires_at IS NOT NULL AND deleted = 0;`);
+    const waveColsV2122 = this.db.prepare(`PRAGMA table_info(waves)`).all();
+    if (waveColsV2122.length > 0 && !waveColsV2122.some(c => c.name === 'ping_ttl')) {
+      this.db.exec(`ALTER TABLE waves ADD COLUMN ping_ttl INTEGER;`);
+      console.log('✅ waves.ping_ttl added');
+    }
+    // The files an expiring ping carries, recorded when it is sent so they can
+    // be erased with it. Only files its author uploaded are listed. In an
+    // encrypted wave the server cannot read the ping, so the client names them.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS ping_expiry_files (
+        ping_id TEXT NOT NULL REFERENCES pings(id) ON DELETE CASCADE,
+        path    TEXT NOT NULL,
+        PRIMARY KEY (ping_id, path)
+      );
+    `);
+
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
     //
     // A remote person's standing here is borrowed, and until now it was borrowed
@@ -6364,6 +6418,8 @@ export class DatabaseSQLite {
       communityId: visibleCommunities.has(r.community_id) ? (r.community_id || null) : null,
       channelId: visibleCommunities.has(r.community_id) ? (r.channel_id || null) : null,
       channelPosition: visibleCommunities.has(r.community_id) && r.channel_id && r.channel_position != null ? r.channel_position : null,
+      // Disappearing pings (v2.122.0): seconds, or null for none.
+      pingTtl: r.ping_ttl || null,
       muted: mutedWaveIds.has(r.id),
     }));
   }
@@ -6423,6 +6479,8 @@ export class DatabaseSQLite {
         w.community_id, w.channel_id,
         -- v2.121.0: the list's order needs both, and the same trap applies.
         w.created_at, w.channel_position,
+        -- v2.122.0: the wave's ping timer.
+        w.ping_ttl,
         (SELECT COUNT(*) FROM pings WHERE wave_id = w.id AND deleted = 0) as ping_count,
         (SELECT COUNT(*) FROM wave_participants WHERE wave_id = w.id) as participant_count
       FROM waves w
@@ -6518,6 +6576,8 @@ export class DatabaseSQLite {
       communityId: visibleCommunities.has(r.community_id) ? (r.community_id || null) : null,
       channelId: visibleCommunities.has(r.community_id) ? (r.channel_id || null) : null,
       channelPosition: visibleCommunities.has(r.community_id) && r.channel_id && r.channel_position != null ? r.channel_position : null,
+      // Disappearing pings (v2.122.0): seconds, or null for none.
+      pingTtl: r.ping_ttl || null,
       muted: mutedWaveIds.has(r.id),
       updatedAt: r.updated_at,
       // The list keeps its own order since v2.121.0, and an unplaced wave is
@@ -6578,6 +6638,8 @@ export class DatabaseSQLite {
       // Where the channel's managers placed it (v2.121.0); null = not placed,
       // listed after the placed ones.
       channelPosition: row.channel_id && row.channel_position != null ? row.channel_position : null,
+      // Disappearing pings (v2.122.0): the wave's timer in seconds, or null.
+      pingTtl: row.ping_ttl || null,
     };
   }
 
@@ -7071,6 +7133,7 @@ export class DatabaseSQLite {
       WHERE p.wave_id = ?
         AND p.media_type = 'video'
         AND p.deleted = 0
+        AND (p.expires_at IS NULL OR p.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     `;
 
     const params = [profileWave.id];
@@ -7899,6 +7962,7 @@ export class DatabaseSQLite {
 
   // === Ping Methods ===
   getPingsForWave(waveId, userId = null) {
+    const readAt = new Date().toISOString();
     // Get blocked/muted users
     let blockedIds = [];
     let mutedIds = [];
@@ -8013,8 +8077,12 @@ export class DatabaseSQLite {
         threaded: d.threaded === 1,
         is_thread_reply: d.is_thread_reply === 1,
         reply_count: d.reply_count || 0,
+        // Expiring pings (v2.122.0). A deleted ping that still has an expiry
+        // is one the sweep erased; deleting by hand clears it.
+        expiresAt: d.expires_at || null,
+        expired: d.deleted === 1 && !!d.expires_at,
       };
-    });
+    }).map(p => hideIfExpired(p, readAt));
 
     // Also get remote pings for federated waves
     const remotePings = this.getRemotePingsForWave(waveId).map(rd => ({
@@ -8070,6 +8138,7 @@ export class DatabaseSQLite {
   // Low-Bandwidth Mode: Minimal ping fetching (v2.10.0)
   // Omits reactions, readBy, and is_unread to reduce payload by 30-50%
   getPingsForWaveMinimal(waveId, userId = null) {
+    const readAt = new Date().toISOString();
     // Get blocked/muted users
     let blockedIds = [];
     let mutedIds = [];
@@ -8083,6 +8152,7 @@ export class DatabaseSQLite {
              d.created_at, d.edited_at, d.deleted, d.deleted_at, d.encrypted, d.nonce, d.key_version,
              d.broken_out_to, d.media_type, d.media_url, d.media_duration, d.media_encrypted,
              d.threaded, d.is_thread_reply, d.event_id, d.pinned_at, d.pinned_by,
+             d.expires_at,
              (SELECT COUNT(*) FROM pings WHERE parent_id = d.id) as reply_count,
              u.display_name as user_display_name, u.avatar as user_avatar, u.avatar_url as user_avatar_url, u.handle as user_handle,
              b.name as bot_name, b.id as bot_id,
@@ -8156,10 +8226,12 @@ export class DatabaseSQLite {
         threaded: d.threaded === 1,
         is_thread_reply: d.is_thread_reply === 1,
         reply_count: d.reply_count || 0,
+        expiresAt: d.expires_at || null,
+        expired: d.deleted === 1 && !!d.expires_at,
         // Omitted for minimal mode: reactions, readBy, is_unread
         minimal: true,
       };
-    });
+    }).map(p => hideIfExpired(p, readAt));
 
     // Also get remote pings for federated waves (minimal)
     const remotePings = this.getRemotePingsForWave(waveId).map(rd => ({
@@ -8185,6 +8257,7 @@ export class DatabaseSQLite {
       isRemote: true,
       originNode: rd.originNode,
       authorNode: rd.authorNode,
+      expiresAt: rd.expiresAt || null,
       minimal: true,
     }));
 
@@ -8238,6 +8311,10 @@ export class DatabaseSQLite {
       is_thread_reply: data.isThreadReply ? 1 : 0,
       // Event card (v2.72.0) — the card renders from this id, never from a copy.
       eventId: data.eventId || null,
+      // Expiring pings (v2.122.0). A route that let the sender choose passes
+      // the time; anything else — bots, webhooks, event cards — gets the
+      // wave's timer here, so no caller can forget it.
+      expiresAt: data.expiresAt !== undefined ? (data.expiresAt || null) : this.waveExpiryFrom(data.waveId, now),
     };
 
     // Check if parent is a remote ping (exists in remote_pings but not in pings table)
@@ -8256,17 +8333,17 @@ export class DatabaseSQLite {
       this.db.exec('PRAGMA foreign_keys = OFF');
       try {
         this.db.prepare(`
-          INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId);
+          INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId, ping.expiresAt);
       } finally {
         this.db.exec('PRAGMA foreign_keys = ON');
       }
     } else {
       this.db.prepare(`
-        INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId);
+        INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId, ping.expiresAt);
     }
 
     // Author has read their own ping (skip for bot pings)
@@ -8336,7 +8413,7 @@ export class DatabaseSQLite {
 
     if (!d) return null;
 
-    return {
+    return hideIfExpired({
       id: d.id,
       waveId: d.wave_id,
       parentId: d.parent_id,
@@ -8373,7 +8450,9 @@ export class DatabaseSQLite {
       // Threading fields (v2.38.0)
       threaded: d.threaded === 1,
       is_thread_reply: d.is_thread_reply === 1,
-    };
+      expiresAt: d.expires_at || null,
+      expired: d.deleted === 1 && !!d.expires_at,
+    }, new Date().toISOString());
   }
 
   // Backward compatibility aliases
@@ -8496,7 +8575,10 @@ export class DatabaseSQLite {
     // their own" — for every row written before v2.88.0 as well as after.
     const removedByOther = existing.author_id !== userId;
     this.db.prepare(`
-      UPDATE pings SET content = '[deleted]', deleted = 1, deleted_at = ?, deleted_by = ?, reactions = '{}'
+      UPDATE pings SET content = '[deleted]', deleted = 1, deleted_at = ?, deleted_by = ?, reactions = '{}',
+        -- v2.122.0: a deleted ping with an expiry reads as expired, so a ping
+        -- deleted by hand drops it.
+        expires_at = NULL
       WHERE id = ?
     `).run(now, removedByOther ? userId : null, pingId);
 
@@ -8505,6 +8587,7 @@ export class DatabaseSQLite {
 
     // Clear history
     this.db.prepare('DELETE FROM ping_history WHERE ping_id = ?').run(pingId);
+    this.db.prepare('DELETE FROM ping_expiry_files WHERE ping_id = ?').run(pingId);
 
     return { success: true, pingId, waveId: existing.wave_id, deleted: true, deletedBy: removedByOther ? userId : null };
   }
@@ -8512,6 +8595,98 @@ export class DatabaseSQLite {
   // Backward compatibility aliases
   deleteMessage(id, userId, options) { return this.deletePing(id, userId, options); }
   deleteDroplet(id, userId, options) { return this.deletePing(id, userId, options); }
+
+  // ============ Expiring pings (v2.122.0) ============
+
+  /**
+   * Note the files an expiring ping carries, so they go with it. Only files
+   * its author uploaded count: naming someone else's attachment must not be a
+   * way to get it erased. A path with no attachment row is a legacy upload
+   * nobody can vouch for, and it is left alone.
+   */
+  recordPingExpiryFiles(pingId, authorId, paths) {
+    const owned = this.db.prepare('SELECT 1 FROM attachments WHERE path = ? AND uploaded_by = ?');
+    const insert = this.db.prepare('INSERT OR IGNORE INTO ping_expiry_files (ping_id, path) VALUES (?, ?)');
+    let recorded = 0;
+    for (const path of new Set(paths)) {
+      if (owned.get(path, authorId)) recorded += insert.run(pingId, path).changes;
+    }
+    return recorded;
+  }
+
+  getPingExpiryFiles(pingId) {
+    return this.db.prepare('SELECT path FROM ping_expiry_files WHERE ping_id = ? ORDER BY path').all(pingId).map(r => r.path);
+  }
+
+  /**
+   * Erase every ping whose time has come, and return which they were.
+   *
+   * The row stays as a placeholder so replies keep their parent; everything
+   * that said anything goes: the content (or ciphertext), reactions, read
+   * receipts, edit history, the pin, any notification that quoted it, and its
+   * files, which are tombstoned so /uploads refuses them at once and the
+   * attachment sweep deletes them from storage.
+   */
+  expireDuePings(now = new Date().toISOString(), limit = 500) {
+    const due = this.db.prepare(`
+      SELECT id, wave_id, author_id FROM pings
+      WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted = 0
+      ORDER BY expires_at LIMIT ?
+    `).all(now, limit);
+    const dueRemote = this.db.prepare(`
+      SELECT id, wave_id FROM remote_pings
+      WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted = 0
+      ORDER BY expires_at LIMIT ?
+    `).all(now, limit);
+    if (!due.length && !dueRemote.length) return { pings: [], files: 0 };
+
+    const filesOf = this.db.prepare('SELECT path FROM ping_expiry_files WHERE ping_id = ?');
+    const tombstone = this.db.prepare(`INSERT OR IGNORE INTO attachment_tombstones (path, queued_at) VALUES (?, datetime('now'))`);
+    const dropAttachment = this.db.prepare('DELETE FROM attachments WHERE path = ? AND uploaded_by = ?');
+    const erase = this.db.prepare(`
+      UPDATE pings SET content = '', deleted = 1, deleted_at = ?, reactions = '{}',
+        nonce = NULL, media_type = NULL, media_url = NULL, media_duration = NULL,
+        event_id = NULL, pinned_at = NULL, pinned_by = NULL
+      WHERE id = ? AND deleted = 0
+    `);
+    const eraseRemote = this.db.prepare(`
+      UPDATE remote_pings SET content = '', deleted = 1, reactions = '{}', updated_at = ?
+      WHERE id = ? AND deleted = 0
+    `);
+    let files = 0;
+    const expired = [];
+    this.db.transaction(() => {
+      for (const p of due) {
+        for (const { path } of filesOf.all(p.id)) {
+          tombstone.run(path);
+          dropAttachment.run(path, p.author_id);
+          files++;
+        }
+        if (!erase.run(now, p.id).changes) continue;
+        this.db.prepare('DELETE FROM ping_read_by WHERE ping_id = ?').run(p.id);
+        this.db.prepare('DELETE FROM ping_history WHERE ping_id = ?').run(p.id);
+        this.db.prepare('DELETE FROM ping_expiry_files WHERE ping_id = ?').run(p.id);
+        this.db.prepare('DELETE FROM notifications WHERE ping_id = ?').run(p.id);
+        expired.push({ id: p.id, waveId: p.wave_id, remote: false });
+      }
+      for (const p of dueRemote) {
+        if (eraseRemote.run(now, p.id).changes) expired.push({ id: p.id, waveId: p.wave_id, remote: true });
+      }
+    })();
+    return { pings: expired, files };
+  }
+
+  /** When a ping sent at `from` would expire under its wave's timer, or null. */
+  waveExpiryFrom(waveId, from = new Date().toISOString()) {
+    const ttl = this.db.prepare('SELECT ping_ttl FROM waves WHERE id = ?').get(waveId)?.ping_ttl;
+    return ttl ? new Date(Date.parse(from) + ttl * 1000).toISOString() : null;
+  }
+
+  /** A wave's ping timer in seconds; null turns it off. */
+  setWavePingTtl(waveId, ttl) {
+    this.db.prepare('UPDATE waves SET ping_ttl = ? WHERE id = ?').run(ttl || null, waveId);
+    return this.getWave(waveId);
+  }
 
   togglePingReaction(pingId, userId, emoji) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
@@ -8591,9 +8766,10 @@ export class DatabaseSQLite {
       LEFT JOIN bots b ON p.bot_id = b.id
       LEFT JOIN users pu ON p.pinned_by = pu.id
       WHERE p.wave_id = ? AND p.pinned_at IS NOT NULL AND p.deleted = 0
+        AND (p.expires_at IS NULL OR p.expires_at > ?)
       ORDER BY p.pinned_at DESC
       LIMIT ?
-    `).all(waveId, limit);
+    `).all(waveId, new Date().toISOString(), limit);
 
     return rows.map(r => ({
       id: r.id,
@@ -8673,8 +8849,9 @@ export class DatabaseSQLite {
       JOIN waves w ON d.wave_id = w.id
       JOIN users u ON d.author_id = u.id
       WHERE pings_fts MATCH ? AND d.deleted = 0
+        AND (d.expires_at IS NULL OR d.expires_at > ?)
     `;
-    const params = [ftsQuery];
+    const params = [ftsQuery, new Date().toISOString()];
 
     if (waveId) {
       sql += ' AND d.wave_id = ?';
@@ -8735,8 +8912,9 @@ export class DatabaseSQLite {
       JOIN waves w ON d.wave_id = w.id
       JOIN users u ON d.author_id = u.id
       WHERE d.content LIKE ? AND d.deleted = 0
+        AND (d.expires_at IS NULL OR d.expires_at > ?)
     `;
-    const params = [`%${searchTerm}%`];
+    const params = [`%${searchTerm}%`, new Date().toISOString()];
 
     if (waveId) {
       sql += ' AND d.wave_id = ?';
@@ -9604,6 +9782,7 @@ export class DatabaseSQLite {
       editedAt: row.edited_at,
       deleted: !!row.deleted,
       reactions: JSON.parse(row.reactions || '{}'),
+      expiresAt: row.expires_at || null,
       cachedAt: row.cached_at,
       updatedAt: row.updated_at,
       isRemote: true
@@ -9616,8 +9795,9 @@ export class DatabaseSQLite {
       FROM remote_pings rd
       LEFT JOIN remote_users ru ON rd.author_id = ru.id
       WHERE rd.wave_id = ? AND rd.deleted = 0
+        AND (rd.expires_at IS NULL OR rd.expires_at > ?)
       ORDER BY rd.created_at ASC
-    `).all(waveId);
+    `).all(waveId, new Date().toISOString());
 
     return rows.map(r => ({
       id: r.id,
@@ -9637,6 +9817,7 @@ export class DatabaseSQLite {
       reactions: JSON.parse(r.reactions || '{}'),
       cachedAt: r.cached_at,
       updatedAt: r.updated_at,
+      expiresAt: r.expires_at || null,
       isRemote: true
     }));
   }
@@ -9646,14 +9827,15 @@ export class DatabaseSQLite {
   // pre-formatted (bot-aware) to match the wave-broadcast payload shape.
   getWavePingsForFederation(waveId, { before = null, limit = 100 } = {}) {
     let sql = `
-      SELECT d.id, d.parent_id, d.author_id, d.content, d.created_at, d.edited_at, d.reactions, d.bot_id,
+      SELECT d.id, d.parent_id, d.author_id, d.content, d.created_at, d.edited_at, d.reactions, d.bot_id, d.expires_at,
              u.display_name AS user_display_name, u.avatar AS user_avatar, u.avatar_url AS user_avatar_url, u.handle AS user_handle,
              b.name AS bot_name
       FROM pings d
       JOIN users u ON d.author_id = u.id
       LEFT JOIN bots b ON d.bot_id = b.id
-      WHERE d.wave_id = ? AND d.deleted = 0`;
-    const params = [waveId];
+      WHERE d.wave_id = ? AND d.deleted = 0
+        AND (d.expires_at IS NULL OR d.expires_at > ?)`;
+    const params = [waveId, new Date().toISOString()];
     if (before) { sql += ' AND d.created_at < ?'; params.push(before); }
     sql += ' ORDER BY d.created_at DESC LIMIT ?';
     params.push(limit);
@@ -9669,6 +9851,7 @@ export class DatabaseSQLite {
         createdAt: d.created_at,
         editedAt: d.edited_at,
         reactions,
+        expiresAt: d.expires_at || null,
         author: {
           id: d.author_id,
           handle: isBot ? String(d.bot_name || 'bot').toLowerCase().replace(/\s+/g, '-') : d.user_handle,
@@ -9693,12 +9876,16 @@ export class DatabaseSQLite {
    * The conflict clause now refuses to change a row whose provenance differs.
    * A caller that needs to know whether its write landed gets `applied` back.
    */
-  cacheRemotePing({ id, waveId, originWaveId, originNode, authorId, authorNode, parentId, content, createdAt, editedAt, reactions }) {
+  cacheRemotePing({ id, waveId, originWaveId, originNode, authorId, authorNode, parentId, content, createdAt, editedAt, reactions, expiresAt }) {
     const now = new Date().toISOString();
+    // v2.122.0 — the expiry travels with the ping. One already past is stored
+    // as gone, so a late delivery or a backfill cannot bring it back.
+    const expiry = normaliseExpiry(expiresAt);
+    const gone = expiry && expiry <= now;
 
     const result = this.db.prepare(`
-      INSERT INTO remote_pings (id, wave_id, origin_wave_id, origin_node, author_id, author_node, parent_id, content, created_at, edited_at, reactions, cached_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO remote_pings (id, wave_id, origin_wave_id, origin_node, author_id, author_node, parent_id, content, created_at, edited_at, reactions, cached_at, updated_at, expires_at, deleted)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
         content = excluded.content,
         edited_at = excluded.edited_at,
@@ -9706,11 +9893,13 @@ export class DatabaseSQLite {
         updated_at = excluded.updated_at
       WHERE remote_pings.wave_id = excluded.wave_id
         AND remote_pings.origin_node = excluded.origin_node
-    `).run(id, waveId, originWaveId, originNode, authorId, authorNode, parentId || null, content, createdAt, editedAt || null, JSON.stringify(reactions || {}), now, now);
+        AND remote_pings.deleted = 0
+    `).run(id, waveId, originWaveId, originNode, authorId, authorNode, parentId || null, gone ? '' : content, createdAt, editedAt || null, gone ? '{}' : JSON.stringify(reactions || {}), now, now, expiry, gone ? 1 : 0);
 
     const cached = this.getRemotePing(id);
     const applied = result.changes > 0;
-    if (!applied && cached) {
+    // A ping already gone (deleted or expired) is meant to refuse updates.
+    if (!applied && cached && !cached.deleted) {
       console.warn(`[federation] refused to overwrite ping ${id}: cached as ${cached.waveId}/${cached.originNode}, offered as ${waveId}/${originNode}`);
     }
     return Object.assign(cached || {}, { applied });
@@ -11768,9 +11957,10 @@ export class DatabaseSQLite {
       SELECT id, content, author_id, created_at
       FROM pings
       WHERE wave_id = ? AND encrypted = 0
+        AND (expires_at IS NULL OR expires_at > ?)
       ORDER BY created_at ASC
       LIMIT ?
-    `).all(waveId, limit).map(d => ({
+    `).all(waveId, new Date().toISOString(), limit).map(d => ({
       id: d.id,
       content: d.content,
       authorId: d.author_id,
@@ -13529,6 +13719,7 @@ export class DatabaseSQLite {
       JOIN users u ON p.author_id = u.id
       WHERE p.media_type = 'video'
         AND p.deleted = 0
+        AND (p.expires_at IS NULL OR p.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         AND p.encrypted = 0
         AND (
           w.privacy = 'public'

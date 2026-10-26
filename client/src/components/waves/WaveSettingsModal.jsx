@@ -4,6 +4,7 @@ import { PRIVACY_LEVELS } from '../../config/constants.js';
 import { SUCCESS, CONFIRM_DIALOG, FEDERATION, formatError } from '../../../messages.js';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { T } from '../../config/terminology.js';
+import { PING_TTLS, ttlLabel } from '../../utils/expiry.js';
 
 const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast, onUpdate, participants = [], showParticipants, setShowParticipants, federationEnabled, currentUserId, onFederate, isMobile }) => {
   const e2ee = useE2EE();
@@ -12,6 +13,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
   const [postPolicy, setPostPolicy] = useState(wave?.postPolicy || 'all');
   const [allowReplies, setAllowReplies] = useState(wave?.allowReplies !== false);
   const [allowReactions, setAllowReactions] = useState(wave?.allowReactions !== false);
+  const [pingTtl, setPingTtl] = useState(wave?.pingTtl || null); // v2.122.0
   const [selectedGroup, setSelectedGroup] = useState(wave?.groupId || null);
   const [title, setTitle] = useState(wave?.title || '');
   // Wave staff (v2.88.0)
@@ -112,6 +114,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       setPostPolicy(wave.postPolicy || 'all');
       setAllowReplies(wave.allowReplies !== false);
       setAllowReactions(wave.allowReactions !== false);
+      setPingTtl(wave.pingTtl || null);
     }
   }, [wave]);
 
@@ -288,7 +291,10 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       await fetchAPI(`/waves/${wave.id}`, {
         method: 'PUT',
         body: { title, privacy, groupId: privacy === 'group' ? selectedGroup : null,
-                postPolicy, allowReplies, allowReactions },
+                postPolicy, allowReplies, allowReactions,
+                // Sent only when changed, so saving the title of a wave whose
+                // timer arrived from its origin port leaves it alone.
+                ...((wave.pingTtl || null) !== pingTtl ? { pingTtl } : {}) },
       });
       showToast(SUCCESS.waveUpdated, 'success');
       onUpdate();
@@ -569,6 +575,31 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
               </div>
             </label>
           ))}
+        </div>
+
+        {/* Disappearing pings (v2.122.0) — a ceiling for everything sent from
+            now on; what was already sent keeps the expiry it was sent with. */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>DISAPPEARING {T.PINGS}</div>
+          <div role="group" aria-label={`Disappearing ${T.pings}`} style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {[{ seconds: null, short: 'OFF' }, ...PING_TTLS].map(opt => {
+              const active = (pingTtl || null) === opt.seconds;
+              return (
+                <button key={opt.short} onClick={() => setPingTtl(opt.seconds)} aria-pressed={active} style={{
+                  minWidth: '44px', padding: '8px 10px',
+                  background: active ? 'var(--accent-teal)20' : 'var(--bg-elevated)',
+                  border: `1px solid ${active ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                  color: active ? 'var(--accent-teal)' : 'var(--text-primary)',
+                  cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.75rem',
+                }}>{opt.short}</button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '6px', lineHeight: 1.4 }}>
+            {pingTtl
+              ? `New ${T.pings} disappear ${ttlLabel(pingTtl)} after they are sent. People can choose a shorter time, not a longer one. ${T.Pings} already sent keep theirs.`
+              : `${T.Pings} stay unless their sender chooses a timer.`}
+          </div>
         </div>
 
         <div style={{ marginBottom: '16px' }}>
