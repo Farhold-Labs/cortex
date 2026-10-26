@@ -140,6 +140,7 @@ Cortex supports PIN-protected hidden waves (Ghost Protocol). These waves:
 - **Activity logs** — automatically deleted after 30 days (configurable by operator)
 - **Sessions** — automatically cleaned up after 30 days (configurable by operator)
 - **Messages** — retained until the wave is deleted by participants
+- **Disappearing pings** — a ping sent with a timer, or in a wave that has one, is erased at that time: its text (or ciphertext), reactions, read receipts, edit history, pin, the notifications that quoted it, and the files its sender attached. Within about 15 seconds of the time the database holds none of it; before that, nobody is shown it. Allied ports erase their copies at the same time, but **a port running a version older than v2.122.0 keeps its copy**. Expiry cannot reach what someone has already seen, copied or screenshotted, push notifications or emails already delivered, or backups of the database taken while the ping existed, until those backups are themselves deleted (v2.122.0)
 - **Attachments** — retained until their wave is deleted. A replaced profile picture is deleted. **Known gap:** deleting an account does not yet delete its profile picture or video files. Nothing links to them any more, but they remain at their old addresses until the operator removes them.
 - **Broadcast recordings** — retained until deleted by the performer or wave staff, or until the wave is deleted
 - **Unconfirmed email follow sign-ups** — deleted after 7 days

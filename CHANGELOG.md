@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.122.0] - 2026-10-26
+
+Pings can disappear. A sender can give a ping a timer, and a wave's owner or admins can give the wave one that every new ping gets.
+
+### Added
+
+- **Disappearing pings.** ⋮ → **⏳ Disappearing** in the message box: 5m, 1h, 8h, 1d, 1w or 4w.
+  - The choice stays for the next pings until it is changed or you leave the wave. A bar above the box says what the next ping will get.
+  - Each expiring ping shows its time left (⏳3h). That includes pings grouped under one header.
+  - At its time it goes from the screen without waiting for the server. Each app runs its own timer.
+- **A wave timer.** Wave settings → DISAPPEARING PINGS (owner and wave admins, like the other settings).
+  - It is a ceiling. Every new ping gets it, including pings from bots, webhooks and event cards. A sender may choose a shorter time, never a longer one or none, because that would defeat the reason the wave has one.
+  - Pings already sent keep the expiry they were sent with: people wrote them under the old terms.
+  - The clock starts when a ping is sent, not when it is read, so everyone loses it at the same moment. Starting it on first read was considered and turned down: it is more complex and tells the server when people read.
+- **What is left.** An expired ping that has replies stays as a muted "⏳ ping expired" line, so the replies keep their place. A reply's quote of it says the same. One with no replies simply goes, like a deleted ping.
+- API:
+  - `expiresIn` (seconds) on `POST /api/pings`, and `attachments` (the paths an encrypted ping carries);
+  - `pingTtl` on `PUT /api/waves/:id`;
+  - `expiresAt` / `expired` on pings and `pingTtl` on waves;
+  - WebSocket `pings_expired`.
+
+  Details in `docs/API.md`.
+
+### Fixed
+
+- A ping under a deleted one lost its author's name. Grouping counted the hidden ping above it, so the next ping from the same person was drawn as part of a group whose header was gone. This was always true of deleted pings; with disappearing pings it would happen constantly.
+
+### Security and privacy
+
+- **Erased, not hidden.** Every 15 seconds a sweep replaces an expired ping's content (or ciphertext) with nothing. It also removes:
+  - its reactions, read receipts and edit history;
+  - its pin, any notification that quoted it, and its search-index entry;
+  - its files.
+- **Nothing readable in the gap.** Between the expiry and the sweep, every read already treats the ping as gone: the wave view (full and low-bandwidth), single pings, pins, both searches, the video feeds, federation backfill and the encrypt-this-wave pass. An expired ping cannot be edited back to life (404).
+- **Its files go with it.** At send time the server notes the files a ping carries: its recording, the uploads its text links, or, in an encrypted wave whose text it cannot read, the paths the app names from the plaintext. At expiry they are tombstoned, so `/uploads` refuses them at once, and the attachment sweep deletes them from storage, every version on B2.
+  - **Only files the ping's author uploaded count.** Naming someone else's attachment must not be a way to get it erased. A file with no attachment row (a legacy upload) is left alone.
+  - Counterfactual: with the ownership check stripped from a copy of `database-sqlite.js`, the other person's file is erased.
+- **Federation.** The expiry travels with the ping, and the wave timer with the wave (broadcasts, invites, re-broadcasts). Each port erases its own copy at that time; nothing has to be sent.
+  - A copy that arrives already expired, or is re-delivered after expiry, is stored as gone, so a backfill cannot revive it.
+  - **A port running an older version keeps its copy**, because it does not know about expiry. Every allied port should upgrade.
+- **What expiry cannot reach:** what someone saw, copied or screenshotted; push notifications and emails already delivered; and database backups taken while the ping existed, until those backups age out. `docs/PRIVACY.md` says so.
+
+### Database
+
+- `pings.expires_at`, `remote_pings.expires_at`, `waves.ping_ttl` (all nullable), partial indexes on the expiries, and table `ping_expiry_files`. Additive; verified backup before upgrading as always.
+
+### Verified
+
+- `tests/expiring-pings.test.cjs` (8):
+  - **Hidden before the sweep.** An expired ping reads as gone before the sweep in every read path above. The sweep then erases the row and its search-index entry.
+  - **Deleting is not expiring.** A ping deleted by hand reads as deleted, not expired.
+  - **The wave timer reaches bots.** It is applied even to a ping created with no timer of its own.
+  - **Federated copies.** One that arrives already expired is stored as gone; one that expires is hidden before the sweep and cannot be revived by re-delivery.
+  - **Someone else's file stays.** It is not erased, and neither is a legacy file, with a counterfactual.
+  - **Through a real server:**
+    - only listed timers are accepted;
+    - members cannot set the wave timer, and both wave lists carry it;
+    - a longer choice is held to the wave timer, a shorter one kept;
+    - the reply keeps its parent, and the notification goes;
+    - the uploaded file is deleted from disk and no longer served, while another person's file is still served;
+    - editing the expired ping returns 404;
+    - search stops finding a ping the moment it is due.
+- In the running app on dev at 390 px:
+  - ⋮ → Disappearing → 5m set the bar and sent the ping with a 5-minute expiry; the badge counted down (⏳5m, then ⏳6s).
+  - At the expiry both pings left the screen. The reply's quote read "⏳ ping expired" and kept its author header, and the sweep erased both rows.
+  - With a 1-day wave timer the bar read "Disappears after 1 day (this wave's timer)" and offered only 5m–1d. Saving 1h in wave settings stored it.
+  - No console errors.
+  - Not tried in the browser: an encrypted wave. The server side of that path (named attachments) is covered by the tests.
+
 ## [2.121.0] - 2026-10-25
 
 The wave list keeps the order you give it. It was sorted by last activity, so a wave jumped to the top every time someone posted in it; with unread counts on every heading (v2.117.1) the jump no longer earned its keep, and it made the list impossible to arrange.
