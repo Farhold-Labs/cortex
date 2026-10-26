@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- `docs/HIGH-AVAILABILITY.md`: proposal for a warm standby in another provider, written after the 2026-10-26 Bluehost Ashburn outage took farhold and PMP down together. Covers health-checked DNS failover (TTL 60, TLS kept end to end, Cloudflare proxying rejected for privacy), Litestream replication to B2, a lease and boot guard against split brain, the failover runbook, DNS-01 certificates, and phases.
+
 ## [2.122.0] - 2026-10-26
 
 Pings can disappear. A sender can give a ping a timer, and a wave's owner or admins can give the wave one that every new ping gets.
