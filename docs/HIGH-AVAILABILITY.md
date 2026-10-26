@@ -182,18 +182,27 @@ The new boxes needn't mirror the current pairing. One standby can host both node
 - the same firewall as the primary: 22 rate-limited (the home IP exempt), 80 and 443, plus fail2ban for sshd; root login key-only;
 - v2.122.0 installed in each user's `~/cortex`, prebuilt `dist`. Nothing running. `~/.config/cortex/ha-role` records `role=standby`.
 
-nginx serves only a default site that answers **503** on port 80, so a health check sees "not ready". Site files for both nodes are staged in `sites-available` (`standby-farhold`, `standby-pmp`), generated from `landing/nginx.conf`. They aren't enabled, because there are no certificates yet.
+**Copied from the primary on 2026-10-26** (sha256 matches):
+- both `server/.env` files, both `ecosystem.config.cjs` files, farhold's `firebase-service-account.json`;
+- both `~/.config/cortex` offsite configs;
+- `/etc/letsencrypt`, the three nginx sites with `conf.d/websocket-upgrade.conf`, and `/var/www/farhold-landing`.
+
+The sites are enabled, and certbot's timer is **disabled**: HTTP-01 renewal can't work here while DNS points at the primary. Checked with `curl --resolve` against the standby, with certificates valid:
+- `cortex.farhold.com` and `cortex.pottermckeanplayers.org` return **502** for `/api/health`, because the API is stopped. That is the "not ready" a health check should see.
+- `farhold.com` returns 200 (the static landing page).
+
+The standby can also list both offsite buckets: the newest backups are `farhold-20261026-031501` and `pmp-20261026-033501`.
 
 **Still to do, and what each step waits on:**
 
 | Step | Waits on |
 |---|---|
-| copy `server/.env`, `ecosystem.config.cjs`, `firebase-service-account.json`, the real nginx sites and `/var/www/farhold-landing` from the primary (the ecosystem files here are placeholders) | the primary being reachable |
-| certificates by DNS-01 | open question 1, plus a DNS API token |
-| Litestream on the primaries, and the replica buckets | the primary, plus a B2 bucket and key in each B2 account |
+| certificates by DNS-01, so the standby renews on its own. Until then, re-copy `/etc/letsencrypt` after the primary renews (farhold's certificates expire 2026-11-29) | the move of the zones from Squarespace (which has no DNS API) to Cloudflare, DNS-only, plus a zone-scoped token |
+| re-copy `.env` and the ecosystem files whenever they change on the primary | a sync step in the release train |
+| Litestream on the primaries, and the replica buckets | a B2 bucket and key in each B2 account |
 | `ha-guard.sh`, `ha-promote.sh`, the health checks, the drill | Phase 3 |
 
-**Until then the standby can't take over.** Its database would come from the offsite backups, and the credentials that read them are only on the primary.
+**What a takeover could do today:** restore the newest offsite backup, losing up to a day of data. The backups decrypt only with the private key on the dev box (open question 3), so that box is part of the path.
 
 ## Open questions
 
