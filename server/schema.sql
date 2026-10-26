@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS waves (
     -- Profile Wave fields (v2.9.0)
     is_profile_wave INTEGER DEFAULT 0,      -- 1 if this is a user's profile video wave
     profile_owner_id TEXT REFERENCES users(id) -- Owner of the profile wave
-, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL, post_policy TEXT NOT NULL DEFAULT 'all', allow_replies INTEGER NOT NULL DEFAULT 1, allow_reactions INTEGER NOT NULL DEFAULT 1, community_id TEXT REFERENCES communities(id) ON DELETE SET NULL, channel_id   TEXT REFERENCES channels(id) ON DELETE SET NULL, channel_position INTEGER);
+, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL, post_policy TEXT NOT NULL DEFAULT 'all', allow_replies INTEGER NOT NULL DEFAULT 1, allow_reactions INTEGER NOT NULL DEFAULT 1, community_id TEXT REFERENCES communities(id) ON DELETE SET NULL, channel_id   TEXT REFERENCES channels(id) ON DELETE SET NULL, channel_position INTEGER, ping_ttl INTEGER);
 CREATE INDEX IF NOT EXISTS idx_waves_created_by ON waves(created_by);
 CREATE INDEX IF NOT EXISTS idx_waves_privacy ON waves(privacy);
 CREATE INDEX IF NOT EXISTS idx_waves_crew ON waves(crew_id);
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS pings (
     -- Threading fields (v2.38.0)
     threaded INTEGER DEFAULT 0,            -- 1 if message has been burst/threaded
     is_thread_reply INTEGER DEFAULT 0      -- 1 if reply was made within thread panel
-, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL, deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL);
+, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL, deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL, expires_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_pings_wave ON pings(wave_id);
 CREATE INDEX IF NOT EXISTS idx_pings_author ON pings(author_id);
 CREATE INDEX IF NOT EXISTS idx_pings_parent ON pings(parent_id);
@@ -196,6 +196,7 @@ CREATE INDEX IF NOT EXISTS idx_pings_video_feed
         WHERE media_type = 'video' AND deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_pings_event_id ON pings(event_id) WHERE event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_pings_pinned ON pings(wave_id, pinned_at) WHERE pinned_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pings_expires ON pings(expires_at) WHERE expires_at IS NOT NULL AND deleted = 0;
 
 CREATE TABLE IF NOT EXISTS ping_read_by (
     ping_id TEXT NOT NULL REFERENCES pings(id) ON DELETE CASCADE,
@@ -649,10 +650,11 @@ CREATE TABLE IF NOT EXISTS remote_pings (
     reactions TEXT DEFAULT '{}',
     cached_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+, expires_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_remote_pings_wave ON remote_pings(wave_id);
 CREATE INDEX IF NOT EXISTS idx_remote_pings_origin ON remote_pings(origin_node, origin_wave_id);
 CREATE INDEX IF NOT EXISTS idx_remote_pings_author ON remote_pings(author_node, author_id);
+CREATE INDEX IF NOT EXISTS idx_remote_pings_expires ON remote_pings(expires_at) WHERE expires_at IS NOT NULL AND deleted = 0;
 
 CREATE TABLE IF NOT EXISTS federation_queue (
     id TEXT PRIMARY KEY,
@@ -1510,6 +1512,12 @@ CREATE TABLE IF NOT EXISTS user_list_order (
         data       TEXT NOT NULL,
         iv         TEXT,
         updated_at TEXT NOT NULL
+      );
+
+CREATE TABLE IF NOT EXISTS ping_expiry_files (
+        ping_id TEXT NOT NULL REFERENCES pings(id) ON DELETE CASCADE,
+        path    TEXT NOT NULL,
+        PRIMARY KEY (ping_id, path)
       );
 
 -- ============ Full-text search triggers ============

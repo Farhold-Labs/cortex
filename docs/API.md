@@ -4559,6 +4559,22 @@ Both shared routes push `community_order_changed` (`{ communityId }`) to the Com
 
 **Fields.** `GET /api/waves` (full and `minimal=true`) gives each wave `position` (your order, or `null`) and `channelPosition` (its channel's order, or `null`). `GET /api/communities/mine` returns your Communities in your order, then the rest by name. `GET /api/communities/:id/channels` adds `canManage` to each channel and `canManageChannels` to the response. A new channel goes after the existing ones unless `sortOrder` is given, and a wave moved into a channel starts unplaced.
 
+## Expiring pings (v2.122.0)
+
+A ping can carry an expiry, fixed when it is sent. At that time it is erased: content, reactions, read receipts, history, its pin, the notifications that quoted it, and the files its author attached. Timers are seconds, one of `300, 3600, 28800, 86400, 604800, 2419200` (5m, 1h, 8h, 1d, 1w, 4w); anything else → 400 `INVALID_EXPIRY`.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| POST | `/api/pings` | a participant | adds `expiresIn` (seconds). With a wave timer the shorter of the two applies, so a longer choice is held to the wave's. Without `expiresIn` the wave timer applies, if any. `attachments: [path…]` (up to 50) names the uploads an **encrypted** ping carries, so they are erased with it; for plain pings the server reads them from the text. Only files the sender uploaded are counted. The ping returned has `expiresAt` (ISO or `null`) |
+| PUT | `/api/pings/:id` | the author | 404 once expired. Uploads added in an edit expire with the ping |
+| PUT | `/api/waves/:id` | owner or wave admin | `pingTtl`: a timer, or `null` / `0` for none. Applies to pings sent afterwards. Logged `set_ping_ttl`; a Verse-Wide origin re-broadcasts so other ports follow |
+
+**Fields.** Pings carry `expiresAt` and `expired` (true once erased; a ping deleted by hand has `expiresAt: null` and `expired: false`). An expired ping reads as `content: ""`, `deleted: true`, `expired: true` from the moment it is due, before the sweep reaches it. Pins, search, feeds and federation backfill leave it out. Waves carry `pingTtl` (seconds or `null`) in `GET /api/waves` (full and `minimal=true`) and `GET /api/waves/:id`.
+
+**WebSocket.** `pings_expired` (`{ waveId, pingIds }`) when the sweep (every 15 s, `PING_EXPIRY_SWEEP_MS`) erases pings. `wave_settings_changed` carries `pingTtl` when the timer changes.
+
+**Federation.** `expiresAt` travels in `new_ping`, in wave broadcasts and in backfill; `pingTtl` travels in `wave_broadcast` and `wave_invite`. Each port erases its own copy at that time. A copy delivered after its expiry is stored as gone.
+
 ## Scoped external media sharing
 
 See [Scoped Jellyfin/Plex media sharing](MEDIA-SECURITY.md) for the grant API, item authorization, proxied playback/HLS, revocation, and legacy-link migration.

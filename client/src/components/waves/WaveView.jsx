@@ -20,7 +20,8 @@ import WaveContextBar from './WaveContextBar.jsx';
 import EventDetailModal from '../calendar/EventDetailModal.jsx';
 import EventCreateModal from '../calendar/EventCreateModal.jsx';
 import { uploadFile, deliverUpload, registerUploadTarget } from '../../utils/uploads.js';
-import { registerAttachments } from '../../utils/attachments.js';
+import { registerAttachments, uploadPathsIn } from '../../utils/attachments.js';
+import { effectiveTtl, nextExpiry, expireDue, ttlLabel } from '../../utils/expiry.js';
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
@@ -73,6 +74,20 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [eventsReload, setEventsReload] = useState(0);
   const [pinsReload, setPinsReload] = useState(0);
   const [replyingTo, setReplyingTo] = useState(null);
+  // Expiring pings (v2.122.0): the sender's choice for this wave, in seconds.
+  // It stays until changed, so a run of pings gets the same timer, and is
+  // forgotten on leaving the wave.
+  const [pingExpiry, setPingExpiry] = useState(null);
+  useEffect(() => { setPingExpiry(null); }, [wave?.id]);
+
+  // Take an expiring ping off the screen at its time, rather than when the
+  // server's sweep next says so. One timer, for whichever is due first.
+  useEffect(() => {
+    const due = nextExpiry(waveData?.all_messages);
+    if (due == null) return undefined;
+    const t = setTimeout(() => setWaveData(prev => expireDue(prev)), Math.min(Math.max(0, due - Date.now()) + 50, 2 ** 31 - 1));
+    return () => clearTimeout(t);
+  }, [waveData?.all_messages]);
   const [newMessage, setNewMessage] = useState('');
   const [collapsed, setCollapsed] = useState(() => {
     // Load collapsed state from localStorage per wave
@@ -1096,6 +1111,14 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
       // E2EE: Encrypt message if wave is encrypted and E2EE is unlocked
       let messageBody = { wave_id: wave.id, parent_id: replyingTo?.id || null, content };
+      // The server applies the wave's timer itself; only a shorter choice is sent.
+      if (pingExpiry) messageBody.expiresIn = pingExpiry;
+      // An encrypted ping's files are named here, from the plaintext, so they
+      // can be erased with it.
+      if (effectiveTtl(pingExpiry, waveData?.pingTtl) && waveData?.encrypted) {
+        const paths = uploadPathsIn(content);
+        if (paths.length) messageBody.attachments = paths;
+      }
 
       if (waveData?.encrypted && e2ee.isUnlocked) {
         try {
@@ -1293,6 +1316,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         mediaType: uploadData.type,
         mediaUrl: uploadData.url,
         mediaDuration: uploadData.duration,
+        ...(pingExpiry ? { expiresIn: pingExpiry } : {}),
       };
 
       // Handle E2EE - for now, just mark media as not encrypted
@@ -2485,7 +2509,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           </div>
         )}
         {pings.map((msg, i) => {
-          const prev = pings[i - 1];
+          // Group with the nearest ping still on screen: a deleted or expired
+          // one above is not drawn, and grouping with it left the next ping
+          // without its author's name (v2.122.0).
+          let p = i - 1;
+          while (p >= 0 && pings[p].deleted) p--;
+          const prev = pings[p];
           const isFirstInGroup = !prev ||
             prev.author_id !== msg.author_id ||
             (new Date(msg.created_at) - new Date(prev.created_at)) > 5 * 60 * 1000;
@@ -2718,6 +2747,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           plexConnections={plexConnections}
           onPlexClick={() => setShowPlexBrowser(true)}
           fetchAPI={fetchAPI}
+          expiry={pingExpiry}
+          waveTtl={waveData?.pingTtl || null}
+          onExpiryChange={setPingExpiry}
         />
         )}
       </div>
