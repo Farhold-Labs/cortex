@@ -99,6 +99,15 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * server has given a final answer — bound, or refused (400/403/404/409, which
  * no retry would change).
  */
+/**
+ * The upload paths a ping's plaintext mentions (v2.122.0). An expiring ping
+ * in an encrypted wave names them to the server, which cannot read the ping,
+ * so they can be erased with it.
+ */
+export function uploadPathsIn(content) {
+  return [...new Set(String(content || '').match(UPLOAD_PATH) || [])];
+}
+
 export async function registerAttachments(content, waveId) {
   if (!content || !waveId) return;
 
@@ -132,4 +141,4 @@ export async function registerAttachments(content, waveId) {
   }
 }
 
-export default { ensureAttachmentSession, startAttachmentSession, stopAttachmentSession, registerAttachments };
+export default { ensureAttachmentSession, startAttachmentSession, stopAttachmentSession, registerAttachments, uploadPathsIn };

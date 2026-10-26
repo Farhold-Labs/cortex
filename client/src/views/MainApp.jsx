@@ -895,8 +895,15 @@ function MainApp({ sharePingId }) {
     }
 
     // Handle both legacy (new_message) and new (new_ping) event names
-    if (data.type === 'new_message' || data.type === 'new_ping' || data.type === 'message_edited' || data.type === 'ping_edited' || data.type === 'message_deleted' || data.type === 'ping_deleted' || data.type === 'wave_created' || data.type === 'wave_updated' || data.type === 'message_reaction' || data.type === 'ping_reaction' || data.type === 'wave_invite_received' || data.type === 'wave_broadcast_received' || data.type === 'ping_threaded' || data.type === 'ping_reparented' || data.type === 'ping_pinned') {
+    if (data.type === 'new_message' || data.type === 'new_ping' || data.type === 'message_edited' || data.type === 'ping_edited' || data.type === 'message_deleted' || data.type === 'ping_deleted' || data.type === 'wave_created' || data.type === 'wave_updated' || data.type === 'message_reaction' || data.type === 'ping_reaction' || data.type === 'wave_invite_received' || data.type === 'wave_broadcast_received' || data.type === 'ping_threaded' || data.type === 'ping_reparented' || data.type === 'ping_pinned'
+        // v2.122.0 — expiring pings, and a wave's timer changing
+        || data.type === 'pings_expired' || data.type === 'wave_settings_changed') {
       loadWaves();
+      // The notifications that quoted an expired ping are gone on the server.
+      if (data.type === 'pings_expired') {
+        setNotificationRefreshTrigger(prev => prev + 1);
+        fetchAPI('/notifications/by-wave').then(result => setWaveNotifications(result.countsByWave || {})).catch(() => {});
+      }
       // If the event is for the currently viewed wave, trigger a reload
       // Extract waveId from different event structures
       const eventWaveId = data.waveId || data.data?.wave_id || data.data?.waveId;
