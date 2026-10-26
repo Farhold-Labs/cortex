@@ -1,6 +1,6 @@
 # High availability: a warm standby in another provider
 
-**Status: proposal (2026-10-26). Nothing here is built yet.**
+**Status: proposal (2026-10-26). Phase 2 has started:** a standby box exists (see *Current state*). Nothing else is built yet.
 
 On 2026-10-26 Bluehost's Ashburn site had an outage. The box at `50.6.203.21` hosts both farhold and PMP, so both nodes went down together, for hours, with nothing to fail over to. This document is the plan for making the next one a few minutes of reconnecting.
 
@@ -173,6 +173,27 @@ The new boxes needn't mirror the current pairing. One standby can host both node
 | 2 | standby boxes: release, `.env` parity, DNS-01 certificates, API stopped | a manual rebuild becomes a manual promotion |
 | 3 | health-checked DNS failover, alarms, `ha-guard.sh`, `ha-promote.sh`, the drill | the runbook in §4 |
 | 4 | *optional:* automatic promotion with a third-party witness | about 2–3 min RTO without waiting for a person |
+
+## Current state
+
+**Standby box: `201.79.38.210`** (hostname `Cortex`; region `mkc1` in its metadata). Set up 2026-10-26 to match the Bluehost primary:
+- Ubuntu 24.04, Node 24, pm2 7, nginx, ffmpeg, Litestream 0.5.17 (installed, its service disabled), 2 GB swap, UTC;
+- users `cortex` (farhold, ports 3000/3001) and `pmp` (PMP, 3010/3011), key-only and without sudo, each with a pm2 boot unit and an empty process list;
+- the same firewall as the primary: 22 rate-limited (the home IP exempt), 80 and 443, plus fail2ban for sshd; root login key-only;
+- v2.122.0 installed in each user's `~/cortex`, prebuilt `dist`. Nothing running. `~/.config/cortex/ha-role` records `role=standby`.
+
+nginx serves only a default site that answers **503** on port 80, so a health check sees "not ready". Site files for both nodes are staged in `sites-available` (`standby-farhold`, `standby-pmp`), generated from `landing/nginx.conf`. They aren't enabled, because there are no certificates yet.
+
+**Still to do, and what each step waits on:**
+
+| Step | Waits on |
+|---|---|
+| copy `server/.env`, `ecosystem.config.cjs`, `firebase-service-account.json`, the real nginx sites and `/var/www/farhold-landing` from the primary (the ecosystem files here are placeholders) | the primary being reachable |
+| certificates by DNS-01 | open question 1, plus a DNS API token |
+| Litestream on the primaries, and the replica buckets | the primary, plus a B2 bucket and key in each B2 account |
+| `ha-guard.sh`, `ha-promote.sh`, the health checks, the drill | Phase 3 |
+
+**Until then the standby can't take over.** Its database would come from the offsite backups, and the credentials that read them are only on the primary.
 
 ## Open questions
 
