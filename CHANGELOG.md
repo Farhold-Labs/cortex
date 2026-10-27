@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 - `docs/HIGH-AVAILABILITY.md`: proposal for a warm standby in another provider, written after the 2026-10-26 Bluehost Ashburn outage took farhold and PMP down together. Covers health-checked DNS failover (TTL 60, TLS kept end to end, Cloudflare proxying rejected for privacy), Litestream replication to B2, a lease and boot guard against split brain, the failover runbook, DNS-01 certificates, and phases.
+- HA doc brought up to date: farhold.com is on Cloudflare (DNS-only, `cortex` TTL 60). The standby box is in place. Both boxes renew farhold's certificates by DNS-01 through a token limited to that zone; PMP's certificate still renews over HTTP and is skipped on the standby. Adds the zone-move lesson: the import missed five records, and a wildcard silently answered for them.
 
 ## [2.122.0] - 2026-10-26
 
