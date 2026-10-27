@@ -1,6 +1,9 @@
 # High availability: a warm standby in another provider
 
-**Status: proposal (2026-10-26). Phase 2 has started:** a standby box exists (see *Current state*). Nothing else is built yet.
+**Status: proposal (2026-10-26).**
+- **Phase 0:** done for farhold, which is on Cloudflare with `cortex` at TTL 60. PMP's zone hasn't moved.
+- **Phase 2:** largely done. The standby box exists, has the primary's configuration, and renews farhold's certificates itself.
+- **Phases 1, 3 and 4:** not started. See *Current state*.
 
 On 2026-10-26 Bluehost's Ashburn site had an outage. The box at `50.6.203.21` hosts both farhold and PMP, so both nodes went down together, for hours, with nothing to fail over to. This document is the plan for making the next one a few minutes of reconnecting.
 
@@ -52,7 +55,16 @@ The standby is **warm**: code, configuration, certificates and secrets are all i
 
 Either one probes `/api/health` through nginx. When cortex-api is stopped, nginx returns 502, so a stopped or fenced node is "unhealthy" with no extra work. The resolver answers with the secondary only when the primary is unhealthy *and* the secondary is healthy. A dark standby therefore never receives traffic by accident: it becomes eligible only once promotion starts its API.
 
-**TTL 60** on every record that should move. Today's records are 1800, so a failover would take up to 30 minutes to reach people. Lowering them is the first step and costs nothing.
+**TTL 60** on every record that should move. The Squarespace records were at 1800, so a failover would have taken up to 30 minutes to reach people. `cortex.farhold.com` has been at 60 since the zone moved to Cloudflare on 2026-10-26.
+
+**Moving a zone: check every record by name, against the old nameservers.** When `farhold.com` moved from Squarespace to Cloudflare on 2026-10-26, Cloudflare's import missed five records:
+- `cortex` (A);
+- `send` (CNAME, used for Resend);
+- `purelymail1` to `purelymail3._domainkey` (CNAMEs, email signing).
+
+The zone also has a wildcard, `*.farhold.com`, pointing at a home IP. Every missing name silently fell through to it, so lookups still succeeded with a wrong address instead of failing. The app was down until the records were re-added.
+
+The old nameservers keep answering for a while after the switch. Compare each expected name on both with `dig +short <type> <name> @<old ns>` and `@<new ns>`, before and after changing the nameservers.
 
 **Records that move, per node:**
 - farhold: `cortex.farhold.com`, plus `farhold.com` and `www` if they're served by the same box;
@@ -143,20 +155,24 @@ B2 offers no reliable compare-and-swap on an object, so this lease is a **fence 
 
 ## 6. Certificates
 
-Today certbot proves control of the domain over HTTP, which only works on the box the name currently points at. A standby kept dark would never renew.
+HTTP challenges only work on the box the name currently points at, so a standby kept dark would never renew. **Both boxes renew farhold's certificates by DNS-01** (since 2026-10-26):
 
-- **Plan:** switch both boxes to **DNS-01** challenges with the DNS provider's certbot plugin. Use a token limited to TXT records, if the provider allows that, kept in root-only files. Both boxes then renew on their own, whichever is primary.
-- **Fallback:** if a provider can't issue a scoped token, copy the primary's certificates to the standby weekly. Certificates last 90 days, so a week-old copy is fine. But this sync breaks exactly when the primary is gone for a long time, so treat it as second best.
+- **Plugin:** `python3-certbot-dns-cloudflare`.
+- **Credentials:** `/root/.secrets/cloudflare-farhold.ini` on each box, mode 600. It holds a Cloudflare API token limited to Zone → DNS → Edit on `farhold.com`, and it can see no other zone.
+- **Certificates:** `cortex.farhold.com` and `farhold.com` (with `www`). Each was switched with `certbot reconfigure -a dns-cloudflare --dns-cloudflare-credentials … --dns-cloudflare-propagation-seconds 30`, and `certbot renew --dry-run` succeeds on both boxes.
+- **Each box renews its own copy.** Two certificates for the same names are fine; Let's Encrypt's duplicate limit is 5 a week.
+- **Trade-off:** root on either box can rewrite the `farhold.com` zone. A box serving the domain is already trusted with about that much.
 
-## 7. Where the standbys live
+**PMP's domain is not on Cloudflare,** so `cortex.pottermckeanplayers.org` still renews over HTTP:
+- On the primary this works, because the name points there.
+- On the standby its renewal file has `autorenew = False`, so a real `certbot renew` skips it. `--dry-run` simulates every certificate regardless, so a dry run there reports PMP's as failed. That's expected.
+- **Until the domain moves,** copy that certificate from the primary after each renewal. It expires 2027-01-02. Certificates last 90 days, so a copy a few weeks old is fine, but the copy breaks exactly when the primary is gone for a long time.
 
-The two old DigitalOcean droplets (`147.182.175.15`, farhold's old box, and `137.184.55.252`, PMP's) are still running, with their APIs stopped and nginx forwarding to Bluehost. They are on a different provider, which makes them obvious candidates instead of decommissioning them. Before choosing them:
-- confirm their region and size against `docs/DEPLOYMENT.md` §0;
-- upgrade the OS and install the current release;
-- remove the forwarding nginx config, since the standby serves its own name;
-- clear any stale data left from before the cutover.
+## 7. Where the standby lives
 
-The new boxes needn't mirror the current pairing. One standby can host both nodes as two users, the way the Bluehost box does. That's cheaper, but then a standby failure is shared too.
+**One new box, `201.79.38.210`** (see *Current state*), outside Bluehost, hosting both nodes as two users the way the Bluehost box does. That's cheaper than one per node, but a standby failure is shared too.
+
+**Considered and not used:** the two old DigitalOcean droplets, `147.182.175.15` (farhold's old box) and `137.184.55.252` (PMP's). They're still running, with their APIs stopped and nginx forwarding to Bluehost, and remain on the decommission list.
 
 ## 8. Testing
 
@@ -187,7 +203,7 @@ The new boxes needn't mirror the current pairing. One standby can host both node
 - both `~/.config/cortex` offsite configs;
 - `/etc/letsencrypt`, the three nginx sites with `conf.d/websocket-upgrade.conf`, and `/var/www/farhold-landing`.
 
-The sites are enabled, and certbot's timer is **disabled**: HTTP-01 renewal can't work here while DNS points at the primary. Checked with `curl --resolve` against the standby, with certificates valid:
+The sites are enabled, and certbot's timer is on: farhold's certificates renew here by DNS-01, and PMP's is skipped (§6). Checked with `curl --resolve` against the standby, with certificates valid:
 - `cortex.farhold.com` and `cortex.pottermckeanplayers.org` return **502** for `/api/health`, because the API is stopped. That is the "not ready" a health check should see.
 - `farhold.com` returns 200 (the static landing page).
 
@@ -197,7 +213,7 @@ The standby can also list both offsite buckets: the newest backups are `farhold-
 
 | Step | Waits on |
 |---|---|
-| certificates by DNS-01, so the standby renews on its own. Until then, re-copy `/etc/letsencrypt` after the primary renews (farhold's certificates expire 2026-11-29) | the move of the zones from Squarespace (which has no DNS API) to Cloudflare, DNS-only, plus a zone-scoped token |
+| PMP's certificate by DNS-01. Until then, copy it from the primary after each renewal (it expires 2027-01-02) | moving `pottermckeanplayers.org` to Cloudflare, which is PMP's call, or a `cortex` CNAME into a zone we control |
 | re-copy `.env` and the ecosystem files whenever they change on the primary | a sync step in the release train |
 | Litestream on the primaries, and the replica buckets | a B2 bucket and key in each B2 account |
 | `ha-guard.sh`, `ha-promote.sh`, the health checks, the drill | Phase 3 |
@@ -206,7 +222,7 @@ The standby can also list both offsite buckets: the newest backups are `farhold-
 
 ## Open questions
 
-1. **Where are the zones hosted?** That decides whether health-checked failover and DNS-01 are available as they are, or whether the zones move (Route 53, or Cloudflare DNS-only). PMP's domain may be controlled by PMP, not by us.
+1. ~~Where are the zones hosted?~~ `farhold.com` moved from Squarespace to Cloudflare (DNS-only) on 2026-10-26. **Still open:** who controls `pottermckeanplayers.org`, and whether it can move too.
 2. **Does either node use SQLCipher?** (§2)
 3. **Is the standby box allowed to hold the replica's decryption key?** It has to, to restore; the offsite backups were deliberately set up the other way.
 4. **What's the budget?** Health checks and failover records cost a few dollars a month per node. The standby box costs whatever the droplets already cost.
