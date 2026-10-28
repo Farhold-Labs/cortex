@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { MapleLeaf, OakLeaf, Leaf } from '../glyphs.jsx';
 
 /**
  * Autumn Leaves Effect - Falling leaves
@@ -55,13 +56,8 @@ const AutumnLeaves = ({ colors = ['#D2691E', '#FF8C00', '#8B4513', '#DAA520'] })
     }
   `, []);
 
-  const getLeafSymbol = (type) => {
-    switch (type) {
-      case 'maple': return String.fromCharCode(0x1F341); // maple leaf
-      case 'oak': return String.fromCharCode(0x1F342); // fallen leaf
-      default: return String.fromCharCode(0x1F343); // leaf fluttering
-    }
-  };
+  // Drawn shapes, not emoji: see ../glyphs.jsx.
+  const LEAVES = { maple: MapleLeaf, oak: OakLeaf, generic: Leaf };
 
   return (
     <>
@@ -73,7 +69,6 @@ const AutumnLeaves = ({ colors = ['#D2691E', '#FF8C00', '#8B4513', '#DAA520'] })
             position: 'absolute',
             left: `${leaf.left}%`,
             top: '-30px',
-            fontSize: `${leaf.size}px`,
             opacity: leaf.opacity,
             animation: `leaf-fall ${leaf.duration}s ease-in-out infinite`,
             animationDelay: `${leaf.delay}s`,
@@ -83,7 +78,7 @@ const AutumnLeaves = ({ colors = ['#D2691E', '#FF8C00', '#8B4513', '#DAA520'] })
             willChange: 'transform, opacity'
           }}
         >
-          {getLeafSymbol(leaf.type)}
+          {React.createElement(LEAVES[leaf.type], { size: leaf.size, color: leaf.color })}
         </div>
       ))}
     </>

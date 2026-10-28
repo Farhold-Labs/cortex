@@ -1,26 +1,44 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Bat, Ghost, Pumpkin, Witch } from '../glyphs.jsx';
 
 /**
- * Spooky Effect - Flying bats and ghosts
+ * Spooky Effect - bats, ghosts, jack-o'-lanterns and a couple of witches
  * Used for Halloween (Oct 28 - Nov 1)
+ *
+ * Drawn shapes (../glyphs.jsx), not emoji: see the note there.
  */
+
+// Glow colours for the dark silhouettes, which a black glow would hide.
+const GLOWS = ['#FF6600', '#B04CFF'];
+
+function spookyType(i) {
+  if (i < 2) return 'witch';
+  const r = Math.random();
+  return r < 0.45 ? 'bat' : r < 0.72 ? 'ghost' : 'pumpkin';
+}
+
+const SHAPES = { bat: Bat, ghost: Ghost, pumpkin: Pumpkin, witch: Witch };
 const SpookyEffect = ({ colors = ['#FF6600', '#800080', '#000000'] }) => {
   const [particles, setParticles] = useState([]);
 
   // Generate spooky elements
   useEffect(() => {
-    const elements = Array.from({ length: 25 }, (_, i) => ({
-      id: i,
-      left: -10 + Math.random() * 120, // Can start off-screen
-      top: Math.random() * 80,
-      delay: Math.random() * 15,
-      duration: 8 + Math.random() * 10, // 8-18 seconds
-      size: 16 + Math.random() * 20, // 16-36px
-      opacity: 0.4 + Math.random() * 0.4,
-      color: colors[Math.floor(Math.random() * colors.length)],
-      type: Math.random() > 0.5 ? 'bat' : 'ghost',
-      verticalDrift: -50 + Math.random() * 100
-    }));
+    const elements = Array.from({ length: 25 }, (_, i) => {
+      const type = spookyType(i);
+      const witch = type === 'witch';
+      return {
+        id: i,
+        left: -10 + Math.random() * 120, // Can start off-screen
+        top: Math.random() * 80,
+        delay: Math.random() * 15,
+        duration: (witch ? 14 : 8) + Math.random() * 10, // witches cross slower
+        size: (witch ? 34 : 18) + Math.random() * (witch ? 14 : 20),
+        opacity: 0.45 + Math.random() * 0.4,
+        glow: GLOWS[Math.floor(Math.random() * GLOWS.length)],
+        type,
+        verticalDrift: -50 + Math.random() * 100
+      };
+    });
     setParticles(elements);
   }, [colors]);
 
@@ -80,7 +98,6 @@ const SpookyEffect = ({ colors = ['#FF6600', '#800080', '#000000'] }) => {
             position: 'absolute',
             left: `${particle.left}%`,
             top: `${particle.top}%`,
-            fontSize: `${particle.size}px`,
             opacity: particle.opacity,
             animation: `fly-across ${particle.duration}s linear infinite`,
             animationDelay: `${particle.delay}s`,
@@ -95,9 +112,11 @@ const SpookyEffect = ({ colors = ['#FF6600', '#800080', '#000000'] }) => {
               : 'ghost-wobble 2s ease-in-out infinite',
             filter: particle.type === 'ghost'
               ? 'drop-shadow(0 0 8px rgba(255,255,255,0.5))'
-              : `drop-shadow(0 0 4px ${particle.color})`
+              : particle.type === 'pumpkin'
+                ? 'drop-shadow(0 0 6px rgba(255,140,0,0.7))'
+                : `drop-shadow(0 0 5px ${particle.glow}) drop-shadow(0 0 2px ${particle.glow})`
           }}>
-            {particle.type === 'bat' ? String.fromCharCode(0x1F987) : String.fromCharCode(0x1F47B)}
+            {React.createElement(SHAPES[particle.type], { size: particle.size })}
           </span>
         </div>
       ))}
