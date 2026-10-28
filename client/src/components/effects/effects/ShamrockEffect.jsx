@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Shamrock } from '../glyphs.jsx';
 
 /**
  * Shamrock Effect - Floating shamrock characters
@@ -61,17 +62,15 @@ const ShamrockEffect = ({ colors = ['#228B22', '#32CD32', '#FFD700'] }) => {
             position: 'absolute',
             left: `${shamrock.left}%`,
             top: '-30px',
-            fontSize: `${shamrock.size}px`,
-            color: shamrock.color,
             opacity: shamrock.opacity,
             animation: `shamrock-fall ${shamrock.duration}s linear infinite`,
             animationDelay: `${shamrock.delay}s`,
             '--sway': `${shamrock.sway}px`,
-            textShadow: `0 0 8px ${shamrock.color}60`,
+            filter: `drop-shadow(0 0 5px ${shamrock.color}60)`,
             willChange: 'transform, opacity'
           }}
         >
-          {String.fromCharCode(0x2618)}
+          <Shamrock size={shamrock.size} color={shamrock.color} />
         </div>
       ))}
     </>

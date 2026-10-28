@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.122.0**. Last brought current 2026-10-26.
+Current version: **2.122.1**. Last brought current 2026-10-28.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2122000 / versionName "2.122.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2122000 / MARKETING_VERSION 2.122.0
+client/android/app/build.gradle                  versionCode 2122001 / versionName "2.122.1"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2122001 / MARKETING_VERSION 2.122.1
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -446,6 +446,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **CHANGELOG.md** — complete version history with technical detail
 - **docs/API.md** — API endpoints
 - **docs/DEPLOYMENT.md** — hardened VPS deployment, hardware sizing, broadcasts/recording setup, release backups
+- **docs/HIGH-AVAILABILITY.md** — proposed warm-standby failover (DNS health checks, Litestream, lease + boot guard); not built yet
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy

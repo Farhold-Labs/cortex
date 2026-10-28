@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.122.1] - 2026-10-28
+
+Holiday effects show what they were meant to. Halloween is drawing Chinese characters, empty boxes and, on Windows, icons where its bats and ghosts should be.
+
+### Fixed
+- **Halloween and Thanksgiving effects drew the wrong characters on every system.** They used `String.fromCharCode(0x1F987)` and the like. `fromCharCode` takes a 16-bit value, so every emoji above U+FFFF was cut down to a different character:
+  - the bat became 驪 (U+F987);
+  - the ghost and the three Thanksgiving leaves became private-use codes, which show as empty boxes, or as whatever icon a system font puts there (on Windows, Segoe's icon fonts live in that range, which is probably where the hourglasses came from).
+
+  It was never a font problem, so no font would have fixed it.
+- **The effects are now drawn as SVG shapes** (`client/src/components/effects/glyphs.jsx`), so they look the same everywhere and take the holiday's colours:
+  - Halloween: bats, ghosts, jack-o'-lanterns and two witches on broomsticks (it had only bats and ghosts);
+  - Thanksgiving: maple, oak and plain leaves;
+  - Valentine's hearts, St Patrick's shamrocks, and Easter's eggs, flowers and butterflies. These used characters that do exist, but depended on fonts some systems lack. Easter's "egg" was actually a florette, and none of Easter's shapes took the holiday colours.
+
+### Security
+- `qs` 6.17.0, via Express 4.22.3 (server): GHSA-6pq8-jhm2-2vcw, moderate. `qs.stringify` with `arrayFormat: 'comma'` could throw on crafted array elements. Cortex never calls `qs` directly; the update is to clear the advisory, which CI's audit gate flagged.
+
+### Docs
+- `docs/HIGH-AVAILABILITY.md`: proposal for a warm standby in another provider, written after the 2026-10-26 Bluehost Ashburn outage took farhold and PMP down together. Covers health-checked DNS failover (TTL 60, TLS kept end to end, Cloudflare proxying rejected for privacy), Litestream replication to B2, a lease and boot guard against split brain, the failover runbook, DNS-01 certificates, and phases.
+- HA doc brought up to date: farhold.com is on Cloudflare (DNS-only, `cortex` TTL 60). The standby box is in place. Both boxes renew farhold's certificates by DNS-01 through a token limited to that zone; PMP's certificate still renews over HTTP and is skipped on the standby. Adds the zone-move lesson: the import missed five records, and a wildcard silently answered for them.
+
+### Verified
+- `tests/holiday-glyphs.test.cjs` (3 tests) fails the build if any client code passes `fromCharCode` a code point above U+FFFF. Run against the v2.122.0 code, it fails and names all five broken calls.
+- Every shape rendered in headless Chrome on dark and light backgrounds. The live Halloween effect checked in the running app at 390 px: 25 shapes, no stray text, no console errors.
+
 ## [2.122.0] - 2026-10-26
 
 Pings can disappear. A sender can give a ping a timer, and a wave's owner or admins can give the wave one that every new ping gets.
