@@ -1,5 +1,6 @@
 import React from 'react';
 import { plainText } from '../../utils/plainText.js';
+import HolidayIcon, { holidayFromAlertTitle, withoutLeadingEmoji } from '../effects/HolidayIcon.jsx';
 
 const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
   if (!alert) return null;
@@ -7,7 +8,8 @@ const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
   const priorityConfig = {
     critical: { icon: '🚨', color: 'var(--accent-orange)', label: 'CRITICAL' },
     warning: { icon: '⚠️', color: 'var(--accent-amber)', label: 'WARNING' },
-    info: { icon: 'ℹ️', color: 'var(--accent-teal)', label: 'INFO' }
+    info: { icon: 'ℹ️', color: 'var(--accent-teal)', label: 'INFO' },
+    celebration: { icon: '🎉', color: 'var(--accent-purple)', label: 'CELEBRATION' }
   };
 
   const categoryLabels = {
@@ -17,6 +19,8 @@ const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
   };
 
   const cfg = priorityConfig[alert.priority] || priorityConfig.info;
+  const holiday = alert.priority === 'celebration' ? holidayFromAlertTitle(alert.title) : null;
+  const title = holiday ? withoutLeadingEmoji(plainText(alert.title)) : plainText(alert.title);
   const categoryLabel = categoryLabels[alert.category] || alert.category;
 
   // Format dates - ensure we parse as UTC
@@ -47,7 +51,9 @@ const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
           background: `${cfg.color}15`, border: `1px solid ${cfg.color}40`,
           borderRadius: '4px',
         }}>
-          <span style={{ fontSize: '1.5rem' }}>{cfg.icon}</span>
+          {holiday
+            ? <HolidayIcon holiday={holiday} size="1.5rem" />
+            : <span style={{ fontSize: '1.5rem' }}>{cfg.icon}</span>}
           <span style={{ color: cfg.color, fontWeight: 600, fontFamily: 'monospace', fontSize: '0.9rem' }}>
             {cfg.label}
           </span>
@@ -61,7 +67,7 @@ const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
           margin: '0 0 16px 0', color: 'var(--text-primary)',
           fontFamily: 'monospace', fontSize: isMobile ? '1.1rem' : '1.25rem',
         }}>
-          {plainText(alert.title)}
+          {title}
         </h2>
 
         {/* Content */}
