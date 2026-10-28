@@ -65,7 +65,6 @@ function getHanukkahDates(year) {
 const HOLIDAYS = {
   newYear: {
     name: "New Year's",
-    emoji: '🎆',
     isActive: (date) => {
       const month = date.getMonth();
       const day = date.getDate();
@@ -79,7 +78,6 @@ const HOLIDAYS = {
 
   valentines: {
     name: "Valentine's Day",
-    emoji: '❤️',
     isActive: (date) => {
       const month = date.getMonth();
       const day = date.getDate();
@@ -93,7 +91,6 @@ const HOLIDAYS = {
 
   elderxeke: {
     name: 'ElderXeke Day',
-    emoji: '✨',
     isActive: (date) => {
       const month = date.getMonth();
       const day = date.getDate();
@@ -107,7 +104,6 @@ const HOLIDAYS = {
 
   stPatricks: {
     name: "St. Patrick's Day",
-    emoji: '☘️',
     isActive: (date) => {
       const month = date.getMonth();
       const day = date.getDate();
@@ -121,7 +117,6 @@ const HOLIDAYS = {
 
   easter: {
     name: 'Easter',
-    emoji: '🐰',
     isActive: (date) => {
       const year = date.getFullYear();
       const easter = calculateEaster(year);
@@ -141,7 +136,6 @@ const HOLIDAYS = {
 
   independenceDay: {
     name: 'Independence Day',
-    emoji: '🇺🇸',
     isActive: (date) => {
       const month = date.getMonth();
       const day = date.getDate();
@@ -155,7 +149,6 @@ const HOLIDAYS = {
 
   halloween: {
     name: 'Halloween',
-    emoji: '🎃',
     isActive: (date) => {
       const month = date.getMonth();
       const day = date.getDate();
@@ -169,7 +162,6 @@ const HOLIDAYS = {
 
   thanksgiving: {
     name: 'Thanksgiving',
-    emoji: '🦃',
     isActive: (date) => {
       const year = date.getFullYear();
       const nov1 = new Date(year, 10, 1);
@@ -195,7 +187,6 @@ const HOLIDAYS = {
 
   christmas: {
     name: 'Christmas',
-    emoji: '🎄',
     isActive: (date) => {
       const month = date.getMonth();
       const day = date.getDate();
@@ -209,7 +200,6 @@ const HOLIDAYS = {
 
   hanukkah: {
     name: 'Hanukkah',
-    emoji: '🕎',
     isActive: (date) => {
       const year = date.getFullYear();
       const { start, end } = getHanukkahDates(year);
@@ -238,7 +228,6 @@ export function getCurrentHoliday(checkDate = new Date()) {
       return {
         id: key,
         name: holiday.name,
-        emoji: holiday.emoji,
         start,
         end
       };
