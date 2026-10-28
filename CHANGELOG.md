@@ -22,6 +22,9 @@ Holiday effects show what they were meant to. Halloween is drawing Chinese chara
   - Thanksgiving: maple, oak and plain leaves;
   - Valentine's hearts, St Patrick's shamrocks, and Easter's eggs, flowers and butterflies. These used characters that do exist, but depended on fonts some systems lack. Easter's "egg" was actually a florette, and none of Easter's shapes took the holiday colours.
 
+### Security
+- `qs` 6.17.0, via Express 4.22.3 (server): GHSA-6pq8-jhm2-2vcw, moderate. `qs.stringify` with `arrayFormat: 'comma'` could throw on crafted array elements. Cortex never calls `qs` directly; the update is to clear the advisory, which CI's audit gate flagged.
+
 ### Docs
 - `docs/HIGH-AVAILABILITY.md`: proposal for a warm standby in another provider, written after the 2026-10-26 Bluehost Ashburn outage took farhold and PMP down together. Covers health-checked DNS failover (TTL 60, TLS kept end to end, Cloudflare proxying rejected for privacy), Litestream replication to B2, a lease and boot guard against split brain, the failover runbook, DNS-01 certificates, and phases.
 - HA doc brought up to date: farhold.com is on Cloudflare (DNS-only, `cortex` TTL 60). The standby box is in place. Both boxes renew farhold's certificates by DNS-01 through a token limited to that zone; PMP's certificate still renews over HTTP and is skipped on the standby. Adds the zone-move lesson: the import missed five records, and a wildcard silently answered for them.
