@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Egg, Flower, Butterfly } from '../glyphs.jsx';
 
 /**
  * Pastel Overlay - Subtle gradient overlay with floating elements
@@ -49,14 +50,9 @@ const PastelOverlay = ({ colors = ['#FFB6C1', '#87CEEB', '#DDA0DD', '#98FB98'] }
     }
   `, []);
 
-  const getSymbol = (type) => {
-    switch (type) {
-      case 'egg': return String.fromCharCode(0x2740); // ❀ white florette
-      case 'flower': return String.fromCharCode(0x273F); // ✿ black florette
-      case 'butterfly': return String.fromCharCode(0x274B); // ❋ heavy eight teardrop-spoked asterisk
-      default: return '*';
-    }
-  };
+  // Drawn shapes, not font characters: see ../glyphs.jsx. (The "egg" was a
+  // florette, and none of them took the holiday colours.)
+  const SHAPES = { egg: Egg, flower: Flower, butterfly: Butterfly };
 
   return (
     <>
@@ -78,7 +74,6 @@ const PastelOverlay = ({ colors = ['#FFB6C1', '#87CEEB', '#DDA0DD', '#98FB98'] }
             position: 'absolute',
             left: `${particle.left}%`,
             bottom: '-30px',
-            fontSize: `${particle.size}px`,
             opacity: particle.opacity,
             animation: `pastel-float ${particle.duration}s ease-in-out infinite`,
             animationDelay: `${particle.delay}s`,
@@ -91,7 +86,7 @@ const PastelOverlay = ({ colors = ['#FFB6C1', '#87CEEB', '#DDA0DD', '#98FB98'] }
             display: 'inline-block',
             animation: particle.type === 'butterfly' ? 'butterfly-flutter 0.3s ease-in-out infinite' : 'none'
           }}>
-            {getSymbol(particle.type)}
+            {React.createElement(SHAPES[particle.type], { size: particle.size, color: particle.color })}
           </span>
         </div>
       ))}

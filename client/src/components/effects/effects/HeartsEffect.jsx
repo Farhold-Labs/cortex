@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Heart } from '../glyphs.jsx';
 
 /**
  * Hearts Effect - Floating hearts rising upward
@@ -56,17 +57,15 @@ const HeartsEffect = ({ colors = ['#FF69B4', '#FF1493', '#FFC0CB'] }) => {
             position: 'absolute',
             left: `${heart.left}%`,
             bottom: '-30px',
-            fontSize: `${heart.size}px`,
-            color: heart.color,
             opacity: heart.opacity,
             animation: `float-up ${heart.duration}s ease-in-out infinite`,
             animationDelay: `${heart.delay}s`,
             '--sway': `${heart.sway}px`,
-            textShadow: `0 0 10px ${heart.color}80`,
+            filter: `drop-shadow(0 0 6px ${heart.color}80)`,
             willChange: 'transform, opacity'
           }}
         >
-          {String.fromCharCode(0x2665)}
+          <Heart size={heart.size} color={heart.color} />
         </div>
       ))}
     </>
