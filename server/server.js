@@ -28177,10 +28177,11 @@ server.listen(PORT, BIND_HOST, () => {
         const alreadyExists = activeAlerts.some(a => a.title.toLowerCase().includes(holiday.name.toLowerCase()) && a.category === 'announcement');
         if (!alreadyExists) {
           const holidayContent = {
-            elderxeke: `Happy ElderXeke Day! ✨ May the Bifrost aurora shine bright across Cortex today!`,
+            elderxeke: `Happy ElderXeke Day! May the Bifrost aurora shine bright across Cortex today!`,
           };
           db.createAlert({
-            title: `${holiday.emoji} ${holiday.name} celebration is active!`,
+            // No emoji: the client draws each holiday's picture (v2.122.2)
+            title: `${holiday.name} celebration is active!`,
             content: holidayContent[holiday.id] || `Happy ${holiday.name}!`,
             priority: 'celebration',
             category: 'announcement',

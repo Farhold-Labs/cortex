@@ -34,14 +34,15 @@ test('no String.fromCharCode with a code point above U+FFFF anywhere in the clie
 });
 
 test('holiday effects draw shapes, not characters', () => {
-  const glyphEffects = ['SpookyEffect.jsx', 'AutumnLeaves.jsx', 'HeartsEffect.jsx', 'ShamrockEffect.jsx', 'PastelOverlay.jsx'];
+  const glyphEffects = ['SpookyEffect.jsx', 'AutumnLeaves.jsx', 'HeartsEffect.jsx', 'ShamrockEffect.jsx', 'PastelOverlay.jsx', 'SnowEffect.jsx'];
   for (const name of glyphEffects) {
     const text = fs.readFileSync(path.join(EFFECTS, name), 'utf8');
     assert.match(text, /from '\.\.\/glyphs\.jsx'/, `${name} should use the drawn shapes`);
     assert.doesNotMatch(text, /fromCharCode|fromCodePoint/, `${name} should not draw characters`);
   }
   const glyphs = fs.readFileSync(path.join(ROOT, 'components', 'effects', 'glyphs.jsx'), 'utf8');
-  for (const shape of ['Bat', 'Ghost', 'Pumpkin', 'Witch', 'MapleLeaf', 'OakLeaf', 'Leaf', 'Heart', 'Shamrock', 'Egg', 'Flower', 'Butterfly']) {
+  for (const shape of ['Bat', 'Ghost', 'Pumpkin', 'Witch', 'MapleLeaf', 'OakLeaf', 'Leaf', 'Heart', 'Shamrock', 'Egg', 'Flower', 'Butterfly',
+    'Snowflake', 'ChristmasTree', 'Menorah', 'Firework', 'Flag', 'Turkey']) {
     assert.match(glyphs, new RegExp(`export const ${shape} =`), `glyphs.jsx should export ${shape}`);
   }
 });
@@ -52,4 +53,46 @@ test('counterfactual: the old Halloween code is caught', () => {
   // ...and it really did produce the wrong characters.
   assert.strictEqual(String.fromCharCode(0x1F987), '驪');
   assert.notStrictEqual(String.fromCharCode(0x1F987), String.fromCodePoint(0x1F987));
+});
+
+// v2.122.2: the rest of the holiday surfaces. Every effect is drawn (the
+// fireworks, candles and aurora were always CSS shapes), and the crawl-bar
+// alert the server posts for a holiday no longer starts with an emoji.
+test('no effect renders a text character as its particle', () => {
+  for (const name of fs.readdirSync(EFFECTS)) {
+    const text = fs.readFileSync(path.join(EFFECTS, name), 'utf8');
+    // A particle that is text sits alone between tags, like >*< or >❄<.
+    assert.doesNotMatch(text, /(?<![=-])>\s*[^\s<>{}()\w/]\s*</, `${name} draws a character`);
+    assert.doesNotMatch(text, /fontSize/, `${name} sizes text`);
+  }
+});
+
+test('server holiday alerts carry no emoji', () => {
+  const holidays = fs.readFileSync(path.join(__dirname, '..', 'server', 'holidays.js'), 'utf8');
+  assert.doesNotMatch(holidays, /\p{Extended_Pictographic}/u);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'server.js'), 'utf8');
+  const start = server.indexOf('// Holiday alerts');
+  const create = server.indexOf('db.createAlert({', start);
+  const block = server.slice(create, server.indexOf('});', create));
+  assert.ok(start > 0 && block.includes('celebration is active!'));
+  assert.doesNotMatch(block, /holiday\.emoji|\p{Extended_Pictographic}/u);
+});
+
+test('every holiday has a drawn alert picture, and old emoji titles are cleaned', () => {
+  const config = fs.readFileSync(path.join(ROOT, 'config', 'holidays.js'), 'utf8');
+  const ids = [...config.matchAll(/^  (\w+): \{$/gm)].map((m) => m[1]);
+  assert.strictEqual(ids.length, 10);
+  const icon = fs.readFileSync(path.join(ROOT, 'components', 'effects', 'HolidayIcon.jsx'), 'utf8');
+  for (const id of ids) {
+    const drawn = new RegExp(`^  ${id}: \\(size\\) =>`, 'm').test(icon) || (id === 'elderxeke' && icon.includes('/holidays/elderxeke.png'));
+    assert.ok(drawn, `${id} has no alert picture`);
+    assert.ok(icon.includes(`'${id}']`), `${id} is not matched from an alert title`);
+  }
+  // The emoji-stripping pattern, exercised on titles older servers wrote.
+  const literal = icon.match(/title\.replace\((\/.+\/u), ''\)/)[1];
+  const re = new Function(`return ${literal}`)();
+  for (const old of ['🎃 Halloween celebration is active!', '🇺🇸 Independence Day celebration is active!', '☘️ St. Patrick\'s Day celebration is active!', '✨ ElderXeke Day celebration is active!']) {
+    assert.match(old.replace(re, ''), /^[A-Z]/, old);
+  }
+  assert.strictEqual('Halloween celebration is active!'.replace(re, ''), 'Halloween celebration is active!');
 });

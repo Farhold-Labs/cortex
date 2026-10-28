@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Snowflake } from '../glyphs.jsx';
 
 /**
  * Snow Effect - Falling snowflakes with CSS keyframes
  * Used for Christmas (Dec 20-26)
+ *
+ * The flakes were a '*' character until v2.122.2, so they looked like
+ * whatever the font's asterisk was. They are drawn now (glyphs.jsx).
  */
 const SnowEffect = ({ colors = ['#FFFFFF', '#F0F8FF', '#E0E0E0'] }) => {
   const [particles, setParticles] = useState([]);
@@ -51,17 +55,15 @@ const SnowEffect = ({ colors = ['#FFFFFF', '#F0F8FF', '#E0E0E0'] }) => {
             position: 'absolute',
             left: `${flake.left}%`,
             top: '-20px',
-            fontSize: `${flake.size}px`,
-            color: flake.color,
             opacity: flake.opacity,
             animation: `snowfall ${flake.duration}s linear infinite`,
             animationDelay: `${flake.delay}s`,
             '--drift': `${flake.drift}px`,
-            textShadow: `0 0 5px ${flake.color}80`,
+            filter: `drop-shadow(0 0 3px ${flake.color}80)`,
             willChange: 'transform, opacity'
           }}
         >
-          *
+          <Snowflake size={flake.size} color={flake.color} />
         </div>
       ))}
     </>
