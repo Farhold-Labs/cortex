@@ -3,6 +3,7 @@ import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG, FEDERATION } from '../../../messages.js';
 import { plainText } from '../../utils/plainText.js';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
+import HolidayIcon, { holidayFromAlertTitle, withoutLeadingEmoji } from '../effects/HolidayIcon.jsx';
 
 const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [alerts, setAlerts] = useState([]);
@@ -191,6 +192,7 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                 {alerts.map(alert => {
                   const status = getAlertStatus(alert);
                   const cfg = priorityConfig[alert.priority] || priorityConfig.info;
+                  const holiday = alert.priority === 'celebration' ? holidayFromAlertTitle(alert.title) : null;
                   return (
                     <div key={alert.id} style={{
                       padding: '12px',
@@ -204,7 +206,7 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                       {/* Priority icon and title */}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                          <span>{cfg.icon}</span>
+                          {holiday ? <HolidayIcon holiday={holiday} size="1em" /> : <span>{cfg.icon}</span>}
                           <span style={{
                             color: 'var(--text-primary)',
                             fontFamily: 'monospace',
@@ -213,7 +215,7 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
                           }}>
-                            {plainText(alert.title)}
+                            {holiday ? withoutLeadingEmoji(plainText(alert.title)) : plainText(alert.title)}
                           </span>
                         </div>
                         <div style={{ display: 'flex', gap: '8px', fontSize: '0.7rem', color: 'var(--text-dim)' }}>

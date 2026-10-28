@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.122.2] - 2026-10-28
+
+Every holiday is now drawn, not typed. v2.122.1 fixed the Halloween, autumn, Valentine's, St. Patrick's and Easter shapes; this release covers the rest of the year.
+
+### Fixed
+
+- **Christmas snow** was a `*` character, so each flake looked like whatever the font's asterisk was. Flakes are now a six-armed SVG snowflake in the holiday's colours.
+- **The crawl-bar holiday alert** started its title with an emoji (🎃, 🎄, 🕎, 🇺🇸…), which shows as a box where no colour emoji font is installed. The crawl bar also asked for `/holidays/<id>.png`, which exists only for ElderXeke, so every other holiday's picture 404'd and was hidden. Each holiday now gets a drawn picture (firework, heart, shamrock, egg, flag, pumpkin, turkey, tree, menorah); ElderXeke keeps its image.
+  - New shapes in `glyphs.jsx`: Snowflake, ChristmasTree, Menorah, Firework, Flag, Turkey. `HolidayIcon.jsx` picks one from the alert title.
+  - The server no longer puts an emoji in the title (or a ✨ in ElderXeke's text). Alerts already in a database, or arriving from a node not yet upgraded, still carry one; the client strips it.
+  - The alert detail modal had no style for celebration alerts and showed them as "ℹ️ INFO". It now says CELEBRATION, with the holiday's picture. The admin alert list shows the picture too.
+- New Year's and Independence Day fireworks, Hanukkah's candle glow and ElderXeke's aurora were already CSS shapes and needed no change.
+
+### Verified
+
+- `tests/holiday-glyphs.test.cjs` (6 tests): no effect renders a character as a particle (it catches the old `*` snow), no emoji in the server's holiday alert, every holiday in the client config has a drawn alert picture and a title match, and old emoji titles come out clean (🎃, the 🇺🇸 flag pair, ☘️ with its variation selector, ✨).
+- Full suite passes (550 tests).
+- Headless at 390 px on dev, with Halloween active: the crawl-bar alert reads "Halloween celebration is active!" with a 16 px pumpkin, the modal shows CELEBRATION and the pumpkin, 0 console errors. All ten alert pictures rendered at 14 px and 20 px, and every shape in a gallery on dark and light backgrounds.
+
 ## [2.122.1] - 2026-10-28
 
 Holiday effects show what they were meant to. Halloween is drawing Chinese characters, empty boxes and, on Windows, icons where its bats and ghosts should be.

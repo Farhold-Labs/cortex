@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { plainText } from '../../utils/plainText.js';
 import { formatTemperature } from '../../utils/temperature.js';
+import HolidayIcon, { holidayFromAlertTitle, withoutLeadingEmoji } from '../effects/HolidayIcon.jsx';
 
 const CRAWL_SCROLL_SPEEDS = {
   slow: 60,     // seconds for full scroll - leisurely pace
@@ -303,18 +304,9 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
     sortedAlerts.forEach(alert => {
       const cfg = alertPriorityConfig[alert.priority] || alertPriorityConfig.info;
 
-      // For celebration alerts, match holiday name in title to resolve icon
-      let holidayIcon = null;
-      if (alert.priority === 'celebration') {
-        const holidayNameMap = { "new year": 'newYear', "valentine": 'valentines', "elderxeke": 'elderxeke', "patrick": 'stPatricks', "easter": 'easter', "independence": 'independenceDay', "halloween": 'halloween', "thanksgiving": 'thanksgiving', "christmas": 'christmas', "hanukkah": 'hanukkah' };
-        const titleLower = alert.title.toLowerCase();
-        for (const [name, key] of Object.entries(holidayNameMap)) {
-          if (titleLower.includes(name)) {
-            holidayIcon = `/holidays/${key}.png`;
-            break;
-          }
-        }
-      }
+      // Celebration alerts carry a drawn holiday picture instead of an emoji (v2.122.2)
+      const holiday = alert.priority === 'celebration' ? holidayFromAlertTitle(alert.title) : null;
+      const title = holiday ? withoutLeadingEmoji(plainText(alert.title)) : plainText(alert.title);
 
       items.push({
         type: 'system-alert',
@@ -333,15 +325,8 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
               gap: '4px',
             }}
           >
-            {holidayIcon && (
-              <img
-                src={holidayIcon}
-                alt=""
-                style={{ height: '1.1em', width: 'auto', verticalAlign: 'middle' }}
-                onError={(e) => { e.target.style.display = 'none'; }}
-              />
-            )}
-            {cfg.showLabel ? `${cfg.icon} [${alert.priority.toUpperCase()}] ${plainText(alert.title)}` : plainText(alert.title)}
+            {holiday && <HolidayIcon holiday={holiday} size="1.1em" />}
+            {cfg.showLabel ? `${cfg.icon} [${alert.priority.toUpperCase()}] ${title}` : title}
             {alert.originNode && (
               <span style={{ fontSize: '0.7em', opacity: 0.7, marginLeft: '4px' }}>
                 (@{alert.originNode})
