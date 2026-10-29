@@ -67,6 +67,7 @@ const PeopleView = (props) => {
           groupInvitations={props.groupInvitations}
           onInvitationsChange={props.onInvitationsChange}
           contacts={props.contacts}
+          onNewWaveWithGroup={props.onNewWaveWithGroup}
         />
       </div>
     </div>

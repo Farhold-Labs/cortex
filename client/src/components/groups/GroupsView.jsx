@@ -9,7 +9,7 @@ import { T } from '../../config/terminology.js';
 import { plainText } from '../../utils/plainText.js';
 import AlertPriorityIcon from '../ui/AlertPriorityIcon.jsx';
 
-const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitations, onInvitationsChange, contacts }) => {
+const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitations, onInvitationsChange, contacts, onNewWaveWithGroup }) => {
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [groupDetails, setGroupDetails] = useState(null);
@@ -20,6 +20,20 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
   const [searchResults, setSearchResults] = useState([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [sentInvitations, setSentInvitations] = useState([]);
+  // v2.132.0: anyone in a group may rename it, or hand the name back to its people.
+  const [renaming, setRenaming] = useState(false);
+  const [renameTo, setRenameTo] = useState('');
+  useEffect(() => { setRenaming(false); }, [selectedGroup]);
+  const saveName = async (body) => {
+    try {
+      const updated = await fetchAPI(`/groups/${selectedGroup}`, { method: 'PUT', body });
+      setGroupDetails(d => ({ ...d, name: updated.name, autoNamed: updated.autoNamed }));
+      setRenaming(false);
+      onGroupsChange?.();
+    } catch (err) {
+      showToast(err.message || formatError(`Failed to rename ${T.crew}`), 'error');
+    }
+  };
   const { width, isMobile, isTablet, isDesktop } = useWindowSize();
 
   useEffect(() => {
@@ -207,7 +221,24 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
-                  <div style={{ color: 'var(--text-primary)', fontSize: '1.2rem', marginBottom: '4px' }}>{groupDetails.name}</div>
+                  {renaming ? (
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '4px', flexWrap: 'wrap' }}>
+                      <input value={renameTo} onChange={(e) => setRenameTo(e.target.value)} maxLength={100} autoFocus
+                        onKeyDown={(e) => { if (e.key === 'Enter' && renameTo.trim()) saveName({ name: renameTo.trim() }); if (e.key === 'Escape') setRenaming(false); }}
+                        aria-label={`${T.Crew} name`}
+                        style={{ padding: '6px 8px', background: 'transparent', border: '1px solid var(--border-primary)', color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: '1rem', minWidth: 0 }} />
+                      <button onClick={() => renameTo.trim() && saveName({ name: renameTo.trim() })} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem' }}>SAVE</button>
+                      <button onClick={() => setRenaming(false)} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem' }}>CANCEL</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap', marginBottom: '4px' }}>
+                      <span style={{ color: 'var(--text-primary)', fontSize: '1.2rem' }}>{groupDetails.name}</span>
+                      <button onClick={() => { setRenameTo(groupDetails.autoNamed ? '' : groupDetails.name); setRenaming(true); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem', padding: 0 }}>RENAME</button>
+                      {!groupDetails.autoNamed && (
+                        <button onClick={() => saveName({ autoNamed: true })} title="Name it after its people again" style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.7rem', padding: 0 }}>USE NAMES</button>
+                      )}
+                    </div>
+                  )}
                   {groupDetails.description && (
                     <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>{groupDetails.description}</div>
                   )}
@@ -216,6 +247,12 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {onNewWaveWithGroup && (
+                    <button onClick={() => onNewWaveWithGroup(groupDetails.id)} style={{
+                      padding: '6px 12px', background: 'var(--accent-amber)15', border: '1px solid var(--accent-amber)',
+                      color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',
+                    }}>+ NEW {T.WAVE}</button>
+                  )}
                   <button onClick={() => setShowInviteModal(true)} style={{
                     padding: '6px 12px', background: 'var(--accent-teal)15', border: '1px solid var(--accent-teal)',
                     color: 'var(--accent-teal)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',

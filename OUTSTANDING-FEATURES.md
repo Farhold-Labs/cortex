@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
 **Last Updated:** October 2026
-**Current Version:** v2.131.0
+**Current Version:** v2.132.0
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.131.0)
+## Completed Features (v1.5.0 - v2.132.0)
 
 | Feature | Version |
 |---------|---------|
@@ -148,6 +148,8 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Collapsing the List Leaves the Rail | v2.129.0 |
 | Being Put into a Wave Is Asked First (wave invitations, blocks honoured) | v2.130.0 |
 | Community Wave Report (owners and node admins); Crews No Longer a Way into Channel Waves | v2.131.0 |
+| List Menus Float Above the Page; Logos and Avatars Accept Phone Photos | v2.131.1–v2.131.2 |
+| Groups That Make Themselves (named after their people, this wave only / whole group) | v2.132.0 |
 
 ---
 
@@ -155,8 +157,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 ### Near-term
 
-- **Wave access redesign, phases 3–6** (`docs/wave-access/01-design.md`; phases 1–2 shipped in v2.130.0–v2.131.0):
-  3. Groups that make themselves: no crew to create first, auto-named groups, crews renamed groups.
+- **Wave access redesign, phases 4–6** (`docs/wave-access/01-design.md`; phases 1–3 shipped in v2.130.0–v2.132.0):
   4. Community wave review (Move it out / Make it a role) and narrowing to people or roles, owners and admins only.
   5. Categories renamed Folders; audiences replace privacy labels in the UI.
   6. Federated invitations.

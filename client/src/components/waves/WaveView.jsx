@@ -40,9 +40,10 @@ const GifSearchModal = lazyComponent(() => import('../search/GifSearchModal.jsx'
 // for a feature most sessions never use (v2.106.0).
 const CallModal = React.lazy(() => import('../calls/CallModal.jsx'));
 import LiveBroadcastBar from '../broadcast/LiveBroadcastBar.jsx';
+import { withGroupScope } from '../../utils/groupScope.jsx';
 const GoLiveModal = lazyComponent(() => import('../broadcast/GoLiveModal.jsx'));
 
-const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove }) => {
+const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove, onNewWaveWithPeople }) => {
   // E2EE context
   const e2ee = useE2EE();
 
@@ -2032,6 +2033,23 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     <span>Members ({participants.length})</span>
                   </div>
 
+                  {/* New wave with these people (v2.132.0): the same group, nobody asked again. */}
+                  {onNewWaveWithPeople && (waveData.group?.id
+                    || (waveData.privacy === 'private' && !waveData.channelId && (waveData.federationState || 'local') === 'local' && participants.length >= 2)) && (
+                    <div
+                      onClick={() => { setShowWaveMenu(false); onNewWaveWithPeople(wave.id); }}
+                      style={{
+                        padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)',
+                        background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>＋</span>
+                      <span>New {T.wave} with these people</span>
+                    </div>
+                  )}
+
                   {/* Settings (creator only) */}
                   {waveData.can_edit && (
                     <>
@@ -2196,10 +2214,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                   onClick={async () => {
                     if (confirm(CONFIRM_DIALOG.leaveWave)) {
                       try {
-                        await fetchAPI(`/waves/${wave.id}/participants/${currentUser.id}`, { method: 'DELETE' });
+                        // A group wave: leaving it can mean the whole group (v2.132.0).
+                        await withGroupScope((scope) => fetchAPI(`/waves/${wave.id}/participants/${currentUser.id}${scope ? `?scope=${scope}` : ''}`, { method: 'DELETE' }), { action: 'remove', who: 'You' });
                         showToast(`You have left the ${T.wave}`, 'success');
                         onBack();
                       } catch (err) {
+                        if (err?.cancelled) return;
                         showToast(err.message || formatError(`Failed to leave ${T.wave}`), 'error');
                       }
                     }
@@ -2438,11 +2458,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                             onClick={async () => {
                               if (confirm(CONFIRM_DIALOG.removeParticipant(p.name))) {
                                 try {
-                                  await fetchAPI(`/waves/${wave.id}/participants/${p.id}`, { method: 'DELETE' });
+                                  await withGroupScope((scope) => fetchAPI(`/waves/${wave.id}/participants/${p.id}${scope ? `?scope=${scope}` : ''}`, { method: 'DELETE' }), { action: 'remove', who: p.name });
                                   showToast(`${p.name} removed from ${T.wave}`, 'success');
                                   setShowModMenu(null);
                                   loadWave(); // Refresh participants
                                 } catch (err) {
+                                  if (err?.cancelled) return;
                                   showToast(err.message || formatError('Failed to remove participant'), 'error');
                                 }
                               }
