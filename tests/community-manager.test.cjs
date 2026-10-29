@@ -184,6 +184,49 @@ test('Community manager (v2.124.0)', async (t) => {
       } finally { ws.terminate(); }
     });
 
+    await t.test('logos (v2.125.0): managers set and remove them; the old file goes', async () => {
+      const { createRequire } = require('node:module');
+      const sharp = createRequire(path.join(root, 'server/package.json'))('sharp');
+      const png = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#ffd23f' } }).png().toBuffer();
+      const upload = (actor, buf = png, type = 'image/png') => {
+        const form = new FormData();
+        form.append('logo', new Blob([buf], { type }), 'logo.png');
+        return fetch(`${base}/api/communities/${cid}/logo`, {
+          method: 'POST', headers: { Authorization: `Bearer ${actor.token}` }, body: form,
+        }).then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
+      };
+      // Only community.manage: a moderator and an outsider are refused.
+      assert.equal((await upload(modU)).status, 403);
+      assert.equal((await upload(outsider)).status, 403);
+      assert.equal((await upload(owner, Buffer.from('<svg/>'), 'image/svg+xml')).status, 400, 'not an allowed type');
+
+      const first = await upload(adminU);
+      assert.equal(first.status, 200, JSON.stringify(first.body));
+      const url1 = first.body.community.logo_url;
+      assert.match(url1, /\/uploads\/community-logos\/[a-f0-9-]{36}-\d{13}-[a-f0-9]{8}\.webp$/);
+      const file1 = path.join(serverDir, 'uploads', 'community-logos', path.basename(url1));
+      assert.ok(fs.existsSync(file1), 'stored');
+      const meta = await sharp(fs.readFileSync(file1)).metadata();
+      assert.equal(meta.width, 256); assert.equal(meta.height, 256); assert.equal(meta.format, 'webp');
+
+      // Members see it in the Community they belong to.
+      const mine = await api('GET', '/api/communities/mine', { token: plain.token });
+      assert.equal(mine.body.communities.find(c => c.id === cid).logo_url, url1);
+      const served = await fetch(base + url1);
+      assert.equal(served.status, 200);
+
+      const second = await upload(owner);
+      assert.equal(second.status, 200);
+      assert.notEqual(second.body.community.logo_url, url1);
+      assert.ok(!fs.existsSync(file1), 'the replaced logo is deleted');
+
+      assert.equal((await api('DELETE', `/api/communities/${cid}/logo`, { token: modU.token })).status, 403);
+      const removed = await api('DELETE', `/api/communities/${cid}/logo`, { token: owner.token });
+      assert.equal(removed.status, 200);
+      assert.equal(removed.body.community.logo_url, null);
+      assert.ok(!fs.existsSync(path.join(serverDir, 'uploads', 'community-logos', path.basename(second.body.community.logo_url))));
+    });
+
     await t.test('the manager wires every control to the routes that enforce it', async () => {
       const ui = fs.readFileSync(path.join(root, 'client/src/components/communities/CommunitySettingsPanel.jsx'), 'utf8');
       for (const route of [
