@@ -266,7 +266,7 @@ This is one minor release, v2.125.0, and it migrates.
 
 ## Community manager (Manage Community)
 
-**Decided 2026-10-28:** the manager is redesigned before the two panels ship,
+**Built in v2.124.0.** The manager was redesigned before the two panels,
 because the logo upload lives there and it already takes too much room.
 
 What it is today (`CommunitySettingsPanel.jsx`) is one long column of always
@@ -274,21 +274,22 @@ open boxes: CHANNELS, NEW CHANNEL, INVITES, INVITE SOMEONE FROM ANOTHER
 SERVER, ADD SOMEONE FROM THIS SERVER, MEMBERS. On a phone, MEMBERS is several
 screens down.
 
-**Collapsible sections.** Use the same `CollapsibleSection` accordion as
-Settings (v2.115.0), with one section open at a time:
+**Collapsible sections.** Built in v2.124.0. Same `CollapsibleSection`
+accordion as Settings (v2.115.0), in a denser variant, one section open at a
+time:
 
 | Section | Holds | Shown to holders of |
 | --- | --- | --- |
-| **ABOUT** | Name, description, visibility, **logo** | `community.manage` |
-| **CHANNELS** | List, rename, delete, new channel (text or voice) | `channel.manage` |
-| **PEOPLE** | Members with their roles, search, add from this server, invite from another server, invite codes | `member.view` / `member.invite` |
-| **ROLES** | Who is owner, admin and moderator; appoint and remove | `member.roles` |
-| **DANGER** | Hand over, close the Community | `community.transfer` / `community.delete` |
+| **ABOUT** | Name, description, visibility; the **logo** goes here in v2.125.0 | everyone (editing needs `community.manage`) |
+| **CHANNELS** | List, rename, delete, stage, new channel | `channel.view` (changes need `channel.manage`) |
+| **MEMBERS** | Search, members with their roles, each with a ⋮ for role changes, hand over, remove, ban | `member.view` |
+| **INVITES** | Add from this server, invite codes, invite from another server | `member.invite` |
+| **ROLES** | Who is owner, admin and moderator | `member.view` |
+| **LEAVE OR CLOSE** | Pending handover, leave, close | members (closing needs `community.delete`) |
 
-- The section a menu item named opens on arrival ("Invite People" opens
-  PEOPLE), replacing today's scroll-to.
-- Each header shows a count: channels, members, pending invites.
-- Long member lists page and filter, so PEOPLE stays short.
+- "+ New Channel" opens CHANNELS and "Invite People" opens INVITES.
+- Switching, creating, joining and browsing fold into YOUR COMMUNITIES, closed
+  when the screen opens on a Community.
 
 **Admins and moderators.** The server has had them since v2.94.0:
 
@@ -313,12 +314,9 @@ So:
 - **Remote members** (cross-port) can be appointed like anyone else, with the
   standing re-check still applying (v2.97.0).
 
-This is mostly client work. Two server checks are still to do:
-
-- the member list returns each member's roles with ids, so the menu can name
-  the role to grant or revoke;
-- a grant or revoke takes effect on someone's open app, through the push
-  that already re-sends capabilities.
+Server additions were small: `myRoles` on the Community detail, `q` and
+`staff=1` on the member list, and a `community_roles_changed` push so a new
+admin's open app picks up their powers.
 
 ## Open questions
 

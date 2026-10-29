@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.124.0] - 2026-10-28
+
+Manage Community, redesigned: it folds into sections, and Communities can finally have admins and moderators.
+
+### Added
+- **Appointing admins and moderators.** Every member's row in MEMBERS has a ⋮ with Make admin, Make moderator, Remove admin / Remove moderator, Hand over, Remove and Ban. It offers only what your rank allows, the server's own two rules: you act only on people below you, and grant only roles below your own. So an owner appoints admins, and an admin appoints moderators. A person holds one staff role at a time; changing it grants the new one before dropping the old. The built-in `admin` and `moderator` roles, the grant and revoke routes and the rank checks have all existed since v2.94.0, with no control anywhere to use them.
+- **ROLES** lists the owner, admins and moderators with a line on what each may do, from `GET /members?staff=1`, so it is complete however many members there are.
+- **Removing and banning members** (with an optional reason, kept in the audit log), **editing the name, description and visibility** (ABOUT), **leaving** and **closing** the Community (LEAVE OR CLOSE; closing asks you to confirm it is you). All were server routes with no UI.
+- **Member search.** MEMBERS has a filter box searched on the server (`?q=`), so it finds people beyond the first page of 500, plus Show more.
+- `myRoles` on `GET /api/communities/:id`, and a `community_roles_changed` push to the person whose roles changed, so a new admin's sidebar offers channel management without a reload.
+
+### Changed
+- **One section open at a time.** ABOUT, CHANNELS, MEMBERS, INVITES, ROLES and LEAVE OR CLOSE are an accordion like Settings, each shown only to people who can use it, with counts in the headers. "+ New Channel" opens CHANNELS and "Invite People" opens INVITES. Switching, creating, joining and browsing Communities fold into YOUR COMMUNITIES, which starts closed when the screen opens on a Community. Previously everything was open at once and MEMBERS was several phone screens down.
+- `CollapsibleSection` has a `dense` variant (about half the height), used here.
+
+### Verified
+- `tests/community-manager.test.cjs` (8): `myRoles` for members and non-members; owner appoints an admin, an admin cannot make a peer, an admin appoints and removes a moderator, a moderator appoints nobody, nobody acts upward; `staff=1` lists exactly owner, admin and moderator; `q` is plain text (`_` and `%` do not act as wildcards) and non-members still get 403; the push reaches the person's WebSocket on grant and on revoke.
+- Headless on dev at 390px and 1280px: the manager opens with every section closed; Make moderator on a member shows MODERATOR on their row and in ROLES, offers Remove moderator, and Remove moderator puts them back. No page errors.
+- Not exercised in a browser: Ban, Remove, Close and Leave (they call routes with their own tests), and the push arriving in a second person's open app.
+
 ## [2.123.1] - 2026-10-28
 
 Community channels in the wave list are nested properly, and their names keep up with the size settings.
