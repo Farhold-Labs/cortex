@@ -13,6 +13,7 @@ import { spawnSync } from 'child_process';
 import { rmSync, existsSync, renameSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { carryAssets, MAX_AGE_DAYS } from './carry-assets.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, 'dist');
@@ -40,6 +41,12 @@ run('node', [
 ]);
 
 run('node', ['scripts/inject-sw-assets.mjs'], { CORTEX_OUT_DIR: 'dist.staging' });
+
+// Pages still running an earlier build keep finding their files (v2.127.0).
+if (existsSync(DIST)) {
+  const r = carryAssets(DIST, STAGING);
+  console.log(`[build] kept ${r.carried} earlier asset file(s), dropped ${r.expired} older than ${MAX_AGE_DAYS} days`);
+}
 
 // Swap. The only window where dist is absent is between these two renames.
 rmSync(PREVIOUS, { recursive: true, force: true });
