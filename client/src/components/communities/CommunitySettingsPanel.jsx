@@ -203,7 +203,8 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
   const [logoBusy, setLogoBusy] = useState(false);
   const uploadLogo = async (file) => {
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) { showToast('That image is over 2 MB', 'error'); return; }
+    // The server shrinks it to 256px, so a full-size phone photo is fine (v2.131.2).
+    if (file.size > 10 * 1024 * 1024) { showToast('That image is over 10 MB', 'error'); return; }
     setLogoBusy(true);
     try {
       const form = new FormData();
@@ -525,7 +526,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
                 <button onClick={removeLogo} disabled={logoBusy} style={{ ...action, marginTop: 0 }}>Remove</button>
               )}
             </div>
-            <div style={hint}>Square works best; it is cropped to a square either way. Without one, the initials are used.</div>
+            <div style={hint}>Square works best; it is cropped to a square either way. JPG, PNG, GIF or WebP, up to 10 MB. Without one, the initials are used.</div>
             <div style={{ ...label, marginTop: '0.6rem' }}>NAME</div>
             <input value={aboutName} onChange={e => setAboutName(e.target.value)} maxLength={80} style={input} />
             <div style={{ ...label, marginTop: '0.6rem' }}>DESCRIPTION</div>

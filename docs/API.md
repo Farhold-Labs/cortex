@@ -695,7 +695,7 @@ Upload a profile avatar image.
 **Request Body:**
 
 - `avatar` (file): Image file (jpg, jpeg, png, gif, webp)
-- **Max size:** 2MB
+- **Max size:** 10MB (2MB before v2.131.2); resized to 256×256
 - **Processing:** Resized to 256×256, converted to webp, EXIF stripped
 
 **Example:**
@@ -4715,7 +4715,7 @@ What Manage Community uses beyond the routes it always had. Role grants and revo
 
 | Method | Path | Who | Notes |
 |---|---|---|---|
-| POST | `/api/communities/:id/logo` | `community.manage` | multipart, field `logo`: JPEG, PNG, GIF or WebP up to 2 MB. Re-encoded to a 256×256 WebP (cropped to a square, metadata stripped). The previous logo's file is deleted. → `{ community }`. Audited `community.logo_set`; members get `community_order_changed` so their lists re-read it |
+| POST | `/api/communities/:id/logo` | `community.manage` | multipart, field `logo`: JPEG, PNG, GIF or WebP up to 10 MB (2 MB before v2.131.2). Re-encoded to a 256×256 WebP (cropped to a square, metadata stripped). The previous logo's file is deleted. → `{ community }`. Audited `community.logo_set`; members get `community_order_changed` so their lists re-read it |
 | DELETE | `/api/communities/:id/logo` | `community.manage` | removes it and deletes the file. → `{ community }`. Audited `community.logo_removed` |
 
 Communities carry `logo_url` (a `/uploads/community-logos/…` URL, or `null`) everywhere a Community row is returned: `GET /api/communities/mine`, `GET /api/communities/:id`, search and the public list. Like an avatar it is an unbound upload, served to anyone with the URL. Closing a Community, by its owner or a node admin, deletes the file.
