@@ -196,7 +196,7 @@ HTTP challenges only work on the box the name currently points at, so a standby 
 - Ubuntu 24.04, Node 24, pm2 7, nginx, ffmpeg, Litestream 0.5.17 (installed, its service disabled), 2 GB swap, UTC;
 - users `cortex` (farhold, ports 3000/3001) and `pmp` (PMP, 3010/3011), key-only and without sudo, each with a pm2 boot unit and an empty process list;
 - the same firewall as the primary: 22 rate-limited (the home IP exempt), 80 and 443, plus fail2ban for sshd; root login key-only;
-- v2.122.0 installed in each user's `~/cortex`, prebuilt `dist`. Nothing running. `~/.config/cortex/ha-role` records `role=standby`.
+- the current release (v2.130.0, re-installed with every release) in each user's `~/cortex`, prebuilt `dist`. Nothing running. `~/.config/cortex/ha-role` records `role=standby`.
 
 **Copied from the primary on 2026-10-26** (sha256 matches):
 - both `server/.env` files, both `ecosystem.config.cjs` files, farhold's `firebase-service-account.json`;

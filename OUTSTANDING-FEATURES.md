@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
 **Last Updated:** October 2026
-**Current Version:** v2.113.3
+**Current Version:** v2.130.0
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.113.3)
+## Completed Features (v1.5.0 - v2.130.0)
 
 | Feature | Version |
 |---------|---------|
@@ -128,12 +128,38 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Attached Audio and Video Play in the Conversation | v2.112.0–v2.113.2 |
 | Broadcast Studio: Rotate, Sideways Layout, Camera Zoom; Choose Orientation Before Going Live | v2.113.0–v2.113.1 |
 | Deleted Waves No Longer Leave Their Attachments Public | v2.113.3 |
+| Settings → About (web, installed-app and server versions); E2EE Key Cleared on Every Sign-Out | v2.114.0–v2.114.1 |
+| Settings Reorganised as an Accordion; MODERATION and ADMINISTRATION Categories | v2.115.0–v2.116.1 |
+| Recorded Voice/Video Gated by Wave Membership; Uploads in a Private S3/B2 Bucket Served Through Cortex | v2.116.2–v2.117.0 |
+| Unread Totals on Collapsed Headings; Encrypted Waves About Three Times Faster | v2.117.1–v2.117.2 |
+| Community Voice Channels (opt-in; LiveKit webhook roster) | v2.118.0–v2.118.1 |
+| Voice Channels Phase 3: Camera Limit, Stage Channels, Move, E2EE Against LiveKit, Idle Limits | v2.119.0 |
+| Crawl Temperatures in °F, °C or Both | v2.120.0–v2.120.1 |
+| Sidebar Order Kept by Hand (encrypted personal order; staff arrange channels) | v2.121.0 |
+| Expiring Pings (sender timer, wave timer ceiling) | v2.122.0 |
+| Holiday Effects and Alert Icons Drawn as SVG | v2.122.1–v2.122.3 |
+| Shared Account Invitations (one link, up to 100 sign-ups) | v2.123.0 |
+| Channel Waves Nested Under Their Channel | v2.123.1 |
+| Manage Community: Appoint Admins and Moderators, Remove, Ban, Leave, Close | v2.124.0 |
+| Two-Panel Wave List, Desktop Rail, Phone Drill-Down, Community Logos | v2.125.0 |
+| One Home List (Communities first, one Reorder) | v2.126.0 |
+| Open Pages Survive Deploys (earlier assets kept 30 days; chunk boundary reload) | v2.127.0 |
+| Public Waves in a Community Channel Visible Only to the Channel | v2.128.0 |
+| Collapsing the List Leaves the Rail | v2.129.0 |
+| Being Put into a Wave Is Asked First (wave invitations, blocks honoured) | v2.130.0 |
 
 ---
 
 ## Outstanding Features
 
 ### Near-term
+
+- **Wave access redesign, phases 2–6** (`docs/wave-access/01-design.md`; phase 1 shipped in v2.130.0):
+  2. A read-only report of Community waves whose people include outsiders.
+  3. Groups that make themselves: no crew to create first, auto-named groups, crews renamed groups.
+  4. Community wave review (Move it out / Make it a role) and narrowing to people or roles, owners and admins only.
+  5. Categories renamed Folders; audiences replace privacy labels in the UI.
+  6. Federated invitations.
 
 - **Mute from the wave view.** Per-wave mute (v2.84.0) is only in the wave-list row menu. It should also be in the ⋮ menu inside an open wave. The server side is done; this is UI only.
 - **Delete profile files with the account.** Account deletion leaves the profile picture and video on disk at their old addresses (nothing links to them). See PRIVACY.md.

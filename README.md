@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.117.0** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.130.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -51,8 +51,12 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Focus View** — View any ping with replies as its own wave-like context
 - **Threading** — Isolate reply chains within a wave for focused conversations
 - **Untabbed navigation** — Wave list clicks open a preview; pin to promote to a persistent tab (max 10)
+- **Asked before being added** — Adding someone to a wave sends them an invitation: they see who invited them, the title and who is in it, and choose Accept, Decline, or Decline and block. Blocks are honoured both ways, invitations expire after 30 days, and contacts' invitations can be accepted automatically (a setting, off by default)
 - **Crews & Contacts** — Organize connections with request/invitation workflows
-- **Wave Categories** — User-defined categories with drag-and-drop organization and per-category unread badges
+- **One home list** — Communities first, then pinned waves, categories and waves, under one header. A Community or category opens in its own panel; on desktop the list folds to a rail of icons (◀ or Ctrl+B), on a phone it drills down
+- **Your own order** — Reorder Communities, categories and waves by hand; the order is kept rather than shuffled by activity, and stored encrypted
+- **Wave Categories** — Personal folders for your waves with per-category unread badges
+- **Expiring pings** — Send a ping that erases itself after a set time, or give a wave a timer that caps every ping in it
 - **Search** — Full-text search across all pings (SQLite FTS5)
 - **Inline emoji autocomplete** — Type `:shortcode:` to pick from 826 emoji; closing colon auto-inserts
 - **PWA** — Installable app with offline support and push notifications
@@ -66,6 +70,7 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Announcement waves** — Per wave: who can post (everyone, or only the owner and staff), and whether replies and reactions are allowed
 - **Instance terminology** — The words "wave", "ping", "crew" and "thread" can be renamed for the whole server
 - **Fast start on slow networks** — The app opens from cache in a couple of seconds on a congested mobile connection, and heavy parts (calls, broadcasts, admin) load only when used
+- **Survives deploys** — A page or app left open across an update keeps working: earlier builds' files are kept for 30 days, and a page that still cannot load one reloads once onto the current build
 - **Public Portal** — Admins can publish selected non-E2EE waves to a public, login-free reader at `/portal` (newest pings first), with per-wave `<iframe>` embed snippets
 
 ### Calendar & Events
@@ -86,6 +91,10 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Communities with channels** — Anyone can create a Community; channels inside it hold waves. Join with an invite code, browse public Communities, or be added directly
 - **Roles and permissions** — Community roles with per-channel overrides (deny wins), bans, an audit log and ownership transfer (offer, then accept)
 - **Across servers** — Members from allied ports join with their home identity; their standing is re-checked with their home server, so suspending or unpairing reaches them
+- **Public means the Community** — A public wave in a Community channel is visible to whoever can see that channel, not to the whole server
+- **Joining is the consent** — Inside a Community, members who can see a channel are added to its waves directly; anyone else cannot be added
+- **Voice channels** — Drop-in voice and video rooms (opt-in per server), with a camera limit, stage channels with raised hands, moving people between rooms, and media end-to-end encrypted against LiveKit
+- **Managing a Community** — Appoint admins and moderators, remove, ban, leave or close from the Community menu; logos for Communities; channel order and wave order within a channel set by staff
 - **Opt-in per server** — An instance feature, off unless the admin turns it on; abuse limits and admin suspend/close controls built in
 
 ### End-to-End Encryption
@@ -133,7 +142,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 Configured in Settings (ADMINISTRATION → CRAWL BAR CONFIG) rather than `.env` since v2.80.0 — feeds, keys, symbols and intervals live in the database, with a TEST button for every key and feed.
 
 - **Stock ticker** — Real-time quotes from Finnhub API
-- **Weather data** — Current conditions from OpenWeatherMap
+- **Weather data** — Current conditions from OpenWeatherMap, in °F, °C or both
 - **Breaking news** — Headlines from NewsAPI.org, GNews.io and any number of custom RSS feeds
 - **Admin alerts** — Scheduled system alerts with priority levels
 - **Holiday effects** — Automatic seasonal celebrations with themed alerts and visual effects
@@ -148,6 +157,7 @@ Configured in Settings (ADMINISTRATION → CRAWL BAR CONFIG) rather than `.env` 
 - **Long-lived sessions without long-lived tokens** — a 60-minute rotating access token over a 90-day sliding refresh session, with reuse detection that revokes an entire token family on replay, step-up re-auth for sensitive actions, new-device email alerts, and password change ending every other session. Policy is per-instance.
 - End-to-end encryption (ECDH P-384 + AES-256-GCM)
 - Multi-factor authentication (TOTP and email-based 2FA)
+- Account invitations — single-use, or one link shared by up to 100 people (user accounts only)
 - Role-based access control (Admin / Moderator / User)
 - Password recovery via email
 - Rate limiting on all endpoints with persistent account lockout
@@ -319,7 +329,8 @@ SUPPORT_BOT_KEY=bot_...            # Fallback: bot API key
 |--------|----------|-------------|
 | GET | `/api/waves` | List waves |
 | POST | `/api/waves` | Create wave |
-| GET | `/api/waves/:id` | Get wave with pings |
+| GET | `/api/waves/:id` | Get wave with pings (and pending `invited`) |
+| POST | `/api/waves/:id/participants` | Add someone: 200 added, 202 invited |
 | POST | `/api/waves/:id/pings` | Send ping |
 | PUT | `/api/pings/:id` | Edit ping (supports E2EE fields) |
 | DELETE | `/api/pings/:id` | Delete ping |
@@ -345,6 +356,14 @@ SUPPORT_BOT_KEY=bot_...            # Fallback: bot API key
 | GET | `/api/public/events/:slug/calendar.ics` | Subscribe to a published calendar |
 | POST | `/api/public/events/:slug/:eventId/rsvp` | Guest RSVP (rate limited per IP and per email) |
 | DELETE | `/api/public/events/rsvp/:token` | Cancel a guest RSVP via its emailed link |
+
+### Wave Invitations
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/wave-invitations` | Your pending invitations |
+| POST | `/api/wave-invitations/:id/accept` | Accept (joins the wave) |
+| POST | `/api/wave-invitations/:id/decline` | Decline (`{ block: true }` also blocks the inviter) |
+| DELETE | `/api/wave-invitations/:id` | Withdraw (inviter, owner or wave admin) |
 
 ### Crews & Contacts
 | Method | Endpoint | Description |
@@ -431,10 +450,10 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 
 | Level | Icon | Description |
 |-------|------|-------------|
-| Private | &#9673; | Only invited participants |
+| Private | &#9673; | Only participants, each of whom accepted an invitation |
 | Crew | &#9672; | All crew members |
 | Cross-Server | &#9671; | Federated across the Verse |
-| Public | &#9675; | Public waves |
+| Public | &#9675; | Everyone on the server; in a Community channel, whoever can see the channel |
 
 ---
 
@@ -447,7 +466,9 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 - [docs/MEDIA-SECURITY.md](docs/MEDIA-SECURITY.md) — Jellyfin/Plex grant model and playback proxy
 - [docs/SECRET-AUDIT.md](docs/SECRET-AUDIT.md) — Git-history credential audit, method and findings
 - [docs/PLAN-federated-push.md](docs/PLAN-federated-push.md) — Why native push is hard in a federated app, and the options
-- [docs/communities/](docs/communities/) — Federated Communities: architecture, threat model and implementation plan (built in v2.94.0–v2.99.2)
+- [docs/communities/](docs/communities/) — Federated Communities: architecture, threat model, implementation plan (built in v2.94.0–v2.99.2), voice channels and the two-panel layout
+- [docs/wave-access/](docs/wave-access/) — Wave audiences, invitations and self-forming groups (phase 1 shipped in v2.130.0)
+- [docs/HIGH-AVAILABILITY.md](docs/HIGH-AVAILABILITY.md) — Proposed warm-standby failover
 - [docs/SECURITY-AUDIT-STATE.md](docs/SECURITY-AUDIT-STATE.md) — The latest security audit's findings and how each was resolved
 - [docs/PRIVACY.md](docs/PRIVACY.md) — Privacy policy
 - [CLAUDE.md](CLAUDE.md) — Developer workflow, branching, and architecture notes
