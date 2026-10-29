@@ -2167,7 +2167,12 @@ function MainApp({ sharePingId }) {
       <main style={{ flex: 1, display: 'flex', overflow: 'hidden', flexDirection: isMobile && selectedWave ? 'column' : 'row', paddingBottom: isMobile ? '60px' : '0' }}>
         {activeView === 'waves' && (
           <>
-            {!isMobile && !sidebarCollapsed && openContainerValid && (
+            {/* The rail (v2.125.0) stands in for the list while a panel is open
+                beside it, and since v2.129.0 also while the list is collapsed:
+                collapsing folds the list to the rail rather than to nothing.
+                A Community, category or ⌂ tile on a collapsed rail opens the
+                list again, with that panel; a wave tile only opens the wave. */}
+            {!isMobile && (sidebarCollapsed || openContainerValid) && (
               <WaveRail
                 communities={instanceFeatures.communities === true ? myCommunities : []}
                 communityUnread={railData.communityUnread}
@@ -2180,8 +2185,8 @@ function MainApp({ sharePingId }) {
                 waveNotifications={waveNotifications}
                 openContainer={openContainer}
                 selectedWaveId={selectedWave?.id}
-                onHome={() => setOpenContainer(null)}
-                onOpen={setOpenContainer}
+                onHome={() => { setOpenContainer(null); setSidebarCollapsed(false); }}
+                onOpen={(container) => { setOpenContainer(container); setSidebarCollapsed(false); }}
                 onSelectWave={(wave) => { if (wave.id !== selectedWave?.id) keepPanelRef.current = true; selectWave(wave); }}
               />
             )}
@@ -2193,7 +2198,7 @@ function MainApp({ sharePingId }) {
                 transition: isMobile ? 'none' : 'width 0.3s ease',
                 borderRight: sidebarCollapsed || isMobile ? 'none' : '1px solid var(--border-subtle)',
                 flexShrink: 0,
-              }}>
+              }} aria-hidden={sidebarCollapsed && !isMobile ? true : undefined}>
                 <WaveList
                   onRefresh={loadWaves}
                   onReorderWaves={handleReorderWaves}
@@ -2245,7 +2250,7 @@ function MainApp({ sharePingId }) {
             {!isMobile && (
               <div
                 onClick={() => setSidebarCollapsed(prev => !prev)}
-                title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (Ctrl+B)`}
+                title={`${sidebarCollapsed ? 'Expand the list' : 'Collapse to the rail'} (Ctrl+B)`}
                 style={{
                   width: '16px',
                   display: 'flex',
