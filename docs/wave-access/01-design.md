@@ -30,6 +30,7 @@ waves should be open to the Community unless someone narrows them.
 - Creating a wave with people, or adding someone later, puts them in at once. They are never asked.
 - Neither path checks blocks. Someone who blocked you can be added to your wave. Only contact requests and crew invitations check blocks.
 - A crew admin adding a member directly skips the crew's own invitation flow.
+- A wave in a Community channel accepts participants who are not members of the Community. The participant route checks only the wave.
 
 These are fixed in phase 1 (below) whatever else is decided.
 
@@ -87,6 +88,8 @@ conversation starts a People wave outside it, as a Discord DM or group DM.
 - **Narrowing it**: in the wave's ⋮ → **Who can see this**, choose people and/or Community roles. Example: an admin makes "Important discussion" visible only to the Moderators role and themselves.
 - **Roles are live**: someone made a moderator later can see it; someone who stops being one cannot. A named person is fixed until removed.
 - **Everyone named must be able to see the channel.** You cannot narrow a staff wave to include someone outside a restricted channel.
+- **Pickers show only the Community** (Jared, 2026-10-29). Inside a Community, choosing who can see a wave lists only its members who can see that channel, and only its roles as groups. Your personal groups, contacts and anyone else on the server are not listed.
+- **The server refuses the rest.** Naming a non-member, or someone who cannot see the channel, is rejected by the server, not just hidden in the picker; the refusal does not say whether that person exists.
 - **Narrowing removes access at once** for everyone else, live, the same way v2.128.0 removes it: they drop out of the list and live updates.
 - **Widening back** to "the channel" is one choice.
 - **Who may narrow**: the Community's **owners and admins only**. Not moderators, not `channel.manage` holders, not the wave's own creator if they are a member.
@@ -128,7 +131,7 @@ because who-was-invited-by-whom is social graph.
 
 ## Phases
 
-1. **Consent first.** Invitations for adding people to waves and groups; blocks enforced; crew direct-add goes through an invitation. Ships on its own, because it closes the gaps above.
+1. **Consent first.** Invitations for adding people to waves and groups; blocks enforced; crew direct-add goes through an invitation; a Community wave refuses anyone who cannot see its channel. Ships on its own, because it closes the gaps above.
 2. **Groups make themselves.** The new create flow, auto-named groups, crews renamed groups, migration of private and crew waves.
 3. **Narrowing in Communities.** Who can see this: people and roles.
 4. **Clean-up.** Categories → Folders, privacy labels replaced by audience in the UI, docs.
@@ -140,3 +143,4 @@ because who-was-invited-by-whom is social graph.
 2. **Narrowing in Communities is Discord-like:** only owners and admins can create narrowed waves; members cannot. Read as: owners and admins also always see them, as Discord administrators do. Confirm if that reading is wrong.
 3. **Categories are renamed Folders** and leave the create-wave dialog.
 4. **Auto-accept from contacts:** a per-person setting, off by default.
+5. **In a Community, people and group pickers list only the Community:** members who can see the channel, and the Community's roles. The server refuses anyone else.
