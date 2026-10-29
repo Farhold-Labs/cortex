@@ -14697,18 +14697,19 @@ export class DatabaseSQLite {
     return this.getCommunityMembership(communityId, userId);
   }
 
-  listCommunityMembers(communityId, { state = 'active', limit = null, offset = 0 } = {}) {
+  listCommunityMembers(communityId, { state = 'active', limit = null, offset = 0, q = null, staffOnly = false } = {}) {
     // Paged since v2.105.0 (CORTEX-COMM-013). `memberPageSize` was defined in
     // limits.js from the start and never used here, so a Community approaching
     // its 10,000-member cap serialised all of them on every open of the member
     // list — on a synchronous server, where that is everyone else's latency too.
+    const filter = this._communityMemberFilter(q, staffOnly);
     let sql = `
       SELECT m.*, u.handle, u.display_name, u.avatar_url, u.is_cross_port, u.home_node
       FROM community_memberships m
       JOIN users u ON u.id = m.user_id
-      WHERE m.community_id = ? AND (? IS NULL OR m.state = ?)
+      WHERE m.community_id = ? AND (? IS NULL OR m.state = ?)${filter.sql}
       ORDER BY u.display_name COLLATE NOCASE ASC`;
-    const params = [communityId, state, state];
+    const params = [communityId, state, state, ...filter.params];
     if (limit != null) {
       sql += ' LIMIT ? OFFSET ?';
       params.push(limit, Math.max(0, offset));
@@ -14717,10 +14718,38 @@ export class DatabaseSQLite {
   }
 
   /** How many members a Community has, without loading any of them. */
-  countCommunityMembers(communityId, { state = 'active' } = {}) {
-    return this.db.prepare(
-      'SELECT COUNT(*) AS c FROM community_memberships WHERE community_id = ? AND (? IS NULL OR state = ?)'
-    ).get(communityId, state, state).c;
+  countCommunityMembers(communityId, { state = 'active', q = null, staffOnly = false } = {}) {
+    const filter = this._communityMemberFilter(q, staffOnly);
+    return this.db.prepare(`
+      SELECT COUNT(*) AS c FROM community_memberships m
+      JOIN users u ON u.id = m.user_id
+      WHERE m.community_id = ? AND (? IS NULL OR m.state = ?)${filter.sql}`
+    ).get(communityId, state, state, ...filter.params).c;
+  }
+
+  /**
+   * The Community manager's member filters (v2.124.0).
+   *
+   * `q` matches handle or display name as plain text: instr() rather than LIKE,
+   * so a typed % or _ is a character and not a wildcard. `staffOnly` keeps the
+   * people holding a role above `member` (priority 100), which is how ROLES can
+   * list every admin and moderator even when the member list is paged.
+   */
+  _communityMemberFilter(q, staffOnly) {
+    let sql = '';
+    const params = [];
+    const needle = typeof q === 'string' ? q.trim().toLowerCase() : '';
+    if (needle) {
+      sql += ' AND (instr(lower(u.handle), ?) > 0 OR instr(lower(COALESCE(u.display_name, \'\')), ?) > 0)';
+      params.push(needle, needle);
+    }
+    if (staffOnly) {
+      sql += ` AND EXISTS (
+        SELECT 1 FROM community_membership_roles mr
+        JOIN community_roles r ON r.id = mr.role_id
+        WHERE mr.membership_id = m.id AND r.community_id = m.community_id AND r.priority > 100)`;
+    }
+    return { sql, params };
   }
 
   /**

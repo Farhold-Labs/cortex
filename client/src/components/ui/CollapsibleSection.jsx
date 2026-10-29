@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0.75rem', children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false, headerAction, collapsible = true }) => {
+const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0.75rem', children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false, dense = false, headerAction, collapsible = true }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -124,9 +124,11 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0
   }
 
   return (
+    // `dense` (v2.124.0): the same box at about half the height, for screens
+    // that are a stack of sections, such as Manage Community.
     <div style={{
-      marginTop: '20px',
-      padding: isMobile ? '16px' : '20px',
+      marginTop: dense ? '8px' : '20px',
+      padding: dense ? (isMobile ? '6px 10px' : '6px 12px') : (isMobile ? '16px' : '20px'),
       background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
       border: accentColor ? `1px solid ${accentColor}40` : '1px solid var(--border-subtle)',
     }}>
@@ -155,7 +157,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0
         <button
           onClick={handleToggle}
           style={{
-            padding: isMobile ? '8px 12px' : '6px 10px',
+            padding: dense ? (isMobile ? '6px 10px' : '4px 8px') : (isMobile ? '8px 12px' : '6px 10px'),
             background: isOpen ? (accentColor ? `${accentColor}20` : 'var(--accent-amber)20') : 'transparent',
             border: `1px solid ${isOpen ? (accentColor || 'var(--accent-amber)') : 'var(--border-primary)'}`,
             color: isOpen ? (accentColor || 'var(--accent-amber)') : 'var(--text-dim)',
@@ -170,7 +172,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0
         </div>
       </div>
       {isOpen && (
-        <div style={{ marginTop: '16px' }}>
+        <div style={{ marginTop: dense ? '10px' : '16px', ...(dense ? { paddingBottom: '6px' } : {}) }}>
           {children}
         </div>
       )}
