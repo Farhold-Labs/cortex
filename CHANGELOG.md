@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.128.0] - 2026-10-29
+
+A public wave inside a Community is now public to that Community, not to everyone on the server.
+
+### Security
+
+- **[SECURITY] A private Community's public waves were visible to every account on the server (CORTEX-COMM-025, High).** Jared logged in with an account in no Community and saw the public waves of a private one. The Communities plan (§2b) says `privacy` is read relative to its container, so a public wave in a channel means visible to that channel; nothing implemented it. Every check read `privacy === 'public'` as "everyone on the node". An outsider could:
+  - see the wave in their WAVES list (the channel and Community ids were hidden, so it looked like an ordinary public wave);
+  - open and read it, and find its messages in search and its videos in the feed;
+  - receive every new message live over the WebSocket;
+  - post in it, which made them a participant;
+  - fetch its files without signing in (the attachment gate treated public waves as published).
+  Opening or posting in a public wave adds the reader as a participant, and notifications, mentions, `@everyone` and push are all sent to participants, so anyone who found one of these waves, and any member later removed, kept receiving it.
+- **The fix is one rule**, `db.channelPublicWaveVisible()`: a public wave in a Community channel is visible to whoever may see the channel (`canDiscoverChannel`: an active member in good standing, not banned, and let into a restricted channel). Participant rows do not count, which is what closes the door on people who joined through the leak. It is applied to:
+  - reading (`canAccessWave`, `canAccessWaveFromCache`) and therefore posting, pinning, filing and marking read;
+  - both wave list queries and the video feed;
+  - search, which now uses the wave-read check itself (it also used to leave crew members out of their own crew waves' results);
+  - live updates (`broadcastToWave`) and both participant lookups, so every fan-out that starts from the participant list;
+  - the attachment gate: only a public wave outside any channel keeps anonymously readable files.
+- **Unchanged:** public waves outside Communities, waves in node-level channels, and private, crew and cross-server waves anywhere. The rule only restricts; Community membership still never grants access to a wave.
+- **Jared chose members only for public Communities too:** non-members can still find a public Community, see its channels and join, but its public waves are for members.
+
+### Verified
+
+- `tests/community-public-waves.test.cjs` against a disposable server: an outsider cannot list, read, read the pings of, search, hear live, post in, or fetch files from a private Community's public wave; a member removed after reading and posting loses all of it, including `@mention` and `@everyone` notifications; a member keeps all of it; a node-wide public wave is still public. The counterfactual strips the rule from a copy of the server and confirms the leak returns: listed, readable, searchable, pushed live, file served, removed member still in. Full suite 589 pass.
+
 ## [2.127.0] - 2026-10-29
 
 Older apps and tabs can sign in again without clearing their cache.

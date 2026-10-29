@@ -4731,9 +4731,16 @@ const participation = {
   isParticipant: (waveId, userId) => USE_SQLITE
     ? waveParticipationCrypto.isParticipant(waveId, userId)
     : db.isWaveParticipant(waveId, userId),
-  getWaveParticipants: (waveId) => USE_SQLITE
-    ? waveParticipationCrypto.getWaveParticipants(waveId)
-    : db.getWaveParticipants(waveId).map(p => p.id),
+  // v2.128.0: for a public wave in a Community channel, only participants who
+  // may still see the channel. Everything that fans out to a wave — live
+  // updates, push, notifications, @everyone — starts here.
+  getWaveParticipants: (waveId) => {
+    const ids = USE_SQLITE
+      ? waveParticipationCrypto.getWaveParticipants(waveId)
+      : db.getWaveParticipants(waveId).map(p => p.id);
+    const audience = db.channelPublicWaveAudience?.(waveId);
+    return audience ? ids.filter(audience) : ids;
+  },
   getUserWaves: (userId) => USE_SQLITE
     ? waveParticipationCrypto.getUserWaves(userId)
     : [],
@@ -4776,6 +4783,10 @@ const participation = {
 function canAccessWaveFromCache(waveId, userId) {
   const wave = db.getWave(waveId);
   if (!wave) return false;
+  // v2.128.0: a public wave in a Community channel follows the channel —
+  // participant rows do not count (see db.channelPublicWaveVisible).
+  const inChannel = db.channelPublicWaveVisible?.(wave, userId);
+  if (inChannel != null) return inChannel;
   if (wave.privacy === 'public') return true;
   if ((wave.privacy === 'crossServer' || wave.privacy === 'cross-server') && wave.federationState === 'participant') return true;
   if ((wave.privacy === 'group' || wave.privacy === 'crew') && wave.groupId) return db.isGroupMember(wave.groupId, userId);
@@ -5040,7 +5051,10 @@ function attachmentRefusal(relative, getViewer) {
     // renders published waves to visitors with no session at all, and those
     // pages are full of /uploads images — demanding a cookie here would
     // break every one of them to protect content that is already published.
-    if (wave.privacy !== 'public') {
+    // A public wave inside a Community channel is not published to anyone
+    // outside the channel (v2.128.0), so its files take the gate.
+    const nodePublic = wave.privacy === 'public' && !wave.channelId;
+    if (!nodePublic) {
       const viewerId = getViewer();
       if (!viewerId) {
         return [401, { error: 'Attachment access required', code: 'ATTACHMENT_AUTH' }];
@@ -22834,8 +22848,9 @@ app.put('/api/waves/:waveId/category', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'Wave not found' });
     }
 
-    const isParticipant = participation.isParticipant(waveId, req.user.userId);
-    if (!isParticipant && wave.privacy !== 'public') {
+    // The wave-read predicate (v2.128.0): "public" no longer means anyone when
+    // the wave sits in a Community channel.
+    if (!canAccessWaveFromCache(waveId, req.user.userId)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -22888,8 +22903,9 @@ app.put('/api/waves/:waveId/pin', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'Wave not found' });
     }
 
-    const isParticipant = participation.isParticipant(waveId, req.user.userId);
-    if (!isParticipant && wave.privacy !== 'public') {
+    // The wave-read predicate (v2.128.0): "public" no longer means anyone when
+    // the wave sits in a Community channel.
+    if (!canAccessWaveFromCache(waveId, req.user.userId)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -24818,15 +24834,10 @@ app.get('/api/search', authenticateToken, (req, res) => {
 
   // Filter results to only include waves the user has access to
   const accessibleResults = results.filter(result => {
-    const wave = db.getWave(result.waveId);
-    if (!wave) return false;
-
-    // Public waves are accessible to all
-    if (wave.privacy === 'public') return true;
-
-    // Check if user is a participant
-    const participants = db.getWaveParticipants(result.waveId);
-    return participants.some(p => p.id === req.user.userId);
+    // The wave-read predicate itself (v2.128.0). This used to admit every
+    // public wave, including those in a private Community's channels, and
+    // left crew members out of their own crew waves.
+    return canAccessWaveFromCache(result.waveId, req.user.userId);
   });
 
   res.json({ results: accessibleResults, count: accessibleResults.length });
@@ -27953,9 +27964,16 @@ function broadcastToWave(waveId, message, excludeWs = null) {
     db.getGroupMembers(wave.groupId).forEach(m => recipients.add(m.id));
   }
 
-  // For public waves, all connected users (they can see it in their list)
+  // For public waves, all connected users (they can see it in their list).
+  // A public wave in a Community channel only reaches those who may see the
+  // channel (v2.128.0); that includes dropping participants who may not.
   if (wave.privacy === 'public') {
     clients.forEach((_, userId) => recipients.add(userId));
+  }
+  if (wave.privacy === 'public' && wave.channelId) {
+    for (const userId of [...recipients]) {
+      if (db.channelPublicWaveVisible(wave, userId) === false) recipients.delete(userId);
+    }
   }
 
   for (const userId of recipients) {

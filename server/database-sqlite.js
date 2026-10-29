@@ -18,7 +18,7 @@ import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import sanitizeHtml from 'sanitize-html';
 import crypto from 'crypto';
-import { canInviteConferRole } from './lib/communities/authorize.js';
+import { canInviteConferRole, canDiscoverChannel } from './lib/communities/authorize.js';
 import { CAPS as COMMUNITY_CAPS } from './lib/communities/limits.js';
 
 /** Shared with the HTTP admission paths — see lib/communities/limits.js. */
@@ -6269,6 +6269,7 @@ export class DatabaseSQLite {
     // v2.84.0 — one lookup for the whole list rather than a query per row.
     const mutedWaveIds = new Set(this.getMutedWaveIds(userId));
     const visibleCommunities = this.visibleCommunityIds(userId);
+    const channelMemo = new Map();
     // Get user's crew IDs
     const userCrewIds = this.db.prepare('SELECT crew_id FROM crew_members WHERE user_id = ?').all(userId).map(r => r.crew_id);
 
@@ -6361,6 +6362,10 @@ export class DatabaseSQLite {
         const cid = wcaMap.get(r.id);
         if (cid) categoryId = cid;
       }
+
+      // v2.128.0: a public wave in a Community channel only for those who
+      // may see the channel, participant row or not.
+      if (this.channelPublicWaveVisible(r, userId, channelMemo) === false) continue;
 
       // Filter based on mode
       if (showHidden) {
@@ -6476,6 +6481,7 @@ export class DatabaseSQLite {
     // v2.84.0 — one lookup for the whole list rather than a query per row.
     const mutedWaveIds = new Set(this.getMutedWaveIds(userId));
     const visibleCommunities = this.visibleCommunityIds(userId);
+    const channelMemo = new Map();
     // Get user's crew IDs
     const userCrewIds = this.db.prepare('SELECT crew_id FROM crew_members WHERE user_id = ?').all(userId).map(r => r.crew_id);
 
@@ -6567,6 +6573,10 @@ export class DatabaseSQLite {
         const cid = wcaMap.get(r.id);
         if (cid) categoryId = cid;
       }
+
+      // v2.128.0: a public wave in a Community channel only for those who
+      // may see the channel, participant row or not.
+      if (this.channelPublicWaveVisible(r, userId, channelMemo) === false) continue;
 
       // Filter based on mode
       if (showHidden) {
@@ -6717,7 +6727,12 @@ export class DatabaseSQLite {
       WHERE wp.wave_id = ?
     `).all(waveId);
 
-    return rows.map(r => ({
+    // v2.128.0: a public wave in a Community channel lists only those who may
+    // still see the channel. Reading or posting in a public wave adds the
+    // reader as a participant, so the leak left rows for people outside it;
+    // every fan-out (notifications, mentions, @everyone) reads this list.
+    const audience = this.channelPublicWaveAudience(waveId);
+    return (audience ? rows.filter(r => audience(r.id)) : rows).map(r => ({
       id: r.id,
       name: r.display_name,
       avatar: r.avatar,
@@ -6744,6 +6759,9 @@ export class DatabaseSQLite {
     const wave = this.getWave(waveId);
     if (!wave) return false;
 
+    // v2.128.0: a public wave in a Community channel follows the channel.
+    const inChannel = this.channelPublicWaveVisible(wave, userId);
+    if (inChannel !== null) return inChannel;
     if (wave.privacy === 'public') return true;
 
     // Federated participant waves are accessible to all local users
@@ -13770,6 +13788,7 @@ export class DatabaseSQLite {
       SELECT
         p.id,
         p.wave_id,
+        w.channel_id AS wave_channel_id,
         p.author_id,
         p.content,
         p.media_url,
@@ -13831,7 +13850,13 @@ export class DatabaseSQLite {
     query += ` ORDER BY p.created_at DESC LIMIT ?`;
     params.push(fetchLimit);
 
-    const rows = this.db.prepare(query).all(...params);
+    // v2.128.0: a public wave in a Community channel only for those who may see
+    // the channel. Filtered here rather than in SQL because the decision is the
+    // Community evaluator's; participant rows do not count (see
+    // channelPublicWaveVisible).
+    const channelMemo = new Map();
+    const rows = this.db.prepare(query).all(...params).filter(row =>
+      this.channelPublicWaveVisible({ privacy: row.wave_privacy, channelId: row.wave_channel_id }, userId, channelMemo) !== false);
 
     // Seeded random generator for consistent discovery randomness per session
     const seededRandom = (s) => {
@@ -15065,6 +15090,58 @@ export class DatabaseSQLite {
    * Public Communities are knowable by anyone; the rest need an active
    * membership. Computed once per list rather than per wave.
    */
+  /**
+   * A public wave inside a Community channel (v2.128.0).
+   *
+   * `privacy` is read relative to its container (plan §2b): a public wave filed
+   * in a channel means "visible to whoever may see that channel", not "visible
+   * to everyone on the node". Until v2.128.0 nothing read it that way, so a
+   * private Community's public waves were listed, readable, searchable and
+   * pushed live to every account on the node, and their files were served to
+   * anyone.
+   *
+   * Participation deliberately does not count here. Opening or posting in a
+   * public wave used to add the reader as a participant, so everyone who found
+   * one of these waves through the leak holds a participant row; honouring it
+   * would keep the leak open for exactly those people. Only the channel decides.
+   *
+   * This restricts; it never grants. Private, crew and cross-server waves keep
+   * their own rules wherever they are filed.
+   *
+   * Returns null when the rule does not apply (not public, or not in a
+   * channel), otherwise whether this person may see the wave. Pass a Map as
+   * `memo` when checking many waves for one person.
+   */
+  channelPublicWaveVisible(wave, userId, memo = null) {
+    if (!wave || wave.privacy !== 'public') return null;
+    const channelId = wave.channelId ?? wave.channel_id ?? null;
+    if (!channelId) return null;
+    if (!userId) return false;
+    if (memo?.has(channelId)) return memo.get(channelId);
+    let ok = false;
+    try {
+      const channel = this.getChannelById(channelId);
+      // A node-level channel has no Community to be a member of: its public
+      // waves are node-public, as before.
+      if (channel && channel.community_id === null) ok = true;
+      else if (channel) ok = canDiscoverChannel(this, { kind: 'user', userId }, channelId).allowed === true;
+    } catch {
+      ok = false; // fail closed
+    }
+    memo?.set(channelId, ok);
+    return ok;
+  }
+
+  /**
+   * For a public wave in a Community channel, a predicate saying who of its
+   * participants may still see it; null for every other wave (v2.128.0).
+   */
+  channelPublicWaveAudience(waveId) {
+    const w = this.db.prepare('SELECT privacy, channel_id FROM waves WHERE id = ?').get(waveId);
+    if (!w || w.privacy !== 'public' || !w.channel_id) return null;
+    return (userId) => this.channelPublicWaveVisible(w, userId) !== false;
+  }
+
   visibleCommunityIds(userId) {
     const ids = new Set();
     try {
