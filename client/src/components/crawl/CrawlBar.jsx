@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { plainText } from '../../utils/plainText.js';
 import { formatTemperature } from '../../utils/temperature.js';
 import HolidayIcon, { holidayFromAlertTitle, withoutLeadingEmoji } from '../effects/HolidayIcon.jsx';
+import AlertPriorityIcon from '../ui/AlertPriorityIcon.jsx';
 
 const CRAWL_SCROLL_SPEEDS = {
   slow: 60,     // seconds for full scroll - leisurely pace
@@ -288,10 +289,10 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
 
   // System Alerts (from admins) - displayed first, highest priority
   const alertPriorityConfig = {
-    critical: { icon: '🚨', color: 'var(--accent-orange)', showLabel: true },
-    warning: { icon: '⚠️', color: 'var(--accent-amber)', showLabel: true },
-    info: { icon: 'ℹ️', color: 'var(--accent-teal)', showLabel: true },
-    celebration: { icon: '', color: 'var(--accent-purple)', showLabel: false },
+    critical: { color: 'var(--accent-orange)', showLabel: true },
+    warning: { color: 'var(--accent-amber)', showLabel: true },
+    info: { color: 'var(--accent-teal)', showLabel: true },
+    celebration: { color: 'var(--accent-purple)', showLabel: false },
   };
 
   if (data.alerts?.enabled && data.alerts?.data?.length > 0) {
@@ -326,7 +327,8 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
             }}
           >
             {holiday && <HolidayIcon holiday={holiday} size="1.1em" />}
-            {cfg.showLabel ? `${cfg.icon} [${alert.priority.toUpperCase()}] ${title}` : title}
+            {cfg.showLabel && <AlertPriorityIcon priority={alert.priority} size="1.1em" color={cfg.color} />}
+            {cfg.showLabel ? `[${alert.priority.toUpperCase()}] ${title}` : title}
             {alert.originNode && (
               <span style={{ fontSize: '0.7em', opacity: 0.7, marginLeft: '4px' }}>
                 (@{alert.originNode})
@@ -416,7 +418,7 @@ const CrawlBar = ({ fetchAPI, enabled = true, userPrefs = {}, isMobile = false, 
               style={{ textDecoration: 'none', color: 'var(--accent-orange)' }}
               onClick={(e) => e.stopPropagation()}
             >
-              ⚠️ ALERT: {alert.event}
+              <AlertPriorityIcon priority="warning" size="1.1em" style={{ marginRight: '4px' }} />ALERT: {alert.event}
             </a>
           ),
         });

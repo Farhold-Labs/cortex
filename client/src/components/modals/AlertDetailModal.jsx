@@ -1,15 +1,16 @@
 import React from 'react';
 import { plainText } from '../../utils/plainText.js';
 import HolidayIcon, { holidayFromAlertTitle, withoutLeadingEmoji } from '../effects/HolidayIcon.jsx';
+import AlertPriorityIcon from '../ui/AlertPriorityIcon.jsx';
 
 const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
   if (!alert) return null;
 
   const priorityConfig = {
-    critical: { icon: '🚨', color: 'var(--accent-orange)', label: 'CRITICAL' },
-    warning: { icon: '⚠️', color: 'var(--accent-amber)', label: 'WARNING' },
-    info: { icon: 'ℹ️', color: 'var(--accent-teal)', label: 'INFO' },
-    celebration: { icon: '🎉', color: 'var(--accent-purple)', label: 'CELEBRATION' }
+    critical: { color: 'var(--accent-orange)', label: 'CRITICAL' },
+    warning: { color: 'var(--accent-amber)', label: 'WARNING' },
+    info: { color: 'var(--accent-teal)', label: 'INFO' },
+    celebration: { color: 'var(--accent-purple)', label: 'CELEBRATION' }
   };
 
   const categoryLabels = {
@@ -18,7 +19,8 @@ const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
     emergency: 'Emergency'
   };
 
-  const cfg = priorityConfig[alert.priority] || priorityConfig.info;
+  const priority = priorityConfig[alert.priority] ? alert.priority : 'info';
+  const cfg = priorityConfig[priority];
   const holiday = alert.priority === 'celebration' ? holidayFromAlertTitle(alert.title) : null;
   const title = holiday ? withoutLeadingEmoji(plainText(alert.title)) : plainText(alert.title);
   const categoryLabel = categoryLabels[alert.category] || alert.category;
@@ -53,7 +55,7 @@ const AlertDetailModal = ({ alert, onClose, onDismiss, isMobile }) => {
         }}>
           {holiday
             ? <HolidayIcon holiday={holiday} size="1.5rem" />
-            : <span style={{ fontSize: '1.5rem' }}>{cfg.icon}</span>}
+            : <AlertPriorityIcon priority={priority} size="1.5rem" color={cfg.color} />}
           <span style={{ color: cfg.color, fontWeight: 600, fontFamily: 'monospace', fontSize: '0.9rem' }}>
             {cfg.label}
           </span>
