@@ -205,7 +205,7 @@ non-participants.
 **One wrinkle to write into the schema comment**, because someone will otherwise
 assume the other thing: a wave marked `public` *inside a Community* means
 visible to Community members, not to the internet. `privacy` is read relative to
-its container.
+its container. *(Built in v2.128.0, `db.channelPublicWaveVisible()`; until then it was not, and such waves were node-public: CORTEX-COMM-025.)*
 
 Secondary costs, both accepted: navigation is four levels deep
 (community → channel → wave → thread), which needs care on mobile; and posting
