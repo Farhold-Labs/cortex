@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.123.0] - 2026-10-28
+
+One invitation link for a whole group. An admin invited their crew on a 7-day link and the first person to sign up used it up: account invitations were single-use, and everyone after got "This invitation is not valid".
+
+### Added
+
+- **Shared invitations.** Settings → ADMINISTRATION → INVITATIONS → NEW INVITATION has a PEOPLE WHO CAN USE IT choice: 1 (the default, as before), 5, 10, 25, 50 or 100. The link works until that many people have signed up, it expires, or it is revoked.
+  - A shared link makes **user accounts only** and is **not tied to an email address**; the server refuses either with 400. A link passed round a group must not make several moderators, and an email invitation is for one person. The form hides ROLE, EMAIL and DELIVERY while more than one use is chosen.
+  - Capped at 100 uses, so a link that leaks beyond the group cannot open the server to everyone.
+  - The ISSUED list shows "used 3 / 10" and who signed up with each invitation. Revoking a partly used one stops the remaining uses.
+- `POST /api/admin/invites` takes `maxUses`; listed invitations carry `maxUses`, `useCount` and `usedByHandles` (docs/API.md).
+- Schema: `user_invitations.max_uses` (default 1) and `use_count`, and a `user_invitation_uses` table (invitation, account, time). Every existing invitation stays single-use, one already redeemed counts as used, and its taker is copied into the new table.
+
+### Security
+
+- **The last use of an invitation can only be taken once.** Taking a use and creating the account are now one transaction, and the account exists only if a use was left. Before, the account was created first and the invitation claimed afterwards, so someone who lost a race for a link still kept their account (as a plain user) even with registration closed. With shared links that race becomes likely at the last use.
+- The use is also refused if the invitation expired or was revoked between the signup form loading and the account being created; before, only the earlier check looked at that.
+
+### Verified
+
+- `tests/invite-uses.test.cjs` (4 tests):
+  - four people on a three-use link: three accounts, and the fourth gets none;
+  - revoke stops a partly used link, an expired one admits nobody, and a failed signup spends no use;
+  - **counterfactual:** with the use guard stripped from a copy of `database-sqlite.js`, the fourth person gets an account;
+  - migration from the v2.67.0 table shape: a used invitation stays used and keeps its taker, an unused one stays single-use;
+  - through a real server: the 400s for 0, 101, 2.5, text, a shared moderator link and a shared email invitation; three signups on one link, the fourth refused with no account, the list showing 3 / 3 and the three handles; a plain invitation still single-use.
+- Full suite passes (557 tests). `generate-schema --check` passes.
+- Headless at 390 px on dev: created a 10-use invitation from the admin panel (ROLE, EMAIL and DELIVERY hidden, the explanation shown), signed two accounts up with it, and the ISSUED list read "used 2 / 10" and "signed up: @invcrewa, @invcrewb". 0 console errors. The invitation was revoked and the two accounts deleted afterwards.
+
 ## [2.122.3] - 2026-10-28
 
 Alert priority icons are drawn too, the last emoji the alert views depended on.
