@@ -18,13 +18,17 @@ Phase 2 of the wave-access redesign (docs/wave-access/01-design.md): the Communi
 - Nobody is told who the people outside are, in either view: who is in a crew or a private wave is not the Community's to learn.
 - `GET /api/communities/:id/wave-report` and `GET /api/admin/communities/wave-report` (docs/API.md).
 
+### Fixed
+
+- **A new crew member was refused crew actions until the server restarted.** Accepting a crew invitation wrote `crew_members` only; the encrypted membership and its in-memory cache, which the crew's own routes check, never heard of it. The member could see the crew's waves but was refused inviting others, listing invitations sent and starting a crew wave. Accepting now updates both. Deleting a crew also clears its encrypted membership, which it used to leave behind. `tests/crew-cache.test.cjs`, with a counterfactual that drops the update and sees the refusal return.
+
 ### Security
 
 - **Crews were a way into Community channel waves** (CORTEX-COMM-026). v2.130.0 refused outsiders when adding or filing, but filing counted only participant rows, so a crew wave whose crew included an outsider could still be filed into a channel; and joining a crew joins its waves, so accepting an invitation to a crew whose wave was already filed reached that wave. Filing now counts the whole crew, and a crew invitation, a crew admin's add and the acceptance itself are refused when the crew has a wave filed in a channel the person cannot see. People already in such crews keep their access until the owner reviews the wave.
 
 ### Verified
 
-- `tests/community-wave-report.test.cjs` against a disposable server: an owner's report lists a private wave someone left the Community from, a crew wave whose crew member left, and a wave the owner is not in (counted, title hidden), and not a members-only wave; totals 3 waves, 2 people; no outsider id or handle in either report; a member gets 403 and a stranger 404; the node admin's report has the same numbers and no titles; a crew wave with an outsider cannot be filed; a crew invitation answered after the filing, a new invitation and an admin's add are all refused. The counterfactual puts the v2.130.0 crew handling back and sees the filing succeed, the report miss the crew wave and the late joiner open it. Full suite 610 pass.
+- `tests/community-wave-report.test.cjs` against a disposable server: an owner's report lists a private wave someone left the Community from, a crew wave whose crew member left, and a wave the owner is not in (counted, title hidden), and not a members-only wave; totals 3 waves, 2 people; no outsider id or handle in either report; a member gets 403 and a stranger 404; the node admin's report has the same numbers and no titles; a crew wave with an outsider cannot be filed; a crew invitation answered after the filing, a new invitation and an admin's add are all refused. The counterfactual puts the v2.130.0 crew handling back and sees the filing succeed, the report miss the crew wave and the late joiner open it. Full suite 612 pass.
 - Headless on dev at 390 px: mal (owner of Test Private Community and node admin) sees two waves to review, one titled and one "A wave you are not in", and the node-admin section shows the Community with 2 to review and 1 person outside; no horizontal scroll, no page errors.
 
 ### Docs
