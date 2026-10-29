@@ -25152,6 +25152,11 @@ app.get('/api/communities/:id', authenticateToken, (req, res) => {
     community,
     membership: isMember ? membership : null,
     capabilities: [...communityAuthz.effectiveCapabilities(db, communityActor(req), community.id)],
+    // Your own roles (v2.124.0), so the manager offers only the role changes
+    // your rank allows. It is a courtesy: every route re-checks.
+    myRoles: isMember
+      ? db.getMemberRoles(community.id, req.user.userId).map(r => ({ id: r.id, name: r.name, priority: r.priority }))
+      : [],
   });
 });
 
@@ -25211,7 +25216,13 @@ app.get('/api/communities/:id/members', authenticateToken, (req, res) => {
   // more, so a truncated page never passes for a complete one.
   const pageSize = communityLimits.CAPS.memberPageSize;
   const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
-  const rows = db.listCommunityMembers(req.params.id, { limit: pageSize, offset });
+  // The manager's search box and ROLES list (v2.124.0). Both filters run in
+  // the query, so they see the whole membership, not just the loaded page.
+  const filters = {
+    q: typeof req.query.q === 'string' ? req.query.q.slice(0, 64) : null,
+    staffOnly: req.query.staff === '1',
+  };
+  const rows = db.listCommunityMembers(req.params.id, { limit: pageSize, offset, ...filters });
   const rolesByUser = db.getMemberRolesBulk(req.params.id, rows.map(m => m.user_id));
 
   const members = rows.map(m => ({
@@ -25222,7 +25233,7 @@ app.get('/api/communities/:id/members', authenticateToken, (req, res) => {
   }));
   res.json({
     members,
-    total: db.countCommunityMembers(req.params.id),
+    total: db.countCommunityMembers(req.params.id, filters),
     offset,
     limit: pageSize,
     hasMore: rows.length === pageSize,
@@ -25619,6 +25630,7 @@ app.put('/api/communities/:id/members/:userId/roles/:roleId', authenticateToken,
       metadata: { role: role.name },
     });
   });
+  pushCommunityRolesChanged(req.params.id, req.params.userId);
   res.json({ roles: db.getMemberRoles(req.params.id, req.params.userId) });
 });
 
@@ -25645,6 +25657,7 @@ app.delete('/api/communities/:id/members/:userId/roles/:roleId', authenticateTok
       actorId: req.user.userId, action: 'role.revoke', targetType: 'user', targetId: req.params.userId,
     });
   });
+  pushCommunityRolesChanged(req.params.id, req.params.userId);
   res.json({ roles: db.getMemberRoles(req.params.id, req.params.userId) });
 });
 
@@ -25733,6 +25746,15 @@ app.post('/api/communities/:id/channels', authenticateToken, apiLimiter, (req, r
  * waves in a channel. One order everyone in the Community sees, set by whoever
  * may manage channels. Members are told so their sidebars re-read it.
  */
+/**
+ * Someone's roles in a Community changed (v2.124.0). Their open app re-reads
+ * the channel list, whose `canManage` flags decide what it offers; otherwise a
+ * new admin would see nothing change until they reloaded.
+ */
+function pushCommunityRolesChanged(communityId, userId) {
+  broadcast({ type: 'community_roles_changed', communityId }, [userId]);
+}
+
 function pushCommunityOrderChanged(communityId) {
   const members = db.db.prepare(
     "SELECT user_id FROM community_memberships WHERE community_id = ? AND state = 'active'"

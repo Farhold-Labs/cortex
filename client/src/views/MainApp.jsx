@@ -1146,6 +1146,10 @@ function MainApp({ sharePingId }) {
         loadWaves();
         loadCommunityChannelsRef.current?.();
       }
+    } else if (data.type === 'community_roles_changed') {
+      // This person was made, or stopped being, an admin or moderator
+      // (v2.124.0): what the channel list offers them follows their roles.
+      loadCommunityChannelsRef.current?.();
     } else if (data.type === 'voice_presence') {
       // Someone joined or left a Community voice channel (v2.118.0).
       setVoicePresence(prev => ({ ...prev, [data.channelId]: data.participants || [] }));
@@ -2465,6 +2469,7 @@ function MainApp({ sharePingId }) {
           initialCommunityId={communityPanelFor.communityId}
           focus={communityPanelFor.focus}
           voiceEnabled={voiceEnabled}
+          isMobile={isMobile}
           onClose={() => setCommunityPanelFor(null)}
           onChanged={() => { loadCommunityChannels(); loadWaves(); }}
         />
