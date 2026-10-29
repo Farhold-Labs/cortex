@@ -1,6 +1,6 @@
 {
   "name": "cortex-server",
-  "version": "2.131.1",
+  "version": "2.131.2",
   "description": "Cortex - Privacy-First Federated Communication Platform",
   "type": "module",
   "scripts": {

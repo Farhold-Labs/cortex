@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.131.2] - 2026-10-29
+
+### Fixed
+
+- **A Community logo (or a profile picture) could not be set from a phone photo.** Reported by Jared: no icon could be added to PMP Board on PMP. Logos and avatars were capped at 2 MB, and the app refused a larger file before sending it, so nothing reached the server or its logs; PMP Board's audit log has no logo ever set, and its owner is the account that tried. An ordinary phone photo is 3 to 6 MB. Both are re-encoded to 256×256 on the server, so the original's size costs only the upload: the limit is now 10 MB, the same as pictures in messages, in the app and on the server. The logo hint now says which formats and how large.
+
+### Verified
+
+- `tests/community-manager.test.cjs` uploads a 4 MB 2400×1800 JPEG as a logo (stored as a 256×256 WebP) and is refused for an 11 MB file.
+
 ## [2.131.1] - 2026-10-29
 
 ### Fixed

@@ -494,9 +494,14 @@ if (!fs.existsSync(FILES_DIR)) fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // Multer configuration for avatar uploads
 const avatarStorage = multer.memoryStorage();
+// Avatars and Community logos are re-encoded to 256px, so the original's size
+// costs only the upload. 2 MB (until v2.131.2) refused an ordinary phone photo,
+// which is 3-6 MB: a Community owner on PMP could not set a logo at all, and the
+// app refused it before sending, so nothing reached the server's logs.
+const AVATAR_MAX_BYTES = 10 * 1024 * 1024;
 const avatarUpload = multer({
   storage: avatarStorage,
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB max
+  limits: { fileSize: AVATAR_MAX_BYTES },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
     if (allowedTypes.includes(file.mimetype)) {
@@ -7482,7 +7487,7 @@ app.post('/api/profile/avatar', authenticateToken, (req, res, next) => {
     if (err) {
       // Handle multer errors (file too large, invalid type, etc.)
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'File too large. Maximum size is 2MB' });
+        return res.status(400).json({ error: 'File too large. Maximum size is 10MB' });
       }
       return res.status(400).json({ error: err.message || 'File upload failed' });
     }
@@ -25474,7 +25479,7 @@ app.post('/api/communities/:id/logo', authenticateToken, apiLimiter, (req, res, 
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_COMMUNITY)) return;
   avatarUpload.single('logo')(req, res, (err) => {
     if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large. Maximum size is 2MB' });
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large. Maximum size is 10MB' });
       return res.status(400).json({ error: err.message || 'File upload failed' });
     }
     next();
