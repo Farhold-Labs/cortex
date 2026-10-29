@@ -139,7 +139,7 @@ test('Broadcast recording', { timeout: 120000 }, async (t) => {
     const outsider = await makeUser('outsider');
     const stepUp = (await api('POST', '/api/auth/step-up', { token: admin.token, body: { password } })).body.stepUpToken;
     assert.equal((await api('PUT', '/api/admin/instance-config', { token: admin.token, stepUp, body: { features: { broadcasts: true } } })).status, 200);
-    const mkWave = async (title) => { const w = (await api('POST', '/api/waves', { token: performer.token, body: { title, privacy: 'private', participants: [viewer.id] } })).body; return w.id || w.wave?.id; };
+    const mkWave = async (title) => { const w = (await api('POST', '/api/waves', { token: performer.token, body: { title, privacy: 'private', participants: [viewer.id] } })).body; for (const i of ((await api('GET', '/api/wave-invitations', { token: viewer.token })).body?.invitations || [])) await api('POST', `/api/wave-invitations/${i.id}/accept`, { token: viewer.token }); return w.id || w.wave?.id; }; // v2.130.0: the viewer is invited, then accepts
     const waveId = await mkWave('Opening Night');
 
     await t.test('the server says recording is available', async () => {

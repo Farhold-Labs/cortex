@@ -66,7 +66,9 @@ End-to-end encryption (E2EE) is **set per wave**, using ECDH P-384 key exchange 
 - Not even the instance operator can read these conversations.
 - **Your key on your device.** Your private key is unlocked with your passphrase (normally your login password). So that you aren't asked every time you open the app, a copy is kept in this browser or app until your session ends. It is protected by a key stored beside it, so anyone with access to your device could use it. Signing out removes it. Before v2.114.1, signing out from Settings left it in place until it expired.
 
-**In a wave that is not encrypted,** including public waves, waves published to the portal and announcement waves, messages are stored as text the server can read. They are protected by access control, not encryption. A public wave inside a Community's channel is visible only to people who can see that channel, not to everyone on the server; before v2.128.0 it was visible to every account on the server, and its files to anyone with the link.
+**In a wave that is not encrypted,** including public waves, waves published to the portal and announcement waves, messages are stored as text the server can read. They are protected by access control, not encryption.
+
+**Wave invitations (v2.130.0).** Being added to someone's wave outside a Community sends you an invitation first. While it is open, the server stores who invited whom to which wave, in plain form, so it can show you the question; the row is deleted when you accept, decline, the inviter withdraws it, or it expires after 30 days. An accepted invitation becomes ordinary wave participation, which is stored encrypted. Before accepting you see only who invited you, the wave's title and who is in it. A public wave inside a Community's channel is visible only to people who can see that channel, not to everyone on the server; before v2.128.0 it was visible to every account on the server, and its files to anyone with the link.
 
 ---
 

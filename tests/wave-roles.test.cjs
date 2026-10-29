@@ -131,8 +131,13 @@ test('wave roles gate announcement posting without instance-wide moderator', asy
 
     await t.test('a wave admin may appoint moderators but not other admins', async () => {
       assert.equal((await setRole(wave.id, 'member', 'admin', 'owner')).status, 200);
-      assert.equal((await setRole(wave.id, 'outsider', 'moderator', 'member')).status, 200);
-      assert.equal((await setRole(wave.id, 'outsider', 'admin', 'member')).status, 403);
+      assert.equal((await setRole(wave.id, 'deputy', 'moderator', 'member')).status, 200);
+      assert.equal((await setRole(wave.id, 'deputy', 'admin', 'member')).status, 403);
+    });
+
+    await t.test('appointing someone is not a way into the wave (v2.130.0)', async () => {
+      const res = await setRole(wave.id, 'outsider', 'moderator', 'owner');
+      assert.equal(res.status, 400);
     });
 
     await t.test('the owner cannot be demoted or removed', async () => {

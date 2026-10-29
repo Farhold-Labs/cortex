@@ -63,16 +63,20 @@ const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetc
       }
     }
 
+    let invitedCount = 0;
     for (const userId of selectedUsers) {
       const user = availableContacts.find(c => c.id === userId);
       const userName = user?.displayName || user?.name || userId;
 
       try {
-        // Add participant to wave
-        await fetchAPI(`/waves/${wave.id}/participants`, {
+        // Add participant to wave. Since v2.130.0 this usually sends an
+        // invitation (202): they join when they accept. In a Community, or for
+        // someone who auto-accepts from contacts, they are added (200).
+        const outcome = await fetchAPI(`/waves/${wave.id}/participants`, {
           method: 'POST',
           body: { userId }
         });
+        if (outcome?.invited) invitedCount++;
 
         // If wave is encrypted, distribute wave key to new participant
         if (wave.encrypted && e2ee.isUnlocked) {
@@ -102,7 +106,11 @@ const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetc
     setLoading(false);
 
     if (successCount > 0) {
-      showToast(`Added ${successCount} participant${successCount > 1 ? 's' : ''} to ${T.wave}`, 'success');
+      const addedCount = successCount - invitedCount;
+      showToast([
+        invitedCount ? `Invitation${invitedCount > 1 ? 's' : ''} sent to ${invitedCount}` : '',
+        addedCount ? `Added ${addedCount} participant${addedCount > 1 ? 's' : ''} to the ${T.wave}` : '',
+      ].filter(Boolean).join(' · '), 'success');
       if (onParticipantsChange) onParticipantsChange();
       onClose();
     }

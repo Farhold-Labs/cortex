@@ -125,6 +125,11 @@ function MainApp({ sharePingId }) {
   const [contactRequests, setContactRequests] = useState([]); // Received contact requests
   const [sentContactRequests, setSentContactRequests] = useState([]); // Sent contact requests
   const [groupInvitations, setGroupInvitations] = useState([]); // Received group invitations
+  // Invitations into other people's waves (v2.130.0): nothing of the wave is
+  // readable until one is accepted.
+  const [waveInvitations, setWaveInvitations] = useState([]);
+  const loadWaveInvitationsRef = useRef(null);
+  const loadBlockedMutedUsersRef = useRef(null);
   const [blockedUsers, setBlockedUsers] = useState([]); // Users blocked by current user
   const [mutedUsers, setMutedUsers] = useState([]); // Users muted by current user
   const [profileUserId, setProfileUserId] = useState(null); // User ID for profile modal
@@ -1096,6 +1101,11 @@ function MainApp({ sharePingId }) {
         }
         showToastMsg(data.wasSelf ? NOTIFICATION.participantLeft : NOTIFICATION.participantRemoved, 'info');
       }
+    } else if (data.type === 'wave_invitations_changed') {
+      // An invitation to us arrived, was withdrawn or expired; or, for a wave
+      // we are in, someone was invited or answered (v2.130.0).
+      loadWaveInvitationsRef.current?.();
+      if (data.waveId && selectedWave?.id === data.waveId) setWaveReloadTrigger(prev => prev + 1);
     } else if (data.type === 'added_to_wave') {
       // We were added to a wave
       showToastMsg(NOTIFICATION.addedToWave(data.wave?.title || `a ${T.wave}`), 'success');
@@ -1402,6 +1412,54 @@ function MainApp({ sharePingId }) {
     } catch (e) { console.error('Failed to load group invitations:', e); }
   }, [fetchAPI]);
 
+  const loadWaveInvitations = useCallback(async () => {
+    try {
+      const data = await fetchAPI('/wave-invitations');
+      setWaveInvitations(data?.invitations || []);
+    } catch (e) { console.error('Failed to load wave invitations:', e); }
+  }, [fetchAPI]);
+  loadWaveInvitationsRef.current = loadWaveInvitations;
+
+  // The invitations sit at the top of the home list: go there (v2.130.0).
+  const showInvitations = useCallback(() => {
+    setActiveView('waves');
+    setOpenContainer(null);
+    setSidebarCollapsed(false);
+    loadWaveInvitations();
+  }, [loadWaveInvitations]);
+
+  // A push for an invitation opens /?invitations=1.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('invitations') !== '1') return;
+    showInvitations();
+    params.delete('invitations');
+    const rest = params.toString();
+    window.history.replaceState(window.history.state, '', window.location.pathname + (rest ? `?${rest}` : ''));
+  }, [showInvitations]);
+
+  const acceptWaveInvitation = useCallback(async (invitation) => {
+    try {
+      const res = await fetchAPI(`/wave-invitations/${invitation.id}/accept`, { method: 'POST' });
+      setWaveInvitations(prev => prev.filter(i => i.id !== invitation.id));
+      await loadWaves();
+      if (res?.wave?.id) { setActiveView('waves'); selectWave({ id: res.wave.id, title: res.wave.title, privacy: res.wave.privacy }); }
+    } catch (err) {
+      showToastMsg(err.message || 'Could not accept the invitation', 'error');
+      loadWaveInvitations();
+    }
+  }, [fetchAPI, loadWaves, loadWaveInvitations, showToastMsg, selectWave]);
+
+  const declineWaveInvitation = useCallback(async (invitation, { block = false } = {}) => {
+    try {
+      await fetchAPI(`/wave-invitations/${invitation.id}/decline`, { method: 'POST', body: { block } });
+      setWaveInvitations(prev => prev.filter(i => i.id !== invitation.id));
+      if (block) loadBlockedMutedUsersRef.current?.();
+    } catch (err) {
+      showToastMsg(err.message || 'Could not decline the invitation', 'error');
+    }
+  }, [fetchAPI, showToastMsg]);
+
   const loadWaveNotifications = useCallback(async () => {
     try {
       const data = await fetchAPI('/notifications/by-wave');
@@ -1433,6 +1491,7 @@ function MainApp({ sharePingId }) {
       setMutedUsers(mutedData.mutedUsers || []);
     } catch (e) { console.error('Failed to load blocked/muted users:', e); }
   }, [fetchAPI]);
+  loadBlockedMutedUsersRef.current = loadBlockedMutedUsers;
 
   const handleBlockUser = useCallback(async (userId) => {
     try {
@@ -1678,6 +1737,7 @@ function MainApp({ sharePingId }) {
     loadGroups();
     loadContactRequests();
     loadGroupInvitations();
+    loadWaveInvitations();
     loadBlockedMutedUsers();
     loadWaveNotifications();
     loadActiveCalls();
@@ -1686,7 +1746,7 @@ function MainApp({ sharePingId }) {
     fetch(`${API_URL}/federation/identity`)
       .then(res => setFederationEnabled(res.ok))
       .catch(() => setFederationEnabled(false));
-  }, [loadWaves, loadCategories, loadContacts, loadGroups, loadContactRequests, loadGroupInvitations, loadBlockedMutedUsers, loadWaveNotifications, loadActiveCalls, loadActiveWatchParties]);
+  }, [loadWaves, loadCategories, loadContacts, loadGroups, loadContactRequests, loadGroupInvitations, loadWaveInvitations, loadBlockedMutedUsers, loadWaveNotifications, loadActiveCalls, loadActiveWatchParties]);
 
   // Call indicators follow `call_presence` pushes (v2.118.0). They used to be
   // polled every 10 seconds, and every poll made the server ask LiveKit for its
@@ -1843,7 +1903,15 @@ function MainApp({ sharePingId }) {
       }
 
       setNewWaveContainer(null);
-      showToastMsg(SUCCESS.waveCreated, 'success');
+      // v2.130.0: the people it was started with are asked, not added.
+      const invitedCount = created?.invited?.length || 0;
+      const refusedCount = created?.refused?.length || 0;
+      showToastMsg(invitedCount
+        ? `${SUCCESS.waveCreated} Invitation${invitedCount > 1 ? 's' : ''} sent to ${invitedCount} ${invitedCount > 1 ? 'people' : 'person'}.`
+        : SUCCESS.waveCreated, 'success');
+      if (refusedCount) {
+        showToastMsg(`${refusedCount} ${refusedCount > 1 ? 'people' : 'person'} could not be added.`, 'warning');
+      }
       loadWaves();
       loadCommunityChannels();
     } catch (err) {
@@ -2029,6 +2097,7 @@ function MainApp({ sharePingId }) {
               <NotificationBell
                 fetchAPI={fetchAPI}
                 onNavigateToWave={handleNavigateToWaveById}
+                onShowInvitations={showInvitations}
                 isMobile={true}
                 refreshTrigger={notificationRefreshTrigger}
                 onAllRead={() => { loadWaves(); loadWaveNotifications(); }}
@@ -2119,6 +2188,7 @@ function MainApp({ sharePingId }) {
             <NotificationBell
               fetchAPI={fetchAPI}
               onNavigateToWave={handleNavigateToWaveById}
+              onShowInvitations={showInvitations}
               isMobile={false}
               refreshTrigger={notificationRefreshTrigger}
               onAllRead={() => { loadWaves(); loadWaveNotifications(); }}
@@ -2201,6 +2271,9 @@ function MainApp({ sharePingId }) {
               }} aria-hidden={sidebarCollapsed && !isMobile ? true : undefined}>
                 <WaveList
                   onRefresh={loadWaves}
+                  waveInvitations={waveInvitations}
+                  onAcceptInvitation={acceptWaveInvitation}
+                  onDeclineInvitation={declineWaveInvitation}
                   onReorderWaves={handleReorderWaves}
                   onReorderCommunities={handleReorderCommunities}
                   onReorderChannels={handleReorderChannels}

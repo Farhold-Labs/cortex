@@ -815,6 +815,64 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
 };
 
 
+/**
+ * Invitations into other people's waves (v2.130.0), at the top of the list.
+ *
+ * All an invitee is shown before accepting: who asked, the title and who is
+ * already in it. Accept opens the wave; Decline answers quietly; Decline and
+ * block also stops that person asking again, and they are not told which.
+ */
+const WaveInvitations = ({ invitations, onAccept, onDecline, isMobile, density }) => {
+  const [busy, setBusy] = React.useState(null);
+  const [confirmBlock, setConfirmBlock] = React.useState(null);
+  const act = async (id, fn) => { setBusy(id); try { await fn(); } finally { setBusy(null); } };
+  const button = (primary) => ({
+    padding: isMobile ? '7px 12px' : '4px 10px', cursor: 'pointer', fontFamily: 'monospace',
+    fontSize: isMobile ? '0.8rem' : '0.7rem',
+    background: primary ? 'var(--accent-amber)' : 'transparent',
+    color: primary ? 'var(--bg-base)' : 'var(--text-secondary)',
+    border: `1px solid ${primary ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
+  });
+  return (
+    <div role="region" aria-label="Invitations" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
+      <div style={{ padding: '8px 12px 4px', color: 'var(--accent-amber)', fontFamily: 'monospace', fontSize: density?.headingSize || '0.75rem', letterSpacing: '0.05em' }}>
+        INVITATIONS {invitations.length}
+      </div>
+      {invitations.map(inv => {
+        const who = plainText(inv.invitedBy?.displayName || inv.invitedBy?.handle || 'Someone');
+        // The inviter is already named; "with" lists everyone else in it.
+        const rest = (inv.members || []).filter(m => m.id !== inv.invitedBy?.id);
+        const others = rest.map(m => plainText(m.name || m.handle || '')).filter(Boolean);
+        const inviterCounted = (inv.members || []).length !== rest.length ? 1 : 0;
+        const more = Math.max(0, (inv.memberCount || 0) - inviterCounted - others.length);
+        return (
+          <div key={inv.id} style={{ padding: '8px 12px', borderTop: '1px solid var(--border-subtle)' }}>
+            <div style={{ color: 'var(--text-primary)', fontSize: density?.fontSize || '0.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {inv.encrypted ? '🔒 ' : ''}{plainText(inv.waveTitle || '')}
+            </div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', margin: '2px 0 6px' }}>
+              {who} invited you{others.length ? ` · with ${others.join(', ')}${more ? ` +${more}` : ''}` : ''}
+            </div>
+            {confirmBlock === inv.id ? (
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>Block {who}? They won't be able to invite you again.</span>
+                <button disabled={busy === inv.id} style={button(true)} onClick={() => act(inv.id, () => onDecline?.(inv, { block: true }))}>BLOCK</button>
+                <button style={button(false)} onClick={() => setConfirmBlock(null)}>CANCEL</button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button disabled={busy === inv.id} style={button(true)} onClick={() => act(inv.id, () => onAccept?.(inv))}>ACCEPT</button>
+                <button disabled={busy === inv.id} style={button(false)} onClick={() => act(inv.id, () => onDecline?.(inv))}>DECLINE</button>
+                <button disabled={busy === inv.id} style={button(false)} onClick={() => setConfirmBlock(inv.id)}>DECLINE &amp; BLOCK</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 /** A header button that opens a short menu: the list's + and ⋮ (v2.126.0). */
 const HeaderMenu = ({ glyph, title, items, isMobile, buttonStyle }) => {
   const [open, setOpen] = React.useState(false);
@@ -957,7 +1015,7 @@ const PanelMenu = ({ items, title, isMobile }) => {
   );
 };
 
-const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, onNewWaveIn, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh,
+const WaveList = ({ waveInvitations = [], onAcceptInvitation, onDeclineInvitation, categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, onNewWaveIn, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh,
   voicePresence = {}, voiceStage = {}, currentVoiceChannelId = null, voiceConnecting = false, canModerateVoice = false, onJoinVoice = null, onLeaveVoice, onModerateVoice, myUserId,
   onReorderWaves, onReorderCommunities, onReorderChannels, onReorderChannelWaves, onReorderCategories, waves: unorderedWaves,
   communities = [], openContainer = null, onOpenContainer = null }) => {
@@ -1183,6 +1241,15 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
 
     {!sectionCollapsed.waves && (
     <div ref={listScrollRef} style={{ flex: 1, overflowY: 'auto' }}>
+    {waveInvitations.length > 0 && !ghostMode && !showArchived && (
+      <WaveInvitations
+        invitations={waveInvitations}
+        onAccept={onAcceptInvitation}
+        onDecline={onDeclineInvitation}
+        isMobile={isMobile}
+        density={densityStyle}
+      />
+    )}
     {shownCommunities.length > 0 && (
       <WaveCategoryList
         voice={voice}

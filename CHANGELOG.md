@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.130.0] - 2026-10-29
+
+Phase 1 of the wave-access redesign (docs/wave-access/01-design.md): being put into a conversation is asked first.
+
+### Security and privacy
+
+- **People were put into waves without being asked, and blocks were not checked.** Creating a wave with people, or adding someone later, made them a participant on the spot. Neither path checked blocks, so someone who had blocked you could still be put into your wave; only contact requests and crew invitations checked. Jared's original rule is that permission must be asked.
+  - **Outside Communities, adding someone now sends an invitation.** They see who invited them, the title and who is already in it, and nothing of the conversation, until they choose **Accept**, **Decline** or **Decline & block**. Invitations wait in a new INVITATIONS section at the top of the wave list, with a notification and a push. Pending people show as INVITED in the wave, and the inviter or the owner can withdraw. Invitations expire after 30 days and are rate limited.
+  - **Blocks are honoured in both directions** when creating, adding, accepting and auto-accepting. Refusals read the same whatever the reason.
+  - **Accept invitations from my contacts automatically:** a new setting under Settings → Privacy & Safety → Invitations, off by default.
+- **Inside a Community, only people who can see the channel can be put into its waves** (Jared: "you shouldn't be able to add a user to a wave in a community that they are not a member of"). Members are added directly, since joining the Community was their consent; anyone else is refused. Filing a wave into a channel is refused while anyone in it cannot see the channel (it says how many, not who). Existing waves with outsiders keep their people until the owner reviews them in a later phase.
+- **Other back doors closed:** appointing someone wave staff no longer joins a person who could not see the wave; a crew admin's direct add now sends a crew invitation.
+- **Pending invitations only are stored.** The row is deleted on accept, decline, withdraw or expiry; an accepted invitation becomes ordinary (encrypted) participation. The design had proposed an encrypted table; keeping no history protects who-invited-whom more simply. docs/PRIVACY.md says so.
+- **Encrypted waves** keep working: the inviter's client still wraps the wave key for the invitee, and the server releases it only once they can open the wave.
+- **Unchanged here:** invitations from other servers (phase 6), and the public conversation started by replying to a profile video.
+
+### Verified
+
+- `tests/wave-invitations.test.cjs` against a disposable server: invite on create and on add; nothing readable before accepting and no content in the invitation; accept; decline-and-block stops the next invitation; someone who blocked the creator is never invited; withdraw; auto-accept only when on; Community members added and outsiders refused, including by filing; staff appointment and crew direct-add closed. The counterfactual strips the consent step from a copy and sees a blocked person and an outsider go straight in. Six older suites updated to accept their invitations (and COMM-014 builds its outsider-in-a-channel wave the way such waves exist now). Full suite 601 pass.
+- Headless on dev at 390 px: zoe sees the invitation at the top of her list, accepts, and the wave opens; mal sees zoe as a participant and wash as invited. The migration created `wave_invitations` on dev after a verified backup.
+
 ## [2.129.0] - 2026-10-29
 
 Collapsing the wave list on desktop folds it to the rail instead of hiding it.

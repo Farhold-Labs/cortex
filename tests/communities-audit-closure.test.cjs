@@ -367,13 +367,19 @@ test('CORTEX-COMM-014: a private Community does not announce itself', { timeout:
         token: owner.token, body: { name: 'General', slug: 'general' },
       })).body.channel;
 
-      // A wave inside the private Community's channel, which the outsider is
-      // invited into personally.
+      // A wave inside the private Community's channel that the outsider is in
+      // personally. Since v2.130.0 nobody can be put into a channel wave
+      // without being able to see the channel, so it is built the way such
+      // waves exist today: they were a member when it was made, then were
+      // removed from the Community and kept their place in the wave.
+      await api('POST', `/api/communities/${priv.id}/members`, { token: owner.token, body: { handle: 'outsider' } });
       const wave = (await api('POST', '/api/waves', {
         token: owner.token,
         body: { title: 'Shared out', privacy: 'private', channelId: channel.id, participants: [outsider.id] },
       })).body;
       assert.ok(wave && wave.id, `wave creation failed: ${JSON.stringify(wave)}`);
+      const removed = await api('DELETE', `/api/communities/${priv.id}/members/${outsider.id}`, { token: owner.token });
+      assert.ok(removed.status < 300, `remove: ${removed.status} ${JSON.stringify(removed.body)}`);
 
       const mine = await api('GET', '/api/waves', { token: outsider.token });
       const seen = (mine.body.waves || mine.body).find(w => w.id === wave.id);

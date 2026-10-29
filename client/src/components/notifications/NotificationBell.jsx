@@ -8,6 +8,8 @@ const NOTIFICATION_TYPES = {
   reaction: { icon: '♡', color: 'var(--accent-pink, #ff6b9d)', label: 'Reacted to your message' },
   wave_activity: { icon: '◎', color: 'var(--accent-green)', label: 'Wave activity' },
   burst: { icon: '◈', color: 'var(--accent-purple)', label: 'Burst' },
+  // v2.130.0 — asked to join a wave; the invitation waits at the top of the list.
+  wave_invitation: { icon: '✉', color: 'var(--accent-amber)', label: 'Invitation' },
   system: { icon: '⚡', color: 'var(--accent-orange)', label: 'System' },
 };
 
@@ -247,7 +249,7 @@ const NotificationDropdown = ({ notifications, unreadCount, onRead, onDismiss, o
   );
 };
 
-const NotificationBell = ({ fetchAPI, onNavigateToWave, isMobile, refreshTrigger, onAllRead, e2ee }) => {
+const NotificationBell = ({ fetchAPI, onNavigateToWave, onShowInvitations, isMobile, refreshTrigger, onAllRead, e2ee }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -380,7 +382,9 @@ const NotificationBell = ({ fetchAPI, onNavigateToWave, isMobile, refreshTrigger
     }
 
     // Navigate to the relevant content
-    if (notification.waveId) {
+    if (notification.type === 'wave_invitation') {
+      onShowInvitations?.();
+    } else if (notification.waveId) {
       onNavigateToWave(notification.waveId, notification.pingId);
     }
 
