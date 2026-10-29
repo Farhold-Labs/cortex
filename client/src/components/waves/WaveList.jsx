@@ -325,7 +325,10 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
   // Render a single wave item
   // `move` ({ onUp, onDown }) puts the row in reorder mode: ▲ ▼ instead of the
   // menu, and a tap no longer opens the wave, so a missed arrow is harmless.
-  const renderWaveItem = (wave, showPinButton = false, move = null) => {
+  // `indent` is the nesting level, on the same 0.75rem steps as the section
+  // headers: a wave in a channel (2) sits inside its channel (1), not level
+  // with the Community heading.
+  const renderWaveItem = (wave, showPinButton = false, move = null, indent = 0) => {
     const config = PRIVACY_LEVELS[wave.privacy] || PRIVACY_LEVELS.private;
     const isSelected = selectedWave?.id === wave.id;
     const notifInfo = waveNotifications[wave.id];
@@ -376,6 +379,9 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
         }}
         style={{
           padding: densityStyle.padding,
+          // On the headers' rem steps; a nested row gives back the 3px
+          // unread/selected bar so its title lines up on the step.
+          paddingLeft: indent ? `calc(${0.75 + indent * 0.75}rem - 3px)` : '0.75rem',
           cursor: move ? 'default' : (isMobile ? 'pointer' : 'move'),
           background: isSelected ? 'var(--accent-amber)10' : (showNotificationBadge ? `${badgeStyle.bg}08` : 'transparent'),
           borderBottom: '1px solid var(--bg-hover)',
@@ -535,6 +541,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
             accentColor="var(--accent-amber)"
             isMobile={isMobile}
             compact
+            titleSize={densityStyle.headingSize}
           >
             {renderDropZone('__pinned__', 'Pinned')}
             {groupedWaves.pinned.map(wave => renderWaveItem(wave, true, personalMove(wave, groupedWaves.pinned)))}
@@ -570,6 +577,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
               accentColor="var(--accent-amber)"
               isMobile={isMobile}
               compact
+              titleSize={densityStyle.headingSize}
               menuTitle={`${group.communityName} options`}
               menu={onManageCommunity && !reorder?.mode ? [
                 { label: '+ New Channel', onClick: () => onManageCommunity({ communityId: group.communityId }, 'channels') },
@@ -578,7 +586,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
               ] : undefined}
             >
               {group.channels.length === 0 && (
-                <div style={{ padding: '10px 24px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                <div style={{ padding: '10px 12px 10px 1.5rem', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
                   No channels yet
                 </div>
               )}
@@ -601,6 +609,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
                       onLeave={voice.onLeave}
                       onModerate={voice.onModerate}
                       reorderControls={arrows(channelMoves(channel), channel.name) || null}
+                      titleSize={densityStyle.fontSize}
                       menu={onManageCommunity ? [
                         { label: '✎ Rename Channel', onClick: () => onManageCommunity(channel, 'channels') },
                         { label: '⚙ Manage Community', onClick: () => onManageCommunity(channel) },
@@ -621,6 +630,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
                     titleColor="var(--text-primary)"
                     isMobile={isMobile}
                     compact
+                    titleSize={densityStyle.fontSize}
                     indent={1}
                     menuTitle={`#${channel.name} options`}
                     menu={reorder?.mode ? undefined : [
@@ -635,11 +645,11 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
                     ]}
                   >
                     {chWaves.length === 0 ? (
-                      <div style={{ padding: '8px 32px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                      <div style={{ padding: '8px 12px 8px 2.25rem', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
                         No {T.waves} filed here yet
                       </div>
                     ) : (
-                      chWaves.map(wave => renderWaveItem(wave, true, channelWaveMove(wave, chWaves, channel)))
+                      chWaves.map(wave => renderWaveItem(wave, true, channelWaveMove(wave, chWaves, channel), 2))
                     )}
                   </CollapsibleSection>
                 );
@@ -669,6 +679,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
               accentColor={category.color}
               isMobile={isMobile}
               compact
+              titleSize={densityStyle.headingSize}
               headerAction={arrows(categoryMoves, category.name)}
               menuTitle={`${category.name} options`}
               menu={reorder?.mode ? undefined : [
@@ -706,6 +717,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
             accentColor="var(--border-primary)"
             isMobile={isMobile}
             compact
+            titleSize={densityStyle.headingSize}
           >
             {renderDropZone(null, 'Uncategorized')}
             {groupedWaves.uncategorized.map(wave => renderWaveItem(wave, true, personalMove(wave, groupedWaves.uncategorized)))}
