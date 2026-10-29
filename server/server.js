@@ -8233,6 +8233,10 @@ app.put('/api/profile/preferences', authenticateToken, (req, res) => {
   if (typeof req.body.autoCollapseMessages === 'boolean') {
     updates.autoCollapseMessages = req.body.autoCollapseMessages;
   }
+  // v2.130.0 — off unless the person turns it on.
+  if (typeof req.body.autoAcceptContactInvites === 'boolean') {
+    updates.autoAcceptContactInvites = req.body.autoAcceptContactInvites;
+  }
   // Handle crawlBar preferences
   if (req.body.crawlBar && typeof req.body.crawlBar === 'object') {
     const existingCrawlBar = user.preferences?.crawlBar || {};
@@ -20236,10 +20240,19 @@ app.post('/api/groups/:id/members', authenticateToken, (req, res) => {
   if (!['admin', 'moderator', 'member'].includes(memberRole)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
-  if (!crewMembership.addMember(groupId, userId, memberRole)) {
+  // v2.130.0: an admin can no longer put someone into a group directly; it
+  // sends the same invitation the group's own Invite does, and only accepting
+  // it adds them. (A role other than member is given after they join.)
+  if (crewMembership.isMember(groupId, userId)) {
     return res.status(409).json({ error: 'User already in group' });
   }
-  res.status(201).json({ success: true });
+  const invitation = db.createGroupInvitation(groupId, req.user.userId, userId, null);
+  if (invitation.error) {
+    const already = /pending/i.test(invitation.error);
+    return res.status(already ? 409 : 403).json({ error: already ? invitation.error : 'Cannot invite this user' });
+  }
+  broadcast({ type: 'group_invitation_received', invitation }, [invitation.invited_user_id]);
+  res.status(202).json({ success: true, invited: true, invitation });
 });
 
 app.delete('/api/groups/:id/members/:userId', authenticateToken, (req, res) => {
@@ -20608,6 +20621,14 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
 
   const creator = db.findUserById(wave.createdBy);
   const participants = db.getWaveParticipants(wave.id);
+  // Pending invitations (v2.130.0), for the people in the wave. Someone who
+  // can see a public wave without being in it is not shown who was asked.
+  const invited = participation.isParticipant(wave.id, req.user.userId)
+    ? db.listWaveInvitationsForWave(wave.id).map(i => ({
+        invitationId: i.id, id: i.invited_user_id, handle: i.handle, name: i.display_name,
+        avatar: i.avatar, invitedBy: i.invited_by, createdAt: i.created_at,
+      }))
+    : [];
 
   // Get user's archive status for this wave (uses method that works for both JSON and SQLite)
   const isArchived = db.isWaveArchivedForUser(waveId, req.user.userId);
@@ -20642,6 +20663,7 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
       creator_name: creator?.displayName || 'Unknown',
       creator_handle: creator?.handle || 'unknown',
       participants,
+      invited,
       is_archived: isArchived,
       parent_wave: parentWave,
       group_name: group?.name,
@@ -20721,6 +20743,7 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     creator_name: creator?.displayName || 'Unknown',
     creator_handle: creator?.handle || 'unknown',
     participants,
+    invited,
     is_archived: isArchived,
     // v2.84.0 — per-user, so it cannot live in rowToWave
     muted: db.isWaveMuted ? db.isWaveMuted(req.user.userId, waveId) : false,
@@ -21979,7 +22002,10 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     privacy: hasFederatedParticipants ? 'crossServer' : privacy, // Force cross-server if federated
     groupId: privacy === 'group' ? sanitizeInput(req.body.groupId) : null,
     createdBy: req.user.userId,
-    participants: localParticipantIds,
+    // v2.130.0: only the creator is in at the start. Everyone else goes
+    // through addOrInviteToWave below, once the wave is filed, so a Community
+    // wave is judged by its channel and everyone else is asked.
+    participants: [],
     encrypted,
   });
 
@@ -22000,6 +22026,17 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
 
   // Sync participation cache after wave creation (v2.21.0)
   participation.syncWaveFromDb(wave.id);
+
+  // The people it was started with: added (in a Community, or auto-accepted)
+  // or invited. Refusals are reported without saying why.
+  const joined = { added: [], invited: [], refused: [] };
+  for (const id of [...new Set(localParticipantIds)]) {
+    if (id === req.user.userId) continue;
+    const outcome = addOrInviteToWave(wave, req.user.userId, id);
+    if (outcome.added) joined.added.push(id);
+    else if (outcome.invited) joined.invited.push(id);
+    else joined.refused.push(id);
+  }
 
   // E2EE: Store wave keys if encrypted
   if (encrypted && keyDistribution && Array.isArray(keyDistribution)) {
@@ -22053,6 +22090,8 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     creator_handle: db.findUserById(req.user.userId)?.handle || 'unknown',
     participants: db.getWaveParticipants(wave.id),
     message_count: 0,
+    invited: joined.invited,
+    refused: joined.refused,
     federationState: hasFederatedParticipants ? 'origin' : 'local',
     federatedNodes: hasFederatedParticipants ? federatedParticipants.map(fp => fp.nodeName) : [],
   };
@@ -23323,6 +23362,13 @@ app.put('/api/waves/:id/roles/:userId', authenticateToken, (req, res) => {
     return res.status(403).json({ error: 'Only the wave owner can change a wave admin' });
   }
 
+  // v2.130.0: appointing someone is not a way into a wave they were never
+  // asked to join. They must be able to see it already: a participant, or a
+  // wave open to them (public, their crew, their Community channel).
+  if (!participation.isParticipant(waveId, targetId) && !canAccessWaveFromCache(waveId, targetId)) {
+    return res.status(400).json({ error: 'Invite them to the wave first', code: 'NOT_IN_WAVE' });
+  }
+
   waveRoles.setWaveRole(waveId, targetId, role);
 
   // Staff join the wave: moderating something you cannot see is not a state
@@ -23373,9 +23419,227 @@ app.delete('/api/waves/:id/roles/:userId', authenticateToken, (req, res) => {
   res.json({ staff: waveStaffSummary(wave) });
 });
 
-app.post('/api/waves/:id/participants', authenticateToken, async (req, res) => {
+// ============ Wave invitations (v2.130.0) ============
+//
+// Being put into somebody else's conversation needs your consent. Before
+// v2.130.0, creating a wave with people or adding someone later made them a
+// participant on the spot — never asked, and blocks were not checked, so
+// someone who had blocked you could still be put into your wave.
+//
+// Now, outside Communities, adding someone sends an invitation and only
+// accepting it makes them a participant. Inside a Community channel, joining
+// the Community was the consent (docs/wave-access/01-design.md): members who
+// can see the channel are added directly, and anyone else is refused.
+
+const RATE_LIMIT_INVITE_MAX = parseInt(process.env.RATE_LIMIT_INVITE_MAX) || 120;
+const inviteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: RATE_LIMIT_INVITE_MAX,
+  keyGenerator: (req) => (req.user?.userId ? `user:${req.user.userId}` : req.ip),
+  message: { error: 'Too many invitations. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+/**
+ * Why `inviteeId` may not be put into this wave by `inviterId`, or null.
+ * One answer for creation, adding later, auto-accept and staff appointment.
+ * The wording never says whether a person exists or who blocked whom.
+ */
+/** This node's word for one wave ("wave" unless an admin renamed it). */
+function T_WAVE() {
+  try { return resolveTerminology(db.getInstanceConfig?.()).terms.wave.one; } catch { return 'wave'; }
+}
+
+function waveJoinRefusal(wave, inviterId, inviteeId) {
+  const NOPE = { status: 403, error: 'Cannot add this person', code: 'CANNOT_ADD' };
+  const invitee = db.findUserById(inviteeId);
+  if (!invitee) return NOPE;
+  if (inviteeId === inviterId) return { status: 400, error: 'You are already in this wave', code: 'SELF' };
+  if (participation.isParticipant(wave.id, inviteeId)) {
+    return { status: 400, error: 'Already in this wave', code: 'ALREADY_PARTICIPANT' };
+  }
+  // Blocks, in both directions. A refusal either way reads the same.
+  if (db.isBlocked?.(inviteeId, inviterId) || db.isBlocked?.(inviterId, inviteeId)) return NOPE;
+  // A wave in a Community channel takes only people who can see the channel.
+  if (wave.channelId) {
+    const channel = db.getChannelById(wave.channelId);
+    if (channel && channel.community_id !== null &&
+        !communityAuthz.canDiscoverChannel(db, { kind: 'user', userId: inviteeId }, wave.channelId).allowed) {
+      return NOPE;
+    }
+  }
+  return null;
+}
+
+/** Make someone a participant and tell the wave. The tail of every join. */
+function completeWaveJoin(wave, user, addedBy) {
+  participation.addParticipant(wave.id, user.id);
+
+  // An encrypted burst wave inherits its parent's key for the new participant.
+  if (wave.encrypted && wave.broken_out_from) {
+    const parentWave = db.getWave(wave.broken_out_from);
+    if (parentWave && parentWave.encrypted) {
+      const parentKey = db.db.prepare(`
+        SELECT user_id, encrypted_wave_key, sender_public_key, key_version
+        FROM wave_encryption_keys
+        WHERE wave_id = ? AND user_id = ?
+      `).get(wave.broken_out_from, user.id);
+      if (parentKey) {
+        db.db.prepare(`
+          INSERT OR IGNORE INTO wave_encryption_keys (id, wave_id, user_id, encrypted_wave_key, sender_public_key, key_version, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(`wavekey-${uuidv4()}`, wave.id, user.id, parentKey.encrypted_wave_key, parentKey.sender_public_key, parentKey.key_version, new Date().toISOString());
+      }
+    }
+  }
+
+  broadcastToWave(wave.id, {
+    type: 'participant_added',
+    waveId: wave.id,
+    participant: {
+      id: user.id, handle: user.handle, name: user.displayName || user.handle,
+      avatar: user.avatar, avatarUrl: user.avatarUrl,
+    },
+    addedBy,
+  });
+  broadcastToUser(user.id, {
+    type: 'added_to_wave',
+    wave: { id: wave.id, title: wave.title, privacy: wave.privacy },
+    addedBy,
+  });
+}
+
+/**
+ * Add someone, or ask them. Returns { added } | { invited } | { refused }.
+ * Callers have already decided the inviter may add people to this wave.
+ */
+function addOrInviteToWave(wave, inviterId, inviteeId) {
+  const refusal = waveJoinRefusal(wave, inviterId, inviteeId);
+  if (refusal) return { refused: refusal };
+  const invitee = db.findUserById(inviteeId);
+
+  const inCommunity = (() => {
+    if (!wave.channelId) return false;
+    const channel = db.getChannelById(wave.channelId);
+    return !!channel && channel.community_id !== null;
+  })();
+  // Consent already given: joining the Community, or "accept invitations from
+  // my contacts automatically" (off unless the person turned it on).
+  const autoAccept = invitee.preferences?.autoAcceptContactInvites === true && db.isContact?.(inviteeId, inviterId);
+  if (inCommunity || autoAccept) {
+    completeWaveJoin(wave, invitee, inviterId);
+    return { added: true, reason: inCommunity ? 'community' : 'contact' };
+  }
+
+  const invitation = db.createWaveInvitation({ waveId: wave.id, invitedUserId: inviteeId, invitedBy: inviterId });
+  if (!invitation) return { invited: db.getWaveInvitationFor(wave.id, inviteeId), alreadyInvited: true };
+
+  const inviter = db.findUserById(inviterId);
+  const who = inviter?.displayName || inviter?.handle || 'Someone';
+  try {
+    if (shouldCreateNotification(inviteeId, 'wave_invitation', null)) {
+      const notification = db.createNotification({
+        userId: inviteeId,
+        type: 'wave_invitation',
+        actorId: inviterId,
+        title: `${who} invited you to a ${T_WAVE()}`,
+        body: wave.title,
+        // No waveId and no preview: nothing of the conversation before consent.
+        groupKey: `wave_invitation:${wave.id}`,
+      });
+      db.markNotificationPushSent?.(notification.id);
+      sendPushNotification(inviteeId, {
+        type: 'wave_invitation',
+        title: notification.title,
+        body: wave.title,
+        url: '/?invitations=1',
+      }).catch(() => {});
+      broadcastToUser(inviteeId, { type: 'notification', notification });
+    }
+  } catch (err) {
+    console.error('[invitations] notify failed:', err.message);
+  }
+  broadcastToUser(inviteeId, { type: 'wave_invitations_changed' });
+  broadcastToWave(wave.id, { type: 'wave_invitations_changed', waveId: wave.id });
+  return { invited: invitation };
+}
+
+/** What an invitee may know before accepting: who asked, the title, who is in it. */
+function invitationView(row) {
+  const members = db.getWaveParticipants(row.wave_id);
+  return {
+    id: row.id,
+    waveId: row.wave_id,
+    waveTitle: row.wave_title,
+    encrypted: !!row.wave_encrypted,
+    invitedBy: row.invited_by ? {
+      id: row.invited_by, handle: row.inviter_handle, displayName: row.inviter_name, avatar: row.inviter_avatar,
+    } : null,
+    members: members.slice(0, 8).map(m => ({ id: m.id, handle: m.handle, name: m.name, avatar: m.avatar })),
+    memberCount: members.length,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+}
+
+app.get('/api/wave-invitations', authenticateToken, (req, res) => {
+  res.json({ invitations: db.listWaveInvitationsForUser(req.user.userId).map(invitationView) });
+});
+
+app.post('/api/wave-invitations/:id/accept', authenticateToken, (req, res) => {
+  const invitation = db.getWaveInvitation(sanitizeInput(req.params.id));
+  if (!invitation || invitation.invited_user_id !== req.user.userId) {
+    return res.status(404).json({ error: 'Invitation not found' });
+  }
+  const wave = db.getWave(invitation.wave_id);
+  const user = db.findUserById(req.user.userId);
+  db.deleteWaveInvitation(invitation.id);
+  if (!wave || !user) return res.status(404).json({ error: 'Invitation not found' });
+  // Re-checked at acceptance: a block or a lost channel since the invitation
+  // was sent still decides. The inviter may have left; that does not matter.
+  const refusal = waveJoinRefusal(wave, invitation.invited_by || '', req.user.userId);
+  if (refusal && refusal.code !== 'ALREADY_PARTICIPANT') {
+    return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
+  }
+  if (!refusal) completeWaveJoin(wave, user, invitation.invited_by);
+  broadcastToWave(wave.id, { type: 'wave_invitations_changed', waveId: wave.id });
+  broadcastToUser(req.user.userId, { type: 'wave_invitations_changed' });
+  if (db.logActivity) db.logActivity(req.user.userId, 'accept_wave_invitation', 'wave', wave.id, getRequestMeta(req));
+  res.json({ success: true, wave: { id: wave.id, title: wave.title, privacy: wave.privacy, encrypted: !!wave.encrypted } });
+});
+
+app.post('/api/wave-invitations/:id/decline', authenticateToken, (req, res) => {
+  const invitation = db.getWaveInvitation(sanitizeInput(req.params.id));
+  if (!invitation || invitation.invited_user_id !== req.user.userId) {
+    return res.status(404).json({ error: 'Invitation not found' });
+  }
+  db.deleteWaveInvitation(invitation.id);
+  // "Decline and block": the inviter is not told which it was.
+  if (req.body?.block === true && invitation.invited_by) db.blockUser(req.user.userId, invitation.invited_by);
+  broadcastToWave(invitation.wave_id, { type: 'wave_invitations_changed', waveId: invitation.wave_id });
+  broadcastToUser(req.user.userId, { type: 'wave_invitations_changed' });
+  res.json({ success: true });
+});
+
+// Withdraw: the person who invited, or the wave's owner or admins.
+app.delete('/api/wave-invitations/:id', authenticateToken, (req, res) => {
+  const invitation = db.getWaveInvitation(sanitizeInput(req.params.id));
+  const wave = invitation && db.getWave(invitation.wave_id);
+  const allowed = invitation && wave && (
+    invitation.invited_by === req.user.userId ||
+    wave.createdBy === req.user.userId ||
+    waveRoles.getStoredRole(wave.id, req.user.userId) === waveRoles.WAVE_ROLES.ADMIN);
+  if (!allowed) return res.status(404).json({ error: 'Invitation not found' });
+  db.deleteWaveInvitation(invitation.id);
+  broadcastToWave(wave.id, { type: 'wave_invitations_changed', waveId: wave.id });
+  broadcastToUser(invitation.invited_user_id, { type: 'wave_invitations_changed' });
+  res.json({ success: true });
+});
+
+app.post('/api/waves/:id/participants', authenticateToken, inviteLimiter, async (req, res) => {
   const waveId = sanitizeInput(req.params.id);
-  const { userId } = req.body;
+  const userId = sanitizeInput(req.body.userId || '');
 
   if (!userId) {
     return res.status(400).json({ error: 'User ID required' });
@@ -23396,80 +23660,22 @@ app.post('/api/waves/:id/participants', authenticateToken, async (req, res) => {
     return res.status(403).json({ error: 'You must be a participant to add others' });
   }
 
-  // Check if user exists
-  const userToAdd = db.findUserById(userId);
-  if (!userToAdd) {
-    return res.status(404).json({ error: 'User not found' });
+  const outcome = addOrInviteToWave(wave, req.user.userId, userId);
+  if (outcome.refused) {
+    return res.status(outcome.refused.status).json({ error: outcome.refused.error, code: outcome.refused.code });
   }
 
-  // Check if already a participant
-  if (participation.isParticipant(waveId, userId)) {
-    return res.status(400).json({ error: 'User is already a participant' });
+  if (db.logActivity) {
+    db.logActivity(req.user.userId, outcome.added ? 'add_participant' : 'invite_participant', 'wave', waveId,
+      getRequestMeta(req), { userId });
   }
 
-  // Add participant - use crypto module for cache synchronization (v2.21.0)
-  const added = participation.addParticipant(waveId, userId);
-  if (!added) {
-    return res.status(500).json({ error: 'Failed to add participant' });
-  }
-
-  // If this is an encrypted burst wave, copy parent wave encryption keys for new participant
-  if (wave.encrypted && wave.broken_out_from) {
-    console.log(`🔐 Burst wave ${waveId} is encrypted, checking parent ${wave.broken_out_from} for encryption keys...`);
-    const parentWave = db.getWave(wave.broken_out_from);
-    if (parentWave && parentWave.encrypted) {
-      // Get parent wave's encryption key for this user
-      const parentKey = db.db.prepare(`
-        SELECT user_id, encrypted_wave_key, sender_public_key, key_version
-        FROM wave_encryption_keys
-        WHERE wave_id = ? AND user_id = ?
-      `).get(wave.broken_out_from, userId);
-
-      if (parentKey) {
-        // Copy the key to the burst wave
-        const now = new Date().toISOString();
-        db.db.prepare(`
-          INSERT OR IGNORE INTO wave_encryption_keys (id, wave_id, user_id, encrypted_wave_key, sender_public_key, key_version, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(`wavekey-${uuidv4()}`, waveId, userId, parentKey.encrypted_wave_key, parentKey.sender_public_key, parentKey.key_version, now);
-        console.log(`🔐 Copied parent encryption key to burst wave for user ${userId}`);
-      } else {
-        console.log(`⚠️  No encryption key found in parent wave for user ${userId}`);
-      }
-    }
-  }
-
-  // Get updated participant list
-  const participants = db.getWaveParticipants(waveId);
-
-  // Broadcast to wave
-  broadcastToWave(waveId, {
-    type: 'participant_added',
-    waveId,
-    participant: {
-      id: userToAdd.id,
-      handle: userToAdd.handle,
-      name: userToAdd.displayName || userToAdd.handle,
-      avatar: userToAdd.avatar,
-      avatarUrl: userToAdd.avatarUrl
-    },
-    addedBy: req.user.userId
+  res.status(outcome.added ? 200 : 202).json({
+    success: true,
+    added: !!outcome.added,
+    invited: !!outcome.invited,
+    participants: db.getWaveParticipants(waveId),
   });
-
-  // Notify the added user
-  broadcastToUser(userId, {
-    type: 'added_to_wave',
-    wave: {
-      id: wave.id,
-      title: wave.title,
-      privacy: wave.privacy
-    },
-    addedBy: req.user.userId
-  });
-
-  if (db.logActivity) db.logActivity(req.user.userId, 'add_participant', 'wave', waveId, getRequestMeta(req), { addedUserId: userId });
-
-  res.json({ success: true, participants });
 });
 
 // Remove participant from wave
@@ -26062,6 +26268,18 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
   }
   if (!communityAuthz.canInChannel(db, communityActor(req), targetForFile, CommunityCaps.MOVE_WAVE)) {
     return res.status(403).json({ error: 'You cannot file into that channel' });
+  }
+
+  // v2.130.0: filing a wave is not a way to put outsiders into a Community.
+  // Everyone in it must be able to see the channel; the count is given, not
+  // the names (they are not the filer's to learn about).
+  const outsiders = participation.getWaveParticipants(wave.id).filter(uid =>
+    !communityAuthz.canDiscoverChannel(db, { kind: 'user', userId: uid }, targetForFile.id).allowed);
+  if (outsiders.length > 0) {
+    return res.status(409).json({
+      error: `${outsiders.length} ${outsiders.length === 1 ? 'person' : 'people'} in this ${T_WAVE()} cannot see that channel`,
+      code: 'OUTSIDERS_IN_WAVE', count: outsiders.length,
+    });
   }
 
   const updated = inCommunityTransaction(() => {

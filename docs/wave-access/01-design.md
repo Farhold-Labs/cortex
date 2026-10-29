@@ -1,6 +1,6 @@
 # Wave access, groups and invitations — design
 
-Status: **decided** (2026-10-29), not built yet. Jared's decisions are recorded at the end and folded into the text.
+Status: **decided** (2026-10-29). **Phase 1 built in v2.130.0**; the rest not yet. Jared's decisions are recorded at the end and folded into the text.
 
 ## Why
 
@@ -115,8 +115,11 @@ waveAudienceAllows(wave, userId)
   people (group)          → accepted member of the wave's group (or participant, during migration)
 ```
 
-Invitations are a new encrypted table, like participation and crew membership,
-because who-was-invited-by-whom is social graph.
+Invitations are a table of **pending invitations only** (v2.130.0): a row is deleted
+when it is accepted, declined, withdrawn or expires, so who-invited-whom exists only
+while the question is open, and an accepted one becomes participation, which is
+already encrypted. (The plan had said an encrypted table; keeping no history
+protects the social graph more simply.)
 
 ## Migration
 
@@ -182,7 +185,7 @@ whatever their client had already decrypted, as with any removal today.
 
 ## Phases
 
-1. **Consent first.** Invitations for adding people to waves and groups; blocks enforced; crew direct-add goes through an invitation; a Community wave refuses anyone who cannot see its channel. Ships on its own, because it closes the gaps above. (For Communities still in review, the last rule applies only to people being *added*: nobody already in a wave is removed.)
+1. **Consent first (built, v2.130.0).** Invitations for adding people to waves and groups; blocks enforced; crew direct-add goes through an invitation; a Community wave refuses anyone who cannot see its channel; filing a wave with outsiders into a channel is refused; appointing wave staff no longer joins a stranger. Ships on its own, because it closes the gaps above. (For Communities still in review, the last rule applies only to people being *added*: nobody already in a wave is removed.)
 2. **Community wave report.** The read-only report in the app, so the size of the review is known before anything is asked of owners.
 3. **Groups make themselves.** The new create flow, auto-named groups, crews renamed groups, migration of private and crew waves outside Communities.
 4. **Community wave review and narrowing.** Needs review; the owner's Move it out / Make it a role (with or without invitations); Who can see this with people and live roles. Each Community switches to the strict rule when its review is done.

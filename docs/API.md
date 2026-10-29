@@ -1727,6 +1727,29 @@ Delete a wave and all its messages.
 
 ---
 
+### Wave invitations (v2.130.0)
+
+Outside Communities, putting someone into a wave needs their consent. Creating a
+wave with `participants`, or `POST /api/waves/:id/participants`, sends each
+person an **invitation**; only accepting it makes them a participant. Inside a
+Community channel, members who can see the channel are added directly (joining
+the Community was the consent) and anyone else is refused. Someone who has
+turned on `autoAcceptContactInvites` and has the inviter in their contacts is
+added directly. Blocks are honoured in both directions.
+
+- **`POST /api/waves`** now returns `invited` and `refused` (user id arrays) alongside the wave. Refusals give no reason.
+- **`POST /api/waves/:id/participants`** `{ userId }` → `200 { added: true }`, `202 { invited: true }`, or `403 { code: "CANNOT_ADD" }` (blocked, not in the Community, or no such person, deliberately indistinguishable). Rate limited (`RATE_LIMIT_INVITE_MAX`, default 120/hour/person).
+- **`GET /api/waves/:id`** includes `invited: [{ invitationId, id, handle, name, avatar, invitedBy, createdAt }]` for participants.
+- **`GET /api/wave-invitations`** → `{ invitations: [{ id, waveId, waveTitle, encrypted, invitedBy, members, memberCount, createdAt, expiresAt }] }`. No messages, files or previews.
+- **`POST /api/wave-invitations/:id/accept`** → `{ wave }`; re-checks blocks and the channel at acceptance.
+- **`POST /api/wave-invitations/:id/decline`** `{ block?: boolean }`. The inviter is not told whether it was a block.
+- **`DELETE /api/wave-invitations/:id`**: withdraw, by the inviter or the wave's owner or admins.
+- **`PUT /api/waves/:id/roles/:userId`** refuses someone who cannot already see the wave (`400 NOT_IN_WAVE`).
+- **`PUT /api/communities/:id/channels/:channelId/waves/:waveId`** (filing) refuses a wave with anyone in it who cannot see the channel (`409 OUTSIDERS_IN_WAVE`, with a `count`).
+- **`POST /api/groups/:id/members`** sends a group invitation instead of adding (`202 { invited: true }`).
+
+Invitations expire after 30 days. WebSocket: `wave_invitations_changed` (to the invitee, and `{ waveId }` to the wave). Notification type `wave_invitation`, with no wave id or preview.
+
 ### Messages Endpoints
 
 > **⚠️ DEPRECATED (v1.10.0):** These endpoints are deprecated. Use the `/api/pings/*` endpoints instead.
