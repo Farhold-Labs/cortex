@@ -9031,6 +9031,11 @@ app.post('/api/groups/invitations/:id/accept', authenticateToken, (req, res) => 
   if (result.error) {
     return res.status(400).json({ error: result.error });
   }
+  // The invitation wrote crew_members directly; the encrypted membership and
+  // its in-memory cache, which the crew's own routes check (inviting, listing
+  // invitations sent, crew waves), did not hear of it until a restart, so a
+  // new member was refused those (v2.131.0).
+  crewMembership.addMember(result.invitation.group_id, req.user.userId, 'member');
 
   // Notify the inviter that their invitation was accepted
   broadcast({
@@ -20248,6 +20253,8 @@ app.delete('/api/groups/:id', authenticateToken, (req, res) => {
   if (!db.deleteGroup(groupId)) {
     return res.status(404).json({ error: 'Group not found' });
   }
+  // And forget it in the encrypted membership and its cache (v2.131.0).
+  crewMembership.deleteCrewMembership(groupId);
   res.json({ success: true });
 });
 
