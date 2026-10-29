@@ -3,6 +3,7 @@ import { formatError } from '../../../messages.js';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { T } from '../../config/terminology.js';
+import { withGroupScope } from '../../utils/groupScope.jsx';
 
 const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetchAPI, showToast, isMobile, onParticipantsChange }) => {
   const e2ee = useE2EE();
@@ -64,6 +65,9 @@ const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetc
     }
 
     let invitedCount = 0;
+    // A group shared by several waves asks once: this wave only, or the whole
+    // group (v2.132.0). The answer holds for everyone picked in this go.
+    let scope;
     for (const userId of selectedUsers) {
       const user = availableContacts.find(c => c.id === userId);
       const userName = user?.displayName || user?.name || userId;
@@ -72,10 +76,13 @@ const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetc
         // Add participant to wave. Since v2.130.0 this usually sends an
         // invitation (202): they join when they accept. In a Community, or for
         // someone who auto-accepts from contacts, they are added (200).
-        const outcome = await fetchAPI(`/waves/${wave.id}/participants`, {
-          method: 'POST',
-          body: { userId }
-        });
+        const outcome = await withGroupScope((asked) => {
+          if (asked) scope = asked;
+          return fetchAPI(`/waves/${wave.id}/participants`, {
+            method: 'POST',
+            body: { userId, ...(scope ? { scope } : {}) },
+          });
+        }, { action: 'add', who: userName });
         if (outcome?.invited) invitedCount++;
 
         // If wave is encrypted, distribute wave key to new participant
@@ -99,6 +106,7 @@ const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetc
 
         successCount++;
       } catch (err) {
+        if (err?.cancelled) break;
         errors.push(`${userName}: ${err.message}`);
       }
     }

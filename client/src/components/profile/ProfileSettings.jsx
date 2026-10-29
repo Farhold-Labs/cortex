@@ -562,9 +562,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
       return;
     }
 
-    // Validate file size (2MB max)
-    if (file.size > 2 * 1024 * 1024) {
-      showToast('File too large. Maximum size is 2MB', 'error');
+    // Validate file size (10MB max since v2.131.2; it is shrunk to 256px)
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('File too large. Maximum size is 10MB', 'error');
       return;
     }
 
@@ -735,7 +735,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
             )}
           </div>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '4px' }}>
-            Max 2MB. Formats: jpg, png, gif, webp. Image will be resized to 256×256.
+            Max 10MB. Formats: jpg, png, gif, webp. Image will be resized to 256×256.
           </div>
         </div>
 

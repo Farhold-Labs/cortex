@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.131.1** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.132.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -52,6 +52,7 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Threading** — Isolate reply chains within a wave for focused conversations
 - **Untabbed navigation** — Wave list clicks open a preview; pin to promote to a persistent tab (max 10)
 - **Asked before being added** — Adding someone to a wave sends them an invitation: they see who invited them, the title and who is in it, and choose Accept, Decline, or Decline and block. Blocks are honoured both ways, invitations expire after 30 days, and contacts' invitations can be accepted automatically (a setting, off by default)
+- **Groups that make themselves** — Start a wave with two or more people and it forms a group, named after them until someone renames it; reuse it with "New wave with these people". A group shared by several waves asks whether someone joins or leaves this wave only or the whole group
 - **Crews & Contacts** — Organize connections with request/invitation workflows
 - **One home list** — Communities first, then pinned waves, categories and waves, under one header. A Community or category opens in its own panel; on desktop the list folds to a rail of icons (◀ or Ctrl+B), on a phone it drills down
 - **Your own order** — Reorder Communities, categories and waves by hand; the order is kept rather than shuffled by activity, and stored encrypted
@@ -468,7 +469,7 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 - [docs/SECRET-AUDIT.md](docs/SECRET-AUDIT.md) — Git-history credential audit, method and findings
 - [docs/PLAN-federated-push.md](docs/PLAN-federated-push.md) — Why native push is hard in a federated app, and the options
 - [docs/communities/](docs/communities/) — Federated Communities: architecture, threat model, implementation plan (built in v2.94.0–v2.99.2), voice channels and the two-panel layout
-- [docs/wave-access/](docs/wave-access/) — Wave audiences, invitations and self-forming groups (phases 1–2 shipped in v2.130.0–v2.131.0)
+- [docs/wave-access/](docs/wave-access/) — Wave audiences, invitations and self-forming groups (phases 1–3 shipped in v2.130.0–v2.132.0)
 - [docs/HIGH-AVAILABILITY.md](docs/HIGH-AVAILABILITY.md) — Proposed warm-standby failover
 - [docs/SECURITY-AUDIT-STATE.md](docs/SECURITY-AUDIT-STATE.md) — The latest security audit's findings and how each was resolved
 - [docs/PRIVACY.md](docs/PRIVACY.md) — Privacy policy

@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.132.0] - 2026-10-29
+
+Phase 3 of the wave-access redesign (docs/wave-access/01-design.md): groups that make themselves. Starting a conversation with a few people no longer means making a crew first.
+
+### Added
+
+- **A wave started with two or more other people gets a group of its own** (outside Communities, on this server). Everyone is still asked first; accepting the invitation joins the group. The new-wave dialog says so when two or more people are picked.
+- **Group names follow their people** until someone renames it: "Mal & Zoe", "Mal, Zoe & Wash", past four "Mal, Zoe, Wash +3", including people invited and not yet answered. The name is worked out whenever it is shown and **not stored**, so the server does not keep who-is-with-whom in plain text beside the encrypted membership (`crews.auto_named`).
+- **Anyone in a group may rename it** (People → Crews → RENAME), and USE NAMES hands the name back to its people. The description stays with its admins.
+- **A one-to-one conversation becomes a group when a third person is added.** The two already in it are not asked again. Private waves that already had three or more people stay as they are (Jared, 2026-10-29: leave existing waves; only conversations of three or more become groups).
+- **A group shared by several waves asks** when someone is added or removed: **This wave only** (the wave moves into a group of its own with everyone already in it; nobody is asked again) or **The whole group** (invited to, or removed from, every wave of it). An invitation to a group of several waves says so on its card.
+- **New wave with these people** in a wave's ⋮ menu, and **+ NEW WAVE** on a group: a new conversation with the same group, nobody asked again. From a private wave it first makes its people a group; nobody gains or loses access to that wave.
+- `POST /api/waves/:id/group`; `scope` on adding and removing; `group` on wave responses; `autoNamed` and `waveCount` on groups (docs/API.md).
+
+### Fixed
+
+- **Removing someone from a crew wave did not remove them.** It deleted their participant row, but a crew wave is open to its whole crew, so they could still open it. Removing or leaving a group wave now acts on the group (or splits the wave off without them). Counterfactual test.
+- Removing someone from a crew now also clears them from the crew's waves in the participation cache, so live updates stop reaching them.
+- A group's members who had never opened one of its waves could not add people to it.
+
+### Unchanged
+
+- Waves with people on other servers (phase 6), Community waves, and public waves. "Crew" stays the Firefly word for a group (instance terminology).
+
+### Database
+
+- `crews.auto_named` (0 for every existing crew). Migrating: back up first.
+
+### Verified
+
+- `tests/self-forming-groups.test.cjs` against a disposable server: a three-person wave makes a group named after its people with both still asked; accepting joins it; a one-to-one stays direct and becomes a group on the third person without asking the second again; a new wave with the group asks nobody; a shared group answers 409 until told which; the whole group reaches both waves; this wave only splits it off and keeps everyone in; removal takes someone out of the group; any member renames, clearing hands the name back, the description stays with admins. The counterfactual restores row-only removal and sees the removed person still open the wave. Full suite 622 pass.
+- Headless on dev at 390 px: the new-wave dialog's hint, a wave created there becoming a group named "Malcolm Reynolds, Zoe Washburne & Hoban Washburne", the ⋮ menu's "New wave with these people", and the this-wave-or-whole-group dialog when inviting Kaylee into a group of two waves (choosing this wave only moved the wave into a new group; the other kept the old one).
+
+## [2.131.2] - 2026-10-29
+
+### Fixed
+
+- **A Community logo (or a profile picture) could not be set from a phone photo.** Reported by Jared: no icon could be added to PMP Board on PMP. Logos and avatars were capped at 2 MB, and the app refused a larger file before sending it, so nothing reached the server or its logs; PMP Board's audit log has no logo ever set, and its owner is the account that tried. An ordinary phone photo is 3 to 6 MB. Both are re-encoded to 256×256 on the server, so the original's size costs only the upload: the limit is now 10 MB, the same as pictures in messages, in the app and on the server. The logo hint now says which formats and how large.
+
+### Verified
+
+- `tests/community-manager.test.cjs` uploads a 4 MB 2400×1800 JPEG as a logo (stored as a 256×256 WebP) and is refused for an 11 MB file.
+
 ## [2.131.1] - 2026-10-29
 
 ### Fixed
