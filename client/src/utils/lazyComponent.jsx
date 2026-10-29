@@ -16,18 +16,99 @@ import React from 'react';
 // nothing is rendered and nothing is fetched.
 //
 // The service worker precaches every chunk at install, so after the first
-// launch "loading" one of these is a cache read, not a network request.
+// launch "loading" one of these is a cache read, not a network request. A chunk
+// that cannot load (the page outlived its build) is handled below.
 export function lazyComponent(load, { fallback = null, renderIf = null } = {}) {
   const Lazy = React.lazy(load);
   function LazyComponent(props) {
     if (renderIf && !renderIf(props)) return null;
     return (
-      <React.Suspense fallback={fallback}>
-        <Lazy {...props} />
-      </React.Suspense>
+      <ChunkBoundary>
+        <React.Suspense fallback={fallback}>
+          <Lazy {...props} />
+        </React.Suspense>
+      </ChunkBoundary>
     );
   }
   return LazyComponent;
+}
+
+// ----- When a chunk will not load (v2.127.0) -----
+//
+// A page keeps running the build it started with. After a deploy that build's
+// files may be gone, and the import rejects with "Failed to fetch dynamically
+// imported module". Without a boundary that rejection unmounted the whole app:
+// a blank screen, and since the login screen is lazy, signing out or an expired
+// session left people unable to sign in until they cleared the cache. The
+// server now keeps earlier builds' files for 30 days; this is for the rest.
+//
+// The cure is the current build, so the page reloads — once. If it fails again
+// within a minute (offline, or a real fault) it shows a message with a Reload
+// button rather than looping.
+
+const RELOAD_KEY = 'cortex_chunk_reload_at';
+const RELOAD_WINDOW_MS = 60 * 1000;
+
+export function isChunkLoadError(error) {
+  const text = `${error?.name || ''} ${error?.message || ''}`;
+  return /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|ChunkLoadError|Unable to preload CSS/i.test(text);
+}
+
+/** Reload onto the current build, unless that was just tried. True if reloading. */
+export function reloadForNewBuild() {
+  try {
+    const last = Number(sessionStorage.getItem(RELOAD_KEY) || 0);
+    if (Date.now() - last < RELOAD_WINDOW_MS) return false;
+    sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+  } catch {
+    // No session storage: reloading without a guard could loop, so don't.
+    return false;
+  }
+  window.location.reload();
+  return true;
+}
+
+export class ChunkBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null, reloading: false };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    if (!isChunkLoadError(error)) return;
+    if (reloadForNewBuild()) this.setState({ reloading: true });
+  }
+
+  render() {
+    const { error, reloading } = this.state;
+    if (!error) return this.props.children;
+    // Anything else is a real fault in the screen: let it reach the boundary
+    // that would have caught it before.
+    if (!isChunkLoadError(error)) throw error;
+    return (
+      <div role="alert" style={{
+        padding: '24px', color: 'var(--text-dim)', fontFamily: 'monospace', fontSize: '0.85rem',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center',
+      }}>
+        {reloading ? 'Updating Cortex…' : (
+          <>
+            <div>Cortex has been updated, and this screen could not load.</div>
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                padding: '8px 16px', background: 'transparent', border: '1px solid var(--accent-amber)',
+                color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'monospace',
+              }}
+            >RELOAD</button>
+          </>
+        )}
+      </div>
+    );
+  }
 }
 
 // Placeholder for a whole view (Settings, Calendar…) while its code arrives.
