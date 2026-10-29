@@ -215,10 +215,23 @@ test('Community manager (v2.124.0)', async (t) => {
       const served = await fetch(base + url1);
       assert.equal(served.status, 200);
 
+      // v2.131.2: a full-size phone photo (3-6 MB) is accepted and shrunk; the
+      // limit was 2 MB, so a logo could not be set from a phone's camera roll.
+      const photo = await sharp({ create: { width: 2400, height: 1800, channels: 3, noise: { type: 'gaussian', mean: 128, sigma: 60 } } }).jpeg({ quality: 95 }).toBuffer();
+      assert.ok(photo.length > 3 * 1024 * 1024, `test photo is ${photo.length} bytes`);
+      const big = await upload(adminU, photo, 'image/jpeg');
+      assert.equal(big.status, 200, JSON.stringify(big.body));
+      const bigMeta = await sharp(fs.readFileSync(path.join(serverDir, 'uploads', 'community-logos', path.basename(big.body.community.logo_url)))).metadata();
+      assert.equal(bigMeta.width, 256);
+      const huge = await upload(adminU, Buffer.alloc(11 * 1024 * 1024, 1), 'image/jpeg');
+      assert.equal(huge.status, 400, 'over 10 MB is still refused');
+      const firstLogoGone = !fs.existsSync(file1);
+      assert.ok(firstLogoGone, 'the first logo was replaced');
+
       const second = await upload(owner);
       assert.equal(second.status, 200);
-      assert.notEqual(second.body.community.logo_url, url1);
-      assert.ok(!fs.existsSync(file1), 'the replaced logo is deleted');
+      assert.notEqual(second.body.community.logo_url, big.body.community.logo_url);
+      assert.ok(!fs.existsSync(path.join(serverDir, 'uploads', 'community-logos', path.basename(big.body.community.logo_url))), 'the replaced logo is deleted');
 
       assert.equal((await api('DELETE', `/api/communities/${cid}/logo`, { token: modU.token })).status, 403);
       const removed = await api('DELETE', `/api/communities/${cid}/logo`, { token: owner.token });

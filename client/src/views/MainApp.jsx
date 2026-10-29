@@ -1390,6 +1390,22 @@ function MainApp({ sharePingId }) {
     try { setContacts(await fetchAPI('/contacts')); } catch (e) { console.error(e); }
   }, [fetchAPI]);
 
+  // "New wave with these people" (v2.132.0): the wave's group (made from its
+  // people if it is a private wave), then the new-wave dialog with it chosen.
+  const [newWaveGroupId, setNewWaveGroupId] = useState(null);
+  const startWaveWithPeople = useCallback(async (waveId) => {
+    try {
+      const { groupId } = await fetchAPI(`/waves/${waveId}/group`, { method: 'POST' });
+      setGroups(await fetchAPI('/groups'));
+      setNewWaveContainer(null);
+      setNewWaveGroupId(groupId);
+      setShowNewWave(true);
+    } catch (err) {
+      showToastMsg(err.message || `Could not start a new ${T.wave}`, 'error');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchAPI]);
+
   const loadGroups = useCallback(async () => {
     try { setGroups(await fetchAPI('/groups')); } catch (e) { console.error(e); }
   }, [fetchAPI]);
@@ -2499,6 +2515,7 @@ function MainApp({ sharePingId }) {
                     <WaveView wave={selectedWave} onBack={() => { if (activeTabId) closeTab(activeTabId); else setPreviewWaveId(null); loadWaves(); loadWaveNotifications(); setActiveThread(null); }}
                       fetchAPI={fetchAPI} showToast={showToastMsg} currentUser={user}
                       groups={groups} onWaveUpdate={loadWaves} isMobile={isMobile}
+                      onNewWaveWithPeople={startWaveWithPeople}
                       sendWSMessage={sendWSMessage}
                       typingUsers={typingUsers[selectedWave?.id] || {}}
                       reloadTrigger={waveReloadTrigger}
@@ -2583,6 +2600,7 @@ function MainApp({ sharePingId }) {
 
         {activeView === 'people' && (
           <PeopleView
+            onNewWaveWithGroup={(groupId) => { setNewWaveContainer(null); setNewWaveGroupId(groupId); setShowNewWave(true); }}
             contacts={contacts}
             groups={groups}
             fetchAPI={fetchAPI}
@@ -2662,8 +2680,9 @@ function MainApp({ sharePingId }) {
       )}
 
       <NewWaveModal isOpen={showNewWave}
-        onClose={() => { setShowNewWave(false); setNewWaveContainer(null); }}
+        onClose={() => { setShowNewWave(false); setNewWaveContainer(null); setNewWaveGroupId(null); }}
         containerLabel={newWaveContainer?.label || null}
+        initialGroupId={newWaveGroupId}
         onCreate={handleCreateWave} contacts={contacts} groups={groups} federationEnabled={federationEnabled} />
 
       {showSearch && (

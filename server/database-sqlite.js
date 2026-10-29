@@ -3554,6 +3554,18 @@ export class DatabaseSQLite {
       console.log('✅ wave_invitations table created');
     }
 
+    // v2.132.0 — groups that make themselves. A wave started with two or more
+    // other people creates a group with it. Its name is not stored: it is worked
+    // out from the members whenever it is shown (auto_named = 1, name ''), so
+    // the server does not keep "who is with whom" in plain text beside the
+    // encrypted membership. Renaming stores a name and clears the flag.
+    const crewColsV2132 = this.db.prepare(`PRAGMA table_info(crews)`).all();
+    if (crewColsV2132.length > 0 && !crewColsV2132.some(c => c.name === 'auto_named')) {
+      console.log('📝 Adding crews.auto_named (v2.132.0)...');
+      this.db.exec(`ALTER TABLE crews ADD COLUMN auto_named INTEGER NOT NULL DEFAULT 0;`);
+      console.log('✅ crews.auto_named added');
+    }
+
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
     //
     // A remote person's standing here is borrowed, and until now it was borrowed
@@ -5489,13 +5501,63 @@ export class DatabaseSQLite {
 
     return rows.map(r => ({
       id: r.id,
-      name: r.name,
+      name: r.auto_named ? this.groupLabel(r.id) : r.name,
+      autoNamed: !!r.auto_named,
       description: r.description,
       createdBy: r.created_by,
       createdAt: r.created_at,
       memberCount: r.member_count,
       role: r.role,
+      waveCount: this.groupWaveIds(r.id).length,
     }));
+  }
+
+  /**
+   * The name of a group that has not been named (v2.132.0): its people, in the
+   * order they joined, then anyone invited and not yet answered. "Mal & Zoe",
+   * "Mal, Zoe & Wash", past four "Mal, Zoe, Wash +3". Never stored.
+   */
+  groupLabel(groupId) {
+    const names = this.db.prepare(`
+      SELECT COALESCE(NULLIF(u.display_name, ''), u.handle) AS n FROM crew_members gm
+      JOIN users u ON u.id = gm.user_id WHERE gm.crew_id = ?
+      ORDER BY gm.joined_at, CASE gm.role WHEN 'admin' THEN 0 ELSE 1 END, u.handle
+    `).all(groupId).map(r => r.n);
+    const seen = new Set(names);
+    for (const r of this.db.prepare(`
+      SELECT COALESCE(NULLIF(u.display_name, ''), u.handle) AS n FROM wave_invitations wi
+      JOIN waves w ON w.id = wi.wave_id JOIN users u ON u.id = wi.invited_user_id
+      WHERE w.crew_id = ? AND w.privacy IN ('group', 'crew') AND wi.expires_at > ?
+      ORDER BY wi.created_at
+    `).all(groupId, new Date().toISOString())) {
+      if (!seen.has(r.n)) { seen.add(r.n); names.push(r.n); }
+    }
+    if (names.length === 0) return 'Group';
+    if (names.length === 1) return names[0];
+    if (names.length <= 4) return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+    return `${names.slice(0, 3).join(', ')} +${names.length - 3}`;
+  }
+
+  /** The waves that belong to a group (its crew waves). */
+  groupWaveIds(groupId) {
+    return this.db.prepare("SELECT id FROM waves WHERE crew_id = ? AND privacy IN ('group', 'crew') ORDER BY created_at")
+      .all(groupId).map(r => r.id);
+  }
+
+  /** A group named after its people (v2.132.0). Membership is the caller's to add. */
+  createAutoGroup(createdBy) {
+    const now = new Date().toISOString();
+    const id = `group-${uuidv4()}`;
+    this.db.prepare("INSERT INTO crews (id, name, description, created_by, created_at, auto_named) VALUES (?, '', '', ?, ?, 1)")
+      .run(id, createdBy, now);
+    return id;
+  }
+
+  /** Make a wave a group wave of `groupId`. Who can read it is then the group. */
+  setWaveGroup(waveId, groupId) {
+    this.db.prepare("UPDATE waves SET privacy = 'group', crew_id = ?, updated_at = ? WHERE id = ?")
+      .run(groupId, new Date().toISOString(), waveId);
+    return this.getWave(waveId);
   }
 
   getGroup(groupId) {
@@ -5503,7 +5565,8 @@ export class DatabaseSQLite {
     if (!row) return null;
     return {
       id: row.id,
-      name: row.name,
+      name: row.auto_named ? this.groupLabel(row.id) : row.name,
+      autoNamed: !!row.auto_named,
       description: row.description,
       createdBy: row.created_by,
       createdAt: row.created_at,
@@ -5592,6 +5655,10 @@ export class DatabaseSQLite {
     const description = data.description !== undefined ? data.description.slice(0, 500) : group.description;
 
     this.db.prepare('UPDATE crews SET name = ?, description = ? WHERE id = ?').run(name, description, groupId);
+    // v2.132.0: naming a group stops it following its people; an empty name
+    // (`autoNamed: true`) hands the name back to them.
+    if (data.name) this.db.prepare('UPDATE crews SET auto_named = 0 WHERE id = ?').run(groupId);
+    else if (data.autoNamed === true) this.db.prepare("UPDATE crews SET auto_named = 1, name = '' WHERE id = ?").run(groupId);
 
     return this.getGroup(groupId);
   }
@@ -5681,7 +5748,7 @@ export class DatabaseSQLite {
   getGroupInvitationsForUser(userId) {
     const rows = this.db.prepare(`
       SELECT gi.*,
-        g.id as g_id, g.name as g_name, g.description as g_desc,
+        g.id as g_id, g.name as g_name, g.auto_named as g_auto, g.description as g_desc,
         u.id as u_id, u.handle as u_handle, u.display_name as u_display_name, u.avatar as u_avatar
       FROM crew_invitations gi
       JOIN crews g ON gi.crew_id = g.id
@@ -5698,7 +5765,7 @@ export class DatabaseSQLite {
       status: r.status,
       created_at: r.created_at,
       responded_at: r.responded_at,
-      group: { id: r.g_id, name: r.g_name, description: r.g_desc },
+      group: { id: r.g_id, name: r.g_auto ? this.groupLabel(r.g_id) : r.g_name, description: r.g_desc },
       invited_by_user: { id: r.u_id, handle: r.u_handle, displayName: r.u_display_name, avatar: r.u_avatar },
     }));
   }
@@ -5725,7 +5792,7 @@ export class DatabaseSQLite {
 
   getAllSentGroupInvitations(userId) {
     const rows = this.db.prepare(`
-      SELECT gi.*, g.name as group_name,
+      SELECT gi.*, g.name as group_name, g.auto_named as group_auto,
              u.handle as invited_handle, u.display_name as invited_display_name,
              u.avatar as invited_avatar
       FROM crew_invitations gi
@@ -5738,7 +5805,7 @@ export class DatabaseSQLite {
     return rows.map(r => ({
       id: r.id,
       group_id: r.crew_id,
-      group_name: r.group_name,
+      group_name: r.group_auto ? this.groupLabel(r.crew_id) : r.group_name,
       invited_user_id: r.invited_user_id,
       invited_handle: r.invited_handle,
       invited_display_name: r.invited_display_name,
@@ -6345,7 +6412,7 @@ export class DatabaseSQLite {
     const rows = this.db.prepare(`
       SELECT w.*,
         u.display_name as creator_name, u.avatar as creator_avatar, u.handle as creator_handle,
-        cr.name as crew_name,
+        cr.name as crew_name, cr.auto_named as crew_auto,
         (SELECT COUNT(*) FROM pings WHERE wave_id = w.id AND deleted = 0) as ping_count
       FROM waves w
       LEFT JOIN users u ON w.created_by = u.id
@@ -6478,7 +6545,7 @@ export class DatabaseSQLite {
       is_participant: participation ? participation.isParticipant(r.id, userId) : true,
       is_archived: archived === 1,
       is_hidden: hidden === 1,
-      crew_name: r.crew_name,
+      crew_name: r.crew_auto ? this.groupLabel(r.crew_id) : r.crew_name,
       federationState: r.federation_state || 'local',
       originNode: r.origin_node || null,
       originWaveId: r.origin_wave_id || null,
@@ -11101,11 +11168,11 @@ export class DatabaseSQLite {
   cleanupExpiredCrewInvitations(expiryDays = 7) {
     const cutoffDate = new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000).toISOString();
     const expired = this.db.prepare(`
-      SELECT ci.id, ci.invited_by, c.name as crew_name
+      SELECT ci.id, ci.invited_by, ci.crew_id, c.name as crew_name, c.auto_named
       FROM crew_invitations ci
       JOIN crews c ON ci.crew_id = c.id
       WHERE ci.status = 'pending' AND ci.created_at < ?
-    `).all(cutoffDate);
+    `).all(cutoffDate).map(r => ({ id: r.id, invited_by: r.invited_by, crew_name: r.auto_named ? this.groupLabel(r.crew_id) : r.crew_name }));
 
     if (expired.length > 0) {
       const ids = expired.map(r => r.id);
@@ -11163,11 +11230,11 @@ export class DatabaseSQLite {
         ORDER BY w.created_at DESC
       `).all(userId),
       groupMemberships: this.db.prepare(`
-        SELECT g.id, g.name, g.description, gm.role, gm.joined_at
+        SELECT g.id, g.name, g.auto_named, g.description, gm.role, gm.joined_at
         FROM crew_members gm
         JOIN crews g ON gm.crew_id = g.id
         WHERE gm.user_id = ?
-      `).all(userId),
+      `).all(userId).map(({ auto_named, ...g }) => ({ ...g, name: auto_named ? this.groupLabel(g.id) : g.name })),
       sentContactRequests: this.db.prepare(`
         SELECT cr.*, u.handle as to_handle
         FROM contact_requests cr

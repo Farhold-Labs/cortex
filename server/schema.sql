@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS crews (
     description TEXT DEFAULT '',
     created_by TEXT NOT NULL REFERENCES users(id),
     created_at TEXT NOT NULL
-);
+, auto_named INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_crews_created_by ON crews(created_by);
 
 CREATE TABLE IF NOT EXISTS crew_members (

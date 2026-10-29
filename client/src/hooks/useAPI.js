@@ -117,6 +117,7 @@ export function useAPI() {
         e.status = res.status;
         if (data.code) e.code = data.code;
         if (data.feature) e.feature = data.feature;
+        e.data = data;
         return e;
       };
       if (res.status === 401) {

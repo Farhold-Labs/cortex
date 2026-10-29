@@ -1,6 +1,6 @@
 # Wave access, groups and invitations — design
 
-Status: **decided** (2026-10-29). **Phase 1 built in v2.130.0, phase 2 in v2.131.0**; the rest not yet. Jared's decisions are recorded at the end and folded into the text.
+Status: **decided** (2026-10-29). **Phase 1 built in v2.130.0, phase 2 in v2.131.0, phase 3 in v2.132.0**; the rest not yet. Jared's decisions are recorded at the end and folded into the text.
 
 ## Why
 
@@ -187,7 +187,13 @@ whatever their client had already decrypted, as with any removal today.
 
 1. **Consent first (built, v2.130.0).** Invitations for adding people to waves and groups; blocks enforced; crew direct-add goes through an invitation; a Community wave refuses anyone who cannot see its channel; filing a wave with outsiders into a channel is refused; appointing wave staff no longer joins a stranger. Ships on its own, because it closes the gaps above. (For Communities still in review, the last rule applies only to people being *added*: nobody already in a wave is removed.)
 2. **Community wave report (built, v2.131.0).** The read-only report in the app, so the size of the review is known before anything is asked of owners. Owners and admins see their Community's waves in Manage Community → WAVES TO REVIEW, with titles only for waves they can open; node admins see numbers per Community under ADMINISTRATION. Neither shows who the people outside are. Building it found two crew paths round phase 1 (filing counted only participant rows; joining a crew reached its filed waves), closed in the same release.
-3. **Groups make themselves.** The new create flow, auto-named groups, crews renamed groups, migration of private and crew waves outside Communities.
+3. **Groups make themselves (built, v2.132.0).** As built, with Jared's decisions of 2026-10-29:
+   - **Existing private waves are not converted.** They keep their people list; a group is made only when a one-to-one gets a third person, or when someone chooses "New wave with these people". (The migration table above is superseded for private waves.)
+   - **One-to-one conversations stay direct** until a third person is added.
+   - **Group names are not stored** while they follow their people (`crews.auto_named`); they are worked out when shown, so the server keeps no plain-text list of who is with whom.
+   - A group wave is a crew wave; existing crews are already groups. "Crew" stays the Firefly word for one (instance terminology), so nothing was renamed.
+   - Removing someone from a group wave acts on the group, or splits the wave off without them; before, it removed only a participant row and the crew still let them in.
+   - Waves with people on other servers are unchanged (phase 6).
 4. **Community wave review and narrowing.** Needs review; the owner's Move it out / Make it a role (with or without invitations); Who can see this with people and live roles. Each Community switches to the strict rule when its review is done.
 5. **Clean-up.** Categories → Folders, privacy labels replaced by audience in the UI, docs.
 6. **Federated invitations.**
