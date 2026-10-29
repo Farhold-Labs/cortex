@@ -157,6 +157,28 @@ against a disposable server, with a counterfactual that strips the rule from a
 copy and asserts the leak returns (list, read, search, live push, file, removed
 member).
 
+### CORTEX-COMM-026: crews were a way into Community channel waves — Medium (fixed v2.131.0)
+
+Found while building the Community wave report. v2.130.0 made a Community
+channel wave take only people who can see the channel, but two crew paths
+went round it. Filing counted only participant rows, so a crew wave whose
+crew included an outsider could be filed into a channel (crew members can open
+a crew wave without a participant row). And joining a crew joins its waves: an
+outsider who accepted an invitation to a crew whose wave was already filed in a
+channel could open that wave.
+
+Fix: `waveMemberIds()` counts a crew wave's whole crew (from `crew_members`,
+the table `canAccessWave` reads) when filing and in the report.
+`crewChannelRefusal()` refuses a crew invitation, a crew admin's add, and the
+acceptance itself (re-checked, since the wave may have been filed after the
+invite) when the crew has a wave filed in a channel the person cannot see. The
+refusal reads like any other. People already in such crews keep their access
+until the Community's owner reviews the wave (wave-access phase 4).
+
+Test: `tests/community-wave-report.test.cjs`, with a counterfactual that puts
+both paths back and sees the filing succeed, the report miss the crew wave, and
+a late crew join open it.
+
 ## Prior findings still open in current code
 
 - **002, cross-port browser/request binding:** guest session lookup uses a nonce

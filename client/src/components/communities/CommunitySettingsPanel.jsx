@@ -75,6 +75,10 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
   const [renameTo, setRenameTo] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
 
+  // WAVE REVIEW (v2.131.0): filed waves whose people include someone who
+  // cannot see the channel. Read-only for now; deciding each one comes later.
+  const [waveReport, setWaveReport] = useState(null);
+
   // INVITES
   const [invites, setInvites] = useState([]);
   const [mintedToken, setMintedToken] = useState(null);
@@ -136,6 +140,11 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
         const i = await fetchAPI(`/communities/${community.id}/invites`);
         setInvites(i.invites || []);
       } catch { /* ditto */ }
+    }
+    if (can('community.manage')) {
+      try {
+        setWaveReport(await fetchAPI(`/communities/${community.id}/wave-report`));
+      } catch { setWaveReport(null); }
     }
     loadStaff();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -635,6 +644,40 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
                     : <>A channel holds {T.waves}. It is not a conversation itself.</>}
               </div>
             </div>
+          )}
+        </CollapsibleSection>
+      )}
+
+      {can('community.manage') && (
+        <CollapsibleSection {...section('review', `${T.WAVES} TO REVIEW`, waveReport?.totals?.waves ? String(waveReport.totals.waves) : undefined)}>
+          {!waveReport ? (
+            <div style={hint}>Checking…</div>
+          ) : waveReport.waves.length === 0 ? (
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+              Nothing to review. Everyone in the {T.waves} filed in this community's channels can see their channel.
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: '0.6rem' }}>
+                {waveReport.totals.waves} {waveReport.totals.waves === 1 ? T.wave : T.waves} in your channels {waveReport.totals.waves === 1 ? 'includes' : 'include'}{' '}
+                {waveReport.totals.outsiders === 1 ? 'someone who is' : `${waveReport.totals.outsiders} people who are`} not able to see the channel.
+                Nothing has changed for them: they keep their access. A later update will ask you to decide each one,
+                either moving it out of the community or keeping it for a community role.
+              </div>
+              {waveReport.waves.map(w => (
+                <div key={w.id} style={{ padding: '0.4rem 0', borderTop: '1px solid var(--border-subtle)', fontSize: '0.78rem' }}>
+                  <div style={{ color: w.canOpen ? 'var(--text-primary)' : 'var(--text-dim)', overflowWrap: 'anywhere' }}>
+                    {w.canOpen ? w.title : `A ${T.wave} you are not in`}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.15rem' }}>
+                    #{w.channelName} · {w.kind === 'crew' ? (w.crewName ? `${T.crew} ${w.crewName}` : `${T.crew} ${T.wave}`) : w.kind === 'crossServer' ? 'across servers' : 'private'}
+                    {' · '}
+                    <span style={{ color: 'var(--accent-orange)' }}>{w.outsiders} of {w.people} can't see #{w.channelName}</span>
+                  </div>
+                </div>
+              ))}
+              <div style={hint}>Names are not shown: who is in a {T.crew} or a private {T.wave} is not the community's to see.</div>
+            </>
           )}
         </CollapsibleSection>
       )}

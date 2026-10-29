@@ -8928,6 +8928,20 @@ app.delete('/api/contacts/requests/:id', authenticateToken, (req, res) => {
 
 // ============ Group Invitation Routes ============
 // Invite user(s) to a group
+// v2.131.0: joining a crew is joining its waves. A crew with a wave filed in a
+// Community channel takes only people who can see that channel, the rule that
+// filing and adding to a channel wave already follow (v2.130.0). Without it,
+// accepting a crew invitation was a way into a Community's channel.
+function crewChannelRefusal(groupId, userId) {
+  const rows = db.db.prepare(
+    "SELECT DISTINCT channel_id FROM waves WHERE crew_id = ? AND channel_id IS NOT NULL AND privacy IN ('group', 'crew')"
+  ).all(groupId);
+  return rows.some(r => {
+    try { return !communityAuthz.canDiscoverChannel(db, { kind: 'user', userId }, r.channel_id).allowed; }
+    catch { return true; } // fail closed
+  });
+}
+
 app.post('/api/groups/:id/invite', authenticateToken, (req, res) => {
   const groupId = sanitizeInput(req.params.id);
   const { userIds, message } = req.body;
@@ -8945,6 +8959,12 @@ app.post('/api/groups/:id/invite', authenticateToken, (req, res) => {
   const errors = [];
 
   for (const userId of userIds) {
+    // Same words as any other refusal: whether they can see a channel is not
+    // the inviter's to learn.
+    if (crewChannelRefusal(groupId, sanitizeInput(userId))) {
+      errors.push({ userId, error: 'Cannot invite this user' });
+      continue;
+    }
     const result = db.createGroupInvitation(groupId, req.user.userId, sanitizeInput(userId), message);
 
     if (result.error) {
@@ -9001,6 +9021,11 @@ app.get('/api/groups/:id/invitations/sent', authenticateToken, (req, res) => {
 // Accept a group invitation
 app.post('/api/groups/invitations/:id/accept', authenticateToken, (req, res) => {
   const invitationId = sanitizeInput(req.params.id);
+  // Checked again here: the crew's waves may have been filed since the invite.
+  const pending = db.getGroupInvitation(invitationId);
+  if (pending && pending.invited_user_id === req.user.userId && crewChannelRefusal(pending.group_id, req.user.userId)) {
+    return res.status(403).json({ error: 'This invitation can no longer be accepted' });
+  }
   const result = db.acceptGroupInvitation(invitationId, req.user.userId);
 
   if (result.error) {
@@ -20246,6 +20271,7 @@ app.post('/api/groups/:id/members', authenticateToken, (req, res) => {
   if (crewMembership.isMember(groupId, userId)) {
     return res.status(409).json({ error: 'User already in group' });
   }
+  if (crewChannelRefusal(groupId, userId)) return res.status(403).json({ error: 'Cannot invite this user' });
   const invitation = db.createGroupInvitation(groupId, req.user.userId, userId, null);
   if (invitation.error) {
     const already = /pending/i.test(invitation.error);
@@ -26273,7 +26299,9 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
   // v2.130.0: filing a wave is not a way to put outsiders into a Community.
   // Everyone in it must be able to see the channel; the count is given, not
   // the names (they are not the filer's to learn about).
-  const outsiders = participation.getWaveParticipants(wave.id).filter(uid =>
+  // v2.131.0: "everyone in it" includes a crew wave's whole crew, who can all
+  // open it, not only those with participant rows.
+  const outsiders = [...waveMemberIds(wave)].filter(uid =>
     !communityAuthz.canDiscoverChannel(db, { kind: 'user', userId: uid }, targetForFile.id).allowed);
   if (outsiders.length > 0) {
     return res.status(409).json({
@@ -26290,6 +26318,93 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
     return updated;
   });
   res.json({ wave: updated });
+});
+
+// ----- Community wave report (v2.131.0, wave-access phase 2) -----
+//
+// Read-only. Before a Community can switch to "only people who can see the
+// channel" (docs/wave-access/01-design.md), its owner has to decide what to do
+// with each filed wave whose people include someone who cannot see the
+// channel. This measures that: which waves, and how many people inside and
+// outside. It changes nothing and returns no message content, and no names of
+// the people outside: who is in a crew or a private wave is not the
+// Community's to learn.
+
+// Everyone a wave admits by its own rules: participants, plus the whole crew
+// of a crew wave. Public waves are not asked about: in a channel they already
+// follow the channel (v2.128.0). The crew comes from crew_members, the table
+// canAccessWave reads, so this counts exactly who can open the wave.
+function waveMemberIds(wave) {
+  const ids = new Set(participation.getWaveParticipants(wave.id));
+  if ((wave.privacy === 'group' || wave.privacy === 'crew') && wave.groupId) {
+    for (const m of db.getGroupMembers(wave.groupId)) ids.add(m.id);
+  }
+  return ids;
+}
+
+const WAVE_KIND = { private: 'private', group: 'crew', crew: 'crew', crossServer: 'crossServer', 'cross-server': 'crossServer' };
+
+// The affected waves of one Community. `memo` caches channel answers per person
+// across Communities when the node admin's report walks all of them.
+function communityWaveFindings(communityId, memo = new Map()) {
+  const rows = db.db.prepare(`
+    SELECT w.id, ch.id AS channel_id, ch.name AS channel_name
+    FROM waves w JOIN channels ch ON ch.id = w.channel_id
+    WHERE ch.community_id = ? AND w.privacy != 'public'
+    ORDER BY ch.sort_order, w.channel_position IS NULL, w.channel_position, w.created_at
+  `).all(communityId);
+  const canSee = (channelId, userId) => {
+    const key = channelId + '\u0000' + userId;
+    if (!memo.has(key)) {
+      let ok = false;
+      try { ok = communityAuthz.canDiscoverChannel(db, { kind: 'user', userId }, channelId).allowed === true; }
+      catch { ok = false; }
+      memo.set(key, ok);
+    }
+    return memo.get(key);
+  };
+  const findings = [];
+  for (const r of rows) {
+    const wave = db.getWave(r.id);
+    if (!wave) continue;
+    const people = [...waveMemberIds(wave)];
+    const outside = people.filter(uid => !canSee(r.channel_id, uid));
+    if (outside.length === 0) continue;
+    findings.push({ wave, channelId: r.channel_id, channelName: r.channel_name, people: people.length, outside });
+  }
+  return { scanned: rows.length, findings };
+}
+
+app.get('/api/communities/:id/wave-report', authenticateToken, apiLimiter, (req, res) => {
+  // The people who will decide each wave: the owner and admins.
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_COMMUNITY)) return;
+  const community = db.getCommunityById(req.params.id);
+  const { scanned, findings } = communityWaveFindings(req.params.id);
+  const outsideAll = new Set();
+  const waves = findings.map(f => {
+    f.outside.forEach(id => outsideAll.add(id));
+    // A wave's title, and its crew's name, only for someone who can open it.
+    // Filing a wave lists it in the channel; it does not make it readable.
+    const canOpen = canAccessWaveFromCache(f.wave.id, req.user.userId);
+    const crew = canOpen && f.wave.groupId ? db.getGroup?.(f.wave.groupId) : null;
+    return {
+      id: f.wave.id,
+      title: canOpen ? f.wave.title : null,
+      canOpen,
+      kind: WAVE_KIND[f.wave.privacy] || 'private',
+      crewName: crew?.name || null,
+      channelId: f.channelId,
+      channelName: f.channelName,
+      people: f.people,
+      outsiders: f.outside.length,
+    };
+  });
+  res.json({
+    community: { id: community.id, name: community.name },
+    scanned,
+    waves,
+    totals: { waves: waves.length, outsiders: outsideAll.size },
+  });
 });
 
 app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateToken, (req, res) => {
@@ -26856,6 +26971,34 @@ app.get('/api/admin/communities', authenticateToken, (req, res) => {
     FROM communities c ORDER BY c.created_at DESC LIMIT 500
   `).all();
   res.json({ communities: rows });
+});
+
+// v2.131.0: the same measurement for the whole node, as numbers only. A node
+// admin is not a member of these Communities (see above): they learn how big
+// the review is, not what the waves are called or who is in them.
+app.get('/api/admin/communities/wave-report', authenticateToken, apiLimiter, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+  const communities = db.db.prepare(
+    "SELECT id, name, status, visibility FROM communities WHERE status != 'deleted' ORDER BY created_at DESC LIMIT 500"
+  ).all();
+  const memo = new Map();
+  const outsideAll = new Set();
+  let affectedTotal = 0;
+  const rows = communities.map(c => {
+    const { scanned, findings } = communityWaveFindings(c.id, memo);
+    const outside = new Set();
+    for (const f of findings) f.outside.forEach(id => { outside.add(id); outsideAll.add(id); });
+    affectedTotal += findings.length;
+    return {
+      id: c.id, name: c.name, status: c.status, visibility: c.visibility,
+      channelWaves: scanned,
+      affectedWaves: findings.length,
+      crewWaves: findings.filter(f => WAVE_KIND[f.wave.privacy] === 'crew').length,
+      outsiders: outside.size,
+    };
+  }).sort((a, b) => b.affectedWaves - a.affectedWaves || a.name.localeCompare(b.name));
+  res.json({ communities: rows, totals: { communities: rows.filter(r => r.affectedWaves > 0).length, waves: affectedTotal, outsiders: outsideAll.size } });
 });
 
 // The role is checked BEFORE step-up, deliberately. Running step-up first asks

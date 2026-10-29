@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.130.0** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.131.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -93,6 +93,7 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Across servers** — Members from allied ports join with their home identity; their standing is re-checked with their home server, so suspending or unpairing reaches them
 - **Public means the Community** — A public wave in a Community channel is visible to whoever can see that channel, not to the whole server
 - **Joining is the consent** — Inside a Community, members who can see a channel are added to its waves directly; anyone else cannot be added
+- **Waves to review** — Owners and admins see which filed waves include people who can't see the channel, ahead of deciding each one; node admins see the numbers per Community
 - **Voice channels** — Drop-in voice and video rooms (opt-in per server), with a camera limit, stage channels with raised hands, moving people between rooms, and media end-to-end encrypted against LiveKit
 - **Managing a Community** — Appoint admins and moderators, remove, ban, leave or close from the Community menu; logos for Communities; channel order and wave order within a channel set by staff
 - **Opt-in per server** — An instance feature, off unless the admin turns it on; abuse limits and admin suspend/close controls built in
@@ -467,7 +468,7 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 - [docs/SECRET-AUDIT.md](docs/SECRET-AUDIT.md) — Git-history credential audit, method and findings
 - [docs/PLAN-federated-push.md](docs/PLAN-federated-push.md) — Why native push is hard in a federated app, and the options
 - [docs/communities/](docs/communities/) — Federated Communities: architecture, threat model, implementation plan (built in v2.94.0–v2.99.2), voice channels and the two-panel layout
-- [docs/wave-access/](docs/wave-access/) — Wave audiences, invitations and self-forming groups (phase 1 shipped in v2.130.0)
+- [docs/wave-access/](docs/wave-access/) — Wave audiences, invitations and self-forming groups (phases 1–2 shipped in v2.130.0–v2.131.0)
 - [docs/HIGH-AVAILABILITY.md](docs/HIGH-AVAILABILITY.md) — Proposed warm-standby failover
 - [docs/SECURITY-AUDIT-STATE.md](docs/SECURITY-AUDIT-STATE.md) — The latest security audit's findings and how each was resolved
 - [docs/PRIVACY.md](docs/PRIVACY.md) — Privacy policy
