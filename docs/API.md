@@ -1750,6 +1750,19 @@ added directly. Blocks are honoured in both directions.
 
 Invitations expire after 30 days. WebSocket: `wave_invitations_changed` (to the invitee, and `{ waveId }` to the wave). Notification type `wave_invitation`, with no wave id or preview.
 
+### Groups that make themselves (v2.132.0)
+
+A group wave is a crew wave (`privacy: 'group'`, `groupId`): everyone in the group can open it, and joining it means joining the group.
+
+- **`POST /api/waves`** with `privacy: 'private'`, no `channelId`, no federated participants and two or more other people creates a group with the wave (the creator its admin) and returns `privacy: 'group'` and `group`. Everyone else is invited as before.
+- **`group`** on wave responses (create, `GET /api/waves/:id`): `{ id, name, autoNamed, waveCount }`. `crew_name` on wave lists carries the same name.
+- **Names.** A group with `autoNamed: true` has no stored name; `name` is worked out from its members (in the order they joined) and people invited to its waves: "A & B", "A, B & C", "A, B, C & D", then "A, B, C +N". `GET /api/groups` adds `autoNamed` and `waveCount`.
+- **`PUT /api/groups/:id`** `{ name }` by any member renames it (`autoNamed` becomes false); `{ autoNamed: true }` hands the name back to its people. `description` remains admin-only (403 for a member).
+- **`POST /api/waves/:id/participants`** `{ userId, scope? }`: for a private wave whose people (participants and pending invitations) are exactly two, the wave first becomes a group of its participants. For a group wave whose group has more than one wave, `scope` is required: without it `409 { code: "GROUP_SCOPE_REQUIRED", waveCount, groupName }`. `scope: "group"` invites to the group (accepting reaches every wave of it); `scope: "wave"` first moves this wave into a copy of the group (same people and roles) and invites to that. Any member of a group wave's group may add.
+- **`DELETE /api/waves/:id/participants/:userId?scope=`**: for a group wave, removes the person from the group (`scope: "group"`, or the only wave) or moves this wave into a copy of the group without them (`scope: "wave"`). The group's admins may remove people as well as the wave's creator. Returns `{ scope }`.
+- **`POST /api/waves/:id/group`**: the wave's group, making one from a private wave's participants (outside Communities, on this server, two or more people) → `{ groupId, group }`. Nobody gains or loses access to the wave.
+- **`GET /api/wave-invitations`**: an invitation to a group wave carries `group: { name, waveCount }` and the group's members.
+
 ### Community wave report (v2.131.0)
 
 Read-only. Which waves filed in a Community's channels include people who cannot see the channel (wave-access phase 2). Public waves are not counted: in a channel they already follow the channel. A wave's people are its participants plus, for a crew wave, the whole crew. Neither answer names or identifies the people outside.

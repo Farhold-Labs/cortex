@@ -20241,11 +20241,19 @@ app.post('/api/groups', authenticateToken, (req, res) => {
 
 app.put('/api/groups/:id', authenticateToken, (req, res) => {
   const groupId = sanitizeInput(req.params.id);
-  if (!db.isGroupAdmin(groupId, req.user.userId)) {
+  // v2.132.0: anyone in a group may rename it (or hand the name back to its
+  // people with `autoNamed: true`); the description stays with its admins.
+  const isAdmin = db.isGroupAdmin(groupId, req.user.userId);
+  const renameOnly = req.body && req.body.description === undefined;
+  if (!isAdmin && !(renameOnly && db.isGroupMember(groupId, req.user.userId))) {
     return res.status(403).json({ error: 'Admin access required' });
   }
-  
-  const group = db.updateGroup(groupId, req.body);
+  const body = {
+    name: typeof req.body?.name === 'string' ? sanitizeInput(req.body.name).trim() : undefined,
+    description: typeof req.body?.description === 'string' ? sanitizeInput(req.body.description) : undefined,
+    autoNamed: req.body?.autoNamed === true,
+  };
+  const group = db.updateGroup(groupId, body);
   if (!group) return res.status(404).json({ error: 'Group not found' });
   res.json(group);
 });
@@ -20661,7 +20669,8 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
   const participants = db.getWaveParticipants(wave.id);
   // Pending invitations (v2.130.0), for the people in the wave. Someone who
   // can see a public wave without being in it is not shown who was asked.
-  const invited = participation.isParticipant(wave.id, req.user.userId)
+  const invited = (participation.isParticipant(wave.id, req.user.userId)
+      || (isGroupWave(wave) && db.isGroupMember(wave.groupId, req.user.userId)))
     ? db.listWaveInvitationsForWave(wave.id).map(i => ({
         invitationId: i.id, id: i.invited_user_id, handle: i.handle, name: i.display_name,
         avatar: i.avatar, invitedBy: i.invited_by, createdAt: i.created_at,
@@ -20705,6 +20714,7 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
       is_archived: isArchived,
       parent_wave: parentWave,
       group_name: group?.name,
+      group: groupInfo(wave),
       can_edit: wave.createdBy === req.user.userId,
       total_pings: totalPings,
       total_droplets: totalPings, // Legacy
@@ -20802,6 +20812,7 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     total_messages: totalPings,
     hasMoreMessages: hasOlderMessages,
     group_name: group?.name,
+    group: groupInfo(wave),
     can_edit: wave.createdBy === req.user.userId,
   });
 });
@@ -22030,6 +22041,15 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   // Determine if this is a federated wave
   const hasFederatedParticipants = federatedParticipants.length > 0;
 
+  // v2.132.0: started with two or more other people, outside Communities and on
+  // this server, a wave gets a group of its own. A one-to-one conversation
+  // stays a direct conversation until a third person is added.
+  let autoGroupId = null;
+  const others = [...new Set(localParticipantIds)].filter(id => id !== req.user.userId);
+  if (privacy === 'private' && !targetChannel && !hasFederatedParticipants && others.length >= 2) {
+    autoGroupId = createGroupOf(req.user.userId, [req.user.userId]);
+  }
+
   // E2EE: Check if wave should be encrypted
   // FORCE_WAVE_ENCRYPTION overrides client — still requires keyDistribution from client
   const encrypted = FORCE_WAVE_ENCRYPTION || !!req.body.encrypted;
@@ -22037,8 +22057,8 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
 
   const wave = db.createWave({
     title,
-    privacy: hasFederatedParticipants ? 'crossServer' : privacy, // Force cross-server if federated
-    groupId: privacy === 'group' ? sanitizeInput(req.body.groupId) : null,
+    privacy: hasFederatedParticipants ? 'crossServer' : (autoGroupId ? 'group' : privacy), // Force cross-server if federated
+    groupId: autoGroupId || (privacy === 'group' ? sanitizeInput(req.body.groupId) : null),
     createdBy: req.user.userId,
     // v2.130.0: only the creator is in at the start. Everyone else goes
     // through addOrInviteToWave below, once the wave is filed, so a Community
@@ -22128,6 +22148,7 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     creator_handle: db.findUserById(req.user.userId)?.handle || 'unknown',
     participants: db.getWaveParticipants(wave.id),
     message_count: 0,
+    ...(wave.groupId ? { crew_name: db.getGroup(wave.groupId)?.name, group: groupInfo(wave) } : {}),
     invited: joined.invited,
     refused: joined.refused,
     federationState: hasFederatedParticipants ? 'origin' : 'local',
@@ -23494,7 +23515,7 @@ function waveJoinRefusal(wave, inviterId, inviteeId) {
   const invitee = db.findUserById(inviteeId);
   if (!invitee) return NOPE;
   if (inviteeId === inviterId) return { status: 400, error: 'You are already in this wave', code: 'SELF' };
-  if (participation.isParticipant(wave.id, inviteeId)) {
+  if (participation.isParticipant(wave.id, inviteeId) || (isGroupWave(wave) && db.isGroupMember(wave.groupId, inviteeId))) {
     return { status: 400, error: 'Already in this wave', code: 'ALREADY_PARTICIPANT' };
   }
   // Blocks, in both directions. A refusal either way reads the same.
@@ -23512,6 +23533,8 @@ function waveJoinRefusal(wave, inviterId, inviteeId) {
 
 /** Make someone a participant and tell the wave. The tail of every join. */
 function completeWaveJoin(wave, user, addedBy) {
+  // A group wave is joined by joining its group (v2.132.0).
+  if (isGroupWave(wave)) crewMembership.addMember(wave.groupId, user.id, 'member');
   participation.addParticipant(wave.id, user.id);
 
   // An encrypted burst wave inherits its parent's key for the new participant.
@@ -23546,6 +23569,91 @@ function completeWaveJoin(wave, user, addedBy) {
     wave: { id: wave.id, title: wave.title, privacy: wave.privacy },
     addedBy,
   });
+}
+
+// ----- Groups that make themselves (v2.132.0, wave-access phase 3) -----
+//
+// A wave started with two or more other people (outside Communities, on this
+// server) gets a group of its own, and accepting the invitation joins the
+// group. A group wave is a crew wave: everyone in the group can open it. The
+// group's name is worked out from its people (db.groupLabel) until someone
+// renames it. A group used by several waves makes adding or removing someone a
+// choice: this wave only (the wave splits off into a group of its own; nobody
+// already in is asked again) or the whole group.
+
+/** What a wave's people see about its group: name, whether it follows them, how many waves share it. */
+function groupInfo(wave) {
+  if (!isGroupWave(wave)) return null;
+  const g = db.getGroup(wave.groupId);
+  return g ? { id: g.id, name: g.name, autoNamed: !!g.autoNamed, waveCount: db.groupWaveIds(g.id).length } : null;
+}
+
+function isGroupWave(wave) {
+  return !!wave && (wave.privacy === 'group' || wave.privacy === 'crew') && !!wave.groupId;
+}
+
+// A one-to-one conversation or a group of three or more: the people a private
+// wave has or has been asked to have.
+function privateWavePeople(wave) {
+  const ids = new Set(participation.getWaveParticipants(wave.id));
+  for (const inv of db.listWaveInvitationsForWave(wave.id)) ids.add(inv.invited_user_id);
+  return ids;
+}
+
+/** A new group named after its people, holding `memberIds` (the first is admin). */
+function createGroupOf(createdBy, memberIds, roles = new Map()) {
+  const groupId = db.createAutoGroup(createdBy);
+  for (const id of memberIds) {
+    crewMembership.addMember(groupId, id, roles.get(id) || (id === createdBy ? 'admin' : 'member'));
+  }
+  return groupId;
+}
+
+/** Turn a private wave into a group wave of its current participants. Nobody gains or loses access. */
+function makePrivateWaveAGroup(wave) {
+  const members = [wave.createdBy, ...participation.getWaveParticipants(wave.id).filter(id => id !== wave.createdBy)]
+    .filter(id => db.findUserById(id));
+  const groupId = createGroupOf(wave.createdBy, [...new Set(members)]);
+  return db.setWaveGroup(wave.id, groupId);
+}
+
+/**
+ * "This wave only": the wave leaves a group it shares with other waves for a
+ * copy of that group (same people and roles, minus `withoutUserId`).
+ */
+function splitWaveFromGroup(wave, withoutUserId = null) {
+  const members = db.getGroupMembers(wave.groupId).filter(m => m.id !== withoutUserId);
+  const roles = new Map(members.map(m => [m.id, m.role]));
+  const groupId = createGroupOf(wave.createdBy, members.map(m => m.id), roles);
+  return db.setWaveGroup(wave.id, groupId);
+}
+
+/** Someone leaves a group, and so every wave of it. */
+function leaveGroup(groupId, userId, removedBy) {
+  const waveIds = db.groupWaveIds(groupId);
+  for (const waveId of waveIds) participation.removeParticipant(waveId, userId);
+  crewMembership.removeMember(groupId, userId);
+  for (const waveId of waveIds) {
+    broadcastToWave(waveId, { type: 'participant_removed', waveId, userId, removedBy, wasSelf: removedBy === userId });
+    if (removedBy !== userId) {
+      const w = db.getWave(waveId);
+      broadcastToUser(userId, { type: 'removed_from_wave', wave: { id: waveId, title: w?.title }, removedBy });
+    }
+  }
+}
+
+/** For a request touching one wave of a group with several: which, or a 409 asking. */
+function groupScope(req, res, wave) {
+  if (!isGroupWave(wave)) return 'wave';
+  const waveCount = db.groupWaveIds(wave.groupId).length;
+  if (waveCount <= 1) return 'group';
+  const scope = req.body?.scope || req.query?.scope;
+  if (scope === 'wave' || scope === 'group') return scope;
+  res.status(409).json({
+    error: `This group has ${waveCount} ${T_WAVE()}s. This one only, or the whole group?`,
+    code: 'GROUP_SCOPE_REQUIRED', waveCount, groupName: db.getGroup(wave.groupId)?.name,
+  });
+  return null;
 }
 
 /**
@@ -23616,6 +23724,17 @@ function invitationView(row) {
     } : null,
     members: members.slice(0, 8).map(m => ({ id: m.id, handle: m.handle, name: m.name, avatar: m.avatar })),
     memberCount: members.length,
+    // A group wave: accepting joins the group, and so all of its waves.
+    ...(() => {
+      const w = db.getWave(row.wave_id);
+      if (!isGroupWave(w)) return {};
+      const people = db.getGroupMembers(w.groupId);
+      return {
+        group: { name: db.getGroup(w.groupId)?.name, waveCount: db.groupWaveIds(w.groupId).length },
+        members: people.slice(0, 8).map(m => ({ id: m.id, handle: m.handle, name: m.name, avatar: m.avatar })),
+        memberCount: people.length,
+      };
+    })(),
     createdAt: row.created_at,
     expiresAt: row.expires_at,
   };
@@ -23639,6 +23758,9 @@ app.post('/api/wave-invitations/:id/accept', authenticateToken, (req, res) => {
   const refusal = waveJoinRefusal(wave, invitation.invited_by || '', req.user.userId);
   if (refusal && refusal.code !== 'ALREADY_PARTICIPANT') {
     return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
+  }
+  if (!refusal && isGroupWave(wave) && crewChannelRefusal(wave.groupId, req.user.userId)) {
+    return res.status(403).json({ error: 'This invitation can no longer be accepted' });
   }
   if (!refusal) completeWaveJoin(wave, user, invitation.invited_by);
   broadcastToWave(wave.id, { type: 'wave_invitations_changed', waveId: wave.id });
@@ -23675,6 +23797,26 @@ app.delete('/api/wave-invitations/:id', authenticateToken, (req, res) => {
   res.json({ success: true });
 });
 
+// "New wave with these people" (v2.132.0): the wave's group, made from its
+// participants if it is a private wave that has none yet. Nobody gains or loses
+// access to this wave, and a new wave for the group asks nobody again: they
+// are already in a conversation with each other.
+app.post('/api/waves/:id/group', authenticateToken, (req, res) => {
+  const wave = db.getWave(sanitizeInput(req.params.id));
+  if (!wave || !canAccessWaveFromCache(wave.id, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
+  if (isGroupWave(wave)) return res.json({ groupId: wave.groupId, group: db.getGroup(wave.groupId) });
+  if (wave.privacy !== 'private' || wave.channelId || wave.federationState !== 'local') {
+    return res.status(400).json({ error: `Only a private ${T_WAVE()} outside communities can become a group` });
+  }
+  if (!participation.isParticipant(wave.id, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
+  if (participation.getWaveParticipants(wave.id).length < 2) {
+    return res.status(400).json({ error: `Nobody else is in this ${T_WAVE()} yet` });
+  }
+  const updated = makePrivateWaveAGroup(wave);
+  broadcastToWave(wave.id, { type: 'wave_updated', wave: updated });
+  res.json({ groupId: updated.groupId, group: db.getGroup(updated.groupId) });
+});
+
 app.post('/api/waves/:id/participants', authenticateToken, inviteLimiter, async (req, res) => {
   const waveId = sanitizeInput(req.params.id);
   const userId = sanitizeInput(req.body.userId || '');
@@ -23693,12 +23835,28 @@ app.post('/api/waves/:id/participants', authenticateToken, inviteLimiter, async 
     return res.status(403).json({ error: 'Only wave creator can add participants to private waves' });
   }
 
-  // Check if requester is a participant
-  if (!participation.isParticipant(waveId, req.user.userId)) {
+  // A participant, or anyone in a group wave's group (v2.132.0).
+  const inGroup = isGroupWave(wave) && db.isGroupMember(wave.groupId, req.user.userId);
+  if (!participation.isParticipant(waveId, req.user.userId) && !inGroup) {
     return res.status(403).json({ error: 'You must be a participant to add others' });
   }
 
-  const outcome = addOrInviteToWave(wave, req.user.userId, userId);
+  let target = wave;
+  const early = waveJoinRefusal(wave, req.user.userId, userId);
+  if (early) return res.status(early.status).json({ error: early.error, code: early.code });
+  // A one-to-one conversation becomes a group when a third person is added
+  // (v2.132.0). Private waves that already had three or more people stay as
+  // they are.
+  if (wave.privacy === 'private' && !wave.channelId && wave.federationState === 'local'
+      && privateWavePeople(wave).size === 2) {
+    target = makePrivateWaveAGroup(wave);
+  } else if (isGroupWave(wave)) {
+    const scope = groupScope(req, res, wave);
+    if (!scope) return;
+    if (scope === 'wave' && db.groupWaveIds(wave.groupId).length > 1) target = splitWaveFromGroup(wave);
+  }
+
+  const outcome = addOrInviteToWave(target, req.user.userId, userId);
   if (outcome.refused) {
     return res.status(outcome.refused.status).json({ error: outcome.refused.error, code: outcome.refused.code });
   }
@@ -23731,14 +23889,34 @@ app.delete('/api/waves/:id/participants/:userId', authenticateToken, async (req,
   // - Users can remove themselves (leave wave)
   const isCreator = wave.createdBy === req.user.userId;
   const isSelf = userId === req.user.userId;
+  // v2.132.0: a group's admins may remove people from its waves too.
+  const isGroupAdmin = isGroupWave(wave) && db.isGroupAdmin(wave.groupId, req.user.userId);
 
-  if (!isCreator && !isSelf) {
+  if (!isCreator && !isSelf && !isGroupAdmin) {
     return res.status(403).json({ error: 'Only wave creator can remove other participants' });
   }
 
   // Creator cannot remove themselves
   if (isCreator && isSelf) {
     return res.status(400).json({ error: 'Wave creator cannot leave. Delete the wave instead.' });
+  }
+
+  // A group wave is left by leaving its group, which reaches every wave of it;
+  // "this wave only" splits the wave off into a group without them (v2.132.0).
+  // Removing only a participant row would leave the group's access in place.
+  if (isGroupWave(wave) && db.isGroupMember(wave.groupId, userId)) {
+    const scope = groupScope(req, res, wave);
+    if (!scope) return;
+    if (scope === 'group') {
+      leaveGroup(wave.groupId, userId, req.user.userId);
+    } else {
+      splitWaveFromGroup(wave, userId);
+      participation.removeParticipant(waveId, userId);
+      broadcastToWave(waveId, { type: 'participant_removed', waveId, userId, removedBy: req.user.userId, wasSelf: isSelf });
+      if (!isSelf) broadcastToUser(userId, { type: 'removed_from_wave', wave: { id: wave.id, title: wave.title }, removedBy: req.user.userId });
+    }
+    if (db.logActivity) db.logActivity(req.user.userId, isSelf ? 'leave_wave' : 'remove_participant', 'wave', waveId, getRequestMeta(req), { removedUserId: userId, scope });
+    return res.json({ success: true, scope, participants: db.getWaveParticipants(waveId) });
   }
 
   // Check if target is a participant

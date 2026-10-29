@@ -1,17 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useModalDismiss } from '../../hooks/useModalDismiss.js';
 import { PRIVACY_LEVELS } from '../../config/constants.js';
 import { FEDERATION } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 import { T } from '../../config/terminology.js';
 
-const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null}) => {
+const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null, initialGroupId = null }) => {
   const [title, setTitle] = useState('');
   const [privacy, setPrivacy] = useState('private');
   const [selectedParticipants, setSelectedParticipants] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [federatedInput, setFederatedInput] = useState('');
   const [federatedParticipants, setFederatedParticipants] = useState([]); // Array of "@handle@server" strings
+
+  // Opened from "New wave with these people" (v2.132.0): that group, chosen.
+  useEffect(() => {
+    if (isOpen && initialGroupId) { setPrivacy('group'); setSelectedGroup(initialGroupId); }
+  }, [isOpen, initialGroupId]);
 
   /**
    * The same dismissal every other modal uses: Escape and the Close button
@@ -155,6 +160,12 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
                   {selectedParticipants.includes(c.id) && <span style={{ marginLeft: 'auto', color: 'var(--accent-green)' }}>✔</span>}
                 </button>
               ))}
+            </div>
+            {/* v2.132.0: two or more people make a group; the server decides, this says so. */}
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginTop: '6px', lineHeight: 1.4 }}>
+              {privacy === 'private' && selectedParticipants.length >= 2 && federatedParticipants.length === 0 && !containerLabel
+                ? `With you and ${selectedParticipants.length} others this starts a group, named after its people until someone renames it. Each is asked first.`
+                : 'Everyone you pick is asked first.'}
             </div>
           </div>
         )}

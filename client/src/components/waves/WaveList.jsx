@@ -837,6 +837,10 @@ const WaveInvitations = ({ invitations, onAccept, onDecline, isMobile, density }
             </div>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', margin: '2px 0 6px' }}>
               {who} invited you{others.length ? ` · with ${others.join(', ')}${more ? ` +${more}` : ''}` : ''}
+              {/* v2.132.0: accepting joins the group, and so every wave of it. */}
+              {inv.group?.waveCount > 1 && (
+                <div style={{ marginTop: '2px' }}>Joins {plainText(inv.group.name || '')}: {inv.group.waveCount} {T.waves}</div>
+              )}
             </div>
             {confirmBlock === inv.id ? (
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
