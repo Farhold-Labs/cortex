@@ -1750,6 +1750,15 @@ added directly. Blocks are honoured in both directions.
 
 Invitations expire after 30 days. WebSocket: `wave_invitations_changed` (to the invitee, and `{ waveId }` to the wave). Notification type `wave_invitation`, with no wave id or preview.
 
+### Community wave report (v2.131.0)
+
+Read-only. Which waves filed in a Community's channels include people who cannot see the channel (wave-access phase 2). Public waves are not counted: in a channel they already follow the channel. A wave's people are its participants plus, for a crew wave, the whole crew. Neither answer names or identifies the people outside.
+
+- **`GET /api/communities/:id/wave-report`**, `community.manage` (owner and admins; 403 for other members, 404 for someone who cannot see the Community) → `{ community: { id, name }, scanned, waves: [{ id, title, canOpen, kind, crewName, channelId, channelName, people, outsiders }], totals: { waves, outsiders } }`. `scanned` is the number of non-public waves filed. `title` and `crewName` are null unless the caller can open the wave. `kind` is `private`, `crew` or `crossServer`. `totals.outsiders` counts distinct people.
+- **`GET /api/admin/communities/wave-report`**, node admin → `{ communities: [{ id, name, status, visibility, channelWaves, affectedWaves, crewWaves, outsiders }], totals: { communities, waves, outsiders } }`, sorted by `affectedWaves`. No titles.
+
+Also in v2.131.0: `POST /api/groups/:id/invite` lists a person in `errors` ("Cannot invite this user"), `POST /api/groups/:id/members` answers 403, and `POST /api/groups/invitations/:id/accept` answers 403, when the crew has a wave filed in a Community channel that person cannot see. Filing (`PUT …/channels/:channelId/waves/:waveId`) counts a crew wave's whole crew for `OUTSIDERS_IN_WAVE`.
+
 ### Messages Endpoints
 
 > **⚠️ DEPRECATED (v1.10.0):** These endpoints are deprecated. Use the `/api/pings/*` endpoints instead.
