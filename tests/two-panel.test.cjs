@@ -52,7 +52,7 @@ test('back: a press that lands on our own entry is not ours to handle', () => {
 
 test('the rail: desktop only, and a wave tile leaves the panel alone', () => {
   const app = read('client/src/views/MainApp.jsx');
-  assert.match(app, /\{!isMobile && !sidebarCollapsed && openContainerValid && \(\s*<WaveRail/);
+  assert.match(app, /\{!isMobile && \(sidebarCollapsed \|\| openContainerValid\) && \(\s*<WaveRail/);
   assert.match(app, /onSelectWave=\{\(wave\) => \{ if \(wave\.id !== selectedWave\?\.id\) keepPanelRef\.current = true; selectWave\(wave\); \}\}/);
   const rail = read('client/src/components/waves/WaveRail.jsx');
   // Categories if you use them, otherwise one tile per wave.
@@ -66,4 +66,14 @@ test('a lost Community or deleted category closes its panel, only once the real 
   const app = read('client/src/views/MainApp.jsx');
   assert.match(app, /openContainer\.kind === 'community' && communitiesLoaded/);
   assert.match(app, /openContainer\.kind === 'category' && categoriesLoaded/);
+});
+
+test('v2.129.0: collapsing the list folds it to the rail, and a container tile reopens it', () => {
+  const main = fs.readFileSync(path.join(root, 'client/src/views/MainApp.jsx'), 'utf8');
+  assert.match(main, /\{!isMobile && \(sidebarCollapsed \|\| openContainerValid\) && \(\s*<WaveRail/,
+    'the rail shows while collapsed, not only beside an open panel');
+  assert.match(main, /onHome=\{\(\) => \{ setOpenContainer\(null\); setSidebarCollapsed\(false\); \}\}/);
+  assert.match(main, /onOpen=\{\(container\) => \{ setOpenContainer\(container\); setSidebarCollapsed\(false\); \}\}/);
+  const wave = main.slice(main.indexOf('<WaveRail'), main.indexOf('/>', main.indexOf('<WaveRail')));
+  assert.doesNotMatch(wave.slice(wave.indexOf('onSelectWave')), /setSidebarCollapsed/, 'a wave tile leaves the list collapsed');
 });
