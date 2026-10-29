@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+
+- README brought from v2.117.0 to v2.130.0: invitations before being added, the one home list and rail, hand-kept order, expiring pings, pages that survive deploys, Community voice channels, management and members-only public waves, shared account invitations, crawl temperature units, the wave-invitation endpoints, and the privacy levels as they now behave.
+- OUTSTANDING-FEATURES.md: completed table through v2.130.0; wave-access phases 2–6 listed as near-term.
+- docs/PRIVACY.md (v2.130.0+): declining, blocking and auto-accept for wave invitations, and why Communities have none. docs/communities/README.md no longer says no code has been written; voice channels and the two-panel layout marked built. HIGH-AVAILABILITY.md: the standby carries every release. CLAUDE.md: phase 1 of docs/wave-access shipped.
+
 ## [2.130.0] - 2026-10-29
 
 Phase 1 of the wave-access redesign (docs/wave-access/01-design.md): being put into a conversation is asked first.

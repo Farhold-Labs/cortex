@@ -13,15 +13,15 @@ going the wrong way.
 
 ## Status
 
-**Phase 0 — reconnaissance. No feature code has been written.**
+**Built** in v2.94.0–v2.99.2, audited and hardened since (see `docs/SECURITY-AUDIT-STATE.md`). These documents began as Phase 0 reconnaissance; the decisions below still stand.
 
 | Document | What it is |
 | --- | --- |
 | [00-existing-architecture.md](00-existing-architecture.md) | What Cortex actually does today, with file references |
 | [01-threat-model.md](01-threat-model.md) | What Communities would be exposed to, and what the current stack does and does not defend |
 | [02-implementation-plan.md](02-implementation-plan.md) | The proposed build, mapped onto real Cortex modules, in gated phases |
-| [03-voice-channels.md](03-voice-channels.md) | Voice channels on LiveKit: server and client built (Phases 1–2, v2.118.0); Phase 3 to come |
-| [04-two-panel-layout.md](04-two-panel-layout.md) | Proposed: Communities and categories open in their own panel; a rail of Communities (with logos), categories and waves on desktop, drill-down on phone |
+| [03-voice-channels.md](03-voice-channels.md) | Voice channels on LiveKit: all three phases built (v2.118.0–v2.119.0) |
+| [04-two-panel-layout.md](04-two-panel-layout.md) | Built (v2.125.0; one home list v2.126.0, collapse to the rail v2.129.0): Communities and categories open in their own panel; a rail of Communities (with logos), categories and waves on desktop, drill-down on phone |
 
 ## Decisions taken 2026-09-18
 
