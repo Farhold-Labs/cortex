@@ -1,147 +1,269 @@
 # Two-panel wave list
 
-**Status: proposed 2026-10-28. Not built.** Decisions below were taken with Jared
-on 2026-10-28; the rest is the plan for agreeing before code.
+**Status: proposed 2026-10-28. Not built.** The decisions below were taken
+with Jared on 2026-10-28; the rest is the plan, to agree before any code.
 
 ## Why
 
-Since v2.102.0 the wave list is one nested scroll: COMMUNITIES (each Community
-→ its channels → their waves) above WAVES (pinned, categories, uncategorized).
-That is four levels in a 300px column. v2.123.1 fixed the indentation so the
-levels read correctly, but the list still grows with every channel of every
-Community, and personal waves get pushed below the fold by Communities you are
-not looking at.
+Since v2.102.0 the wave list has been one nested scroll: COMMUNITIES (each
+Community, then its channels, then their waves) above WAVES (pinned,
+categories, uncategorized). That is four levels in a 300px column. v2.123.1
+fixed the indentation so the levels read correctly. The list still grows with
+every channel of every Community, though, and Communities you aren't looking
+at push your personal waves below the fold.
 
 The fix is to give a Community its own panel, the way chat apps with servers
-and channels do, while keeping Cortex's personal waves one tap away.
+and channels do, while keeping Cortex's personal waves one click away.
 
 ## Decisions (2026-10-28)
 
 | Question | Decision |
 | --- | --- |
-| What does the home panel collapse to on desktop when a Community is open? | **An icon rail**: a home button, then one tile per Community with its unread dot. One click switches Community or goes home. |
-| Keep the nested single list as an option? | **No.** Two panels replace it. One layout to support, test and document. |
-| What does tapping a Community in the home list do? | **Opens its panel.** The home list shows each Community as one row; channels appear only inside the Community panel. |
+| What does the home panel collapse to on desktop? | **An icon rail.** It is a navigator for everything in the home list, not just Communities. |
+| What is on the rail? | **Communities, then your other waves.** Your other waves are personal and node waves, meaning every wave not filed in a Community. They appear as category tiles if you use categories, and as one tile per wave if you don't. |
+| What does a tile look like? | **Initials by default.** A Community can upload a **logo**, which replaces its initials. Categories and waves use initials. |
+| What does clicking a tile do? | **Takes you to what you clicked:** the Community, the category or the wave. |
+| Keep the nested single list as an option? | **No.** Two panels replace it. That leaves one layout to support, test and document. |
+| What does tapping a Community in the home list do? | **Opens its panel.** The home list shows each Community as one row; its channels appear only inside its panel. |
 
-## The two panels
+## The panels
 
-**Home panel.** What the wave list is today, minus the channel tree:
+**Home panel.** This is the wave list today, minus the channel tree:
 
-- COMMUNITIES: one row per Community — name, unread total, a 🔊 marker while
-  someone is in one of its voice channels, ⋮ menu (New Channel, Invite People,
-  Manage Community). The section's +, ⋮ and fold stay as they are.
-- WAVES: unchanged — PINNED, categories, UNCATEGORIZED. A pinned channel wave
-  stays under PINNED here, as today, and still counts toward its Community's
-  unread total.
+- **COMMUNITIES:** one row per Community. Each row shows:
+  - its logo or initials and its name;
+  - its unread total;
+  - a 🔊 marker while someone is in one of its voice channels;
+  - a ⋮ menu with New Channel, Invite People and Manage Community.
+
+  The section's +, ⋮ and fold stay as they are.
+- **WAVES:** unchanged: PINNED, then categories, then UNCATEGORIZED. A pinned
+  channel wave stays under PINNED here, as it does today, and still counts
+  toward its Community's unread total.
 
 **Community panel.** One Community:
 
-- Header: ‹ back to home, the Community name, ⋮ (the same menu as its home row).
-- Its channels in channel order, each foldable, with their waves nested one
-  step in (the v2.123.1 steps); voice channels with their occupants and JOIN.
-- "No channels yet" / "No waves filed here yet" as now.
-- Reorder mode (v2.121.0) works here for channels and channel waves, under the
-  same `channel.manage` rule. Reordering Communities themselves stays in the
-  home panel.
+- **Header:** ‹ (back to home), the logo or initials, the Community name, and ⋮
+  (the same menu as its home row).
+- **Channels** in channel order, each foldable, with their waves nested one
+  step in (the v2.123.1 steps).
+- **Voice channels** with their occupants and JOIN.
+- "No channels yet" and "No waves filed here yet", as now.
+- **Reorder mode** (v2.121.0) works here for channels and channel waves, under
+  the same `channel.manage` rule. Communities themselves are still reordered
+  in the home panel.
 
-## Desktop
+**Category panel.** One of your categories, opened from its rail tile:
+
+- **Header:** ‹, the category's initials in its colour, its name, and ⋮ (New
+  Wave Here, Manage Categories).
+- Its waves, as they appear under that category in the home panel, with the
+  same row menus and reorder.
+
+## The rail (desktop)
 
 ```
- Home (nothing open)          A Community open
-┌────────────────┬──────┐    ┌──┬────────────────┬──────┐
-│ COMMUNITIES  + │      │    │⌂ │‹ MY PRIVATE   ⋮│      │
-│ My Public    0 │      │    │MP│ # Main Stage   │ wave │
-│ My Private   2 │ wave │    │●M│   test crew    │ view │
-│ My Unlisted  0 │ view │    │MU│ # MPTC Chan 1  │      │
-│ WAVES        + │      │    │  │   Test mptc    │      │
-│ UNCATEGORIZED  │      │    │  │ 🔊 Lounge JOIN │      │
-└────────────────┴──────┘    └──┴────────────────┴──────┘
+ Home (nothing open)          A Community open             A category open
+┌────────────────┬──────┐    ┌──┬────────────────┬──────┐  ┌──┬────────────────┬──────┐
+│ COMMUNITIES  + │      │    │⌂ │‹ MY PRIVATE   ⋮│      │  │⌂ │‹ GENERAL      ⋮│      │
+│ My Public    0 │      │    │MP│ # Main Stage   │ wave │  │MP│ test           │ wave │
+│ My Private   2 │ wave │    │▣ │   test crew    │ view │  │MT│ Test Public    │ view │
+│ My Unlisted  0 │ view │    │MU│ # MPTC Chan 1  │      │  │MU│ test wave      │      │
+│ WAVES        + │      │    │──│   Test mptc    │      │  │──│                │      │
+│ GENERAL        │      │    │GE│ 🔊 Lounge JOIN │      │  │▣ │                │      │
+│ UNCATEGORIZED  │      │    │UN│                │      │  │UN│                │      │
+└────────────────┴──────┘    └──┴────────────────┴──────┘  └──┴────────────────┴──────┘
+                                ▣ = the open tile
 ```
 
-- The rail is about 56px. Tiles are the Community's initials (Communities have
-  no icon today); the open one is highlighted, others show an unread dot or a
-  🔊 marker. Hover and `aria-label` give the full name.
-- ⌂ returns to the home panel and removes the rail.
-- Opening a personal wave from the home panel doesn't open a rail.
+**When it shows.** Opening a Community or a category, from the home panel or a
+link, collapses the home panel to the rail. ⌂ at the top brings the full home
+panel back and hides the rail.
+
+**What's on it, top to bottom:**
+
+1. **⌂** (home).
+2. **Communities,** in your order, one tile each: the logo if it has one,
+   otherwise its initials.
+3. A divider.
+4. **Pinned waves,** one tile each, because pinning is how you say "keep this
+   in reach".
+5. **Your other waves,** which depend on whether you use categories:
+   - **You have categories:** one tile per category, plus an **UNCATEGORIZED**
+     tile if any waves are unfiled. Tiles are the category's initials in its
+     colour.
+   - **You have no categories:** one tile per wave, in your wave order, showing
+     the wave's initials.
+
+The rail scrolls on its own when it is longer than the window.
+
+**Every tile** shows an unread dot when anything inside it is unread, and a 🔊
+marker for a Community with people in voice. Hover and `aria-label` give the
+full name.
+
+**Clicking a tile:**
+
+- **A Community** opens its Community panel.
+- **A category** (or UNCATEGORIZED) opens its category panel.
+- **A wave** opens that wave in the wave view. The panel beside the rail stays
+  as it is, so you can glance at a pinned wave and come straight back to the
+  channel you were in.
+
+**Initials.** These are the first letters of the first two words ("My Private
+Test" gives MP), or the first two letters of a one-word name ("Main" gives
+MA). Upper-cased, ignoring emoji and punctuation.
+
+Two tiles can share initials, as MP and MP could. The tile's colour and
+position tell them apart, and hovering shows the name. A logo is the way to
+make a Community unmistakable.
+
+**Other desktop details:**
+
 - Ctrl+B and the ◀ toggle still collapse the whole sidebar, rail included.
-- The sidebar grows from 300px to about 356px while a Community is open. At
-  the narrowest desktop widths that comes out of the wave view; check at
-  1024px.
+- The rail is about 56px wide, so the sidebar grows from 300px to about 356px
+  while something is open. At the narrowest desktop widths that space comes
+  out of the wave view; check it at 1024px.
 
-## Phone (and portrait touch tablets — `isMobile`)
+## Community logos
 
-There's no room for a rail, so it's a drill-down:
+- **Who can set it:** whoever holds `community.manage`, the same people who can
+  rename the Community. They do it from Manage Community, with upload, replace
+  and remove.
+- **Server.** Uploads go to `POST /api/communities/:id/logo` (multipart,
+  through `uploadFile()`), and `DELETE` on the same path removes the logo. The
+  server:
+  - processes the image with `sharp` into a square WebP, as `/api/profile/avatar`
+    does (256px, so the rail looks sharp at 2x);
+  - stores it through `storage.upload()`;
+  - records it in a new nullable `communities.logo_url` column;
+  - deletes the old file through `lib/s3-delete.js` when a logo is replaced or
+    removed.
 
-1. WAVES tab → home panel.
-2. Tap a Community → its panel replaces the home panel.
-3. Tap a wave → the wave view.
-4. Back (‹ in the wave header, Android system back) → the Community panel, not
-   home. Back again → home.
+  The usual limiter and image type checks apply.
+- **Who can see it.** A logo is an **unbound file**, like an avatar: anyone
+  with its URL can load it. The URL is random and is only sent in Community
+  responses, so it reaches only people who could already see the Community.
+  The access rules stay exactly as they are. A PRIVATE Community's logo is
+  therefore no more exposed than its name already is to its members. Say this
+  in `docs/PRIVACY.md`.
+- **Remote members** reach the Community on its hosting node through
+  cross-port auth (v2.56.0). The logo URL belongs to that node, so it loads for
+  them too.
+- **Closing or deleting a Community** deletes its logo file.
+
+## Phone (and portrait touch tablets: `isMobile`)
+
+There is no room for a rail, so it's a drill-down. Logos and initials show on
+the Community rows and in the panel header.
+
+1. The WAVES tab shows the home panel.
+2. Tap a Community, and its panel replaces the home panel.
+3. Tap a wave to open the wave view.
+4. Back goes to the Community panel, not home. That is the ‹ in the wave
+   header or Android system back. Back again goes home.
 5. Tapping the WAVES tab while inside a Community goes home.
 
+Categories keep folding in place in the phone's home panel. With no rail there
+is nothing to drill into, and folding already keeps them short.
+
 Switching between Communities on a phone means going back home first. That is
-the cost of not having a rail; unread totals on the home rows are what tell you
+the cost of not having a rail; the unread totals on the home rows tell you
 where to go.
 
 ## State
 
-- `openCommunityId` lives in `MainApp`, beside `previewWaveId` and the tabs.
-  It is navigation state, not a preference: nothing goes to the server.
-- It is remembered per person in `localStorage` (a per-viewer convenience, read
-  in try/catch). Reopening the app returns you to the Community you were in.
-- **Opening a channel wave from anywhere else opens its Community:** a
-  notification, search, a pinned row, a link. On desktop the panel switches; on
-  a phone, back from that wave lands in its Community panel. The wave's
-  `channel_id` → channel → Community is already in the channel cache.
-- A Community you lose access to (removed, Community closed, instance feature
-  turned off) closes its panel and falls back home. The `instance_config_changed`
-  push (v2.118.1) covers the feature switch.
-- With the `communities` feature off there is no COMMUNITIES section and no
-  rail: the list is exactly the WAVES section, as today.
+- **`openContainer` is navigation state, not a preference.** It lives in
+  `MainApp`, next to `previewWaveId` and the tabs, and is either
+  `{ kind: 'community' | 'category', id }` or null. Nothing goes to the server.
+- **It is remembered per person in `localStorage`.** That is a per-viewer
+  convenience, and every read and write is wrapped in try/catch. Reopening the
+  app brings you back to what you had open.
+- **Opening a channel wave from anywhere else opens its Community.** That
+  covers a notification, search, a pinned row or a link. On desktop the panel
+  switches. On a phone, back from that wave lands in its Community panel. The
+  path from the wave's `channel_id` to its channel and Community is already in
+  the channel cache.
+- **Access lost means back to home.** If you lose access to the open Community
+  (you were removed, it was closed, or the instance feature was turned off), or
+  the open category is deleted, the panel closes and you fall back to home. The
+  `instance_config_changed` push (v2.118.1) covers the feature switch.
+- **With the `communities` feature off,** there is no COMMUNITIES section. The
+  rail still works for categories and waves.
 
-## What does not change
+## What changes on the server
 
-- No server or API change. Channel lists, unread counts, voice presence and
-  ordering are all already on the client; this is a re-arrangement of
-  `WaveList.jsx` into two components and some `MainApp` navigation state.
-- The low-bandwidth wave query, the wave-list cache and the encrypted
-  `user_list_order` are untouched.
-- The wave view, focus view and tabs are untouched.
+Only the logo:
+
+- the column;
+- the upload and remove routes;
+- the old file deleted on replace;
+- `logoUrl` in the Community responses the client already fetches (the list,
+  the detail and the channel cache's Community entry).
+
+The column is added through the boot-time update logic in
+`database-sqlite.js`; then regenerate `schema.sql`. **This is a migrating
+release, so take a verified backup on every node first.**
+
+Everything else is already on the client: channel lists, unread counts, voice
+presence and ordering. The low-bandwidth wave query, the wave-list cache and
+the encrypted `user_list_order` stay as they are.
 
 ## Build plan
 
-1. Split `WaveCategoryList` into `HomeWaveList` (Community rows + WAVES) and
-   `CommunityPanel` (channels + waves), sharing `renderWaveItem` and the
-   unread helpers. `components/communities/CommunityPanel.jsx` already exists
-   (the Community settings/members screen) — the new one needs another name,
-   e.g. `CommunityChannelList.jsx`.
-2. `openCommunityId` in `MainApp`, the rail, and the desktop layout.
-3. Phone drill-down and back handling (`useSystemBack` is used by `WaveView`
-   only today; the Community panel needs its own entry).
-4. "Opening a channel wave opens its Community" for notifications, search and
-   pinned rows.
-5. Docs: README, CLAUDE.md wave-list notes, CHANGELOG.
+1. **Split the list.** `WaveCategoryList` becomes three components sharing
+   `renderWaveItem` and the unread helpers:
+   - `HomeWaveList`: the Community rows and WAVES.
+   - `CommunityChannelList`: channels and their waves. It needs a new name
+     because `components/communities/CommunityPanel.jsx` already exists; that
+     is the Community settings and members screen.
+   - `CategoryWaveList`.
+2. **The rail.** Add `WaveRail.jsx` with tiles, the initials helper, unread
+   dots and voice markers, plus `openContainer` in `MainApp` and the desktop
+   layout.
+3. **Phone.** The drill-down and its back handling. Only `WaveView` uses
+   `useSystemBack` today, so the Community panel needs its own entry.
+4. **Links into a Community.** Opening a channel wave from a notification,
+   search or a pinned row opens its Community.
+5. **Logos.**
+   - The migration and routes, with tests: who may upload, image type checks,
+     the old file deleted, and only Community members get `logoUrl`.
+   - The upload in Manage Community.
+   - The logo on the rail, the rows and the header.
+6. **Docs:** README, PRIVACY.md (logos), API.md (the routes), CLAUDE.md's
+   wave-list notes and CHANGELOG.
 
-One minor release (v2.124.0), client only.
+This is one minor release, v2.124.0, and it migrates.
 
 ## Testing
 
-- Headless, at 390px and 1280px (and 1024px for the rail squeeze), across the
-  font-size × density combinations used for v2.123.1.
-- Drive the flows: open a Community, switch with the rail, go home; on phone,
-  drill down and back out with the header ‹ and with history back; open a
-  channel wave from a notification and check where back lands.
-- Unread: a new ping in a channel wave lights its rail tile and its home row,
-  and clears when read.
-- Voice: join a voice channel, go home, check the 🔊 marker and that the call
+- **Layout.** Headless, at 390px, 1024px and 1280px, across the font-size ×
+  density combinations used for v2.123.1.
+- **Rail.**
+  - A person with categories sees category tiles.
+  - A person without categories sees wave tiles.
+  - Pinned waves sit above both.
+  - Each tile opens the right thing.
+  - Opening a wave tile leaves the panel alone.
+- **Phone.** Drill down, then back out with the header ‹ and with history back.
+  Open a channel wave from a notification and check where back lands.
+- **Unread.** A new ping in a channel wave lights its rail tile and its home
+  row. A new ping in a categorized wave lights the category tile. Both clear
+  once read.
+- **Logos.** Upload, replace and remove; check the old file goes, and that a
+  non-manager gets 403. A remote member sees the logo.
+- **Voice.** Join a voice channel and go home. The 🔊 marker shows, and the call
   stays up.
-- Android system back and tablet portrait need a real device — say so in the
-  release notes rather than claim them.
+- **Real devices.** Android system back and portrait tablets need a person with
+  a phone. Say so in the release notes rather than claim them.
 
 ## Open questions
 
-- Rail tile for a Community: initials only, or should Communities get an icon
-  upload (a server change, so a later release)?
-- Should a person's personal waves be reachable from inside a Community on a
-  phone without going home — e.g. a "Waves" row at the top of the Community
-  panel? Suggest no, and see whether it's missed.
+- **A long rail.** For someone with no categories and many waves, the rail is
+  one tile per wave. With 40 waves it is a long scroll of initials. Should it
+  cap (say, the 20 most recent, with "…" opening home), or is that the nudge to
+  use categories?
+- **Wave tile behaviour.** Should a wave tile in a category user's rail exist
+  only for pinned waves (as above)? Or should a wave you open from a category
+  panel also get a temporary tile, the way a browser keeps a tab?
+- **Category logos.** Should categories ever get an uploaded icon, or are
+  initials plus their colour enough?
