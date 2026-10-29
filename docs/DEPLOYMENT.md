@@ -44,7 +44,7 @@ Hardened deployment of Cortex on a fresh VPS with LUKS disk encryption, SQLCiphe
 1. Ensure ≥2 GB swap exists (`swapon --show`; create with `fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`, then add to `/etc/fstab`).
 2. The build script already sets the V8 heap ceiling — swap alone is not enough, because V8 auto-caps its heap ~256 MB on low-RAM hosts regardless of swap.
 
-**Preferred alternative — build off-box:** build the client on a workstation/CI (`cd client && npm run build`) and ship the prebuilt `client/dist` to the server (e.g. `tar -C client/dist -czf - . | ssh <deploy>@<host> 'extract into a temp dir, then atomically swap it over ~/cortex/client/dist'`). This avoids swap-thrash on the live host entirely and finishes in seconds. The server still needs the source (for `server/`), typically via the `git archive` deploy.
+**Preferred alternative — build off-box:** build the client on a workstation/CI (`cd client && npm run build`) and ship the prebuilt `client/dist` to the server (e.g. `tar -C client/dist -czf - . | ssh <deploy>@<host> 'extract into a temp dir, then atomically swap it over ~/cortex/client/dist'`). This avoids swap-thrash on the live host entirely and finishes in seconds. The server still needs the source (for `server/`), typically via the `git archive` deploy. **Before the swap, carry the previous build's assets forward** with `node client/scripts/carry-assets.mjs client/dist <new dist>` (v2.127.0): pages and installed apps still running the earlier build keep loading their screens, including the login screen, for 30 days. `npm run build` does this itself.
 
 ---
 

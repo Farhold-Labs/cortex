@@ -9,6 +9,20 @@ import React from 'react';
 // nothing, the same drift trap as the three message-processing copies.
 import AuthProvider from './src/views/AuthProvider.jsx';
 import E2EEWrapper from './src/views/E2EEWrapper.jsx';
+import { ChunkBoundary, isChunkLoadError, reloadForNewBuild } from './src/utils/lazyComponent.jsx';
+
+// ============ A PAGE THAT OUTLIVED ITS BUILD (v2.127.0) ============
+// Code loaded on demand outside React (LiveKit, hls.js…) and Vite's own
+// preloading report a missing file here rather than to a component. The cure is
+// the same as in lazyComponent: reload once onto the current build.
+if (typeof window !== 'undefined') {
+  window.addEventListener('vite:preloadError', (event) => {
+    if (reloadForNewBuild()) event.preventDefault();
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    if (isChunkLoadError(event.reason)) reloadForNewBuild();
+  });
+}
 
 // ============ SERVICE WORKER REGISTRATION ============
 // Registered in the Android app too since v2.106.0. It had been skipped on the
@@ -54,8 +68,12 @@ if ('serviceWorker' in navigator && !_isElectron) {
 // ============ MAIN APP ENTRY POINT ============
 export default function CortexApp() {
   return (
-    <AuthProvider>
-      <E2EEWrapper />
-    </AuthProvider>
+    // Catches a screen loaded with React.lazy directly whose file is gone; any
+    // other error passes through as before.
+    <ChunkBoundary>
+      <AuthProvider>
+        <E2EEWrapper />
+      </AuthProvider>
+    </ChunkBoundary>
   );
 }
