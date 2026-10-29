@@ -130,6 +130,33 @@ legitimate staff accounts should be handled before enforcing a new policy.
 This finding was validated by source inspection; no live signup requests or
 new automated tests were run for it.
 
+### CORTEX-COMM-025: public waves in Community channels were node-public — High (fixed v2.128.0)
+
+Reported by Jared, 2026-10-29: an account in no Community could see the public
+waves of a private Community. The plan (§2b) says a public wave inside a
+Community means visible to that Community, but nothing implemented it: every
+check read `privacy === 'public'` as "everyone on the node". An outsider could
+list such a wave, read it, search it, receive every new message over the
+WebSocket and in the video feed, post in it (which auto-joined them), and fetch
+its files with no session. Opening or posting made the reader a participant,
+and the fan-outs (notifications, mentions, `@everyone`, push) all read the
+participant list, so a removed member kept receiving it too.
+
+Fix: one rule, `db.channelPublicWaveVisible()`. A public wave in a Community
+channel is visible to whoever `canDiscoverChannel` admits (an active member in
+good standing, unbanned, and let into a restricted channel); participant rows do
+not count. It is applied in `canAccessWave`, `canAccessWaveFromCache`, both wave
+list queries, the video feed, search, `broadcastToWave`, both participant
+lookups (so every fan-out), and the attachment gate, which now treats only a
+public wave outside any channel as anonymously readable. It restricts and never
+grants; private, crew and cross-server waves keep their own rules. Public waves
+outside Communities, and node-level channels, are unchanged.
+
+Test: `tests/community-public-waves.test.cjs`, an outsider and a removed member
+against a disposable server, with a counterfactual that strips the rule from a
+copy and asserts the leak returns (list, read, search, live push, file, removed
+member).
+
 ## Prior findings still open in current code
 
 - **002, cross-port browser/request binding:** guest session lookup uses a nonce
