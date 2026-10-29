@@ -348,3 +348,25 @@ admin's open app picks up their powers.
 - **Logo URLs** are resolved against the API host, as avatars are, and fall
   back to initials if the image fails to load.
 
+
+## One home list (v2.126.0)
+
+With Communities down to one row each, the reason for v2.102.0's two headers
+(COMMUNITIES, then WAVES) was gone: it had existed because a Community unfolded
+into all its channels in the list. The home panel is now one list under one
+WAVES header, chosen over a freely mixed order:
+
+- **Communities first**, then PINNED, categories, UNCATEGORIZED — one scroll.
+  The old Communities box was capped at 45% of the height with its own scroll.
+- **+** goes straight to a new wave, or, with Communities on, offers New wave,
+  New Community, Browse Public Communities and Join With A Code.
+- **⋮** holds Manage Communities, Manage Categories, Ghost Protocol, Show
+  Archived and Reorder.
+- **One Reorder** shows arrows on both halves. Communities move among
+  Communities and waves among waves, each saved in the order it already had
+  (`communities` and `waves` in `user_list_order`), so nothing migrated.
+- **One unread total** on the header, each wave counted once.
+- **Fixed on the way:** reordering Communities only re-sorted the channel list,
+  so the rows and the rail kept the old order until a reload; and any
+  channels-only write to the offline cache replaced its saved Communities with
+  an empty list.
