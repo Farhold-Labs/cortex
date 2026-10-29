@@ -532,6 +532,11 @@ function MainApp({ sharePingId }) {
   // Every Community this person is in, in their order (v2.125.0), including
   // ones with no channels yet: { id, name, logoUrl }.
   const [myCommunities, setMyCommunities] = useState([]);
+  // Current values for handlers that rearrange both lists at once.
+  const communityChannelsRef = useRef(communityChannels);
+  communityChannelsRef.current = communityChannels;
+  const myCommunitiesRef = useRef(myCommunities);
+  myCommunitiesRef.current = myCommunities;
   const [communitiesLoaded, setCommunitiesLoaded] = useState(false);
   const [communityPanelFor, setCommunityPanelFor] = useState(null); // null | { communityId, focus }
 
@@ -920,24 +925,24 @@ function MainApp({ sharePingId }) {
     saveOrder(() => fetchAPI('/profile/list-order', { method: 'PUT', body: { waves: ids } }), loadWaves);
   }, [fetchAPI, saveOrder, loadWaves]);
 
-  // Communities and channels are ordered by the channel list itself, which is
-  // grouped by Community in order; re-sorting it is the whole client change.
-  const reorderChannelList = useCallback((rank) => {
-    setCommunityChannels(prev => {
-      const next = prev.map((ch, i) => ({ ch, i }))
-        .sort((a, b) => rank(a.ch, a.i) - rank(b.ch, b.i) || a.i - b.i)
-        .map(({ ch }) => ch);
-      cacheCommunityChannels(next, user?.id);
-      return next;
-    });
-  }, [user?.id]);
-
   const handleReorderCommunities = useCallback((ids) => {
     const at = new Map(ids.map((id, i) => [id, i]));
-    reorderChannelList((ch) => at.get(ch.communityId) ?? Infinity);
+    const rank = (id) => at.get(id) ?? Infinity;
+    // The Community rows and the rail draw from myCommunities (v2.125.0), so it
+    // moves with the channels; before v2.126.0 only the channels did, and the
+    // new order showed only after a reload. One cache write for both.
+    const channels = communityChannelsRef.current.map((ch, i) => ({ ch, i }))
+      .sort((a, b) => rank(a.ch.communityId) - rank(b.ch.communityId) || a.i - b.i)
+      .map(({ ch }) => ch);
+    const communities = myCommunitiesRef.current.map((c, i) => ({ c, i }))
+      .sort((a, b) => rank(a.c.id) - rank(b.c.id) || a.i - b.i)
+      .map(({ c }) => c);
+    setCommunityChannels(channels);
+    setMyCommunities(communities);
+    cacheCommunityChannels(channels, user?.id, communities);
     saveOrder(() => fetchAPI('/profile/list-order', { method: 'PUT', body: { communities: ids } }),
       () => loadCommunityChannelsRef.current?.());
-  }, [fetchAPI, saveOrder, reorderChannelList]);
+  }, [fetchAPI, saveOrder, user?.id]);
 
   const handleReorderChannels = useCallback((communityId, ids) => {
     const at = new Map(ids.map((id, i) => [id, i]));

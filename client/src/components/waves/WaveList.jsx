@@ -815,16 +815,52 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
 };
 
 
+/** A header button that opens a short menu: the list's + and ⋮ (v2.126.0). */
+const HeaderMenu = ({ glyph, title, items, isMobile, buttonStyle }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)} title={title} aria-label={title} aria-expanded={open} style={buttonStyle(open)}>{glyph}</button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
+          <div role="menu" style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: '4px',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
+            zIndex: 100, minWidth: '190px',
+          }}>
+            {items.map((item, i) => (
+              <button
+                key={item.label}
+                role="menuitem"
+                onClick={() => { setOpen(false); item.onClick(); }}
+                style={{
+                  display: 'block', width: '100%', padding: '9px 12px',
+                  background: 'transparent', border: 'none',
+                  borderBottom: i < items.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                  color: item.color || 'var(--text-primary)', cursor: 'pointer', textAlign: 'left',
+                  fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.75rem', whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >{item.label}</button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 /**
- * A top-level section header for the list: COMMUNITIES, then WAVES.
+ * The list's header (one since v2.126.0; COMMUNITIES and WAVES before).
  *
- * Both carry the same pair of affordances, and they mean different things on
+ * It carries a pair of affordances that mean different things on
  * purpose — **+ creates, ⋮ manages**. Keeping creation out of the menu is what
  * makes that readable at a glance; a menu whose first item is "New…" trains
  * people to open it for everything.
  */
-const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, menuTitle, isMobile, collapsed, onToggleCollapse, unreadCount = 0, onDone = null }) => {
-  const [open, setOpen] = React.useState(false);
+const ListSectionHeader = ({ title, titleColor, onCreate, createMenu = null, createTitle, menu, menuTitle, isMobile, collapsed, onToggleCollapse, unreadCount = 0, onDone = null }) => {
   const iconButton = (active) => ({
     padding: isMobile ? '8px 10px' : '4px 7px',
     background: active ? 'var(--bg-hover)' : 'transparent',
@@ -876,36 +912,11 @@ const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, men
         {!onDone && onCreate && (
           <button onClick={onCreate} title={createTitle} style={iconButton(false)}>+</button>
         )}
+        {!onDone && createMenu && createMenu.length > 0 && (
+          <HeaderMenu glyph="+" title={createTitle} items={createMenu} isMobile={isMobile} buttonStyle={iconButton} />
+        )}
         {!onDone && menu && menu.length > 0 && (
-          <div style={{ position: 'relative' }}>
-            <button onClick={() => setOpen(o => !o)} title={menuTitle} style={iconButton(open)}>⋮</button>
-            {open && (
-              <>
-                <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
-                <div style={{
-                  position: 'absolute', top: '100%', right: 0, marginTop: '4px',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
-                  zIndex: 100, minWidth: '190px',
-                }}>
-                  {menu.map((item, i) => (
-                    <button
-                      key={item.label}
-                      onClick={() => { setOpen(false); item.onClick(); }}
-                      style={{
-                        display: 'block', width: '100%', padding: '9px 12px',
-                        background: 'transparent', border: 'none',
-                        borderBottom: i < menu.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                        color: item.color || 'var(--text-primary)', cursor: 'pointer', textAlign: 'left',
-                        fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.75rem', whiteSpace: 'nowrap',
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                    >{item.label}</button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
+          <HeaderMenu glyph="⋮" title={menuTitle} items={menu} isMobile={isMobile} buttonStyle={iconButton} />
         )}
       </div>
     </div>
@@ -992,26 +1003,26 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
     });
   };
 
+  const shownCommunities = communitiesEnabled ? communities : [];
+
   /**
-   * Unread totals for the two sections, for their headers when collapsed.
-   *
-   * The split mirrors WaveCategoryList: a wave filed in one of your community
-   * channels is listed under COMMUNITIES unless it is pinned (PINNED sits in
-   * the waves section); everything else is under WAVES. The per-wave count is
-   * the same one the group badges use.
+   * The unread total on the list's header (v2.126.0: one header for the whole
+   * list). Every wave counts once — a pinned channel wave is listed twice, under
+   * PINNED and inside its Community, but it is one wave to read. The per-wave
+   * count is the same one the group badges use.
    */
-  const sectionUnread = useMemo(() => {
-    const channelIds = new Set(channels.map(ch => ch.id));
-    let communities = 0, own = 0;
-    for (const wave of waves) {
-      const count = waveNotifications[wave.id]?.count || wave.unread_count || 0;
-      // A pinned channel wave counts in both: it is listed under PINNED, and
-      // it is still part of its Community (v2.121.0).
-      if (channelIds.has(wave.channelId)) communities += count;
-      if (wave.pinned || !channelIds.has(wave.channelId)) own += count;
-    }
-    return { communities, waves: own };
-  }, [waves, channels, waveNotifications]);
+  const sectionUnread = useMemo(() => waves.reduce(
+    (total, wave) => total + (waveNotifications[wave.id]?.count || wave.unread_count || 0), 0,
+  ), [waves, waveNotifications]);
+
+  // + on the header: straight to a new wave, or — with Communities on — a
+  // short menu, because there is more than one thing to create or join.
+  const createMenu = communitiesEnabled && onManageCommunities ? [
+    ...(onNewWave ? [{ label: `+ New ${T.Wave}`, onClick: onNewWave }] : []),
+    { label: '+ New Community', onClick: () => onManageCommunities('create') },
+    { label: '🔍 Browse Public Communities', onClick: () => onManageCommunities('browse') },
+    { label: '🔗 Join With A Code', onClick: () => onManageCommunities('join') },
+  ] : null;
 
   // Which section is being rearranged, if either (v2.121.0). Not offered for
   // the archived or hidden lists: they hold only some of someone's waves, and
@@ -1019,6 +1030,9 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
   const [reorderMode, setReorderMode] = React.useState(null);
   const canReorder = !showArchived && !ghostMode;
   useEffect(() => { if (!canReorder) setReorderMode(null); }, [canReorder]);
+  // Opening or closing a panel (from the rail, say) ends any rearranging: the
+  // mode belongs to the list it was started in.
+  useEffect(() => { setReorderMode(null); }, [openContainer?.kind, openContainer?.id]);
   const reorder = useMemo(() => reorderMode ? ({
     mode: reorderMode,
     allWaveIds: waves.map(w => w.id),
@@ -1028,11 +1042,14 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
     onChannelWaves: (communityId, channelId, ids) => onReorderChannelWaves?.(communityId, channelId, ids),
     onCategories: (ids) => onReorderCategories?.(ids),
   }) : null, [reorderMode, waves, onReorderWaves, onReorderCommunities, onReorderChannels, onReorderChannelWaves, onReorderCategories]);
-  const reorderItem = (section) => canReorder && (section === 'communities' ? onReorderCommunities : onReorderWaves)
+  // One Reorder for the home list (v2.126.0): Communities move among
+  // Communities and waves among waves, each saved in the order it already had
+  // ('communities' and 'waves' in user_list_order). Communities stay on top.
+  const reorderItem = () => canReorder && (onReorderWaves || onReorderCommunities)
     ? [{ label: '↕ Reorder', onClick: () => {
-        setReorderMode(section);
-        // Nothing to arrange in a folded section.
-        if (sectionCollapsed[section]) toggleSection(section);
+        setReorderMode('home');
+        // Nothing to arrange in a folded list.
+        if (sectionCollapsed.waves) toggleSection('waves');
       } }]
     : [];
 
@@ -1135,90 +1152,63 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
     display: 'flex', flexDirection: 'column', height: '100%',
     borderBottom: isMobile ? '1px solid var(--border-subtle)' : 'none',
   }}>
-    {/* Two labelled sections, in the order they are read: the communities you
-        belong to, then your own waves. Previously one WAVES header sat above
-        both, so the communities appeared under a heading that did not describe
-        them. Each header carries + to create and ⋮ to manage. */}
-    {communitiesEnabled && (
-      <ListSectionHeader
-        title="COMMUNITIES"
-        isMobile={isMobile}
-        collapsed={!!sectionCollapsed.communities}
-        onToggleCollapse={() => toggleSection('communities')}
-        unreadCount={sectionUnread.communities}
-        onDone={reorderMode === 'communities' ? () => setReorderMode(null) : null}
-        onCreate={onManageCommunities ? () => onManageCommunities('create') : undefined}
-        createTitle="New community"
-        menuTitle="Community options"
-        menu={[
-          ...(onManageCommunities ? [
-            { label: '⚙ Manage Communities', onClick: () => onManageCommunities() },
-            { label: '🔍 Browse Public', onClick: () => onManageCommunities('browse') },
-            { label: '🔗 Join With A Code', onClick: () => onManageCommunities('join') },
-          ] : []),
-          ...(communities.length > 1 ? reorderItem('communities') : []),
-        ]}
-      />
-    )}
-
-    {communitiesEnabled && !sectionCollapsed.communities && (
-      communities.length > 0 ? (
-        <div style={{ flexShrink: 0, maxHeight: '45%', overflowY: 'auto' }}>
-          <WaveCategoryList
-            voice={voice}
-            reorder={reorderMode === 'communities' ? reorder : null}
-            show="communityRows"
-            communities={communities}
-            onOpenContainer={onOpenContainer}
-            waves={waves}
-            categories={categories}
-            channels={channels}
-            selectedWave={selectedWave}
-            onSelectWave={onSelectWave}
-            onManageCommunity={onManageCommunity}
-            isMobile={isMobile}
-            waveNotifications={waveNotifications}
-            activeCalls={activeCalls}
-            density={density}
-          />
-        </div>
-      ) : (
-        <div style={{ padding: '10px 14px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-          You are not in any communities yet.
-        </div>
-      )
-    )}
-
+    {/* One section (v2.126.0). Communities are one row each now, opening in
+        their own panel, so they no longer crowd the list and sit at the top of
+        the same scrolling list as the person's own waves. v2.102.0 had split
+        them under two headers when a Community unfolded into all its channels
+        here. + creates, ⋮ manages; one Reorder arranges both halves, each in
+        the order it already had. */}
     <ListSectionHeader
       title={ghostMode ? GHOST_PROTOCOL.modeActive : `${T.WAVES}`}
       titleColor={ghostMode ? 'var(--accent-orange)' : 'var(--accent-amber)'}
       isMobile={isMobile}
       collapsed={!!sectionCollapsed.waves}
       onToggleCollapse={() => toggleSection('waves')}
-      unreadCount={sectionUnread.waves}
-      onDone={reorderMode === 'waves' ? () => setReorderMode(null) : null}
-      onCreate={onNewWave}
-      createTitle={`New ${T.wave}`}
-      menuTitle={`${T.Wave} options`}
+      unreadCount={sectionUnread}
+      onDone={reorderMode === 'home' ? () => setReorderMode(null) : null}
+      onCreate={createMenu ? undefined : onNewWave}
+      createMenu={createMenu}
+      createTitle={createMenu ? 'Create or join' : `New ${T.wave}`}
+      menuTitle="List options"
       menu={[
-        // Creation lives on the + beside this menu, so the menu is only for
-        // managing. "New…" as a menu item would undo that distinction.
-        ...(waves.length > 1 ? reorderItem('waves') : []),
+        ...(communitiesEnabled && onManageCommunities ? [{ label: '⚙ Manage Communities', onClick: () => onManageCommunities() }] : []),
         { label: categories.length > 0 ? '⚙ Manage Categories' : '⚙ Create Category', onClick: onManageCategories },
         { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol',
           color: ghostMode ? 'var(--accent-orange)' : undefined, onClick: onToggleGhostProtocol },
         { label: showArchived ? '📬 Show Active' : '📦 Show Archived',
           color: showArchived ? 'var(--accent-teal)' : undefined, onClick: onToggleArchived },
+        ...(waves.length > 1 || shownCommunities.length > 1 ? reorderItem() : []),
       ].filter(item => item.onClick)}
     />
 
-    {sectionCollapsed.waves ? null : (categories.length > 0 || channels.length > 0) ? (
+    {!sectionCollapsed.waves && (
+    <div ref={listScrollRef} style={{ flex: 1, overflowY: 'auto' }}>
+    {shownCommunities.length > 0 && (
       <WaveCategoryList
-          voice={voice}
-        reorder={reorderMode === 'waves' ? reorder : null}
+        voice={voice}
+        reorder={reorderMode === 'home' ? { ...reorder, mode: 'communities' } : null}
+        show="communityRows"
+        communities={shownCommunities}
+        onOpenContainer={onOpenContainer}
+        waves={waves}
+        categories={categories}
+        channels={channels}
+        selectedWave={selectedWave}
+        onSelectWave={onSelectWave}
+        onManageCommunity={onManageCommunity}
+        isMobile={isMobile}
+        waveNotifications={waveNotifications}
+        activeCalls={activeCalls}
+        density={density}
+      />
+    )}
+
+    {(categories.length > 0 || channels.length > 0) ? (
+      <WaveCategoryList
+        voice={voice}
+        reorder={reorderMode === 'home' ? { ...reorder, mode: 'waves' } : null}
         show="waves"
         onOpenContainer={onOpenContainer}
-        scrollRef={listScrollRef}
         waves={waves}
         categories={categories}
         channels={channels}
@@ -1238,7 +1228,7 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
         density={density}
       />
     ) : (
-      <div ref={listScrollRef} style={{ flex: 1, overflowY: 'auto' }}>
+      <div>
         {waves.length === 0 ? (
           <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
             {showArchived ? `No archived ${T.waves}` : EMPTY.noWavesCreate}
@@ -1246,7 +1236,7 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
         ) : waves.map((wave, index) => {
         const config = PRIVACY_LEVELS[wave.privacy] || PRIVACY_LEVELS.private;
         // Reorder mode: here the section is the whole list.
-        const move = reorderMode === 'waves' ? {
+        const move = reorderMode === 'home' ? {
           onUp: index > 0 ? () => onReorderWaves?.(moveInList(waves.map(w => w.id), wave.id, -1)) : null,
           onDown: index < waves.length - 1 ? () => onReorderWaves?.(moveInList(waves.map(w => w.id), wave.id, 1)) : null,
         } : null;
@@ -1366,6 +1356,8 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
         );
       })}
       </div>
+    )}
+    </div>
     )}
   </div>
   );
