@@ -5,7 +5,6 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
 const REPO = path.join(__dirname, '..');
 const VIEWS = [
@@ -41,12 +40,21 @@ test('every priority has a shape', () => {
   assert.doesNotMatch(icon.replace(/\/\*[\s\S]*?\*\//g, ''), /\p{Extended_Pictographic}/u);
 });
 
-test('counterfactual: the v2.122.2 views are caught', () => {
-  let found = 0;
-  for (const file of VIEWS) {
-    const old = execFileSync('git', ['show', `v2.122.2:${file}`], { cwd: REPO, encoding: 'utf8' });
-    found += emojiIcons(old).length;
-  }
-  // 4 tables (14 icons), 7 options, the weather alert and the SYSTEM ALERTS heading.
-  assert.strictEqual(found, 23);
+test('counterfactual: the v2.122.2 code is caught', () => {
+  // The lines these views had before v2.122.3. Embedded rather than read from
+  // git: CI's checkout has no tags.
+  const old = [
+    "critical: { icon: '🚨', color: 'var(--accent-orange)', showLabel: true },",
+    "warning: { icon: '⚠️', color: 'var(--accent-amber)' },",
+    "info: { icon: 'ℹ️', color: 'var(--accent-teal)', label: 'INFO' },",
+    "celebration: { icon: '🎉', color: 'var(--accent-purple)' }",
+    '<option value="info">ℹ️ Info</option>',
+    '<option value="critical">🚨 Critical</option>',
+    '<option value="celebration">🎉 Celebration</option>',
+    '⚠️ ALERT: {alert.event}',
+    "fontWeight: 500 }}>🚨 SYSTEM ALERTS</div>",
+  ].join('\n');
+  assert.strictEqual(emojiIcons(old).length, 9);
+  // The empty celebration icon the crawl bar had is not an emoji, and is not flagged.
+  assert.deepStrictEqual(emojiIcons("celebration: { icon: '', color: 'x' },"), []);
 });

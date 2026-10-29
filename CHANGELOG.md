@@ -20,7 +20,7 @@ Alert priority icons are drawn too, the last emoji the alert views depended on.
 
 ### Verified
 
-- `tests/alert-priority-icons.test.cjs` (3 tests): no priority table, option, weather line or heading in the four alert views uses an emoji, every priority has a shape, and the same check run against the v2.122.2 files finds all 23 emoji it replaced.
+- `tests/alert-priority-icons.test.cjs` (3 tests): no priority table, option, weather line or heading in the four alert views uses an emoji, every priority has a shape, and the check catches the v2.122.2 lines (tables, options, the weather line and the heading).
 - Full suite passes (553 tests).
 - Headless at 390 px on dev: posted one alert of each priority. The crawl bar drew all three icons with no emoji, the popup showed the beacon and CRITICAL, and there were 0 console errors. The test alerts were deleted. Icons rendered at 14 px and 20 px on dark and light backgrounds.
 - The admin and crew alert lists were checked by build and test only, not opened headlessly.
