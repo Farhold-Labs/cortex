@@ -143,11 +143,13 @@ export async function getCachedWaveList(showArchived = false, userId) {
 
 const channelsKey = (userId) => `${userId}:communityChannels`;
 
-export async function cacheCommunityChannels(channels, userId) {
+export async function cacheCommunityChannels(channels, userId, communities = []) {
   if (!userId || storage.getUser()?.id !== userId) return;
   try {
     await withTransaction(STORES.METADATA, 'readwrite', (store, resolve) => {
-      store.put({ key: channelsKey(userId), userId, channels, timestamp: Date.now() });
+      // The Communities themselves ride along (v2.125.0): the home panel lists
+      // every Community, including ones with no channels yet.
+      store.put({ key: channelsKey(userId), userId, channels, communities, timestamp: Date.now() });
       resolve();
     });
   } catch (error) {
@@ -417,3 +419,20 @@ export default {
   clearAllCache,
   getCacheStatus,
 };
+
+/** The Communities saved with the channel list (v2.125.0), or null. */
+export async function getCachedCommunities(userId) {
+  if (!userId) return null;
+  try {
+    return await withTransaction(STORES.METADATA, 'readonly', (store, resolve) => {
+      const request = store.get(channelsKey(userId));
+      request.onsuccess = () => {
+        const result = request.result;
+        resolve(result && result.userId === userId && Array.isArray(result.communities) ? result.communities : null);
+      };
+      request.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { T } from '../../config/terminology.js';
 import { storage } from '../../utils/storage.js';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
+import { ContainerTile } from '../waves/WaveRail.jsx';
+import { uploadFile } from '../../utils/uploads.js';
 
 /**
  * Manage Community (v2.99.0, Phase 6; redesigned v2.124.0).
@@ -185,6 +187,37 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
     } catch (err) {
       showToast(err?.error || 'Could not update the community', 'error');
     }
+  };
+
+  // Logo (v2.125.0): replaces the initials on the rail and beside the name.
+  const logoInputRef = React.useRef(null);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const uploadLogo = async (file) => {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { showToast('That image is over 2 MB', 'error'); return; }
+    setLogoBusy(true);
+    try {
+      const form = new FormData();
+      form.append('logo', file);
+      await uploadFile(`/communities/${community.id}/logo`, form, { label: file.name || 'Community logo', size: file.size });
+      showToast('Logo updated', 'success');
+      onChanged && onChanged();
+    } catch (err) {
+      if (!err?.cancelled) showToast(err?.message || 'Could not upload that logo', 'error');
+    } finally {
+      setLogoBusy(false);
+      if (logoInputRef.current) logoInputRef.current.value = '';
+    }
+  };
+  const removeLogo = async () => {
+    setLogoBusy(true);
+    try {
+      await fetchAPI(`/communities/${community.id}/logo`, { method: 'DELETE' });
+      showToast('Logo removed', 'success');
+      onChanged && onChanged();
+    } catch (err) {
+      showToast(err?.error || 'Could not remove the logo', 'error');
+    } finally { setLogoBusy(false); }
   };
 
   // ----- MEMBERS -----
@@ -471,7 +504,20 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       <CollapsibleSection {...section('about', 'ABOUT')}>
         {can('community.manage') ? (
           <div>
-            <div style={label}>NAME</div>
+            <div style={label}>LOGO</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.3rem', flexWrap: 'wrap' }}>
+              <ContainerTile name={community.name} logoUrl={community.logo_url} size={56} />
+              <input ref={logoInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+                style={{ display: 'none' }} onChange={e => uploadLogo(e.target.files?.[0])} />
+              <button onClick={() => logoInputRef.current?.click()} disabled={logoBusy} style={{ ...action, marginTop: 0 }}>
+                {community.logo_url ? 'Replace logo' : 'Upload logo'}
+              </button>
+              {community.logo_url && (
+                <button onClick={removeLogo} disabled={logoBusy} style={{ ...action, marginTop: 0 }}>Remove</button>
+              )}
+            </div>
+            <div style={hint}>Square works best; it is cropped to a square either way. Without one, the initials are used.</div>
+            <div style={{ ...label, marginTop: '0.6rem' }}>NAME</div>
             <input value={aboutName} onChange={e => setAboutName(e.target.value)} maxLength={80} style={input} />
             <div style={{ ...label, marginTop: '0.6rem' }}>DESCRIPTION</div>
             <textarea value={aboutDesc} onChange={e => setAboutDesc(e.target.value)} maxLength={1000} rows={3}

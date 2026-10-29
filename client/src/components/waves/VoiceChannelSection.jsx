@@ -27,7 +27,7 @@ const SOURCE_ICONS = { camera: '📷', screen_share: '🖥️' };
 const VoiceChannelSection = ({
   channel, participants = [], stage = false, moveTargets = [], isMobile, menu,
   connected, connecting, canModerate, myUserId, onJoin, onLeave, onModerate,
-  reorderControls = null, titleSize,
+  reorderControls = null, titleSize, indent = 1,
 }) => {
   const [actionsFor, setActionsFor] = useState(null);
   const [movingFor, setMovingFor] = useState(null);
@@ -85,7 +85,7 @@ const VoiceChannelSection = ({
           onClick={canAct ? () => { setMovingFor(null); setActionsFor(open ? null : p.userId); } : undefined}
           style={{
             display: 'flex', alignItems: 'center', gap: '8px',
-            padding: isMobile ? '6px 12px 6px 2.25rem' : '4px 12px 4px 2.25rem',
+            padding: isMobile ? `6px 12px 6px ${0.75 + (indent + 1) * 0.75}rem` : `4px 12px 4px ${0.75 + (indent + 1) * 0.75}rem`,
             cursor: canAct ? 'pointer' : 'default',
             opacity: listening ? 0.8 : 1,
           }}
@@ -135,7 +135,7 @@ const VoiceChannelSection = ({
       titleColor={connected ? 'var(--accent-teal)' : 'var(--text-primary)'}
       isMobile={isMobile}
       compact
-      indent={1}
+      indent={indent}
       titleSize={titleSize}
       menuTitle={`${channel.name} options`}
       // While the list is being rearranged (v2.121.0) the header carries the
@@ -145,7 +145,7 @@ const VoiceChannelSection = ({
     >
       {onStage.map(renderRow)}
       {stage && audience.length > 0 && (
-        <div style={{ padding: '4px 12px 2px 2.25rem', color: 'var(--text-muted)', fontSize: '0.65rem', letterSpacing: '0.05em' }}>
+        <div style={{ padding: `4px 12px 2px ${0.75 + (indent + 1) * 0.75}rem`, color: 'var(--text-muted)', fontSize: '0.65rem', letterSpacing: '0.05em' }}>
           AUDIENCE · {audience.length}
         </div>
       )}

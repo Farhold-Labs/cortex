@@ -25194,15 +25194,98 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
   res.json({ community });
 });
 
+// ----- Logo (v2.125.0) -----
+//
+// Shown on the desktop rail and beside the Community's name. Like an avatar it
+// is an unbound file: anyone holding the URL can load it. The URL is random and
+// only ever appears in responses that already describe the Community, so it
+// reaches nobody who could not already see the Community's name.
+
+const COMMUNITY_LOGO_PREFIX = 'community-logos/';
+
+// Only a key this code wrote is ever deleted, so a tampered column cannot aim
+// storage.delete() at another file.
+function communityLogoKey(url) {
+  const name = typeof url === 'string' ? path.basename(url) : '';
+  return /^[a-f0-9-]{36}-\d{13}-[a-f0-9]{8}\.webp$/i.test(name) ? COMMUNITY_LOGO_PREFIX + name : null;
+}
+
+async function deleteCommunityLogoFile(url) {
+  const key = communityLogoKey(url);
+  if (!key) return;
+  try { await storage.delete(key); } catch (err) {
+    console.warn('[communities] could not delete an old logo:', err.message);
+  }
+}
+
+app.post('/api/communities/:id/logo', authenticateToken, apiLimiter, (req, res, next) => {
+  // Refused before the upload is read, so a stranger cannot make the server
+  // decode an image.
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_COMMUNITY)) return;
+  avatarUpload.single('logo')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large. Maximum size is 2MB' });
+      return res.status(400).json({ error: err.message || 'File upload failed' });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const community = db.getCommunityById(req.params.id);
+  if (!community || community.status !== 'active') return res.status(404).json({ error: 'Not found' });
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
+
+  let logoUrl;
+  try {
+    // Square, so a tile and a header crop it the same way. 256px keeps it sharp
+    // on a 2x screen; metadata is stripped by the re-encode.
+    const processed = await sharp(req.file.buffer)
+      .resize(256, 256, { fit: 'cover', position: 'center' })
+      .webp({ quality: 85 })
+      .toBuffer();
+    const key = `${COMMUNITY_LOGO_PREFIX}${community.id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.webp`;
+    logoUrl = await storage.upload(processed, key, 'image/webp');
+  } catch (err) {
+    console.error('[communities] logo upload failed:', err.message);
+    return res.status(400).json({ error: 'That image could not be read' });
+  }
+
+  const updated = inCommunityTransaction(() => {
+    const row = db.updateCommunity(community.id, { logo_url: logoUrl });
+    db.logCommunityAudit(community.id, { actorId: req.user.userId, action: 'community.logo_set' });
+    return row;
+  });
+  await deleteCommunityLogoFile(community.logo_url);
+  pushCommunityOrderChanged(community.id);
+  res.json({ community: updated });
+});
+
+app.delete('/api/communities/:id/logo', authenticateToken, async (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_COMMUNITY)) return;
+  const community = db.getCommunityById(req.params.id);
+  if (!community || community.status !== 'active') return res.status(404).json({ error: 'Not found' });
+  if (!community.logo_url) return res.json({ community });
+  const updated = inCommunityTransaction(() => {
+    const row = db.updateCommunity(community.id, { logo_url: null });
+    db.logCommunityAudit(community.id, { actorId: req.user.userId, action: 'community.logo_removed' });
+    return row;
+  });
+  await deleteCommunityLogoFile(community.logo_url);
+  pushCommunityOrderChanged(community.id);
+  res.json({ community: updated });
+});
+
 // Step-up re-auth: this disposes of a shared space and everyone's place in it.
 app.delete('/api/communities/:id', authenticateToken, requireStepUp, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.DELETE_COMMUNITY)) return;
   const closingRooms = voiceChannelIdsOf({ communityId: req.params.id });
+  const closingLogo = db.getCommunityById(req.params.id)?.logo_url;
   inCommunityTransaction(() => {
     db.deleteCommunity(req.params.id);
     db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'community.delete' });
   });
   closeVoiceRooms(closingRooms);
+  deleteCommunityLogoFile(closingLogo);
   res.json({ success: true });
 });
 
@@ -26588,6 +26671,7 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
   // Soft delete, and the waves inside are detached rather than destroyed — a
   // node admin closing a Community must not take conversations with it.
   const closingRooms = voiceChannelIdsOf({ communityId: req.params.id });
+  const closingLogo = db.getCommunityById(req.params.id)?.logo_url;
   inCommunityTransaction(() => {
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'community.closed_by_node_admin',
@@ -26596,6 +26680,7 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
     db.deleteCommunity(req.params.id);
   });
   closeVoiceRooms(closingRooms);
+  deleteCommunityLogoFile(closingLogo);
   db.logActivity(req.user.userId, 'community_deleted', 'community', req.params.id, {});
   res.json({ success: true });
 });

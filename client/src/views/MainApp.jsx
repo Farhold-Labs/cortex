@@ -11,7 +11,11 @@ import { startAttachmentSession, stopAttachmentSession } from '../utils/attachme
 import { updateAppBadge, subscribeToPush } from '../utils/pwa.js';
 import { setupCapacitorPushListeners } from '../utils/capacitor-push.js';
 import { updateDocumentTitle, startFaviconFlash, stopFaviconFlash } from '../utils/favicon.js';
-import { getCachedWaveList, cacheWaveList, getCachedCommunityChannels, cacheCommunityChannels } from '../utils/waveCache.js';
+import { getCachedWaveList, cacheWaveList, getCachedCommunityChannels, cacheCommunityChannels, getCachedCommunities } from '../utils/waveCache.js';
+import WaveRail from '../components/waves/WaveRail.jsx';
+import { groupWaves, unreadOf, UNCATEGORIZED_ID } from '../utils/waveGroups.js';
+import { byPersonalOrder } from '../utils/listOrder.js';
+import { useSystemBack } from '../hooks/useSystemBack.js';
 import { NotificationSync } from '../utils/notification-sync.js';
 import BottomNav from '../components/ui/BottomNav.jsx';
 import { Toast, OfflineIndicator, VersionMismatchBanner, ScanLines, GlowText } from '../components/ui/SimpleComponents.jsx';
@@ -132,6 +136,7 @@ function MainApp({ sharePingId }) {
   const [selectedAlert, setSelectedAlert] = useState(null); // Alert to show in detail modal
   const [footerTagline, setFooterTagline] = useState(getRandomTagline()); // Rotating Firefly tagline
   const [waveCategories, setWaveCategories] = useState([]); // User's wave categories (v2.2.0)
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
   const [categoryManagementOpen, setCategoryManagementOpen] = useState(false); // Category management modal (v2.2.0)
   const [activeWatchParties, setActiveWatchParties] = useState({}); // Active watch parties by wave ID (v2.14.0)
   const [watchPartyPlayer, setWatchPartyPlayer] = useState(null); // { waveId, partyId } for open player (v2.14.0)
@@ -524,6 +529,10 @@ function MainApp({ sharePingId }) {
   // nested under a community — nesting is what made the first version of this
   // feel like a separate application.
   const [communityChannels, setCommunityChannels] = useState([]);
+  // Every Community this person is in, in their order (v2.125.0), including
+  // ones with no channels yet: { id, name, logoUrl }.
+  const [myCommunities, setMyCommunities] = useState([]);
+  const [communitiesLoaded, setCommunitiesLoaded] = useState(false);
   const [communityPanelFor, setCommunityPanelFor] = useState(null); // null | { communityId, focus }
 
   // Shown from the device's copy first (v2.107.0), then refreshed below.
@@ -532,6 +541,9 @@ function MainApp({ sharePingId }) {
     let cancelled = false;
     getCachedCommunityChannels(user?.id).then(cached => {
       if (!cancelled && cached && !channelsFromNetworkRef.current) setCommunityChannels(cached);
+    });
+    getCachedCommunities(user?.id).then(cached => {
+      if (!cancelled && cached && !channelsFromNetworkRef.current) setMyCommunities(cached);
     });
     return () => { cancelled = true; };
   }, [user?.id]);
@@ -542,7 +554,9 @@ function MainApp({ sharePingId }) {
     if (!instanceFeatures.communities) {
       channelsFromNetworkRef.current = true;
       setCommunityChannels([]);
-      cacheCommunityChannels([], user?.id);
+      setMyCommunities([]);
+      setCommunitiesLoaded(true);
+      cacheCommunityChannels([], user?.id, []);
       return;
     }
     try {
@@ -564,9 +578,12 @@ function MainApp({ sharePingId }) {
       // A partial answer must not replace a whole one, on screen or in the cache.
       if (!complete) return;
       const channels = lists.flat();
+      const communities = (mine.communities || []).map(c => ({ id: c.id, name: c.name, logoUrl: c.logo_url || null }));
       channelsFromNetworkRef.current = true;
       setCommunityChannels(channels);
-      cacheCommunityChannels(channels, user?.id);
+      setMyCommunities(communities);
+      setCommunitiesLoaded(true);
+      cacheCommunityChannels(channels, user?.id, communities);
     } catch {
       // A transient failure keeps what is shown — the saved list, or nothing.
       // It must never break the wave list.
@@ -578,11 +595,105 @@ function MainApp({ sharePingId }) {
   const loadCommunityChannelsRef = useRef(null);
   loadCommunityChannelsRef.current = loadCommunityChannels;
 
+  /**
+   * The Community or category open in its own panel (v2.125.0):
+   * { kind: 'community' | 'category', id } or null for the home panel.
+   *
+   * Navigation state, not a preference, so nothing goes to the server. It is
+   * remembered on this device so reopening the app returns to it; storage can
+   * be unavailable, so every access is wrapped and failure means "home".
+   */
+  const openContainerKey = user?.id ? `farhold_open_container:${user.id}` : null;
+  const [openContainer, setOpenContainerState] = useState(() => {
+    try {
+      const saved = openContainerKey && JSON.parse(localStorage.getItem(openContainerKey) || 'null');
+      return saved && (saved.kind === 'community' || saved.kind === 'category') && typeof saved.id === 'string' ? saved : null;
+    } catch { return null; }
+  });
+  const setOpenContainer = useCallback((next) => {
+    setOpenContainerState(next);
+    try {
+      if (!openContainerKey) return;
+      if (next) localStorage.setItem(openContainerKey, JSON.stringify(next));
+      else localStorage.removeItem(openContainerKey);
+    } catch { /* private mode: it just isn't remembered */ }
+  }, [openContainerKey]);
+
+  // Something that is no longer there closes its panel: you left or were
+  // removed from the Community, it closed, the feature was switched off, or
+  // the category was deleted. Only judged once the real lists have arrived,
+  // so a slow start never throws you out of where you were.
+  useEffect(() => {
+    if (!openContainer) return;
+    if (openContainer.kind === 'community' && communitiesLoaded
+        && (!instanceFeatures.communities || !myCommunities.some(c => c.id === openContainer.id))) {
+      setOpenContainer(null);
+    }
+    if (openContainer.kind === 'category' && categoriesLoaded && openContainer.id !== UNCATEGORIZED_ID
+        && !waveCategories.some(c => c.id === openContainer.id)) {
+      setOpenContainer(null);
+    }
+  }, [openContainer, communitiesLoaded, myCommunities, instanceFeatures.communities, categoriesLoaded, waveCategories, setOpenContainer]);
+
+  // Opening a channel wave from anywhere (a notification, search, a pinned
+  // row, a link) opens its Community, so on a phone "back" lands among its
+  // channels. A wave tile on the rail is the exception: it opens the wave and
+  // leaves the panel where it was.
+  const keepPanelRef = useRef(false);
+  useEffect(() => {
+    if (keepPanelRef.current) { keepPanelRef.current = false; return; }
+    const id = selectedWave?.id;
+    if (!id) return;
+    const channelId = waves.find(w => w.id === id)?.channelId || selectedWave.channelId;
+    const channel = channelId && communityChannels.find(ch => ch.id === channelId);
+    if (channel && !(openContainer?.kind === 'community' && openContainer.id === channel.communityId)) {
+      setOpenContainer({ kind: 'community', id: channel.communityId });
+    }
+    // Only when the open wave changes; re-reading the lists must not re-open a
+    // Community someone has just left with ‹.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedWave?.id]);
+
+  const openContainerValid = Boolean(openContainer) && (
+    openContainer.kind === 'community'
+      ? instanceFeatures.communities === true && myCommunities.some(c => c.id === openContainer.id)
+      : openContainer.id === UNCATEGORIZED_ID || waveCategories.some(c => c.id === openContainer.id));
+
+
   // ----- Voice channels (v2.118.0) -----
   // Who is in each voice channel, by channel id. Loaded per Community when the
   // socket (re)connects, then kept current by `voice_presence` pushes.
   const voiceEnabled = instanceFeatures.communities === true && instanceFeatures.voiceChannels === true;
   const [voicePresence, setVoicePresence] = useState({});
+
+  // What the desktop rail shows (v2.125.0), filed the same way the list files it.
+  const railData = useMemo(() => {
+    const sorted = [...waves].sort(byPersonalOrder);
+    const g = groupWaves(sorted, waveCategories, communityChannels);
+    const communityUnread = {}, communityVoice = {};
+    for (const c of myCommunities) {
+      const chs = communityChannels.filter(ch => ch.communityId === c.id);
+      communityUnread[c.id] = unreadOf(chs.flatMap(ch => g.allByChannel[ch.id] || []), waveNotifications);
+      communityVoice[c.id] = chs.some(ch => ch.type === 'voice' && (voicePresence?.[ch.id] || []).length > 0);
+    }
+    const categoryUnread = { [UNCATEGORIZED_ID]: unreadOf(g.uncategorized, waveNotifications) };
+    for (const cat of waveCategories) categoryUnread[cat.id] = unreadOf(g.categorized[cat.id] || [], waveNotifications);
+    return {
+      communityUnread, communityVoice, categoryUnread,
+      pinned: g.pinned, uncategorized: g.uncategorized,
+      looseWaves: waveCategories.length === 0 ? g.uncategorized : null,
+    };
+  }, [waves, waveCategories, communityChannels, myCommunities, waveNotifications, voicePresence]);
+
+  // On a phone, back from a Community's panel goes home (v2.125.0). Armed only
+  // once the panel is on screen without a wave over it: a wave pushes its own
+  // back entry, and ours must sit beneath it, not above.
+  const [panelBackArmed, setPanelBackArmed] = useState(false);
+  useEffect(() => {
+    if (!isMobile || !openContainerValid || activeView !== 'waves') setPanelBackArmed(false);
+    else if (!selectedWave) setPanelBackArmed(true);
+  }, [isMobile, openContainerValid, activeView, selectedWave]);
+  useSystemBack(panelBackArmed, () => setOpenContainer(null), { marker: 'cortex-panel' });
   // channel id → whether it is a stage (v2.119.0). Pushed with presence, so a
   // channel switched to a stage changes for everyone without a reload.
   const [voiceStage, setVoiceStage] = useState({});
@@ -680,6 +791,7 @@ function MainApp({ sharePingId }) {
       const data = await fetchAPI('/wave-categories');
       console.log('📁 loadCategories received', data.length, 'categories');
       setWaveCategories(data);
+      setCategoriesLoaded(true);
     } catch (err) {
       console.error('loadCategories failed:', err);
     }
@@ -2050,6 +2162,24 @@ function MainApp({ sharePingId }) {
       <main style={{ flex: 1, display: 'flex', overflow: 'hidden', flexDirection: isMobile && selectedWave ? 'column' : 'row', paddingBottom: isMobile ? '60px' : '0' }}>
         {activeView === 'waves' && (
           <>
+            {!isMobile && !sidebarCollapsed && openContainerValid && (
+              <WaveRail
+                communities={instanceFeatures.communities === true ? myCommunities : []}
+                communityUnread={railData.communityUnread}
+                communityVoice={railData.communityVoice}
+                categories={waveCategories}
+                categoryUnread={railData.categoryUnread}
+                uncategorized={railData.uncategorized}
+                pinned={railData.pinned}
+                looseWaves={railData.looseWaves}
+                waveNotifications={waveNotifications}
+                openContainer={openContainer}
+                selectedWaveId={selectedWave?.id}
+                onHome={() => setOpenContainer(null)}
+                onOpen={setOpenContainer}
+                onSelectWave={(wave) => { if (wave.id !== selectedWave?.id) keepPanelRef.current = true; selectWave(wave); }}
+              />
+            )}
             {(!isMobile || !selectedWave) && (
               <div style={{
                 width: sidebarCollapsed && !isMobile ? '0px' : (isMobile ? '100%' : '300px'),
@@ -2069,6 +2199,9 @@ function MainApp({ sharePingId }) {
                   waves={waves}
                   categories={waveCategories}
                   channels={communityChannels}
+                  communities={instanceFeatures.communities === true ? myCommunities : []}
+                  openContainer={openContainerValid ? openContainer : null}
+                  onOpenContainer={setOpenContainer}
                   selectedWave={selectedWave}
                   onSelectWave={(wave, opts) => selectWave(wave, opts)}
                   onNewWave={() => setShowNewWave(true)}
@@ -2421,6 +2554,9 @@ function MainApp({ sharePingId }) {
             if (view === 'search') {
               setShowSearch(true);
             } else {
+              // WAVES again, with nothing open over the list, goes home from a
+              // Community's panel (v2.125.0).
+              if (view === 'waves' && activeView === 'waves' && !selectedWave) setOpenContainer(null);
               setActiveView(view);
               // Mobile shows the list OR a wave, never both, so leaving a view has
               // to drop the open wave entirely. Clearing tabs is not enough:
