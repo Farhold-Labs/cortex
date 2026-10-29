@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.127.0] - 2026-10-29
+
+Older apps and tabs can sign in again without clearing their cache.
+
+### Fixed
+
+- **A page that outlived its build could not show the login screen.** Jared reported older clients failing to log in until their cache was cleared. Reproduced on dev: a page keeps running the build it started with, and every deploy deleted that build's files. The login screen has been loaded on demand since v2.107.0, so when such a page signed out, or its session expired, the import 404'd (`Failed to fetch dynamically imported module …/LoginScreen-….js`). Nothing caught the error, so the whole app unmounted to a blank screen. The Android app resumes the same page rather than reloading it, so it stayed blank until the cache was cleared. With this many releases in a row, most long-running pages were hitting it.
+  - **Earlier builds' files are kept for 30 days.** `client/scripts/carry-assets.mjs` copies the previous build's hashed assets into the new one, keeping each file's age, and drops files more than 30 days old. `npm run build` runs it before the swap and after the service worker is stamped, so the new worker does not precache the old files. The production deploy runs it on the prebuilt dist (docs/DEPLOYMENT.md). A made-up asset still returns 404 (the v2.60.3 rule).
+  - **A screen whose file still will not load reloads once onto the current build.** `lazyComponent()` now has an error boundary. A second failure within a minute shows "Cortex has been updated, and this screen could not load" with a RELOAD button, rather than looping. Screens loaded with `React.lazy` directly are covered by the same boundary at the root, and `vite:preloadError` and unhandled chunk rejections take the same path. Other errors pass through unchanged.
+
+### Verified
+
+- On dev, headless at 390 px: with the login file failing once, signing out reloads once and shows the login form; with it failing every time, one reload, then the message and RELOAD. The previous build's LoginScreen file is still served (200) after a rebuild that kept 113 earlier files; `/assets/nope-zz9.js` is still 404. `tests/stale-build.test.cjs` (4 tests).
+
 ## [2.126.0] - 2026-10-29
 
 The home panel is one list again: your Communities at the top, then your waves, under one header.
