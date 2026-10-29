@@ -4668,3 +4668,13 @@ Client pages that use these routes:
 **Studio orientation.** The studio accepts `?orientation=landscape|portrait` (v2.113.1). The Go Live dialog sets it and turns the screen inside the START tap, because browsers only allow full screen from a user gesture. It then opens the studio with `pushState`, not a page load, because a reload drops full screen and with it the orientation lock. The studio re-locks the screen and waits up to 1.5 s for it to turn before starting the camera.
 
 **Native orientation lock.** In the Android app, the lock goes through the native `CortexOrientation` plugin (`lock({orientation})` / `unlock()`), which works even with auto-rotate off. The plugin exists from the v2.113.0 APK; older installs fall back to the browser API.
+
+## Community manager (v2.124.0)
+
+What Manage Community uses beyond the routes it always had. Role grants and revocations, member removal and bans, `PATCH` and `DELETE` on the Community, and leaving all existed since v2.94.0; this release gave them controls.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/communities/:id/members` | `member.view` | adds `q` (up to 64 characters, matched as plain text against handle and display name, so `%` and `_` are characters) and `staff=1` (only members holding a role above `member`: owner, admins, moderators). Both filter in the query, so they cover the whole membership; `total` counts the filtered set |
+| GET | `/api/communities/:id` | anyone who may discover it | adds `myRoles`: your own roles there, `[{ id, name, priority }]`, highest first, or `[]` if you are not a member |
+| PUT / DELETE | `/api/communities/:id/members/:userId/roles/:roleId` | `member.roles` | unchanged rules: you grant only roles below your own priority whose capabilities you hold, and revoke only from people below you. So an owner appoints admins, and an admin appoints moderators. Both now push `community_roles_changed` (`{ communityId }`) to the person whose roles changed, so their app re-reads its channel list |
