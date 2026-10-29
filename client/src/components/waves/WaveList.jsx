@@ -6,7 +6,10 @@ import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import VoiceChannelSection from './VoiceChannelSection.jsx';
 import { T } from '../../config/terminology.js';
-import { byPersonalOrder, byChannelOrder, moveInGroup, moveInList } from '../../utils/listOrder.js';
+import { byPersonalOrder, moveInGroup, moveInList } from '../../utils/listOrder.js';
+import { groupWaves, unreadOf, UNCATEGORIZED_ID } from '../../utils/waveGroups.js';
+import { plainText } from '../../utils/plainText.js';
+import WaveRail, { ContainerTile } from './WaveRail.jsx';
 
 /**
  * ▲ ▼ for reorder mode (v2.121.0). Buttons rather than dragging: a drag on a
@@ -236,7 +239,88 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
   );
 };
 
-const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, onManageCategories, onNewWaveIn, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef, voice = {} }) => {
+/**
+ * A Community in the home panel (v2.125.0): its logo or initials, its name, its
+ * unread total and 🔊 while anyone is in one of its voice channels. A tap opens
+ * its panel; the ⋮ holds the same actions its header used to.
+ */
+const CommunityRow = ({ community, unread = 0, inVoice = false, density, isMobile, controls, onOpen, menu }) => {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const name = plainText(community.name || '');
+  const tileSize = parseFloat(density.fontSize) >= 0.95 ? 32 : parseFloat(density.fontSize) <= 0.8 ? 22 : 26;
+  return (
+    <div
+      role="button"
+      tabIndex={onOpen ? 0 : -1}
+      aria-label={`Open ${name}${unread ? `, ${unread} unread` : ''}`}
+      onClick={onOpen || undefined}
+      onKeyDown={(e) => { if (onOpen && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-hover)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '0.6rem',
+        padding: density.padding, paddingLeft: '0.75rem',
+        borderBottom: '1px solid var(--bg-hover)', borderLeft: '3px solid transparent',
+        cursor: onOpen ? 'pointer' : 'default',
+      }}
+    >
+      <ContainerTile name={community.name} logoUrl={community.logoUrl} size={tileSize} />
+      <span style={{
+        flex: 1, minWidth: 0, color: 'var(--text-primary)', fontSize: density.fontSize, fontWeight: 600,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{name}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+        {inVoice && <span title="People are in voice" aria-label="people in voice" style={{ fontSize: '0.75rem' }}>🔊</span>}
+        {unread > 0 && (
+          <span style={{
+            minWidth: '18px', height: '18px', padding: '0 5px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            background: 'var(--accent-amber)', color: 'var(--bg-base)', fontSize: '0.65rem', fontWeight: 700,
+            fontFamily: 'monospace', borderRadius: '9px', lineHeight: 1,
+          }}>{unread > 99 ? '99+' : unread}</span>
+        )}
+        {controls}
+        {!controls && menu && menu.length > 0 && (
+          <span style={{ position: 'relative' }}>
+            <button
+              title={`${name} options`}
+              onClick={() => setMenuOpen(o => !o)}
+              style={{
+                background: menuOpen ? 'var(--bg-hover)' : 'transparent', border: 'none',
+                color: menuOpen ? 'var(--accent-amber)' : 'var(--text-dim)', cursor: 'pointer',
+                fontFamily: 'monospace', fontSize: '0.9rem', padding: isMobile ? '4px 8px' : '0 4px', lineHeight: 1,
+              }}
+            >⋮</button>
+            {menuOpen && (
+              <>
+                <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setMenuOpen(false)} />
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 100, minWidth: '180px',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
+                }}>
+                  {menu.map((item, i) => (
+                    <button
+                      key={item.label}
+                      onClick={() => { setMenuOpen(false); item.onClick(); }}
+                      style={{
+                        display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none',
+                        borderBottom: i < menu.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                        color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left',
+                        fontFamily: 'monospace', fontSize: '0.75rem', whiteSpace: 'nowrap',
+                      }}
+                    >{item.label}</button>
+                  ))}
+                </div>
+              </>
+            )}
+          </span>
+        )}
+        {!controls && onOpen && <span aria-hidden="true" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>›</span>}
+      </span>
+    </div>
+  );
+};
+
+const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null, communities = [], onOpenContainer, reorder = null, waves, categories, channels = [], selectedWave, onSelectWave, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCommunity, onManageCategories, onNewWaveIn, isMobile, waveNotifications = {}, activeCalls = {}, density = DEFAULT_WAVE_DENSITY, scrollRef, voice = {} }) => {
   const densityStyle = WAVE_DENSITY[density] || WAVE_DENSITY[DEFAULT_WAVE_DENSITY];
   const [draggedWave, setDraggedWave] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
@@ -287,40 +371,9 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
     });
   };
 
-  const groupedWaves = useMemo(() => {
-    const pinned = waves.filter(w => w.pinned);
+  const groupedWaves = useMemo(() => groupWaves(waves, categories, channels), [waves, categories, channels]);
 
-    // A wave filed in a community channel is listed under that channel, not
-    // under a personal category — the shared grouping wins, because that is the
-    // one other people can also see.
-    const byChannel = {};
-    // Every wave in the channel, pinned ones included, for the unread count:
-    // a pinned wave is listed under PINNED but still belongs to the channel,
-    // and its unread pings should show on the channel and Community too.
-    const allByChannel = {};
-    channels.forEach(ch => {
-      allByChannel[ch.id] = waves.filter(w => w.channelId === ch.id);
-      byChannel[ch.id] = allByChannel[ch.id].filter(w => !w.pinned).sort(byChannelOrder);
-    });
-    const filedIds = new Set(Object.values(byChannel).flat().map(w => w.id));
-
-    const uncategorized = waves.filter(w => !w.pinned && !w.category_id && !filedIds.has(w.id));
-
-    const categorized = {};
-    categories.forEach(cat => {
-      categorized[cat.id] = waves.filter(w => !w.pinned && w.category_id === cat.id && !filedIds.has(w.id));
-    });
-
-    return { pinned, uncategorized, categorized, byChannel, allByChannel };
-  }, [waves, categories, channels]);
-
-  // Calculate unread count for a group of waves
-  const getGroupUnreadCount = (wavesInGroup) => {
-    return wavesInGroup.reduce((sum, wave) => {
-      const notifInfo = waveNotifications[wave.id];
-      return sum + (notifInfo?.count || wave.unread_count || 0);
-    }, 0);
-  };
+  const getGroupUnreadCount = (wavesInGroup) => unreadOf(wavesInGroup, waveNotifications);
 
   // Render a single wave item
   // `move` ({ onUp, onDown }) puts the row in reorder mode: ▲ ▼ instead of the
@@ -466,6 +519,8 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
   // own waves and categories; in COMMUNITIES they arrange their Communities,
   // and — where they may manage channels — the channels and the waves in them,
   // for everyone.
+  // The personal half of the list: PINNED, categories, UNCATEGORIZED.
+  const homeWaves = show === 'waves' || show === 'all';
   const arrangingOwn = reorder?.mode === 'waves';
   const arrangingCommunities = reorder?.mode === 'communities';
   const personalMove = (wave, group) => {
@@ -530,7 +585,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
   return (
     <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto' }}>
       {/* Pinned Section */}
-      {show !== 'communities' && groupedWaves.pinned.length > 0 && (
+      {homeWaves && groupedWaves.pinned.length > 0 && (
         <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
             title="PINNED"
@@ -549,118 +604,133 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
         </div>
       )}
 
-      {/* Communities: community -> channels -> waves, each level collapsible.
-          The community name was previously a subtitle squeezed beside the
-          channel name, and in a narrow sidebar the two ran into each other and
-          neither could be read. Nesting says the same thing legibly, and gives
-          somewhere to collapse a whole community you are not using today. */}
-      {show !== 'waves' && communityGroups.map(group => {
-        const groupWaves = group.channels.flatMap(ch => groupedWaves.byChannel[ch.id] || []);
-        const groupUnreadWaves = group.channels.flatMap(ch => groupedWaves.allByChannel[ch.id] || []);
+      {/* One Community's channels, in its own panel (v2.125.0). The panel
+          header names the Community, so its channels start at the left edge
+          and their waves sit one step in. */}
+      {show === 'community' && (() => {
+        const group = communityGroups.find(g => g.communityId === communityId)
+          || { communityId, channels: [], canManageChannels: false };
+        const base = 0;
         const channelIds = group.channels.map(ch => ch.id);
-        const communityMoves = arrangingCommunities
-          ? listMoves(communityGroups.map(g => g.communityId), group.communityId, reorder.onCommunities)
-          : null;
         const channelMoves = (channel) => arrangingCommunities && group.canManageChannels
           ? listMoves(channelIds, channel.id, (ids) => reorder.onChannels(group.communityId, ids))
           : null;
         return (
-          <div key={group.communityId} style={{ marginBottom: '1px' }}>
-            <CollapsibleSection
-              title={group.communityName.toUpperCase()}
-              badge={groupWaves.length.toString()}
-              unreadCount={getGroupUnreadCount(groupUnreadWaves)}
-              headerAction={arrows(communityMoves, group.communityName)}
-              isOpen={!collapsedKeys[`c:${group.communityId}`]}
-              onToggle={() => toggleCollapsed(`c:${group.communityId}`)}
-              titleColor="var(--accent-amber)"
-              accentColor="var(--accent-amber)"
-              isMobile={isMobile}
-              compact
-              titleSize={densityStyle.headingSize}
-              menuTitle={`${group.communityName} options`}
-              menu={onManageCommunity && !reorder?.mode ? [
-                { label: '+ New Channel', onClick: () => onManageCommunity({ communityId: group.communityId }, 'channels') },
-                { label: '👤 Invite People', onClick: () => onManageCommunity({ communityId: group.communityId }, 'invites') },
-                { label: '⚙ Manage Community', onClick: () => onManageCommunity({ communityId: group.communityId }) },
-              ] : undefined}
-            >
-              {group.channels.length === 0 && (
-                <div style={{ padding: '10px 12px 10px 1.5rem', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                  No channels yet
-                </div>
-              )}
-              {group.channels.map(channel => {
-                if (channel.type === 'voice') {
-                  return (
-                    <VoiceChannelSection
-                      key={channel.id}
-                      channel={channel}
-                      participants={voice.presence?.[channel.id] || []}
-                      stage={voice.stage?.[channel.id] ?? channel.stage === true}
-                      // Where a moderator can move someone: this Community's other voice channels.
-                      moveTargets={group.channels.filter(ch => ch.type === 'voice' && ch.id !== channel.id)}
-                      isMobile={isMobile}
-                      connected={voice.currentChannelId === channel.id}
-                      connecting={voice.connecting}
-                      canModerate={voice.canModerate}
-                      myUserId={voice.myUserId}
-                      onJoin={voice.onJoin}
-                      onLeave={voice.onLeave}
-                      onModerate={voice.onModerate}
-                      reorderControls={arrows(channelMoves(channel), channel.name) || null}
-                      titleSize={densityStyle.fontSize}
-                      menu={onManageCommunity ? [
-                        { label: '✎ Rename Channel', onClick: () => onManageCommunity(channel, 'channels') },
-                        { label: '⚙ Manage Community', onClick: () => onManageCommunity(channel) },
-                      ] : undefined}
-                    />
-                  );
-                }
-                const chWaves = groupedWaves.byChannel[channel.id] || [];
+          <div style={{ marginBottom: '1px' }}>
+            {group.channels.length === 0 && (
+              <div style={{ padding: `10px 12px 10px ${0.75 + base * 0.75}rem`, color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                No channels yet
+              </div>
+            )}
+            {group.channels.map(channel => {
+              if (channel.type === 'voice') {
                 return (
-                  <CollapsibleSection
+                  <VoiceChannelSection
                     key={channel.id}
-                    title={`# ${channel.name}`}
-                    badge={chWaves.length.toString()}
-                    unreadCount={getGroupUnreadCount(groupedWaves.allByChannel[channel.id] || [])}
-                    headerAction={arrows(channelMoves(channel), channel.name)}
-                    isOpen={!collapsedKeys[`ch:${channel.id}`]}
-                    onToggle={() => toggleCollapsed(`ch:${channel.id}`)}
-                    titleColor="var(--text-primary)"
+                    channel={channel}
+                    participants={voice.presence?.[channel.id] || []}
+                    stage={voice.stage?.[channel.id] ?? channel.stage === true}
+                    // Where a moderator can move someone: this Community's other voice channels.
+                    moveTargets={group.channels.filter(ch => ch.type === 'voice' && ch.id !== channel.id)}
                     isMobile={isMobile}
-                    compact
+                    connected={voice.currentChannelId === channel.id}
+                    connecting={voice.connecting}
+                    canModerate={voice.canModerate}
+                    myUserId={voice.myUserId}
+                    onJoin={voice.onJoin}
+                    onLeave={voice.onLeave}
+                    onModerate={voice.onModerate}
+                    reorderControls={arrows(channelMoves(channel), channel.name) || null}
                     titleSize={densityStyle.fontSize}
-                    indent={1}
-                    menuTitle={`#${channel.name} options`}
-                    menu={reorder?.mode ? undefined : [
-                      ...(onNewWaveIn ? [{
-                        label: `+ New ${T.Wave} Here`,
-                        onClick: () => onNewWaveIn({ channelId: channel.id, label: `#${channel.name}` }),
-                      }] : []),
-                      ...(onManageCommunity ? [
-                        { label: '✎ Rename Channel', onClick: () => onManageCommunity(channel, 'channels') },
-                        { label: '⚙ Manage Community', onClick: () => onManageCommunity(channel) },
-                      ] : []),
-                    ]}
-                  >
-                    {chWaves.length === 0 ? (
-                      <div style={{ padding: '8px 12px 8px 2.25rem', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                        No {T.waves} filed here yet
-                      </div>
-                    ) : (
-                      chWaves.map(wave => renderWaveItem(wave, true, channelWaveMove(wave, chWaves, channel), 2))
-                    )}
-                  </CollapsibleSection>
+                    indent={base}
+                    menu={onManageCommunity ? [
+                      { label: '✎ Rename Channel', onClick: () => onManageCommunity(channel, 'channels') },
+                      { label: '⚙ Manage Community', onClick: () => onManageCommunity(channel) },
+                    ] : undefined}
+                  />
                 );
-              })}
-            </CollapsibleSection>
+              }
+              const chWaves = groupedWaves.byChannel[channel.id] || [];
+              return (
+                <CollapsibleSection
+                  key={channel.id}
+                  title={`# ${channel.name}`}
+                  badge={chWaves.length.toString()}
+                  unreadCount={getGroupUnreadCount(groupedWaves.allByChannel[channel.id] || [])}
+                  headerAction={arrows(channelMoves(channel), channel.name)}
+                  isOpen={!collapsedKeys[`ch:${channel.id}`]}
+                  onToggle={() => toggleCollapsed(`ch:${channel.id}`)}
+                  titleColor="var(--text-primary)"
+                  isMobile={isMobile}
+                  compact
+                  titleSize={densityStyle.fontSize}
+                  indent={base}
+                  menuTitle={`#${channel.name} options`}
+                  menu={reorder?.mode ? undefined : [
+                    ...(onNewWaveIn ? [{
+                      label: `+ New ${T.Wave} Here`,
+                      onClick: () => onNewWaveIn({ channelId: channel.id, label: `#${channel.name}` }),
+                    }] : []),
+                    ...(onManageCommunity ? [
+                      { label: '✎ Rename Channel', onClick: () => onManageCommunity(channel, 'channels') },
+                      { label: '⚙ Manage Community', onClick: () => onManageCommunity(channel) },
+                    ] : []),
+                  ]}
+                >
+                  {chWaves.length === 0 ? (
+                    <div style={{ padding: `8px 12px 8px ${0.75 + (base + 1) * 0.75}rem`, color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                      No {T.waves} filed here yet
+                    </div>
+                  ) : (
+                    chWaves.map(wave => renderWaveItem(wave, true, channelWaveMove(wave, chWaves, channel), base + 1))
+                  )}
+                </CollapsibleSection>
+              );
+            })}
           </div>
+        );
+      })()}
+
+      {/* The home panel's COMMUNITIES (v2.125.0): one row per Community. Its
+          channels live in its own panel. */}
+      {show === 'communityRows' && communities.map(c => {
+        const group = communityGroups.find(g => g.communityId === c.id) || { channels: [] };
+        const unread = getGroupUnreadCount(group.channels.flatMap(ch => groupedWaves.allByChannel[ch.id] || []));
+        const inVoice = group.channels.some(ch => ch.type === 'voice' && (voice.presence?.[ch.id] || []).length > 0);
+        const moves = arrangingCommunities
+          ? listMoves(communities.map(x => x.id), c.id, reorder.onCommunities)
+          : null;
+        return (
+          <CommunityRow
+            key={c.id}
+            community={c}
+            unread={unread}
+            inVoice={inVoice}
+            density={densityStyle}
+            isMobile={isMobile}
+            controls={arrows(moves, plainText(c.name || ''))}
+            onOpen={moves ? null : () => onOpenContainer?.({ kind: 'community', id: c.id })}
+            menu={onManageCommunity && !reorder?.mode ? [
+              { label: '+ New Channel', onClick: () => onManageCommunity({ communityId: c.id }, 'channels') },
+              { label: '👤 Invite People', onClick: () => onManageCommunity({ communityId: c.id }, 'invites') },
+              { label: '⚙ Manage Community', onClick: () => onManageCommunity({ communityId: c.id }) },
+            ] : undefined}
+          />
         );
       })}
 
+      {/* One category's waves, in its own panel (v2.125.0). */}
+      {show === 'category' && (() => {
+        const list = categoryId === UNCATEGORIZED_ID ? groupedWaves.uncategorized : (groupedWaves.categorized[categoryId] || []);
+        return list.length === 0 ? (
+          <div style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
+            No {T.waves} in this category
+          </div>
+        ) : list.map(wave => renderWaveItem(wave, true, personalMove(wave, list)));
+      })()}
+
       {/* Category Sections */}
-      {show !== 'communities' && categories.map(category => {
+      {homeWaves && categories.map(category => {
         const categoryWaves = groupedWaves.categorized[category.id] || [];
         const unreadCount = getGroupUnreadCount(categoryWaves);
         const categoryMoves = arrangingOwn
@@ -683,6 +753,11 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
               headerAction={arrows(categoryMoves, category.name)}
               menuTitle={`${category.name} options`}
               menu={reorder?.mode ? undefined : [
+                // Desktop opens a category beside the rail (v2.125.0); a phone
+                // folds it in place, because there is no rail to come back by.
+                ...(onOpenContainer && !isMobile ? [{
+                  label: '▣ Open in Panel', onClick: () => onOpenContainer({ kind: 'category', id: category.id }),
+                }] : []),
                 ...(onNewWaveIn ? [{
                   label: `+ New ${T.Wave} Here`,
                   onClick: () => onNewWaveIn({ categoryId: category.id, label: category.name }),
@@ -706,10 +781,14 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
       })}
 
       {/* Uncategorized Section */}
-      {show !== 'communities' && groupedWaves.uncategorized.length > 0 && (
+      {homeWaves && groupedWaves.uncategorized.length > 0 && (
         <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
             title="UNCATEGORIZED"
+            menuTitle="Uncategorized options"
+            menu={onOpenContainer && !isMobile && !reorder?.mode ? [{
+              label: '▣ Open in Panel', onClick: () => onOpenContainer({ kind: 'category', id: UNCATEGORIZED_ID }),
+            }] : undefined}
             badge={groupedWaves.uncategorized.length.toString()}
             unreadCount={getGroupUnreadCount(groupedWaves.uncategorized)}
             defaultOpen={true}
@@ -726,7 +805,7 @@ const WaveCategoryList = ({ show = 'all', reorder = null, waves, categories, cha
       )}
 
       {/* Empty State */}
-      {show !== 'communities' && waves.length === 0 && (
+      {homeWaves && waves.length === 0 && (
         <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
           {EMPTY.noWavesCreate}
         </div>
@@ -833,9 +912,44 @@ const ListSectionHeader = ({ title, titleColor, onCreate, createTitle, menu, men
   );
 };
 
+/** The ⋮ in a panel header (v2.125.0). */
+const PanelMenu = ({ items, title, isMobile }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)} title={title} style={{
+        padding: isMobile ? '8px 10px' : '4px 7px',
+        background: open ? 'var(--bg-hover)' : 'transparent',
+        border: `1px solid ${open ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
+        color: open ? 'var(--accent-amber)' : 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace',
+        fontSize: isMobile ? '1rem' : '0.9rem', lineHeight: 1,
+      }}>⋮</button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
+          <div style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 100, minWidth: '190px',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
+          }}>
+            {items.map((item, i) => (
+              <button key={item.label} onClick={() => { setOpen(false); item.onClick(); }} style={{
+                display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none',
+                borderBottom: i < items.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left',
+                fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.75rem', whiteSpace: 'nowrap',
+              }}>{item.label}</button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, onNewWave, showArchived, onToggleArchived, isMobile, waveNotifications = {}, activeCalls = {}, onCategoryToggle, onWaveMove, onWaveFile, onWavePin, onWaveMute, onManageCategories, onManageCommunities, onManageCommunity, onNewWaveIn, communitiesEnabled = false, ghostMode = false, onToggleGhostProtocol, density = DEFAULT_WAVE_DENSITY, onRefresh,
   voicePresence = {}, voiceStage = {}, currentVoiceChannelId = null, voiceConnecting = false, canModerateVoice = false, onJoinVoice = null, onLeaveVoice, onModerateVoice, myUserId,
-  onReorderWaves, onReorderCommunities, onReorderChannels, onReorderChannelWaves, onReorderCategories, waves: unorderedWaves }) => {
+  onReorderWaves, onReorderCommunities, onReorderChannels, onReorderChannelWaves, onReorderCategories, waves: unorderedWaves,
+  communities = [], openContainer = null, onOpenContainer = null }) => {
   // Kept in the order people gave it (v2.121.0), not by last activity: a wave
   // no longer jumps to the top whenever somebody posts in it.
   const waves = useMemo(() => [...(unorderedWaves || [])].sort(byPersonalOrder), [unorderedWaves]);
@@ -922,6 +1036,98 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
       } }]
     : [];
 
+  // ----- An open Community or category (v2.125.0) -----
+  const openCommunity = openContainer?.kind === 'community'
+    ? communities.find(c => c.id === openContainer.id) : null;
+  const openCategory = openContainer?.kind === 'category'
+    ? (openContainer.id === UNCATEGORIZED_ID
+      ? { id: UNCATEGORIZED_ID, name: 'Uncategorized', color: 'var(--text-dim)' }
+      : categories.find(c => c.id === openContainer.id))
+    : null;
+
+  if (openCommunity || openCategory) {
+    const kind = openCommunity ? 'community' : 'category';
+    const name = plainText((openCommunity || openCategory).name || '');
+    const canArrangeChannels = openCommunity && channels.some(ch => ch.communityId === openCommunity.id && (ch.canManageChannels || ch.canManage));
+    const panelMenu = openCommunity ? [
+      ...(onManageCommunity ? [
+        { label: '+ New Channel', onClick: () => onManageCommunity({ communityId: openCommunity.id }, 'channels') },
+        { label: '👤 Invite People', onClick: () => onManageCommunity({ communityId: openCommunity.id }, 'invites') },
+        { label: '⚙ Manage Community', onClick: () => onManageCommunity({ communityId: openCommunity.id }) },
+      ] : []),
+      ...(canReorder && canArrangeChannels ? [{ label: '↕ Reorder', onClick: () => setReorderMode('communities') }] : []),
+    ] : [
+      ...(onNewWaveIn && openCategory.id !== UNCATEGORIZED_ID ? [{
+        label: `+ New ${T.Wave} Here`, onClick: () => onNewWaveIn({ categoryId: openCategory.id, label: name }),
+      }] : []),
+      ...(onManageCategories ? [{ label: '⚙ Manage Categories', onClick: onManageCategories }] : []),
+      ...(canReorder ? [{ label: '↕ Reorder', onClick: () => setReorderMode('waves') }] : []),
+    ];
+    return (
+      <div style={{ width: '100%', minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: isMobile ? '8px 10px' : '6px 10px', borderBottom: '1px solid var(--border-subtle)',
+        }}>
+          <button
+            onClick={() => { setReorderMode(null); onOpenContainer?.(null); }}
+            aria-label={`Back to all communities and ${T.waves}`}
+            title="Back"
+            style={{
+              background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--accent-amber)',
+              cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '1.1rem' : '1rem', lineHeight: 1,
+              padding: isMobile ? '6px 10px' : '3px 8px',
+            }}
+          >‹</button>
+          <ContainerTile
+            name={name}
+            logoUrl={openCommunity?.logoUrl}
+            color={openCommunity ? 'var(--accent-amber)' : (openCategory.color || 'var(--accent-teal)')}
+            size={isMobile ? 30 : 26}
+          />
+          <div title={name} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <GlowText color={openCommunity ? 'var(--accent-amber)' : (openCategory.color || 'var(--accent-teal)')} size={isMobile ? '1rem' : '0.9rem'}>
+              {name.toUpperCase()}
+            </GlowText>
+          </div>
+          {reorderMode ? (
+            <button onClick={() => setReorderMode(null)} title="Finish reordering" style={{
+              padding: isMobile ? '8px 10px' : '4px 7px', background: 'var(--bg-hover)', border: '1px solid var(--border-primary)',
+              color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.8rem' : '0.7rem',
+            }}>DONE</button>
+          ) : panelMenu.length > 0 && (
+            <PanelMenu items={panelMenu} title={`${name} options`} isMobile={isMobile} />
+          )}
+        </div>
+        <WaveCategoryList
+          voice={voice}
+          reorder={reorder}
+          show={kind}
+          communityId={openCommunity?.id}
+          categoryId={openCategory?.id}
+          scrollRef={listScrollRef}
+          waves={waves}
+          categories={categories}
+          channels={channels}
+          selectedWave={selectedWave}
+          onSelectWave={onSelectWave}
+          onCategoryToggle={onCategoryToggle}
+          onWaveMove={onWaveMove}
+          onWaveFile={onWaveFile}
+          onWavePin={onWavePin}
+          onWaveMute={onWaveMute}
+          onManageCommunity={onManageCommunity}
+          onManageCategories={onManageCategories}
+          onNewWaveIn={onNewWaveIn}
+          isMobile={isMobile}
+          waveNotifications={waveNotifications}
+          activeCalls={activeCalls}
+          density={density}
+        />
+      </div>
+    );
+  }
+
   return (
   <div style={{
     width: '100%',
@@ -950,34 +1156,32 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
             { label: '🔍 Browse Public', onClick: () => onManageCommunities('browse') },
             { label: '🔗 Join With A Code', onClick: () => onManageCommunities('join') },
           ] : []),
-          ...(channels.length > 0 ? reorderItem('communities') : []),
+          ...(communities.length > 1 ? reorderItem('communities') : []),
         ]}
       />
     )}
 
     {communitiesEnabled && !sectionCollapsed.communities && (
-      channels.length > 0 ? (
-        <WaveCategoryList
-          voice={voice}
-          reorder={reorderMode === 'communities' ? reorder : null}
-          show="communities"
-          waves={waves}
-          categories={categories}
-          channels={channels}
-          selectedWave={selectedWave}
-          onSelectWave={onSelectWave}
-          onWaveMove={onWaveMove}
-          onWaveFile={onWaveFile}
-          onWavePin={onWavePin}
-          onWaveMute={onWaveMute}
-          onManageCommunity={onManageCommunity}
-          onManageCategories={onManageCategories}
-          onNewWaveIn={onNewWaveIn}
-          isMobile={isMobile}
-          waveNotifications={waveNotifications}
-          activeCalls={activeCalls}
-          density={density}
-        />
+      communities.length > 0 ? (
+        <div style={{ flexShrink: 0, maxHeight: '45%', overflowY: 'auto' }}>
+          <WaveCategoryList
+            voice={voice}
+            reorder={reorderMode === 'communities' ? reorder : null}
+            show="communityRows"
+            communities={communities}
+            onOpenContainer={onOpenContainer}
+            waves={waves}
+            categories={categories}
+            channels={channels}
+            selectedWave={selectedWave}
+            onSelectWave={onSelectWave}
+            onManageCommunity={onManageCommunity}
+            isMobile={isMobile}
+            waveNotifications={waveNotifications}
+            activeCalls={activeCalls}
+            density={density}
+          />
+        </div>
       ) : (
         <div style={{ padding: '10px 14px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
           You are not in any communities yet.
@@ -1013,6 +1217,7 @@ const WaveList = ({ categories = [], channels = [], selectedWave, onSelectWave, 
           voice={voice}
         reorder={reorderMode === 'waves' ? reorder : null}
         show="waves"
+        onOpenContainer={onOpenContainer}
         scrollRef={listScrollRef}
         waves={waves}
         categories={categories}

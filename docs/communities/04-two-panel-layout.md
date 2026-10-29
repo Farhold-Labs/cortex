@@ -1,7 +1,8 @@
 # Two-panel wave list
 
-**Status: proposed 2026-10-28. Not built.** The decisions below were taken
-with Jared on 2026-10-28; the rest is the plan, to agree before any code.
+**Status: built in v2.125.0 (2026-10-29).** The decisions below were taken
+with Jared on 2026-10-28. The notes at the end say where the build differs
+from the plan.
 
 ## Why
 
@@ -331,3 +332,19 @@ admin's open app picks up their powers.
   tile gets you back in two clicks, and wave tabs already keep several waves
   open at once. Temporary tiles would be a second tab bar. Only pinned waves get
   tiles of their own.
+
+## As built (v2.125.0)
+
+- **Opening a category on desktop** is "▣ Open in Panel" in the category's ⋮
+  (and UNCATEGORIZED's), as well as its rail tile. The rail only appears once
+  something is open, so without the menu item someone with no Communities
+  could never reach it.
+- **The home panel lists every Community**, including ones with no channels
+  yet. Before, a Community appeared in the list only once it had a channel.
+- **Back on a phone.** `useSystemBack` used to act on every `popstate`, so with
+  a wave open over a Community's panel one back press closed both. A handler
+  now ignores a pop that lands on its own history entry. The panel's entry is
+  pushed only while no wave is over it, so it always sits beneath the wave's.
+- **Logo URLs** are resolved against the API host, as avatars are, and fall
+  back to initials if the image fails to load.
+

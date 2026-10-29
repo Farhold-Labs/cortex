@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.125.0] - 2026-10-29
+
+Communities open in their own panel. On desktop the list folds to a rail of everything else; on a phone it is a drill-down. Communities can have logos.
+
+### Added
+- **Two panels.** The home panel lists one row per Community, with its logo or initials, unread total and 🔊 while anyone is in voice. Your own waves follow, as before. Tapping a Community opens its panel: ‹ back, its logo and name, ⋮ (New Channel, Invite People, Manage Community, Reorder), then its channels with their waves. The nested Community → channel → wave tree in one 300px column is gone (decided: no option to keep it).
+- **The rail (desktop).** While a Community or category is open, the home panel becomes a 56px rail:
+  - ⌂ (home), then your Communities;
+  - pinned waves;
+  - your categories plus UNCATEGORIZED, or, for someone with no categories, one tile per wave.
+
+  A Community or category tile opens its panel. A wave tile opens the wave and leaves the panel alone. Every tile shows an unread dot, and a Community shows 🔊 while anyone is in voice. The rail scrolls and is never capped.
+- **Category panels (desktop).** "▣ Open in Panel" in a category's ⋮ (and UNCATEGORIZED's), or its rail tile, shows that category's waves beside the rail.
+- **Phone drill-down.** Home → Community → wave. Back (the ‹ or Android back) goes to the Community, then home. WAVES pressed again, with no wave open, goes home.
+- **Opening a channel wave from anywhere opens its Community**: a notification, search, a pinned row or a link. What you had open is remembered per device.
+- **Community logos.** Upload, replace or remove one in Manage Community → ABOUT (`community.manage`). It replaces the initials on the rail, the home row and the panel header. The server re-encodes it to a 256px WebP, deletes the old file on replace or remove, and deletes it when the Community is closed. `POST`/`DELETE /api/communities/:id/logo`; `communities.logo_url`. Like avatars, logos are unbound uploads. See PRIVACY.md.
+
+### Changed
+- **The home panel lists every Community you are in,** including ones with no channels yet. These used to be missing from the list.
+- `utils/waveGroups.js` is now the one place that files waves into channels, categories and PINNED and counts their unread. The list, the panels and the rail all use it.
+
+### Fixed
+- **Stacked back handlers.** `useSystemBack` acted on every `popstate`, so with a wave open over a Community's panel one back press closed both. A handler now ignores a pop that lands on its own entry.
+
+### Verified
+- `tests/two-panel.test.cjs` (5):
+  - initials;
+  - the grouping rules, including a pinned channel wave counting toward its channel;
+  - the back rule;
+  - the rail being desktop-only, with wave tiles leaving the panel;
+  - panels closing only once the real lists are in.
+- `tests/community-manager.test.cjs` gains the logo routes:
+  - managers only;
+  - SVG refused;
+  - stored as 256×256 WebP;
+  - visible in `/communities/mine` and served;
+  - the old file deleted on replace and on remove.
+- **Headless on dev, migrated after a verified backup:**
+  - **1280px:** home rows; opening a Community shows the rail (⌂, 4 Communities, GENERAL, UNCATEGORIZED); opening a channel wave keeps the panel; the GENERAL tile opens its panel; ⌂ removes the rail.
+  - **390px:** Community → wave → back lands in the Community → back lands home.
+  - **Logo upload through ABOUT:** shows on the rail and the header.
+  - No page errors.
+- **Not verified:** Android system back and the installed apps (need a phone), and logos on S3/B2 storage (dev serves uploads locally here).
+
 ## [2.124.0] - 2026-10-28
 
 Manage Community, redesigned: it folds into sections, and Communities can finally have admins and moderators.

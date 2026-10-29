@@ -4678,3 +4678,13 @@ What Manage Community uses beyond the routes it always had. Role grants and revo
 | GET | `/api/communities/:id/members` | `member.view` | adds `q` (up to 64 characters, matched as plain text against handle and display name, so `%` and `_` are characters) and `staff=1` (only members holding a role above `member`: owner, admins, moderators). Both filter in the query, so they cover the whole membership; `total` counts the filtered set |
 | GET | `/api/communities/:id` | anyone who may discover it | adds `myRoles`: your own roles there, `[{ id, name, priority }]`, highest first, or `[]` if you are not a member |
 | PUT / DELETE | `/api/communities/:id/members/:userId/roles/:roleId` | `member.roles` | unchanged rules: you grant only roles below your own priority whose capabilities you hold, and revoke only from people below you. So an owner appoints admins, and an admin appoints moderators. Both now push `community_roles_changed` (`{ communityId }`) to the person whose roles changed, so their app re-reads its channel list |
+
+## Community logos (v2.125.0)
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| POST | `/api/communities/:id/logo` | `community.manage` | multipart, field `logo`: JPEG, PNG, GIF or WebP up to 2 MB. Re-encoded to a 256×256 WebP (cropped to a square, metadata stripped). The previous logo's file is deleted. → `{ community }`. Audited `community.logo_set`; members get `community_order_changed` so their lists re-read it |
+| DELETE | `/api/communities/:id/logo` | `community.manage` | removes it and deletes the file. → `{ community }`. Audited `community.logo_removed` |
+
+Communities carry `logo_url` (a `/uploads/community-logos/…` URL, or `null`) everywhere a Community row is returned: `GET /api/communities/mine`, `GET /api/communities/:id`, search and the public list. Like an avatar it is an unbound upload, served to anyone with the URL. Closing a Community, by its owner or a node admin, deletes the file.
+

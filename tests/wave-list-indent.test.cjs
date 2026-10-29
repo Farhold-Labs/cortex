@@ -10,7 +10,9 @@ const read = f => fs.readFileSync(path.join(__dirname, '..', 'client/src', f), '
 
 test('waves in a channel are nested one step past the channel', () => {
   const list = read('components/waves/WaveList.jsx');
-  assert.match(list, /chWaves\.map\(wave => renderWaveItem\(wave, true, channelWaveMove\(wave, chWaves, channel\), 2\)\)/);
+  // v2.125.0: a Community's channels live in its own panel, starting at
+  // `base`, with their waves one step further in.
+  assert.match(list, /chWaves\.map\(wave => renderWaveItem\(wave, true, channelWaveMove\(wave, chWaves, channel\), base \+ 1\)\)/);
   assert.match(list, /paddingLeft: indent \? `calc\(\$\{0\.75 \+ indent \* 0\.75\}rem - 3px\)`/);
   // Header steps are rem, so they scale with FONT SIZE like the rows do.
   assert.match(read('components/ui/CollapsibleSection.jsx'), /paddingLeft: `\$\{0\.75 \+ indent \* 0\.75\}rem`/);

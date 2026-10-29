@@ -3514,6 +3514,15 @@ export class DatabaseSQLite {
       `);
     }
 
+    // v2.125.0 — a Community's logo, shown on the desktop rail and beside its
+    // name. A URL from storage.upload(), or NULL for initials.
+    const communityColsV2125 = this.db.prepare(`PRAGMA table_info(communities)`).all();
+    if (communityColsV2125.length > 0 && !communityColsV2125.some(c => c.name === 'logo_url')) {
+      console.log('📝 Adding communities.logo_url (v2.125.0)...');
+      this.db.exec(`ALTER TABLE communities ADD COLUMN logo_url TEXT;`);
+      console.log('✅ communities.logo_url added');
+    }
+
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
     //
     // A remote person's standing here is borrowed, and until now it was borrowed
@@ -14599,7 +14608,7 @@ export class DatabaseSQLite {
   }
 
   updateCommunity(id, fields = {}) {
-    const allowed = ['name', 'description', 'visibility', 'status', 'home_node'];
+    const allowed = ['name', 'description', 'visibility', 'status', 'home_node', 'logo_url'];
     const sets = [], values = [];
     for (const [key, value] of Object.entries(fields)) {
       if (!allowed.includes(key)) continue;
