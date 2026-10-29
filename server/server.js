@@ -5416,8 +5416,9 @@ const botLimiter = rateLimit({
 // ============ Auth Routes ============
 app.post('/api/auth/register', registerLimiter, async (req, res) => {
   try {
-    // An invite is the way in when registration is closed (v2.67.0). Validated here but
-    // only consumed after the account exists, so a failed signup doesn't burn the invite.
+    // An invite is the way in when registration is closed (v2.67.0). Validated here, and
+    // a use is taken only in the same transaction that creates the account, so a failed
+    // signup doesn't spend one (v2.123.0).
     let invitation = null;
     if (req.body.inviteToken) {
       invitation = db.getInvitationByTokenHash
@@ -5472,11 +5473,27 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
     const avatar = (displayName || handle)[0].toUpperCase();
 
-    const user = db.createUser({
+    const userData = {
       id, handle: handle.toLowerCase(), email: email.toLowerCase(),
       passwordHash, displayName: displayName || handle, avatar,
       nodeName: 'Local', status: 'online',
-    });
+    };
+    // On an invitation, the account exists only if a use was still left when it was
+    // created: someone who loses the race for the last use gets no account.
+    const user = invitation
+      ? db.createUserWithInvitation(invitation.id, userData)
+      : db.createUser(userData);
+    if (!user) {
+      return res.status(400).json({ error: 'This invitation is not valid' });
+    }
+    if (invitation) {
+      if (invitation.role && invitation.role !== ROLES.USER) {
+        db.updateUserRole?.(user.id, invitation.role);
+        user.role = invitation.role;
+        console.log(`✉️  Invite granted role '${invitation.role}' to @${handle}`);
+      }
+      if (db.logActivity) db.logActivity(user.id, 'invite_redeemed', 'invite', invitation.id, {});
+    }
 
     // A new account is a completed login too (v2.81.2).
     const creds = issueAuthCredentials(user, req, {
@@ -5486,20 +5503,6 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     });
     const token = creds.token;
     console.log(`✅ New user registered: ${handle}${creds.refreshToken ? ' (rotating session)' : ''}`);
-
-    // Consume the invite now that the account exists. If two people race the same link,
-    // consumeInvitation() reports 0 changes for the loser and only the winner keeps the
-    // invited role — the loser still gets a plain account rather than an error, since
-    // their account already exists at this point.
-    if (invitation) {
-      const claimed = db.consumeInvitation(invitation.id, user.id);
-      if (claimed && invitation.role && invitation.role !== ROLES.USER) {
-        db.updateUserRole?.(user.id, invitation.role);
-        user.role = invitation.role;
-        console.log(`✉️  Invite granted role '${invitation.role}' to @${handle}`);
-      }
-      if (db.logActivity) db.logActivity(user.id, 'invite_redeemed', 'invite', invitation.id, { claimed });
-    }
 
     // Log registration
     if (db.logActivity) db.logActivity(user.id, 'register', 'user', user.id, getRequestMeta(req));
@@ -11140,6 +11143,9 @@ app.get('/api/plex/hls/:sessionId/:resourceId', authenticateToken, mediaRoute(as
 
 const INVITE_DEFAULT_TTL_DAYS = 7;
 const INVITE_MAX_TTL_DAYS = 90;
+// A shared link (v2.123.0) is for a group, not the public: capped so a leaked
+// one cannot open the door to everyone.
+const INVITE_MAX_USES = 100;
 
 const hashInviteToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
@@ -11152,7 +11158,7 @@ app.post('/api/admin/invites', authenticateToken, async (req, res) => {
   const actor = db.findUserById(req.user.userId);
   if (!requireRole(actor, ROLES.MODERATOR, res)) return;
 
-  const { email, role, note, expiresInDays, sendEmail: shouldEmail } = req.body || {};
+  const { email, role, note, expiresInDays, maxUses: rawMaxUses, sendEmail: shouldEmail } = req.body || {};
 
   // Only an admin may mint an invite that grants elevated privileges
   const requestedRole = role || ROLES.USER;
@@ -11171,6 +11177,19 @@ app.post('/api/admin/invites', authenticateToken, async (req, res) => {
     }
   }
 
+  // How many people may sign up on this link. One unless asked otherwise.
+  const maxUses = rawMaxUses === undefined || rawMaxUses === null || rawMaxUses === '' ? 1 : Number(rawMaxUses);
+  if (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > INVITE_MAX_USES) {
+    return res.status(400).json({ error: `Uses must be a whole number from 1 to ${INVITE_MAX_USES}` });
+  }
+  if (maxUses > 1 && requestedRole !== ROLES.USER) {
+    // A link passed round a group must not make several moderators or admins
+    return res.status(400).json({ error: 'Only a user invitation can be shared by several people' });
+  }
+  if (maxUses > 1 && cleanEmail) {
+    return res.status(400).json({ error: 'An invitation for one email address is for one person — leave the email blank to share a link' });
+  }
+
   const days = Math.max(1, Math.min(INVITE_MAX_TTL_DAYS, parseInt(expiresInDays, 10) || INVITE_DEFAULT_TTL_DAYS));
   const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -11186,6 +11205,7 @@ app.post('/api/admin/invites', authenticateToken, async (req, res) => {
       note: note ? sanitizeInput(String(note)).slice(0, 200) : null,
       createdBy: actor.id,
       expiresAt,
+      maxUses,
     });
 
     const url = inviteUrlFor(token);
@@ -11213,8 +11233,8 @@ app.post('/api/admin/invites', authenticateToken, async (req, res) => {
       }
     }
 
-    if (db.logActivity) db.logActivity(actor.id, 'invite_created', 'invite', invitation.id, { role: requestedRole, emailed });
-    console.log(`✉️  Invite created by @${actor.handle}${cleanEmail ? ` for ${cleanEmail}` : ''} (role: ${requestedRole})`);
+    if (db.logActivity) db.logActivity(actor.id, 'invite_created', 'invite', invitation.id, { role: requestedRole, emailed, maxUses });
+    console.log(`✉️  Invite created by @${actor.handle}${cleanEmail ? ` for ${cleanEmail}` : ''} (role: ${requestedRole}, uses: ${maxUses})`);
 
     // The raw token appears here and nowhere else, ever
     res.status(201).json({ invitation, url, token, emailed, emailError });
@@ -11245,7 +11265,7 @@ app.delete('/api/admin/invites/:id', authenticateToken, (req, res) => {
   try {
     const invitation = db.getInvitationById(req.params.id);
     if (!invitation) return res.status(404).json({ error: 'Invitation not found' });
-    if (invitation.status === 'used') return res.status(400).json({ error: 'That invitation has already been used' });
+    if (invitation.status === 'used') return res.status(400).json({ error: 'That invitation has already been used up' });
 
     if (!db.revokeInvitation(req.params.id)) {
       return res.status(400).json({ error: 'Invitation could not be revoked' });

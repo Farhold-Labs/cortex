@@ -4179,11 +4179,13 @@ A successful `PUT` sends every connected client the WebSocket event `instance_co
 
 ## Invitations Endpoints
 
-*(v2.67.0)* Single-use invitation links, so a server can close registration without becoming impossible to join.
+*(v2.67.0)* Invitation links, so a server can close registration without becoming impossible to join. Since v2.123.0 one link can be shared by a group.
 
 ### POST /api/admin/invites
 
 *(moderator+; admin for role-granting invites)* Creates an invitation. Optionally tied to an email address, with a note and an expiry of 1/7/30/90 days.
+
+`maxUses` *(v2.123.0)*: how many people may sign up on the link, 1–100, default 1. A link with more than one use must grant the `user` role and have no `email` (both refused with 400 otherwise): a shared link passed round a group must not make several moderators, and an email invitation is for one person. Each invitation in the list carries `maxUses`, `useCount` and `usedByHandles`.
 
 **Only the SHA-256 hash of the token is stored.** The usable link is returned exactly once, at creation, and cannot be recovered afterwards — a leaked database yields no usable invitations. Revoke and reissue is the only path if a link is lost.
 
@@ -4196,7 +4198,7 @@ List and revoke invitations.
 
 Public and rate-limited. Validates a token before the signup form is filled in. Responses are deliberately uniform: a token that never existed, one already used, one revoked and one expired all return the same message, revealing nothing to somebody guessing tokens.
 
-An invitation is **consumed after the account exists**, not before, so a failed signup does not burn the link. Consumption is a conditional `UPDATE`, so two people racing the same link cannot both claim it.
+A use is taken **in the same transaction that creates the account** *(v2.123.0)*, so a failed signup does not spend one. Taking it is a conditional `UPDATE` (a use left, not revoked, not expired), so people racing for the last use cannot both get it; the loser gets the same 400 and **no account**. Before v2.123.0 the loser's account already existed when the claim failed, which let a second person in through a closed registration.
 
 ---
 
