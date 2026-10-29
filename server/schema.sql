@@ -1087,7 +1087,7 @@ CREATE TABLE IF NOT EXISTS user_invitations (
           used_at    TEXT,
           used_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
           revoked_at TEXT
-        );
+        , max_uses INTEGER NOT NULL DEFAULT 1, use_count INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_user_invitations_token ON user_invitations(token_hash);
 CREATE INDEX IF NOT EXISTS idx_user_invitations_created_by ON user_invitations(created_by);
 
@@ -1519,6 +1519,14 @@ CREATE TABLE IF NOT EXISTS ping_expiry_files (
         path    TEXT NOT NULL,
         PRIMARY KEY (ping_id, path)
       );
+
+CREATE TABLE IF NOT EXISTS user_invitation_uses (
+        invitation_id TEXT NOT NULL REFERENCES user_invitations(id) ON DELETE CASCADE,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        used_at       TEXT NOT NULL,
+        PRIMARY KEY (invitation_id, user_id)
+      );
+CREATE INDEX IF NOT EXISTS idx_user_invitation_uses_user ON user_invitation_uses(user_id);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
