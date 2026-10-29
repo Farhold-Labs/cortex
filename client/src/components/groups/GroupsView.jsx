@@ -7,6 +7,7 @@ import GroupInvitationsPanel from './GroupInvitationsPanel.jsx';
 import InviteToGroupModal from './InviteToGroupModal.jsx';
 import { T } from '../../config/terminology.js';
 import { plainText } from '../../utils/plainText.js';
+import AlertPriorityIcon from '../ui/AlertPriorityIcon.jsx';
 
 const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitations, onInvitationsChange, contacts }) => {
   const [showNewGroup, setShowNewGroup] = useState(false);
@@ -1523,9 +1524,9 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
   };
 
   const priorityConfig = {
-    critical: { icon: '🚨', color: 'var(--accent-orange)' },
-    warning: { icon: '⚠️', color: 'var(--accent-amber)' },
-    info: { icon: 'ℹ️', color: 'var(--accent-teal)' }
+    critical: { color: 'var(--accent-orange)' },
+    warning: { color: 'var(--accent-amber)' },
+    info: { color: 'var(--accent-teal)' }
   };
 
   return (
@@ -1540,7 +1541,7 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
         justifyContent: 'space-between',
         alignItems: 'center',
       }}>
-        <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', fontWeight: 500 }}>🚨 SYSTEM ALERTS</div>
+        <div style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '6px' }}><AlertPriorityIcon priority="critical" />SYSTEM ALERTS</div>
         <button
           onClick={onToggle}
           style={{
@@ -1600,7 +1601,7 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                         {/* Priority icon and title */}
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                            <span>{cfg.icon}</span>
+                            <AlertPriorityIcon priority={priorityConfig[alert.priority] ? alert.priority : 'info'} color={cfg.color} />
                             <span style={{
                               color: 'var(--text-primary)',
                               fontFamily: 'monospace',
@@ -1733,9 +1734,9 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                     fontSize: '0.85rem',
                   }}
                 >
-                  <option value="info">ℹ️ Info</option>
-                  <option value="warning">⚠️ Warning</option>
-                  <option value="critical">🚨 Critical</option>
+                  <option value="info">Info</option>
+                  <option value="warning">Warning</option>
+                  <option value="critical">Critical</option>
                 </select>
               </div>
               <div style={{ flex: 1 }}>

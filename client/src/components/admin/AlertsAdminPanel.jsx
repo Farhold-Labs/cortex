@@ -4,6 +4,7 @@ import { formatError, CONFIRM_DIALOG, FEDERATION } from '../../../messages.js';
 import { plainText } from '../../utils/plainText.js';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import HolidayIcon, { holidayFromAlertTitle, withoutLeadingEmoji } from '../effects/HolidayIcon.jsx';
+import AlertPriorityIcon from '../ui/AlertPriorityIcon.jsx';
 
 const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => {
   const [alerts, setAlerts] = useState([]);
@@ -156,10 +157,10 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
   };
 
   const priorityConfig = {
-    critical: { icon: '🚨', color: 'var(--accent-orange)' },
-    warning: { icon: '⚠️', color: 'var(--accent-amber)' },
-    info: { icon: 'ℹ️', color: 'var(--accent-teal)' },
-    celebration: { icon: '🎉', color: 'var(--accent-purple)' }
+    critical: { color: 'var(--accent-orange)' },
+    warning: { color: 'var(--accent-amber)' },
+    info: { color: 'var(--accent-teal)' },
+    celebration: { color: 'var(--accent-purple)' }
   };
 
   return (
@@ -206,7 +207,9 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                       {/* Priority icon and title */}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                          {holiday ? <HolidayIcon holiday={holiday} size="1em" /> : <span>{cfg.icon}</span>}
+                          {holiday
+                            ? <HolidayIcon holiday={holiday} size="1em" />
+                            : <AlertPriorityIcon priority={priorityConfig[alert.priority] ? alert.priority : 'info'} color={cfg.color} />}
                           <span style={{
                             color: 'var(--text-primary)',
                             fontFamily: 'monospace',
@@ -337,10 +340,10 @@ const AlertsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) =
                     fontSize: '0.85rem',
                   }}
                 >
-                  <option value="info">ℹ️ Info</option>
-                  <option value="warning">⚠️ Warning</option>
-                  <option value="critical">🚨 Critical</option>
-                  <option value="celebration">🎉 Celebration</option>
+                  <option value="info">Info</option>
+                  <option value="warning">Warning</option>
+                  <option value="critical">Critical</option>
+                  <option value="celebration">Celebration</option>
                 </select>
               </div>
               <div style={{ flex: 1 }}>
