@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.125.0**. Last brought current 2026-10-29.
+Current version: **2.126.0**. Last brought current 2026-10-29.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2125000 / versionName "2.125.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2125000 / MARKETING_VERSION 2.125.0
+client/android/app/build.gradle                  versionCode 2126000 / versionName "2.126.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2126000 / MARKETING_VERSION 2.126.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -305,7 +305,7 @@ A first-class layer of Community → channel → waves (a channel **contains** w
 - **Ownership** transfers by offer and accept.
 - **Design docs:** `docs/communities/`. The audit register is in `docs/SECURITY-AUDIT-STATE.md` and the Communities docs.
 - **Sidebar order (v2.121.0)** is kept, never sorted by activity. Personal order (waves, Communities) is one encrypted row per person in `user_list_order`, under the participation key; channel order and `waves.channel_position` are shared, set with `channel.manage`. The low-bandwidth wave query names its columns, so a new wave field must be SELECTed there too.
-- **Two panels (v2.125.0).** The home panel lists one row per Community, then WAVES. A Community (or, on desktop, a category) opens in its own panel. On desktop the home panel then shrinks to a rail (`WaveRail.jsx`): ⌂, Communities, pinned waves, then categories, or one tile per wave for someone without categories. On a phone it is a drill-down. `openContainer` in `MainApp` is navigation state, kept per device in localStorage. Grouping and unread counts come from `utils/waveGroups.js`, which the list and the rail share. `useSystemBack` ignores a pop that lands on its own entry, so stacked back handlers (a wave over a panel) each take one press. Community logos are unbound uploads like avatars (`communities.logo_url`).
+- **Two panels (v2.125.0; one home list v2.126.0).** The home panel is one list under one WAVES header: a row per Community on top, then pinned, categories and waves; one Reorder moves Communities among Communities and waves among waves. A Community (or, on desktop, a category) opens in its own panel. On desktop the home panel then shrinks to a rail (`WaveRail.jsx`): ⌂, Communities, pinned waves, then categories, or one tile per wave for someone without categories. On a phone it is a drill-down. `openContainer` in `MainApp` is navigation state, kept per device in localStorage. Grouping and unread counts come from `utils/waveGroups.js`, which the list and the rail share. `useSystemBack` ignores a pop that lands on its own entry, so stacked back handlers (a wave over a panel) each take one press. Community logos are unbound uploads like avatars (`communities.logo_url`).
 
 ### Expiring pings (v2.122.0)
 

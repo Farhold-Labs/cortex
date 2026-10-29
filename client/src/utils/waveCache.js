@@ -143,14 +143,26 @@ export async function getCachedWaveList(showArchived = false, userId) {
 
 const channelsKey = (userId) => `${userId}:communityChannels`;
 
-export async function cacheCommunityChannels(channels, userId, communities = []) {
+export async function cacheCommunityChannels(channels, userId, communities) {
   if (!userId || storage.getUser()?.id !== userId) return;
   try {
     await withTransaction(STORES.METADATA, 'readwrite', (store, resolve) => {
       // The Communities themselves ride along (v2.125.0): the home panel lists
-      // every Community, including ones with no channels yet.
-      store.put({ key: channelsKey(userId), userId, channels, communities, timestamp: Date.now() });
-      resolve();
+      // every Community, including ones with no channels yet. A caller that
+      // only moved channels passes none, and the saved ones are kept — before
+      // v2.126.0 they were overwritten with [], so the next cold start showed
+      // no Communities until the network answered.
+      if (communities) {
+        store.put({ key: channelsKey(userId), userId, channels, communities, timestamp: Date.now() });
+        resolve();
+        return;
+      }
+      const request = store.get(channelsKey(userId));
+      request.onsuccess = () => {
+        store.put({ key: channelsKey(userId), userId, channels, communities: request.result?.communities || [], timestamp: Date.now() });
+        resolve();
+      };
+      request.onerror = () => resolve();
     });
   } catch (error) {
     console.warn('[WaveCache] Failed to cache community channels:', error);

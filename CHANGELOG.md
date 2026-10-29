@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.126.0] - 2026-10-29
+
+The home panel is one list again: your Communities at the top, then your waves, under one header.
+
+### Changed
+
+- **One WAVES header instead of COMMUNITIES and WAVES.** v2.102.0 split the list in two because each Community unfolded into all its channels and waves there. Since v2.125.0 a Community is one row that opens its own panel, so the split only cost room: the Communities sat in their own box, capped at 45% of the height, scrolling separately. Now Communities come first and everything scrolls together. Jared chose "Communities first" over a freely mixed order.
+- **+ creates or joins.** With Communities on, + offers New wave, New Community, Browse Public Communities and Join With A Code; without them it opens a new wave as before.
+- **⋮ manages:** Manage Communities, Manage Categories, Ghost Protocol, Show Archived, Reorder.
+- **One Reorder** puts arrows on both halves. Communities move among Communities and waves among waves, each saved in the order it already had, so there is no migration.
+- **The header's unread total** counts each wave once. A pinned channel wave used to count under both headers.
+
+### Fixed
+
+- **Reordering Communities showed the new order only after a reload.** Since v2.125.0 the Community rows and the rail are drawn from the list of Communities, but a reorder re-sorted only the channels. Both now move at once.
+- **The offline list could lose its Communities.** Moving channels rewrote the cached channel list with an empty list of Communities, so the next cold start showed none until the network answered. A channels-only write now keeps the saved Communities.
+
+### Verified
+
+- Headless on dev at 1280 and 390 px: one header, Communities above PINNED/categories/UNCATEGORIZED in one scroll, both menus, Reorder arrows on Communities and waves, a Community move redrawing at once and surviving a reload; no page errors. `tests/single-pane.test.cjs` (6 tests); full suite 579 pass.
+
 ## [2.125.0] - 2026-10-29
 
 Communities open in their own panel. On desktop the list folds to a rail of everything else; on a phone it is a drill-down. Communities can have logos.
