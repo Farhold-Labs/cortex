@@ -36,7 +36,11 @@ export function useSystemBack(active, onBack, { marker = 'cortex-back' } = {}) {
       pushedRef.current = true;
     }
 
-    const onPop = () => {
+    const onPop = (event) => {
+      // Landing ON our entry means something stacked above it was popped (a
+      // wave open over a Community's panel, v2.125.0), not us. Every listener
+      // hears every pop, so without this one back press closed both.
+      if (event?.state && event.state[marker]) return;
       pushedRef.current = false;
       onBackRef.current?.();
     };

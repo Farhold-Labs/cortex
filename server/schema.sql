@@ -1298,7 +1298,7 @@ CREATE TABLE IF NOT EXISTS communities (
           created_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
           created_at    TEXT NOT NULL,
           updated_at    TEXT NOT NULL
-        );
+        , logo_url TEXT);
 CREATE INDEX IF NOT EXISTS idx_communities_visibility ON communities(visibility, status);
 
 CREATE TABLE IF NOT EXISTS community_memberships (
