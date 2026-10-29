@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.131.1] - 2026-10-29
+
+### Fixed
+
+- **A Community's ⋮ menu gave the wave list scroll bars.** Reported by Jared: the menu on the last Community in the home list opened under the list and the panel grew scroll bars on two sides. Every menu in the wave list (a wave's ⋮, a Community's ⋮, the list's + and ⋮, a panel's ⋮, a category's ⋮) was `position: absolute` under its button inside the scrolling list, so near the bottom it stretched what the list could scroll and was cut off by it. They now share `FloatingMenu` (`components/ui/FloatingMenu.jsx`), rendered into the page body at fixed coordinates: it takes no room in the list, opens upward when there is no room below, stays inside the window, and closes on Escape, a scroll or a resize.
+
+### Verified
+
+- Headless on dev at 1280 and 390 px: the last Community's ⋮ opens a menu that is inside the window and on top, no element gains scroll, and Manage Community opens from it. The same check against the v2.131.0 build reproduced the bug (opening the menu created a 289×221 scrolling box). `tests/floating-menu.test.cjs` pins the shared menu. Full suite 614 pass.
+
 ## [2.131.0] - 2026-10-29
 
 Phase 2 of the wave-access redesign (docs/wave-access/01-design.md): the Community wave report. Before any Community switches to "only people who can see the channel", its owner will decide each filed wave whose people include someone who cannot see it. This measures how many there are, in the app, rather than by querying production by hand.

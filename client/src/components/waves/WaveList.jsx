@@ -4,6 +4,7 @@ import { PRIVACY_LEVELS, NOTIFICATION_BADGE_COLORS, WAVE_DENSITY, DEFAULT_WAVE_D
 import { EMPTY, GHOST_PROTOCOL } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
+import FloatingMenu from '../ui/FloatingMenu.jsx';
 import VoiceChannelSection from './VoiceChannelSection.jsx';
 import { T } from '../../config/terminology.js';
 import { byPersonalOrder, moveInGroup, moveInList } from '../../utils/listOrder.js';
@@ -54,9 +55,11 @@ const listMoves = (ids, id, apply) => {
 const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen, onToggle, onWavePin, onWaveMute, onWaveMove, onWaveFile }) => {
   // A voice channel holds no waves (v2.118.0), so it is not somewhere to file one.
   const channels = allChannels.filter(ch => ch.type !== 'voice');
+  const buttonRef = useRef(null);
   return (
   <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
     <button
+      ref={buttonRef}
       onClick={(e) => {
         e.stopPropagation();
         onToggle(isOpen ? null : wave.id);
@@ -76,21 +79,7 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
     </button>
     {/* Move menu dropdown */}
     {isOpen && (
-      <div
-        style={{
-          position: 'absolute',
-          right: 0,
-          top: '100%',
-          marginTop: '4px',
-          background: 'var(--bg-elevated)',
-          border: '1px solid var(--border-primary)',
-          borderRadius: '4px',
-          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-          minWidth: '150px',
-          zIndex: 1000,
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <FloatingMenu anchorRef={buttonRef} onClose={() => onToggle(null)} minWidth={150}>
         <div style={{ padding: '4px 0' }}>
           {/* Pin/Unpin option */}
           <div
@@ -233,7 +222,7 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
             </div>
           )}
         </div>
-      </div>
+      </FloatingMenu>
     )}
   </div>
   );
@@ -246,6 +235,7 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
  */
 const CommunityRow = ({ community, unread = 0, inVoice = false, density, isMobile, controls, onOpen, menu }) => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef(null);
   const name = plainText(community.name || '');
   const tileSize = parseFloat(density.fontSize) >= 0.95 ? 32 : parseFloat(density.fontSize) <= 0.8 ? 22 : 26;
   return (
@@ -282,6 +272,7 @@ const CommunityRow = ({ community, unread = 0, inVoice = false, density, isMobil
         {!controls && menu && menu.length > 0 && (
           <span style={{ position: 'relative' }}>
             <button
+              ref={menuButtonRef}
               title={`${name} options`}
               onClick={() => setMenuOpen(o => !o)}
               style={{
@@ -291,12 +282,7 @@ const CommunityRow = ({ community, unread = 0, inVoice = false, density, isMobil
               }}
             >⋮</button>
             {menuOpen && (
-              <>
-                <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setMenuOpen(false)} />
-                <div style={{
-                  position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 100, minWidth: '180px',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
-                }}>
+              <FloatingMenu anchorRef={menuButtonRef} onClose={() => setMenuOpen(false)}>
                   {menu.map((item, i) => (
                     <button
                       key={item.label}
@@ -309,8 +295,7 @@ const CommunityRow = ({ community, unread = 0, inVoice = false, density, isMobil
                       }}
                     >{item.label}</button>
                   ))}
-                </div>
-              </>
+              </FloatingMenu>
             )}
           </span>
         )}
@@ -876,17 +861,12 @@ const WaveInvitations = ({ invitations, onAccept, onDecline, isMobile, density }
 /** A header button that opens a short menu: the list's + and ⋮ (v2.126.0). */
 const HeaderMenu = ({ glyph, title, items, isMobile, buttonStyle }) => {
   const [open, setOpen] = React.useState(false);
+  const buttonRef = useRef(null);
   return (
     <div style={{ position: 'relative' }}>
-      <button onClick={() => setOpen(o => !o)} title={title} aria-label={title} aria-expanded={open} style={buttonStyle(open)}>{glyph}</button>
+      <button ref={buttonRef} onClick={() => setOpen(o => !o)} title={title} aria-label={title} aria-expanded={open} style={buttonStyle(open)}>{glyph}</button>
       {open && (
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
-          <div role="menu" style={{
-            position: 'absolute', top: '100%', right: 0, marginTop: '4px',
-            background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
-            zIndex: 100, minWidth: '190px',
-          }}>
+        <FloatingMenu anchorRef={buttonRef} onClose={() => setOpen(false)} minWidth={190}>
             {items.map((item, i) => (
               <button
                 key={item.label}
@@ -903,8 +883,7 @@ const HeaderMenu = ({ glyph, title, items, isMobile, buttonStyle }) => {
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
               >{item.label}</button>
             ))}
-          </div>
-        </>
+        </FloatingMenu>
       )}
     </div>
   );
@@ -984,9 +963,10 @@ const ListSectionHeader = ({ title, titleColor, onCreate, createMenu = null, cre
 /** The ⋮ in a panel header (v2.125.0). */
 const PanelMenu = ({ items, title, isMobile }) => {
   const [open, setOpen] = useState(false);
+  const buttonRef = useRef(null);
   return (
     <div style={{ position: 'relative' }}>
-      <button onClick={() => setOpen(o => !o)} title={title} style={{
+      <button ref={buttonRef} onClick={() => setOpen(o => !o)} title={title} style={{
         padding: isMobile ? '8px 10px' : '4px 7px',
         background: open ? 'var(--bg-hover)' : 'transparent',
         border: `1px solid ${open ? 'var(--border-primary)' : 'var(--border-subtle)'}`,
@@ -994,12 +974,7 @@ const PanelMenu = ({ items, title, isMobile }) => {
         fontSize: isMobile ? '1rem' : '0.9rem', lineHeight: 1,
       }}>⋮</button>
       {open && (
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
-          <div style={{
-            position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 100, minWidth: '190px',
-            background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
-          }}>
+        <FloatingMenu anchorRef={buttonRef} onClose={() => setOpen(false)} minWidth={190}>
             {items.map((item, i) => (
               <button key={item.label} onClick={() => { setOpen(false); item.onClick(); }} style={{
                 display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none',
@@ -1008,8 +983,7 @@ const PanelMenu = ({ items, title, isMobile }) => {
                 fontFamily: 'monospace', fontSize: isMobile ? '0.9rem' : '0.75rem', whiteSpace: 'nowrap',
               }}>{item.label}</button>
             ))}
-          </div>
-        </>
+        </FloatingMenu>
       )}
     </div>
   );
