@@ -1,7 +1,7 @@
 import { T } from '../config/terminology.js';
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.123.0';
+export const VERSION = '2.123.1';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
@@ -68,9 +68,9 @@ export const FONT_SIZES = {
 // Row spacing/size for the wave list. `comfy` matches the historical default,
 // so existing users see no change until they pick another option.
 export const WAVE_DENSITY = {
-  compact: { name: 'Compact', padding: '3px 12px', fontSize: '0.8rem' },
-  comfy: { name: 'Comfy', padding: '6px 12px', fontSize: '0.85rem' },
-  spacious: { name: 'Spacious', padding: '10px 12px', fontSize: '0.95rem' },
+  compact: { name: 'Compact', padding: '3px 12px', fontSize: '0.8rem', headingSize: '0.72rem' },
+  comfy: { name: 'Comfy', padding: '6px 12px', fontSize: '0.85rem', headingSize: '0.75rem' },
+  spacious: { name: 'Spacious', padding: '10px 12px', fontSize: '0.95rem', headingSize: '0.85rem' },
 };
 export const DEFAULT_WAVE_DENSITY = 'comfy';
 

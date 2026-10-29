@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.123.1] - 2026-10-28
+
+Community channels in the wave list are nested properly, and their names keep up with the size settings.
+
+### Fixed
+- **Waves in a channel sat outside it.** A channel header was indented one step, but the waves filed in it were drawn exactly like top-level waves, so they sat level with the Community heading and to the left of their own channel. They are now one step past the channel (12px → 24px → 36px at Medium).
+- **Nesting steps are rem, not px.** A fixed 12px step all but disappeared at X-Large FONT SIZE. Section headers, channel waves, the "No channels yet" / "No waves filed here yet" lines and voice-channel occupant rows now step in 0.75rem, so the hierarchy reads the same at every size.
+- **Channel names were a fixed 0.75rem.** Wave titles follow WAVE DENSITY (0.8 / 0.85 / 0.95rem) but channel names did not, so at Spacious a channel name was smaller than the waves inside it (15.6px against 19.8px at X-Large). Text and voice channel names now use the same size as wave titles, and Community / category headings grow with density too (`headingSize` 0.72 / 0.75 / 0.85rem).
+
+### Verified
+- Measured headlessly at 390px and 1280px across Small+Compact, Medium+Comfy and X-Large+Spacious: Community heading, channel and channel wave land at 11/22/32, 12/24/36 and 16/31/47px, and channel names match wave titles at each density. Personal waves are unchanged at Medium.
+- Voice-channel occupant rows were changed on the same steps but not seen on screen; dev has no one in a voice channel.
+
 ## [2.123.0] - 2026-10-28
 
 One invitation link for a whole group. An admin invited their crew on a 7-day link and the first person to sign up used it up: account invitations were single-use, and everyone after got "This invitation is not valid".
