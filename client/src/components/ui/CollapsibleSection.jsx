@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+import FloatingMenu from './FloatingMenu.jsx';
 
 const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0.75rem', children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false, dense = false, headerAction, collapsible = true }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef(null);
 
   // collapsible={false} (compact only): a fixed header that always shows its
   // children, e.g. a voice channel row, where folding hides nothing useful.
@@ -70,6 +72,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0
               // collapse the group.
               <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
                 <button
+                  ref={menuButtonRef}
                   title={menuTitle || 'Options'}
                   onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o); }}
                   style={{
@@ -80,16 +83,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0
                   }}
                 >⋮</button>
                 {menuOpen && (
-                  <>
-                    <div
-                      style={{ position: 'fixed', inset: 0, zIndex: 99 }}
-                      onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
-                    />
-                    <div style={{
-                      position: 'absolute', top: '100%', right: 0, marginTop: '4px',
-                      background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
-                      zIndex: 100, minWidth: '180px',
-                    }}>
+                  <FloatingMenu anchorRef={menuButtonRef} onClose={() => setMenuOpen(false)}>
                       {menu.map((item, i) => (
                         <button
                           key={item.label}
@@ -106,8 +100,7 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0
                           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                         >{item.label}</button>
                       ))}
-                    </div>
-                  </>
+                  </FloatingMenu>
                 )}
               </div>
             )}
