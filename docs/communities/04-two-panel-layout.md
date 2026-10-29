@@ -349,6 +349,13 @@ admin's open app picks up their powers.
   back to initials if the image fails to load.
 
 
+## Collapsing to the rail (v2.129.0)
+
+The ◀ handle and Ctrl+B used to fold the list away entirely. They now fold it to
+the rail, which is shown whenever the list is collapsed, open panel or not. A
+Community, category or ⌂ tile on a collapsed rail opens the list again (with
+that panel, or at home); a wave tile opens the wave and stays collapsed.
+
 ## One home list (v2.126.0)
 
 With Communities down to one row each, the reason for v2.102.0's two headers

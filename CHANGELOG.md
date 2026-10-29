@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.129.0] - 2026-10-29
+
+Collapsing the wave list on desktop folds it to the rail instead of hiding it.
+
+### Changed
+
+- **◀ (and Ctrl+B) collapse the list to the rail.** Collapsing used to fold the list away completely, leaving only the thin ▶ handle, so getting to another Community or wave meant expanding it again first. Jared asked for it to drop to the rail instead. The rail (v2.125.0) now shows whenever the list is collapsed, as well as beside an open Community or category panel.
+- **On a collapsed rail:** a Community or category tile opens the list again with that panel; ⌂ opens it again at the home list; a wave tile opens the wave and leaves the rail collapsed.
+
+### Verified
+
+- Headless on dev at 1280 px: collapsing shows the rail and takes the list to 0 width; a Community tile reopens the list with its panel; a wave tile opens the wave and stays collapsed; ⌂ reopens the home list; Ctrl+B toggles list and rail; no page errors. `tests/two-panel.test.cjs` updated (6 tests).
+
 ## [2.128.0] - 2026-10-29
 
 A public wave inside a Community is now public to that Community, not to everyone on the server.
