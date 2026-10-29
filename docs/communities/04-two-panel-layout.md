@@ -23,6 +23,8 @@ and channels do, while keeping Cortex's personal waves one click away.
 | What is on the rail? | **Communities, then your other waves.** Your other waves are personal and node waves, meaning every wave not filed in a Community. They appear as category tiles if you use categories, and as one tile per wave if you don't. |
 | What does a tile look like? | **Initials by default.** A Community can upload a **logo**, which replaces its initials. Categories and waves use initials. |
 | What does clicking a tile do? | **Takes you to what you clicked:** the Community, the category or the wave. |
+| A long rail? | **It scrolls, and is not capped.** Forty uncategorized waves make forty tiles, and that is the nudge to use categories. |
+| Category icons? | **Not now.** Initials in the category's colour. Uploaded category icons are a welcome later addition. |
 | Keep the nested single list as an option? | **No.** Two panels replace it. That leaves one layout to support, test and document. |
 | What does tapping a Community in the home list do? | **Opens its panel.** The home list shows each Community as one row; its channels appear only inside its panel. |
 
@@ -95,7 +97,9 @@ panel back and hides the rail.
    - **You have no categories:** one tile per wave, in your wave order, showing
      the wave's initials.
 
-The rail scrolls on its own when it is longer than the window.
+The rail scrolls on its own when it is longer than the window. It is never
+capped: someone with forty uncategorized waves gets forty tiles, and the cure
+is categories.
 
 **Every tile** shows an unread dot when anything inside it is unread, and a 🔊
 marker for a Community with people in voice. Hover and `aria-label` give the
@@ -210,6 +214,10 @@ the encrypted `user_list_order` stay as they are.
 
 ## Build plan
 
+0. **The Community manager first, as its own release (v2.124.0):** collapsible
+   sections, plus appointing admins and moderators. The two panels and logos
+   follow as v2.125.0, and the logo upload then goes into the new ABOUT
+   section.
 1. **Split the list.** `WaveCategoryList` becomes three components sharing
    `renderWaveItem` and the unread helpers:
    - `HomeWaveList`: the Community rows and WAVES.
@@ -232,7 +240,7 @@ the encrypted `user_list_order` stay as they are.
 6. **Docs:** README, PRIVACY.md (logos), API.md (the routes), CLAUDE.md's
    wave-list notes and CHANGELOG.
 
-This is one minor release, v2.124.0, and it migrates.
+This is one minor release, v2.125.0, and it migrates.
 
 ## Testing
 
@@ -256,14 +264,72 @@ This is one minor release, v2.124.0, and it migrates.
 - **Real devices.** Android system back and portrait tablets need a person with
   a phone. Say so in the release notes rather than claim them.
 
+## Community manager (Manage Community)
+
+**Decided 2026-10-28:** the manager is redesigned before the two panels ship,
+because the logo upload lives there and it already takes too much room.
+
+What it is today (`CommunitySettingsPanel.jsx`) is one long column of always
+open boxes: CHANNELS, NEW CHANNEL, INVITES, INVITE SOMEONE FROM ANOTHER
+SERVER, ADD SOMEONE FROM THIS SERVER, MEMBERS. On a phone, MEMBERS is several
+screens down.
+
+**Collapsible sections.** Use the same `CollapsibleSection` accordion as
+Settings (v2.115.0), with one section open at a time:
+
+| Section | Holds | Shown to holders of |
+| --- | --- | --- |
+| **ABOUT** | Name, description, visibility, **logo** | `community.manage` |
+| **CHANNELS** | List, rename, delete, new channel (text or voice) | `channel.manage` |
+| **PEOPLE** | Members with their roles, search, add from this server, invite from another server, invite codes | `member.view` / `member.invite` |
+| **ROLES** | Who is owner, admin and moderator; appoint and remove | `member.roles` |
+| **DANGER** | Hand over, close the Community | `community.transfer` / `community.delete` |
+
+- The section a menu item named opens on arrival ("Invite People" opens
+  PEOPLE), replacing today's scroll-to.
+- Each header shows a count: channels, members, pending invites.
+- Long member lists page and filter, so PEOPLE stays short.
+
+**Admins and moderators.** The server has had them since v2.94.0:
+
+- built-in `admin` and `moderator` roles with priorities 300 and 200;
+- grant and revoke routes, `PUT` and `DELETE`
+  `/api/communities/:id/members/:userId/roles/:roleId`;
+- `canActOnMember`, which stops you acting on anyone at or above your own rank.
+
+There has never been a control to use them. The manager only lists role names.
+So:
+
+- **On each member's row**, a ⋮ menu with Make admin, Make moderator, Remove
+  admin and Remove moderator. Only the moves the server would allow are shown:
+  you need `member.roles`, the role must sit below your own, and so must the
+  member. The server checks again whatever the menu shows.
+- **ROLES** lists the owner, the admins and the moderators with a one-line
+  description of each, so you can see who runs the Community without scrolling
+  through everyone.
+- **What each role can do is fixed for now:** the built-in capability sets in
+  `server/lib/communities/capabilities.js`. Custom roles exist server-side but
+  get no editor in this release.
+- **Remote members** (cross-port) can be appointed like anyone else, with the
+  standing re-check still applying (v2.97.0).
+
+This is mostly client work. Two server checks are still to do:
+
+- the member list returns each member's roles with ids, so the menu can name
+  the role to grant or revoke;
+- a grant or revoke takes effect on someone's open app, through the push
+  that already re-sends capabilities.
+
 ## Open questions
 
-- **A long rail.** For someone with no categories and many waves, the rail is
-  one tile per wave. With 40 waves it is a long scroll of initials. Should it
-  cap (say, the 20 most recent, with "…" opening home), or is that the nudge to
-  use categories?
-- **Wave tile behaviour.** Should a wave tile in a category user's rail exist
-  only for pinned waves (as above)? Or should a wave you open from a category
-  panel also get a temporary tile, the way a browser keeps a tab?
-- **Category logos.** Should categories ever get an uploaded icon, or are
-  initials plus their colour enough?
+- **Temporary wave tiles.** Here is an example. You click the GENERAL tile, and
+  the panel beside the rail lists GENERAL's waves, just as a Community lists its
+  channels. You open "test wave" from that list. Then you click a Community
+  tile: the panel switches to that Community, and "test wave" stays open on the
+  right until you pick something else.
+
+  The question is whether "test wave" should also get a tile of its own (TW) so
+  you can jump back to it in one click. The suggestion is **no**: the GENERAL
+  tile gets you back in two clicks, and wave tabs already keep several waves
+  open at once. Temporary tiles would be a second tab bar. Only pinned waves get
+  tiles of their own.
