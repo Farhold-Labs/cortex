@@ -129,13 +129,65 @@ because who-was-invited-by-whom is social graph.
 | Public wave in a channel | Open to the channel (already true since v2.128.0). |
 | Private wave in a channel | Narrowed to its current participants. Only owners and admins can change it from then on. |
 
+## Migrating Community waves that have outsiders
+
+Jared, 2026-10-29: plenty of waves in Communities today have groups (crews) or
+participant lists that include people who are not members of the Community.
+They are there because a Community owner filed them into a channel. Switching
+on the strict rule ("only people who can see the channel") would cut those
+people off with no warning, so it is not switched on for a Community until
+its owner has dealt with each such wave.
+
+**Which waves are affected**
+
+| Kind | Example |
+| --- | --- |
+| Group (crew) wave filed in a channel | the "Ops crew" wave in #general, where two crew members never joined the Community |
+| Private or Verse-Wide wave filed in a channel | a hand-picked list that includes outsiders |
+| Public wave in a channel | not affected: already channel-scoped since v2.128.0 |
+
+A wave whose people are all Community members who can see the channel is not
+affected: it becomes "narrowed to those people" (or to the role made from its
+group, below) with no review.
+
+**Step 0: measure, read-only, in the app.** A report, built as a screen rather
+than run against production by hand. It changes nothing and shows no message
+content: per Community, the affected waves, how many of each wave's people are
+members and how many are not, and the groups involved. Community owners see
+their own Communities; node admins see the whole server.
+
+**Step 1: the owner decides each wave.** Until they do, the wave keeps exactly
+the access it has now and is marked **Needs review** in the channel and in the
+report. There is no deadline and no automatic default. The owner (or a
+Community admin) chooses:
+
+- **Move it out.** The wave leaves the channel and becomes an ordinary People wave. Nobody loses access and nobody gains it.
+- **Make it a role.** The wave's group becomes a Community role named after it (e.g. "Ops crew"), granted to the group's members who are already Community members, and the wave is narrowed to that role. A wave with a hand-picked list is narrowed to the named members instead. Then, optionally:
+  - **Send invitations** to the people outside the Community. Each gets a Community invitation; accepting it makes them a member and grants the role, so they keep the wave. Until they accept, they cannot see it.
+  - Without invitations, the outsiders lose access and are told the wave now belongs to a Community they are not in.
+
+**Step 2: groups used elsewhere.** A group also used by waves outside the
+Community stays a personal group for those waves. The Community role is a copy
+made at the moment of the decision, not a move. Later changes to one do not
+change the other.
+
+**Step 3: the strict rule switches on** for a Community once it has no waves
+left in Needs review. From then on, pickers list only the Community and the
+server refuses outsiders, as above.
+
+**What does not change during review:** the wave's encryption keys, its
+messages and its files. Narrowing a wave to a role removes access from the
+server's point of view; for an encrypted wave, people who lose access keep
+whatever their client had already decrypted, as with any removal today.
+
 ## Phases
 
-1. **Consent first.** Invitations for adding people to waves and groups; blocks enforced; crew direct-add goes through an invitation; a Community wave refuses anyone who cannot see its channel. Ships on its own, because it closes the gaps above.
-2. **Groups make themselves.** The new create flow, auto-named groups, crews renamed groups, migration of private and crew waves.
-3. **Narrowing in Communities.** Who can see this: people and roles.
-4. **Clean-up.** Categories → Folders, privacy labels replaced by audience in the UI, docs.
-5. **Federated invitations.**
+1. **Consent first.** Invitations for adding people to waves and groups; blocks enforced; crew direct-add goes through an invitation; a Community wave refuses anyone who cannot see its channel. Ships on its own, because it closes the gaps above. (For Communities still in review, the last rule applies only to people being *added*: nobody already in a wave is removed.)
+2. **Community wave report.** The read-only report in the app, so the size of the review is known before anything is asked of owners.
+3. **Groups make themselves.** The new create flow, auto-named groups, crews renamed groups, migration of private and crew waves outside Communities.
+4. **Community wave review and narrowing.** Needs review; the owner's Move it out / Make it a role (with or without invitations); Who can see this with people and live roles. Each Community switches to the strict rule when its review is done.
+5. **Clean-up.** Categories → Folders, privacy labels replaced by audience in the UI, docs.
+6. **Federated invitations.**
 
 ## Decisions (Jared, 2026-10-29)
 
@@ -144,3 +196,4 @@ because who-was-invited-by-whom is social graph.
 3. **Categories are renamed Folders** and leave the create-wave dialog.
 4. **Auto-accept from contacts:** a per-person setting, off by default.
 5. **In a Community, people and group pickers list only the Community:** members who can see the channel, and the Community's roles. The server refuses anyone else.
+6. **Existing Community waves with outsiders are decided by the Community's owner**, one by one: Move it out, or Make it a role with or without sending invitations. No deadline, no automatic default; until then the wave keeps its access and shows Needs review. The numbers come from a read-only report in the app, not from querying production by hand.
