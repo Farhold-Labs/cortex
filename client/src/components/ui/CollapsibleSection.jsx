@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false, headerAction, collapsible = true }) => {
+const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, titleSize = '0.75rem', children, defaultOpen = true, isOpen: controlledIsOpen, onToggle, isMobile, titleColor = 'var(--text-dim)', accentColor, badge, unreadCount = 0, compact = false, headerAction, collapsible = true }) => {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -20,14 +20,16 @@ const CollapsibleSection = ({ title, menu, menuTitle, indent = 0, children, defa
             justifyContent: 'space-between',
             alignItems: 'center',
             padding: '6px 12px',
-            paddingLeft: `${12 + indent * 12}px`,
+            // In rem, so each level of nesting stays a visible step at every
+            // FONT SIZE (a fixed 12px all but vanishes at X-Large).
+            paddingLeft: `${0.75 + indent * 0.75}rem`,
             cursor: collapsible ? 'pointer' : 'default',
             userSelect: 'none',
             borderTop: '1px solid var(--bg-hover)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-            <span style={{ color: titleColor, fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
+            <span style={{ color: titleColor, fontSize: titleSize, fontWeight: 700, letterSpacing: '0.05em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
             {badge && (
               <span style={{
                 color: 'var(--text-muted)',
