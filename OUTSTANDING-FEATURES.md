@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
 **Last Updated:** October 2026
-**Current Version:** v2.130.0
+**Current Version:** v2.131.0
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.130.0)
+## Completed Features (v1.5.0 - v2.131.0)
 
 | Feature | Version |
 |---------|---------|
@@ -147,6 +147,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Public Waves in a Community Channel Visible Only to the Channel | v2.128.0 |
 | Collapsing the List Leaves the Rail | v2.129.0 |
 | Being Put into a Wave Is Asked First (wave invitations, blocks honoured) | v2.130.0 |
+| Community Wave Report (owners and node admins); Crews No Longer a Way into Channel Waves | v2.131.0 |
 
 ---
 
@@ -154,8 +155,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 ### Near-term
 
-- **Wave access redesign, phases 2–6** (`docs/wave-access/01-design.md`; phase 1 shipped in v2.130.0):
-  2. A read-only report of Community waves whose people include outsiders.
+- **Wave access redesign, phases 3–6** (`docs/wave-access/01-design.md`; phases 1–2 shipped in v2.130.0–v2.131.0):
   3. Groups that make themselves: no crew to create first, auto-named groups, crews renamed groups.
   4. Community wave review (Move it out / Make it a role) and narrowing to people or roles, owners and admins only.
   5. Categories renamed Folders; audiences replace privacy labels in the UI.
