@@ -262,6 +262,7 @@ test('expiring pings through a real server', { timeout: 180000 }, async (t) => {
     assert.equal(created.status, 201);
     const waveId = created.body.id;
     assert.equal((await api('POST', `/api/waves/${waveId}/participants`, { token: owner.token, body: { userId: member.id } })).status < 300, true);
+    for (const i of ((await api('GET', '/api/wave-invitations', { token: member.token })).body?.invitations || [])) await api('POST', `/api/wave-invitations/${i.id}/accept`, { token: member.token }); // v2.130.0: invited, then accepts
 
     await t.test('a sender picks a timer, from the list only', async () => {
       const res = await send(member, waveId, 'five minutes', { expiresIn: 300 });

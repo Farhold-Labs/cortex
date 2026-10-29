@@ -79,6 +79,7 @@ test('Live broadcasts', { timeout: 120000 }, async (t) => {
     const wave = (await api('POST', '/api/waves', { token: performer.token, body: { title: 'Opening Night', privacy: 'private', participants: [viewer.id] } })).body;
     const waveId = wave.id || wave.wave?.id;
     assert.ok(waveId, JSON.stringify(wave));
+    for (const i of ((await api('GET', '/api/wave-invitations', { token: viewer.token })).body?.invitations || [])) await api('POST', `/api/wave-invitations/${i.id}/accept`, { token: viewer.token }); // v2.130.0: invited, then accepts
 
     await t.test('off until an operator turns it on', async () => {
       const res = await api('POST', `/api/waves/${waveId}/broadcasts`, { token: performer.token, body: { title: 'Act One' } });

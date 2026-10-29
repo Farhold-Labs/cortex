@@ -3523,6 +3523,37 @@ export class DatabaseSQLite {
       console.log('✅ communities.logo_url added');
     }
 
+    // v2.130.0 — wave invitations. Being put into a conversation now needs the
+    // person's consent outside Communities: adding someone creates one of these,
+    // and only accepting it makes them a participant.
+    //
+    // Only PENDING invitations are stored. A row is deleted the moment it is
+    // accepted, declined, withdrawn or expires, so who-invited-whom exists only
+    // while the question is open; an accepted one becomes an ordinary
+    // participant, which the participation layer already keeps encrypted.
+    const waveInvitationsTable = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='wave_invitations'`
+    ).get();
+    if (!waveInvitationsTable) {
+      console.log('📝 Creating wave_invitations table (v2.130.0)...');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS wave_invitations (
+          id              TEXT PRIMARY KEY,
+          wave_id         TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          invited_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- SET NULL: an inviter deleting their account should not take the
+          -- question away from the person it was put to.
+          invited_by      TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at      TEXT NOT NULL,
+          expires_at      TEXT NOT NULL,
+          UNIQUE (wave_id, invited_user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_wave_invitations_invitee ON wave_invitations(invited_user_id);
+        CREATE INDEX IF NOT EXISTS idx_wave_invitations_wave ON wave_invitations(wave_id);
+      `);
+      console.log('✅ wave_invitations table created');
+    }
+
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
     //
     // A remote person's standing here is borrowed, and until now it was borrowed
@@ -15168,6 +15199,70 @@ export class DatabaseSQLite {
   }
 
 
+
+  // ----- Wave invitations (v2.130.0) -----
+  // Pending only: see the migration. Expired rows are dropped as they are read.
+
+  _dropExpiredWaveInvitations() {
+    this.db.prepare('DELETE FROM wave_invitations WHERE expires_at <= ?').run(new Date().toISOString());
+  }
+
+  createWaveInvitation({ waveId, invitedUserId, invitedBy, ttlDays = 30 }) {
+    this._dropExpiredWaveInvitations();
+    const now = new Date();
+    const row = {
+      id: `winv-${uuidv4()}`,
+      wave_id: waveId,
+      invited_user_id: invitedUserId,
+      invited_by: invitedBy,
+      created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + ttlDays * 86400000).toISOString(),
+    };
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO wave_invitations (id, wave_id, invited_user_id, invited_by, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(row.id, row.wave_id, row.invited_user_id, row.invited_by, row.created_at, row.expires_at);
+    // Already invited: the existing question stands; do not ask twice.
+    return result.changes > 0 ? row : null;
+  }
+
+  getWaveInvitation(id) {
+    this._dropExpiredWaveInvitations();
+    return this.db.prepare('SELECT * FROM wave_invitations WHERE id = ?').get(id) || null;
+  }
+
+  getWaveInvitationFor(waveId, userId) {
+    this._dropExpiredWaveInvitations();
+    return this.db.prepare('SELECT * FROM wave_invitations WHERE wave_id = ? AND invited_user_id = ?').get(waveId, userId) || null;
+  }
+
+  listWaveInvitationsForUser(userId) {
+    this._dropExpiredWaveInvitations();
+    return this.db.prepare(`
+      SELECT i.*, w.title AS wave_title, w.privacy AS wave_privacy, w.encrypted AS wave_encrypted,
+             u.handle AS inviter_handle, u.display_name AS inviter_name, u.avatar AS inviter_avatar
+      FROM wave_invitations i
+      JOIN waves w ON w.id = i.wave_id
+      LEFT JOIN users u ON u.id = i.invited_by
+      WHERE i.invited_user_id = ?
+      ORDER BY i.created_at DESC
+    `).all(userId);
+  }
+
+  listWaveInvitationsForWave(waveId) {
+    this._dropExpiredWaveInvitations();
+    return this.db.prepare(`
+      SELECT i.id, i.invited_user_id, i.invited_by, i.created_at,
+             u.handle, u.display_name, u.avatar
+      FROM wave_invitations i JOIN users u ON u.id = i.invited_user_id
+      WHERE i.wave_id = ?
+      ORDER BY i.created_at
+    `).all(waveId);
+  }
+
+  deleteWaveInvitation(id) {
+    return this.db.prepare('DELETE FROM wave_invitations WHERE id = ?').run(id).changes > 0;
+  }
 
   // ----- Attachments (v2.104.0, CORTEX-COMM-009) -----
 
