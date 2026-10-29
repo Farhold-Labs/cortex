@@ -2235,6 +2235,32 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
 
       {/* Privacy & safety */}
       <CollapsibleSection title="PRIVACY & SAFETY" isOpen={openSection === 'privacy'} onToggle={() => toggleSection('privacy')} isMobile={isMobile}>
+        {/* Invitations (v2.130.0): being put into a wave is asked first; this
+            lets someone skip the question for people in their contacts. */}
+        <CollapsibleSection title="INVITATIONS" isOpen={openSub === 'invitations'} onToggle={() => toggleSub('invitations')} isMobile={isMobile}>
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '8px' }}>ACCEPT INVITATIONS FROM MY CONTACTS AUTOMATICALLY</div>
+            <button
+              onClick={() => handleUpdatePreferences({ autoAcceptContactInvites: !(user?.preferences?.autoAcceptContactInvites === true) })}
+              style={{
+                padding: isMobile ? '10px 16px' : '8px 16px',
+                minHeight: isMobile ? '44px' : 'auto',
+                background: (user?.preferences?.autoAcceptContactInvites === true) ? 'var(--accent-teal)20' : 'transparent',
+                border: `1px solid ${(user?.preferences?.autoAcceptContactInvites === true) ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                color: (user?.preferences?.autoAcceptContactInvites === true) ? 'var(--accent-teal)' : 'var(--text-dim)',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: isMobile ? '0.9rem' : '0.85rem',
+              }}
+            >
+              {(user?.preferences?.autoAcceptContactInvites === true) ? '▣ ENABLED' : '▢ DISABLED'}
+            </button>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '6px' }}>
+              When someone adds you to a {T.wave}, you are asked first. Turn this on to join straight away when it is someone in your contacts. Blocked people can never add or invite you.
+            </div>
+          </div>
+        </CollapsibleSection>
+
         {/* Blocked & Muted Users Sub-section */}
         <CollapsibleSection title="BLOCKED & MUTED USERS" isOpen={openSub === 'blocked'} onToggle={() => toggleSub('blocked')} isMobile={isMobile}>
           {/* Blocked Users */}
@@ -2244,7 +2270,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
             </div>
             {blockedUsers.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', padding: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--bg-hover)' }}>
-                No blocked users. Blocked users cannot send you contact requests, invite you to {T.crews}, or have their messages shown to you.
+                No blocked users. Blocked users cannot send you contact requests, invite you to {T.crews} or {T.waves}, or have their messages shown to you.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

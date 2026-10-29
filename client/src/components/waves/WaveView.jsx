@@ -2220,6 +2220,40 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               )}
             </div>
           </div>
+          {/* Asked but not yet in (v2.130.0). They see nothing of the wave
+              until they accept; the inviter or the owner can withdraw. */}
+          {(waveData?.invited || []).map(inv => (
+            <div key={`invited-${inv.id}`} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+              padding: '8px 12px', background: 'var(--bg-elevated)', border: '1px dashed var(--border-primary)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                <Avatar letter={inv.avatar || inv.name?.[0] || '?'} color="var(--text-dim)" size={isMobile ? 32 : 28} />
+                <div style={{ color: 'var(--text-secondary)', fontSize: isMobile ? '0.85rem' : '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {inv.name || inv.handle}
+                </div>
+              </div>
+              <span style={{ padding: '2px 6px', border: '1px solid var(--border-primary)', fontSize: '0.6rem', color: 'var(--text-dim)', fontFamily: 'monospace' }}>INVITED</span>
+              {(inv.invitedBy === currentUser?.id || waveData?.createdBy === currentUser?.id) && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await fetchAPI(`/wave-invitations/${inv.invitationId}`, { method: 'DELETE' });
+                      showToast('Invitation withdrawn', 'success');
+                      loadWave(true);
+                    } catch (err) {
+                      showToast(err.message || 'Could not withdraw the invitation', 'error');
+                    }
+                  }}
+                  style={{
+                    padding: isMobile ? '6px 10px' : '2px 8px', background: 'transparent', cursor: 'pointer',
+                    border: '1px solid var(--border-primary)', color: 'var(--text-secondary)',
+                    fontFamily: 'monospace', fontSize: '0.6rem',
+                  }}
+                >WITHDRAW</button>
+              )}
+            </div>
+          ))}
           {participants.map(p => {
             const latestPing = allPings.length > 0 ? allPings[allPings.length - 1] : null;
             const hasReadLatest = latestPing ? (latestPing.readBy || [latestPing.author_id]).includes(p.id) : true;

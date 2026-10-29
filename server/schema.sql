@@ -1528,6 +1528,20 @@ CREATE TABLE IF NOT EXISTS user_invitation_uses (
       );
 CREATE INDEX IF NOT EXISTS idx_user_invitation_uses_user ON user_invitation_uses(user_id);
 
+CREATE TABLE IF NOT EXISTS wave_invitations (
+          id              TEXT PRIMARY KEY,
+          wave_id         TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          invited_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- SET NULL: an inviter deleting their account should not take the
+          -- question away from the person it was put to.
+          invited_by      TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at      TEXT NOT NULL,
+          expires_at      TEXT NOT NULL,
+          UNIQUE (wave_id, invited_user_id)
+        );
+CREATE INDEX IF NOT EXISTS idx_wave_invitations_invitee ON wave_invitations(invited_user_id);
+CREATE INDEX IF NOT EXISTS idx_wave_invitations_wave ON wave_invitations(wave_id);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);

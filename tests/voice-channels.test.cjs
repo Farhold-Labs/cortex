@@ -462,6 +462,7 @@ test('Voice channels', { timeout: 180000 }, async (t) => {
     await t.test('wave calls: presence is pushed to the wave and served without asking LiveKit', async () => {
       const w = await s.api('POST', '/api/waves', { token: owner.token, body: { title: 'Call me', privacy: 'private', participants: [mod.id] } });
       const waveId = w.body.id || w.body.wave?.id;
+      for (const i of ((await s.api('GET', '/api/wave-invitations', { token: mod.token })).body?.invitations || [])) await s.api('POST', `/api/wave-invitations/${i.id}/accept`, { token: mod.token }); // v2.130.0: invited, then accepts
       const listener = await s.socket(mod.token);
       try {
         const listRoomsBefore = lk.calls.filter(c => c.method === 'ListRooms').length;
