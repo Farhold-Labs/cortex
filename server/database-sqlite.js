@@ -3478,6 +3478,42 @@ export class DatabaseSQLite {
       );
     `);
 
+    // v2.123.0 — account invitations more than one person can use. A crew
+    // invited on one link found it used up by whoever signed up first. Every
+    // existing invitation stays single-use (max_uses defaults to 1), and one
+    // already redeemed counts as its one use.
+    const inviteColsV2123 = this.db.prepare(`PRAGMA table_info(user_invitations)`).all();
+    if (inviteColsV2123.length > 0 && !inviteColsV2123.some(c => c.name === 'max_uses')) {
+      console.log('📝 Adding user_invitations.max_uses/use_count (v2.123.0)...');
+      this.db.exec(`
+        ALTER TABLE user_invitations ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE user_invitations ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0;
+        UPDATE user_invitations SET use_count = 1 WHERE used_at IS NOT NULL;
+      `);
+      console.log('✅ user_invitations.max_uses/use_count added');
+    }
+    // Who signed up with each invitation, so a shared link shows its takers.
+    const inviteUsesExisted = this.db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='user_invitation_uses'`
+    ).get();
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_invitation_uses (
+        invitation_id TEXT NOT NULL REFERENCES user_invitations(id) ON DELETE CASCADE,
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        used_at       TEXT NOT NULL,
+        PRIMARY KEY (invitation_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_invitation_uses_user ON user_invitation_uses(user_id);
+    `);
+    if (!inviteUsesExisted && inviteColsV2123.length > 0) {
+      this.db.exec(`
+        INSERT OR IGNORE INTO user_invitation_uses (invitation_id, user_id, used_at)
+        SELECT i.id, i.used_by, i.used_at FROM user_invitations i
+        JOIN users u ON u.id = i.used_by
+        WHERE i.used_at IS NOT NULL;
+      `);
+    }
+
     // v2.100.0 — when a cross-port identity was last confirmed by its home node.
     //
     // A remote person's standing here is borrowed, and until now it was borrowed
@@ -10047,12 +10083,12 @@ export class DatabaseSQLite {
   // admin once, at creation, and is unrecoverable afterwards. A leaked database therefore
   // yields no usable invites.
 
-  createInvitation({ id, tokenHash, email, role, note, createdBy, expiresAt }) {
+  createInvitation({ id, tokenHash, email, role, note, createdBy, expiresAt, maxUses = 1 }) {
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO user_invitations (id, token_hash, email, role, note, created_by, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, tokenHash, email || null, role || 'user', note || null, createdBy || null, now, expiresAt);
+      INSERT INTO user_invitations (id, token_hash, email, role, note, created_by, created_at, expires_at, max_uses)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, tokenHash, email || null, role || 'user', note || null, createdBy || null, now, expiresAt, maxUses);
     return this.getInvitationById(id);
   }
 
@@ -10072,43 +10108,73 @@ export class DatabaseSQLite {
 
   listInvitations({ includeUsed = true } = {}) {
     const rows = this.db.prepare(`
-      SELECT i.*, c.handle AS created_by_handle, u.handle AS used_by_handle
+      SELECT i.*, c.handle AS created_by_handle
       FROM user_invitations i
       LEFT JOIN users c ON c.id = i.created_by
-      LEFT JOIN users u ON u.id = i.used_by
       ORDER BY i.created_at DESC
     `).all();
-    const mapped = rows.map(r => this.rowToInvitation(r));
+    const takers = new Map();
+    for (const r of this.db.prepare(`
+      SELECT iu.invitation_id, u.handle
+      FROM user_invitation_uses iu JOIN users u ON u.id = iu.user_id
+      ORDER BY iu.used_at
+    `).all()) {
+      if (!takers.has(r.invitation_id)) takers.set(r.invitation_id, []);
+      takers.get(r.invitation_id).push(r.handle);
+    }
+    const mapped = rows.map(r => ({ ...this.rowToInvitation(r), usedByHandles: takers.get(r.id) || [] }));
     return includeUsed ? mapped : mapped.filter(i => i.status === 'pending');
   }
 
+  // Stops an invitation's remaining uses. One already used up has nothing left to stop.
   revokeInvitation(id) {
     const res = this.db.prepare(
-      `UPDATE user_invitations SET revoked_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`
+      `UPDATE user_invitations SET revoked_at = ? WHERE id = ? AND use_count < max_uses AND revoked_at IS NULL`
     ).run(new Date().toISOString(), id);
     return res.changes > 0;
   }
 
-  // Marks an invite used. The WHERE clause is the guard against two people redeeming the
-  // same link at once — whoever's UPDATE reports 0 changes loses.
-  consumeInvitation(id, userId) {
-    const res = this.db.prepare(`
-      UPDATE user_invitations SET used_at = ?, used_by = ?
-      WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL
-    `).run(new Date().toISOString(), userId, id);
-    return res.changes > 0;
+  /**
+   * Creates an account on an invitation (v2.123.0). Taking a use and creating
+   * the account are one transaction: the guarded UPDATE is the check that a
+   * use is left, so when two people race for the last one the loser gets no
+   * account at all. (Before, the loser's account already existed when the
+   * claim failed, which let someone in through a closed registration.)
+   * Returns the user, or null when the invitation had no use left.
+   */
+  createUserWithInvitation(invitationId, userData) {
+    return this.db.transaction(() => {
+      const now = new Date().toISOString();
+      const claimed = this.db.prepare(`
+        UPDATE user_invitations SET use_count = use_count + 1
+        WHERE id = ? AND revoked_at IS NULL AND use_count < max_uses AND expires_at > ?
+      `).run(invitationId, now).changes > 0;
+      if (!claimed) return null;
+      const user = this.createUser(userData);
+      this.db.prepare(
+        'INSERT INTO user_invitation_uses (invitation_id, user_id, used_at) VALUES (?, ?, ?)'
+      ).run(invitationId, user.id, now);
+      // used_at / used_by: the first taker, and when it was first used.
+      this.db.prepare(`
+        UPDATE user_invitations SET used_at = COALESCE(used_at, ?), used_by = COALESCE(used_by, ?) WHERE id = ?
+      `).run(now, user.id, invitationId);
+      return user;
+    })();
   }
 
   deleteExpiredInvitations(beforeIso) {
     return this.db.prepare(
-      `DELETE FROM user_invitations WHERE used_at IS NULL AND expires_at < ?`
+      `DELETE FROM user_invitations WHERE use_count = 0 AND expires_at < ?`
     ).run(beforeIso).changes;
   }
 
   rowToInvitation(row) {
     if (!row) return null;
     const expired = new Date(row.expires_at).getTime() < Date.now();
-    const status = row.used_at ? 'used' : row.revoked_at ? 'revoked' : expired ? 'expired' : 'pending';
+    const maxUses = row.max_uses ?? 1;
+    const useCount = row.use_count ?? (row.used_at ? 1 : 0);
+    const usedUp = useCount >= maxUses;
+    const status = usedUp ? 'used' : row.revoked_at ? 'revoked' : expired ? 'expired' : 'pending';
     return {
       id: row.id,
       email: row.email || null,
@@ -10118,9 +10184,10 @@ export class DatabaseSQLite {
       createdByHandle: row.created_by_handle || null,
       createdAt: row.created_at,
       expiresAt: row.expires_at,
+      maxUses,
+      useCount,
       usedAt: row.used_at || null,
       usedBy: row.used_by || null,
-      usedByHandle: row.used_by_handle || null,
       revokedAt: row.revoked_at || null,
       status,
     };
