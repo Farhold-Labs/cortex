@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.133.0] - 2026-10-30
 
-Video links play in the wave. YouTube already did; TikTok was only a card that opened TikTok, and most other providers were plain links.
+Video links play in the wave. YouTube already did; TikTok was only a card that opened TikTok, and most other providers were plain links. And `@everyone` in a Community reaches the Community.
+
+### Changed
+- **`@everyone` in a Community channel reaches every member who can see the channel** (`everyoneMentionIds()`). It reached the wave's participant rows, and a member becomes a participant only by opening or posting in the wave, so it missed everyone who had not been in that wave yet. It still never reaches a member kept out of a restricted channel (the notification carries a preview of the message), anyone outside the Community, someone who has blocked the author or been blocked by them, or the rest of the node.
+- Away from Communities, `@everyone` reaches everyone the wave admits (`waveMemberIds()`): a crew wave now reaches its whole crew, not only those who had opened it. A private wave filed in a channel is still only its own people, and a public wave outside a Community still reaches only its participants.
+- Verified by `tests/everyone-mention.test.cjs`: a member who never opened the wave is reached; a blocker, an outsider, the rest of the node and anyone outside a restricted channel are not; a crew member who never opened the crew wave is reached. The counterfactual puts the participant rows back and the first and last are missed again.
 
 ### Added
 - **TikTok plays in place.** The card that left the app is gone. TikTok's iframe player (`tiktok.com/player/v1/<id>`) replaces it, in an upright box. The old card existed because TikTok's `embed.js` rewrote the page and could not live inside React; the iframe player has no such problem. Short links (`vm.tiktok.com`, `vt.tiktok.com`, `tiktok.com/t/…`) do not say which video they are, so the server asks TikTok's oEmbed for the video number (`embed_product_id`), or failing that follows the short link's redirect once.

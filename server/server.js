@@ -26633,6 +26633,41 @@ function waveMemberIds(wave) {
   return ids;
 }
 
+/**
+ * Who `@everyone` reaches (v2.133.0). It used to be the wave's participant rows,
+ * and in a Community channel a member becomes a participant only by opening or
+ * posting in the wave, so `@everyone` missed every member who had not been in
+ * it yet. Now:
+ *
+ * - a public wave in a Community channel: every active member who can see the
+ *   channel (canDiscoverChannel, the v2.128.0 rule). A member who cannot see a
+ *   restricted channel is not told about it: the notification carries a
+ *   preview of the message;
+ * - any other wave: everyone the wave admits (waveMemberIds), so a crew wave
+ *   reaches its whole crew, not only those who have opened it. A private wave
+ *   filed in a channel is still only its own people.
+ *
+ * Never the whole node: a public wave outside a Community reaches its
+ * participants, as before.
+ */
+function everyoneMentionIds(wave) {
+  const ids = waveMemberIds(wave);
+  const channelId = wave.channelId ?? wave.channel_id ?? null;
+  if (wave.privacy !== 'public' || !channelId) return ids;
+  let channel = null;
+  try { channel = db.getChannelById(channelId); } catch { channel = null; }
+  if (!channel?.community_id) return ids;
+  const memo = new Map();
+  for (const m of db.listCommunityMembers(channel.community_id, { state: 'active' })) {
+    if (db.channelPublicWaveVisible(wave, m.user_id, memo) === true) ids.add(m.user_id);
+  }
+  // Participant rows of people who can no longer see the channel do not count.
+  for (const uid of [...ids]) {
+    if (db.channelPublicWaveVisible(wave, uid, memo) === false) ids.delete(uid);
+  }
+  return ids;
+}
+
 const WAVE_KIND = { private: 'private', group: 'crew', crew: 'crew', crossServer: 'crossServer', 'cross-server': 'crossServer' };
 
 // The affected waves of one Community. `memo` caches channel answers per person
@@ -28335,10 +28370,16 @@ function createPingNotifications(ping, wave, author) {
   const mentionedHandles = extractMentions(ping.content);
   const mentionedUsers = new Set();
 
-  // @everyone — notify all wave participants as direct mentions
+  // @everyone — everyone the wave reaches, as direct mentions. In a Community
+  // channel that is every member who can see it (everyoneMentionIds, v2.133.0).
   if (mentionedHandles.includes('everyone')) {
-    for (const participant of participants) {
+    for (const participantId of everyoneMentionIds(wave)) {
+      const participant = { id: participantId };
       if (!isBot && participant.id === author.id) continue;
+      // Someone reached only because of the Community, never because they are
+      // in the wave, must not hear from a person they have blocked or who has
+      // blocked them.
+      if (!participantIds.has(participant.id) && author.id && db.isBlocked?.(participant.id, author.id)) continue;
       if (!shouldCreateNotification(participant.id, 'direct_mention', wave.id)) continue;
 
       mentionedUsers.add(participant.id);
