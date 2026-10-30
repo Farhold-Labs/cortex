@@ -1772,6 +1772,35 @@ Read-only. Which waves filed in a Community's channels include people who cannot
 
 Also in v2.131.0: `POST /api/groups/:id/invite` lists a person in `errors` ("Cannot invite this user"), `POST /api/groups/:id/members` answers 403, and `POST /api/groups/invitations/:id/accept` answers 403, when the crew has a wave filed in a Community channel that person cannot see. Filing (`PUT …/channels/:channelId/waves/:waveId`) counts a crew wave's whole crew for `OUTSIDERS_IN_WAVE`.
 
+Since v2.134.0 the report lists only waves waiting for review (`reviewState: 'needs_review'`); `scanned` still counts every non-public wave filed.
+
+### Who can see a Community wave (v2.134.0)
+
+Wave-access phase 4. A wave in a Community channel is **open to the channel** (public: whoever can see the channel) or **narrowed**: only the people and Community roles named in it, the crew of a crew wave, and the Community's owners and admins (whoever holds `community.manage`), all of whom must be able to see the channel. Roles are live. Participant rows never count. One rule decides it everywhere: `db.channelWaveVisible()`.
+
+- **Waves on responses** carry `reviewState` (`'needs_review'` or null) on `GET /api/waves/:id` and the wave lists.
+- **`GET /api/waves/:id/audience`**, anyone who can read the wave → `{ mode, communityId, channelId, channelName, canEdit, users?, roles?, crew? }`. `mode` is `channel`, `only`, `review` (waiting for the owner; keeps its old access) or `federated`. For `only`: `users: [{ id, handle, name, avatar, avatarUrl }]`, `roles: [{ id, name }]`, and for a crew wave `crew: { id, name, memberIds }`. 400 `NOT_IN_COMMUNITY` outside a Community.
+- **`PUT /api/waves/:id/audience`**, `community.manage` only (403 `NARROWED_WAVE` otherwise) → the new view. `{ mode: 'channel' }` makes it public to the channel and clears the names. `{ mode: 'only', userIds, roleIds }` makes it private to exactly those (a crew wave stops following its crew), plus the caller. Anyone who cannot see the channel, or does not exist, is refused with the same `400 CANNOT_NAME`; an unknown role `400 UNKNOWN_ROLE`. 409 `NEEDS_REVIEW` for a wave in review, `CROSS_SERVER` for a Verse-Wide one. People who lose it get `removed_from_wave`; people named get `added_to_wave`.
+- **`POST /api/waves`** with a `channelId` and any `privacy` but `public` → 403 `NARROWING_NOT_ALLOWED` unless the caller holds `community.manage`. A narrowed wave names its creator, and the people it was started with as they are added.
+- **`PUT /api/communities/:id/channels/:channelId/waves/:waveId`** (filing): a non-public wave needs `community.manage` (403 `NARROWING_NOT_ALLOWED`); its participants and creator are named as it arrives, so nobody in it loses it. A Verse-Wide wave cannot be filed (409 `CROSS_SERVER`). Filing a wave in review into a channel all its people can see settles the review.
+- **`DELETE …/channels/:channelId/waves/:waveId`** (unfiling) a narrowed wave: its named people who could see it keep participant rows; every other row is removed, including those of admins who only opened it, and everyone who loses it gets `removed_from_wave`.
+- **`POST /api/waves/:id/participants`** on a narrowed wave: `community.manage` only; names the person (they must see the channel). **`DELETE /api/waves/:id/participants/:userId`** on a narrowed wave: yourself, or anyone by `community.manage`; removes the name. Returns `stillSees` (true if a role or being an admin still admits them).
+- **`PUT /api/waves/:id`** on a Community channel wave: changing `privacy`, or a crew wave's `groupId`, → 409 `USE_AUDIENCE`.
+- **`POST /api/waves/:id/invite-federated`** on a Community channel wave → 409 `IN_COMMUNITY`.
+- **`GET /api/communities/:id/members?channel=<channelId>`** adds `canSeeChannel` to each member, for the picker, if the caller can see that channel.
+
+**Review.** Migration marks every non-public channel wave whose people (participants and creator, or its crew) include someone who cannot see the channel `needs_review`; it keeps the access it had. The rest are narrowed (a private wave to its people by name, a crew wave to its crew).
+
+- **`POST /api/communities/:id/waves/:waveId/review`** `{ action, invite?, roleName? }`, `community.manage` → `{ action, ... }`. 409 `NOT_IN_REVIEW` if it is not waiting.
+  - `move_out`: the wave leaves the channel; nobody gains or loses access. → `{ action, wave }`.
+  - `make_role`: a crew wave's crew becomes a new Community role (named `roleName`, else the crew's own name if it has one and the caller can open the wave, else the wave's title if they can, else "<wave> group"; no capabilities; granted to the crew's members who can see the channel) and the wave is narrowed to it; a hand-picked wave is narrowed to its people who can see the channel. The caller is named too. With `invite: true` each person outside who is not banned, blocked either way, or removed from the Community gets a Community invitation (and, for a hand-picked wave, is named, so accepting gives it back). Without, they lose it and get `removed_from_wave` with `reason: 'community', communityName`. → `{ action, role, inside, outside, invited }`.
+
+**Community invitations** (personal, from a review): a membership in state `invited`.
+
+- **`GET /api/community-invitations`** → `{ invitations: [{ communityId, communityName, logoUrl, invitedBy, createdAt }] }`.
+- **`POST /api/community-invitations/:communityId/accept`** → `{ community }`: an active member with the `member` role (and any role granted with the invitation).
+- **`POST /api/community-invitations/:communityId/decline`** `{ block? }`: someone who was never a member leaves no trace; a former member goes back to `left`.
+
 ### Messages Endpoints
 
 > **⚠️ DEPRECATED (v1.10.0):** These endpoints are deprecated. Use the `/api/pings/*` endpoints instead.

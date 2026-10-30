@@ -13,6 +13,7 @@ import DeleteConfirmModal from './DeleteConfirmModal.jsx';
 import ReportModal from '../reports/ReportModal.jsx';
 // BurstModal removed in v2.38.0 — replaced by ThreadPanel
 import InviteToWaveModal from './InviteToWaveModal.jsx';
+import WaveAudienceModal from './WaveAudienceModal.jsx';
 import InviteFederatedModal from './InviteFederatedModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
@@ -109,6 +110,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     }
   });
   const [showSettings, setShowSettings] = useState(false);
+  const [showAudience, setShowAudience] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState(null);
   const [showGifSearch, setShowGifSearch] = useState(false);
@@ -2033,6 +2035,22 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     <span>Members ({participants.length})</span>
                   </div>
 
+                  {/* Who can see this (v2.134.0): a wave in a Community channel. */}
+                  {waveData.channelId && waveData.communityId && (
+                    <div
+                      onClick={() => { setShowWaveMenu(false); setShowAudience(true); }}
+                      style={{
+                        padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)',
+                        background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>👁</span>
+                      <span>Who can see this</span>
+                    </div>
+                  )}
+
                   {/* New wave with these people (v2.132.0): the same group, nobody asked again. */}
                   {onNewWaveWithPeople && (waveData.group?.id
                     || (waveData.privacy === 'private' && !waveData.channelId && (waveData.federationState || 'local') === 'local' && participants.length >= 2)) && (
@@ -2808,6 +2826,10 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         />
         )}
       </div>
+
+      <WaveAudienceModal isOpen={showAudience} onClose={() => setShowAudience(false)} waveId={wave.id}
+        fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} currentUserId={currentUser?.id}
+        onChanged={() => { loadWave(true); onWaveUpdate?.(); }} />
 
       <WaveSettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)}
         wave={waveData} groups={groups} fetchAPI={fetchAPI} showToast={showToast}

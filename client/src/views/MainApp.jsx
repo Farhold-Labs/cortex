@@ -7,6 +7,7 @@ import { VERSION, API_URL, BASE_URL, canAccess, FONT_SIZES, MESSAGE_FONTS, DEFAU
 import { setTerminology } from '../config/terminology.js';
 import { getRandomTagline, SUCCESS, NOTIFICATION, formatError, GHOST_PROTOCOL } from '../../messages.js';
 import { storage } from '../utils/storage.js';
+import { plainText } from '../utils/plainText.js';
 import { startAttachmentSession, stopAttachmentSession } from '../utils/attachments.js';
 import { updateAppBadge, subscribeToPush } from '../utils/pwa.js';
 import { setupCapacitorPushListeners } from '../utils/capacitor-push.js';
@@ -1121,7 +1122,10 @@ function MainApp({ sharePingId }) {
       loadCategories();
     } else if (data.type === 'removed_from_wave') {
       // We were removed from a wave (by someone else) — close its tab
-      showToastMsg(NOTIFICATION.removedFromWave(data.wave?.title || `a ${T.wave}`), 'info');
+      // v2.134.0: kept for a Community this person is not in.
+      showToastMsg(data.reason === 'community'
+        ? `${plainText(data.wave?.title || `A ${T.wave}`)} now belongs to ${plainText(data.communityName || 'a community')}, which you're not in`
+        : NOTIFICATION.removedFromWave(data.wave?.title || `a ${T.wave}`), 'info');
       const removedTab2 = openTabs.find(t => t.waveId === data.wave?.id);
       if (removedTab2) closeTab(removedTab2.id);
       loadWaves();
@@ -1276,7 +1280,9 @@ function MainApp({ sharePingId }) {
     } else if (data.type === 'community_roles_changed') {
       // This person was made, or stopped being, an admin or moderator
       // (v2.124.0): what the channel list offers them follows their roles.
+      // Since v2.134.0 roles also decide which narrowed waves they see.
       loadCommunityChannelsRef.current?.();
+      loadWaves();
     } else if (data.type === 'voice_presence') {
       // Someone joined or left a Community voice channel (v2.118.0).
       setVoicePresence(prev => ({ ...prev, [data.channelId]: data.participants || [] }));
@@ -1430,8 +1436,15 @@ function MainApp({ sharePingId }) {
 
   const loadWaveInvitations = useCallback(async () => {
     try {
-      const data = await fetchAPI('/wave-invitations');
-      setWaveInvitations(data?.invitations || []);
+      // v2.134.0: invitations into a Community share the box, marked by kind.
+      const [data, community] = await Promise.all([
+        fetchAPI('/wave-invitations'),
+        fetchAPI('/community-invitations').catch(() => null),
+      ]);
+      setWaveInvitations([
+        ...(community?.invitations || []).map(c => ({ ...c, kind: 'community', id: `community:${c.communityId}` })),
+        ...(data?.invitations || []),
+      ]);
     } catch (e) { console.error('Failed to load wave invitations:', e); }
   }, [fetchAPI]);
   loadWaveInvitationsRef.current = loadWaveInvitations;
@@ -1455,6 +1468,19 @@ function MainApp({ sharePingId }) {
   }, [showInvitations]);
 
   const acceptWaveInvitation = useCallback(async (invitation) => {
+    if (invitation.kind === 'community') {
+      try {
+        await fetchAPI(`/community-invitations/${invitation.communityId}/accept`, { method: 'POST' });
+        setWaveInvitations(prev => prev.filter(i => i.id !== invitation.id));
+        showToastMsg(`You joined ${invitation.communityName}`, 'success');
+        await loadWaves();
+        loadCommunityChannelsRef.current?.();
+      } catch (err) {
+        showToastMsg(err.message || 'Could not accept the invitation', 'error');
+        loadWaveInvitations();
+      }
+      return;
+    }
     try {
       const res = await fetchAPI(`/wave-invitations/${invitation.id}/accept`, { method: 'POST' });
       setWaveInvitations(prev => prev.filter(i => i.id !== invitation.id));
@@ -1468,7 +1494,10 @@ function MainApp({ sharePingId }) {
 
   const declineWaveInvitation = useCallback(async (invitation, { block = false } = {}) => {
     try {
-      await fetchAPI(`/wave-invitations/${invitation.id}/decline`, { method: 'POST', body: { block } });
+      const path = invitation.kind === 'community'
+        ? `/community-invitations/${invitation.communityId}/decline`
+        : `/wave-invitations/${invitation.id}/decline`;
+      await fetchAPI(path, { method: 'POST', body: { block } });
       setWaveInvitations(prev => prev.filter(i => i.id !== invitation.id));
       if (block) loadBlockedMutedUsersRef.current?.();
     } catch (err) {
@@ -2682,6 +2711,7 @@ function MainApp({ sharePingId }) {
       <NewWaveModal isOpen={showNewWave}
         onClose={() => { setShowNewWave(false); setNewWaveContainer(null); setNewWaveGroupId(null); }}
         containerLabel={newWaveContainer?.label || null}
+        inChannel={!!newWaveContainer?.channelId}
         initialGroupId={newWaveGroupId}
         onCreate={handleCreateWave} contacts={contacts} groups={groups} federationEnabled={federationEnabled} />
 

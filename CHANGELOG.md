@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.134.0] - 2026-10-30
+
+Wave-access phase 4: inside a Community, a conversation is open to its channel or narrowed to chosen people and roles, Discord-style, and the conversations that had people outside their channel wait for the owner's decision. Migrating release.
+
+### Added
+- **Who can see this** (wave ⋮, for a wave in a Community channel). Everyone sees who can: the channel, or the people and roles it is narrowed to, "and the community's owners and admins". Owners and admins change it: open to the channel, or only chosen people and Community roles. Roles are live: someone given the role later sees it, someone who loses it does not. The picker lists only members who can see the channel (`GET /api/communities/:id/members?channel=` marks them) and the Community's roles; the server refuses anyone else with one answer whether or not they exist. Narrowing takes the wave away from everyone else at once (`removed_from_wave`).
+- **Review** (Manage Community → WAVES TO REVIEW): each wave waiting for a decision has MOVE IT OUT (it leaves the Community; nobody gains or loses access) and MAKE IT A ROLE (a crew becomes a new Community role, copied and granted to its members who can see the channel; a hand-picked wave keeps its people who can see the channel). "Invite the people outside to join the community" is on by default; without it they lose the wave and are told it now belongs to a Community they are not in. A wave waiting shows REVIEW in the list. `POST /api/communities/:id/waves/:waveId/review`.
+- **Community invitations**, from a review: they appear in the invitations box at the top of the list (JOIN, DECLINE, DECLINE & BLOCK). Joining makes the person a member with the role, so they keep the wave. A membership in state `invited`; declining leaves no trace for someone who was never a member.
+
+### Changed
+- **Owners and admins only narrow.** A member can no longer start, or file into a channel, a wave only some people see (403 `NARROWING_NOT_ALLOWED`); the new-wave dialog in a channel has no privacy choice and says why. For a private conversation, a member starts one outside the Community (decision #2, confirmed by Jared: owners and admins see narrowed waves, as Discord administrators see every channel).
+- **Participant rows never count in a Community channel.** They did for private and crew waves filed in channels; now the wave's audience decides, everywhere (`db.channelWaveVisible()`): reads, both wave lists, search, the video feed, live updates, push, `@everyone` and the attachment gate.
+- Filing a private wave names its people as it arrives (`db.setWaveChannel`), so nobody in it loses it. Taking a narrowed wave out keeps its named people who could see it and drops every other participant row, including those of admins who only opened it.
+- Wave settings no longer change the privacy, or the crew, of a Community channel wave (409 `USE_AUDIENCE`): that is Who can see this. A Community channel wave cannot be made Verse-Wide (409 `IN_COMMUNITY`).
+- `@everyone`, live updates and push reach a narrowed wave's whole audience, participant row or not, and nobody else.
+- Becoming or stopping being a role holder re-reads the wave list (`community_roles_changed`), since roles now decide which narrowed waves someone sees.
+
+### Migration
+- `waves.review_state` and `wave_audience (wave_id, kind 'user'|'role', ref_id)`. Once, at the first boot: every non-public wave in a Community channel whose people (participants and creator, or its crew) can all see the channel is narrowed (a private wave to its people by name, a crew wave to its crew); one that includes anyone who cannot is marked `needs_review` and keeps exactly the access it had. Dev: 1 narrowed, 2 to review.
+
+### Security
+- The visibility memo is now keyed by person as well as channel, so sharing one across people is safe (the CORTEX-COMM-027 class cannot recur through it). The COMM-027 counterfactual now also restores the old key.
+- `assertNeverGrantsWaveAccess` stays: Community membership alone still grants no wave. Its comment now names `db.channelWaveVisible()` as the one place where a wave's audience (which can be a Community role) decides.
+
+### Verified
+- `tests/community-wave-audience.test.cjs` (14 checks, real server): only owners and admins narrow; outsiders and non-existent accounts refused alike; a narrowed wave admits its named people, role holders, owner and admins, not a member who posted in it while it was open, not other members; both list modes; `@everyone`; roles live; adding and leaving; widening; moving out; the migration on pre-v2.134 data (3 to review); review keeps old access; Make it a role with and without invitations; Move it out; the invitation accepted gives the wave back; a channel crew wave's crew cannot be swapped. Counterfactuals: with participant rows counting again, the member who posted keeps the narrowed wave and the role means nothing; without the unfiling clean-up, the admin who looked in keeps the wave outside the Community.
+- Existing tests that encoded the old rules were updated where the rule deliberately changed (members filing private waves, the owner not seeing a filed private wave, outsiders kept in channel waves); `community-wave-report.test.cjs` now builds its outsider waves as pre-v2.134 data and runs the real migration. Full suite 650/650.
+- Headless at phone width on dev after migrating its database (backup taken first): the REVIEW marker beside a waiting wave, Who can see this for the owner (editable) and for a named member (read-only), the review confirm step with the invitation option, and the channel new-wave dialog.
+
 ## [2.133.1] - 2026-10-30
 
 ### Security
