@@ -278,7 +278,10 @@ test('counterfactual: without the consent step, blocked people and outsiders go 
     const r = await scenario(srv);
     assert.equal(r.zoeBeforeAccept, 200, 'added without being asked');
     assert.equal(r.kayleeRead, 200, 'someone who blocked the creator was put in');
-    assert.equal(r.communityOutsiderRead, 200, 'an outsider was put into a Community wave');
+    assert.equal(r.communityOutsiderRefused, false, 'an outsider was put into a Community wave');
+    // Since v2.134.0 the channel still keeps them out: a narrowed wave admits
+    // nobody who cannot see its channel, whatever rows or names they hold.
+    assert.equal(r.communityOutsiderRead, 403, 'and the channel rule still holds');
   } finally {
     srv?.child.kill();
     fs.rmSync(temp, { recursive: true, force: true });

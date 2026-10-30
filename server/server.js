@@ -22103,6 +22103,16 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     if (targetChannel.type === 'voice') {
       return res.status(409).json({ error: 'A voice channel does not hold conversations' });
     }
+    // v2.134.0: a wave in a channel is open to the channel. Only the
+    // Community's owners and admins may start one that only some people see
+    // (Discord-like); a member who wants a private conversation starts one
+    // outside the Community.
+    if (privacy !== 'public' && !db.isCommunityManager(targetChannel.community_id, req.user.userId)) {
+      return res.status(403).json({
+        error: `Only the community's owners and admins can start a ${T_WAVE()} that only some people can see`,
+        code: 'NARROWING_NOT_ALLOWED',
+      });
+    }
   }
 
   // Validate group access for group waves
@@ -22173,6 +22183,8 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   // createWave left them.
   if (targetChannel) {
     inCommunityTransaction(() => {
+      // A narrowed wave names its creator here (setWaveChannel); the people
+      // it was started with are named as they are added (addOrInviteToWave).
       db.setWaveChannel(wave.id, targetChannel.id);
       db.logCommunityAudit(targetChannel.community_id, {
         actorId: req.user.userId, action: 'wave.create_in_channel',
@@ -22406,6 +22418,13 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
   const wasLocal = wave.federationState === 'local' || !wave.federationState;
   const changingToCrossServer = privacy === 'crossServer' && wave.privacy !== 'crossServer';
 
+  // v2.134.0: in a Community channel, who sees a wave is chosen through
+  // PUT /api/waves/:id/audience, by the Community's owners and admins. A
+  // privacy change here would narrow or widen it around them.
+  if (privacy && privacy !== wave.privacy && wave.channelId && db.getChannelById(wave.channelId)?.community_id) {
+    return res.status(409).json({ error: `Choose who can see this ${T_WAVE()} under "Who can see this"`, code: 'USE_AUDIENCE' });
+  }
+
   if (privacy && ['private', 'group', 'crossServer', 'public'].includes(privacy)) {
     let groupId = null;
     if (privacy === 'group') {
@@ -22626,6 +22645,13 @@ app.post('/api/waves/:id/invite-federated', authenticateToken, async (req, res) 
 
   if (federatedParticipants.length === 0) {
     return res.status(400).json({ error: 'No valid federated participants found' });
+  }
+
+  // v2.134.0: people on other servers are not Community members, and a
+  // Verse-Wide wave keeps its own rules (phase 6), so promoting a Community
+  // channel wave would take it out from under its channel.
+  if (wave.channelId && db.getChannelById(wave.channelId)?.community_id) {
+    return res.status(409).json({ error: `Move this ${T_WAVE()} out of its community first`, code: 'IN_COMMUNITY' });
   }
 
   // Update wave to crossServer if not already federated
@@ -23616,7 +23642,12 @@ function waveJoinRefusal(wave, inviterId, inviteeId) {
   const invitee = db.findUserById(inviteeId);
   if (!invitee) return NOPE;
   if (inviteeId === inviterId) return { status: 400, error: 'You are already in this wave', code: 'SELF' };
-  if (participation.isParticipant(wave.id, inviteeId) || (isGroupWave(wave) && db.isGroupMember(wave.groupId, inviteeId))) {
+  // A narrowed Community wave (v2.134.0): being in it is being named in it (or
+  // in its crew). A leftover participant row is not being in it.
+  const already = db.isNarrowedChannelWave(wave)
+    ? db.isWaveAudienceUser(wave.id, inviteeId) || (isGroupWave(wave) && db.isGroupMember(wave.groupId, inviteeId))
+    : participation.isParticipant(wave.id, inviteeId) || (isGroupWave(wave) && db.isGroupMember(wave.groupId, inviteeId));
+  if (already) {
     return { status: 400, error: 'Already in this wave', code: 'ALREADY_PARTICIPANT' };
   }
   // Blocks, in both directions. A refusal either way reads the same.
@@ -23636,7 +23667,9 @@ function waveJoinRefusal(wave, inviterId, inviteeId) {
 function completeWaveJoin(wave, user, addedBy) {
   // A group wave is joined by joining its group (v2.132.0).
   if (isGroupWave(wave)) crewMembership.addMember(wave.groupId, user.id, 'member');
-  participation.addParticipant(wave.id, user.id);
+  // A narrowed Community wave is joined by being named in it (v2.134.0).
+  else if (db.isNarrowedChannelWave(wave)) db.addWaveAudienceUser(wave.id, user.id);
+  if (!participation.isParticipant(wave.id, user.id)) participation.addParticipant(wave.id, user.id);
 
   // An encrypted burst wave inherits its parent's key for the new participant.
   if (wave.encrypted && wave.broken_out_from) {
@@ -23918,6 +23951,129 @@ app.post('/api/waves/:id/group', authenticateToken, (req, res) => {
   res.json({ groupId: updated.groupId, group: db.getGroup(updated.groupId) });
 });
 
+// ----- Who can see a Community wave (v2.134.0, wave-access phase 4) -----
+//
+// A wave in a Community channel is open to the channel, or narrowed to named
+// people and Community roles (docs/wave-access/01-design.md). Narrowing is the
+// Community's owners' and admins' tool, as private channels are in Discord, and
+// they always see narrowed waves. Everyone named must be able to see the
+// channel; the server refuses anyone else without saying whether they exist.
+
+function waveAudienceContext(wave) {
+  if (!wave?.channelId) return null;
+  const channel = db.getChannelById(wave.channelId);
+  if (!channel?.community_id) return null;
+  return { channel, communityId: channel.community_id };
+}
+
+function waveAudienceView(wave, viewerId) {
+  const ctx = waveAudienceContext(wave);
+  if (!ctx) return null;
+  const isManager = db.isCommunityManager(ctx.communityId, viewerId);
+  const mode = wave.reviewState === 'needs_review' ? 'review'
+    : wave.privacy === 'public' ? 'channel'
+    : (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') ? 'federated'
+    : 'only';
+  const view = { mode, communityId: ctx.communityId, channelId: ctx.channel.id, channelName: ctx.channel.name, canEdit: isManager && (mode === 'channel' || mode === 'only') };
+  if (mode !== 'only') return view;
+  const audience = db.getWaveAudience(wave.id);
+  view.users = audience.userIds.map(id => db.findUserById(id)).filter(Boolean)
+    .map(u => ({ id: u.id, handle: u.handle, name: u.displayName || u.handle, avatar: u.avatar, avatarUrl: u.avatarUrl }));
+  const roles = new Map(db.listCommunityRoles(ctx.communityId).map(r => [r.id, r]));
+  view.roles = audience.roleIds.filter(id => roles.has(id)).map(id => ({ id, name: roles.get(id).name }));
+  if (isGroupWave(wave)) {
+    view.crew = { id: wave.groupId, name: db.getGroup(wave.groupId)?.name || null,
+      memberIds: db.getGroupMembers(wave.groupId).map(m => m.id) };
+  }
+  return view;
+}
+
+app.get('/api/waves/:id/audience', authenticateToken, (req, res) => {
+  const wave = db.getWave(sanitizeInput(req.params.id));
+  if (!wave || !canAccessWaveFromCache(wave.id, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
+  const view = waveAudienceView(wave, req.user.userId);
+  if (!view) return res.status(400).json({ error: `This ${T_WAVE()} is not in a community`, code: 'NOT_IN_COMMUNITY' });
+  res.json(view);
+});
+
+app.put('/api/waves/:id/audience', authenticateToken, apiLimiter, (req, res) => {
+  const wave = db.getWave(sanitizeInput(req.params.id));
+  if (!wave || !canAccessWaveFromCache(wave.id, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
+  const ctx = waveAudienceContext(wave);
+  if (!ctx) return res.status(400).json({ error: `This ${T_WAVE()} is not in a community`, code: 'NOT_IN_COMMUNITY' });
+  if (!requireFeature('communities', res)) return;
+  if (!db.isCommunityManager(ctx.communityId, req.user.userId)) {
+    return res.status(403).json({ error: `Only the community's owners and admins choose who can see this ${T_WAVE()}`, code: 'NARROWED_WAVE' });
+  }
+  if (wave.reviewState === 'needs_review') {
+    return res.status(409).json({ error: `This ${T_WAVE()} is waiting for review`, code: 'NEEDS_REVIEW' });
+  }
+  if (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') {
+    return res.status(409).json({ error: `This ${T_WAVE()} has people on other servers`, code: 'CROSS_SERVER' });
+  }
+
+  const mode = req.body?.mode;
+  let userIds = [], roleIds = [];
+  if (mode === 'only') {
+    const asList = (v) => Array.isArray(v) ? [...new Set(v.map(x => sanitizeInput(String(x || ''))).filter(Boolean))] : [];
+    userIds = asList(req.body.userIds);
+    roleIds = asList(req.body.roleIds);
+    if (userIds.length > 500 || roleIds.length > 50) return res.status(400).json({ error: 'Too many people or roles' });
+    // Plus the person narrowing it, so nobody narrows a wave away from themselves.
+    if (!userIds.includes(req.user.userId)) userIds.push(req.user.userId);
+    // Everyone named must be able to see the channel. One answer for "no such
+    // account", "not a member" and "cannot see this channel".
+    for (const uid of userIds) {
+      if (!db.findUserById(uid) || !communityAuthz.canDiscoverChannel(db, { kind: 'user', userId: uid }, ctx.channel.id).allowed) {
+        return res.status(400).json({ error: 'Someone named cannot see this channel', code: 'CANNOT_NAME' });
+      }
+    }
+    const roles = new Set(db.listCommunityRoles(ctx.communityId).map(r => r.id));
+    if (roleIds.some(id => !roles.has(id))) return res.status(400).json({ error: 'Unknown role', code: 'UNKNOWN_ROLE' });
+  } else if (mode !== 'channel') {
+    return res.status(400).json({ error: "mode must be 'channel' or 'only'" });
+  }
+
+  // Who could see it before, to tell those who lose it. A public channel wave
+  // is in the list of everyone who can see the channel; only people who have
+  // been in it (participant rows) are told.
+  const before = wave.privacy === 'public'
+    ? new Set(participation.getWaveParticipants(wave.id))
+    : (db.narrowedWaveMemberIds(wave) || new Set());
+
+  inCommunityTransaction(() => {
+    if (mode === 'channel') {
+      db.updateWavePrivacy(wave.id, 'public', null);
+      db.clearWaveAudience(wave.id);
+    } else {
+      // Narrowed to exactly who was chosen: a crew wave stops following its
+      // crew (its members are listed by name if they were chosen).
+      if (wave.privacy !== 'private') db.updateWavePrivacy(wave.id, 'private', null);
+      db.setWaveAudience(wave.id, { userIds, roleIds });
+    }
+    db.logCommunityAudit(ctx.communityId, {
+      actorId: req.user.userId, action: mode === 'channel' ? 'wave.audience_channel' : 'wave.audience_narrow',
+      targetType: 'wave', targetId: wave.id,
+      metadata: mode === 'only' ? { users: userIds.length, roles: roleIds.length } : null,
+    });
+  });
+
+  const updated = db.getWave(wave.id);
+  for (const uid of before) {
+    if (!canAccessWaveFromCache(wave.id, uid)) {
+      broadcastToUser(uid, { type: 'removed_from_wave', wave: { id: wave.id, title: wave.title }, removedBy: req.user.userId });
+    }
+  }
+  for (const uid of userIds) {
+    if (!before.has(uid) && uid !== req.user.userId) {
+      broadcastToUser(uid, { type: 'added_to_wave', wave: { id: wave.id, title: updated.title, privacy: updated.privacy }, addedBy: req.user.userId });
+    }
+  }
+  broadcastToWave(wave.id, { type: 'wave_updated', wave: updated });
+  if (db.logActivity) db.logActivity(req.user.userId, 'set_wave_audience', 'wave', wave.id, getRequestMeta(req), { mode });
+  res.json(waveAudienceView(updated, req.user.userId));
+});
+
 app.post('/api/waves/:id/participants', authenticateToken, inviteLimiter, async (req, res) => {
   const waveId = sanitizeInput(req.params.id);
   const userId = sanitizeInput(req.body.userId || '');
@@ -23931,15 +24087,24 @@ app.post('/api/waves/:id/participants', authenticateToken, inviteLimiter, async 
     return res.status(404).json({ error: 'Wave not found' });
   }
 
-  // Only wave creator can add participants to private waves
-  if (wave.privacy === 'private' && wave.createdBy !== req.user.userId) {
-    return res.status(403).json({ error: 'Only wave creator can add participants to private waves' });
-  }
+  // v2.134.0: who sees a narrowed Community wave is the Community's owners'
+  // and admins' choice, and only theirs.
+  const narrowedCommunity = db.isNarrowedChannelWave(wave) ? db.getChannelById(wave.channelId)?.community_id : null;
+  if (narrowedCommunity) {
+    if (!db.isCommunityManager(narrowedCommunity, req.user.userId)) {
+      return res.status(403).json({ error: `Only the community's owners and admins choose who can see this ${T_WAVE()}`, code: 'NARROWED_WAVE' });
+    }
+  } else {
+    // Only wave creator can add participants to private waves
+    if (wave.privacy === 'private' && wave.createdBy !== req.user.userId) {
+      return res.status(403).json({ error: 'Only wave creator can add participants to private waves' });
+    }
 
-  // A participant, or anyone in a group wave's group (v2.132.0).
-  const inGroup = isGroupWave(wave) && db.isGroupMember(wave.groupId, req.user.userId);
-  if (!participation.isParticipant(waveId, req.user.userId) && !inGroup) {
-    return res.status(403).json({ error: 'You must be a participant to add others' });
+    // A participant, or anyone in a group wave's group (v2.132.0).
+    const inGroup = isGroupWave(wave) && db.isGroupMember(wave.groupId, req.user.userId);
+    if (!participation.isParticipant(waveId, req.user.userId) && !inGroup) {
+      return res.status(403).json({ error: 'You must be a participant to add others' });
+    }
   }
 
   let target = wave;
@@ -23983,6 +24148,30 @@ app.delete('/api/waves/:id/participants/:userId', authenticateToken, async (req,
   const wave = db.getWave(waveId);
   if (!wave) {
     return res.status(404).json({ error: 'Wave not found' });
+  }
+
+  // v2.134.0: a narrowed Community wave. Leaving, or being taken off it by
+  // the Community's owners and admins, is losing your name in it; a crew
+  // member goes through the crew, below.
+  const narrowedCommunity = db.isNarrowedChannelWave(wave) ? db.getChannelById(wave.channelId)?.community_id : null;
+  if (narrowedCommunity && !(isGroupWave(wave) && db.isGroupMember(wave.groupId, userId))) {
+    const self = userId === req.user.userId;
+    if (!self && !db.isCommunityManager(narrowedCommunity, req.user.userId)) {
+      return res.status(403).json({ error: `Only the community's owners and admins choose who can see this ${T_WAVE()}`, code: 'NARROWED_WAVE' });
+    }
+    if (!db.isWaveAudienceUser(waveId, userId) && !participation.isParticipant(waveId, userId)) {
+      return res.status(400).json({ error: 'User is not a participant' });
+    }
+    db.removeWaveAudienceUser(waveId, userId);
+    if (participation.isParticipant(waveId, userId)) participation.removeParticipant(waveId, userId);
+    broadcastToWave(waveId, { type: 'participant_removed', waveId, userId, removedBy: req.user.userId, wasSelf: self });
+    // Someone who still sees it (an admin, or through a role) keeps it.
+    const stillSees = canAccessWaveFromCache(waveId, userId);
+    if (!self && !stillSees) {
+      broadcastToUser(userId, { type: 'removed_from_wave', wave: { id: wave.id, title: wave.title }, removedBy: req.user.userId });
+    }
+    if (db.logActivity) db.logActivity(req.user.userId, self ? 'leave_wave' : 'remove_participant', 'wave', waveId, getRequestMeta(req), { removedUserId: userId });
+    return res.json({ success: true, stillSees, participants: db.getWaveParticipants(waveId) });
   }
 
   // Check permissions:
@@ -26601,7 +26790,24 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
     });
   }
 
+  // v2.134.0: a wave that is not public becomes narrowed in a channel, and
+  // only the Community's owners and admins narrow waves.
+  const narrowing = wave.privacy !== 'public' && wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server';
+  if (narrowing && !db.isCommunityManager(req.params.id, req.user.userId)) {
+    return res.status(403).json({
+      error: `Only the community's owners and admins can file a ${T_WAVE()} that only some people can see. Make it public first.`,
+      code: 'NARROWING_NOT_ALLOWED',
+    });
+  }
+  if (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') {
+    return res.status(409).json({ error: `A ${T_WAVE()} with people on other servers cannot be filed in a community`, code: 'CROSS_SERVER' });
+  }
+
   const updated = inCommunityTransaction(() => {
+    // A private wave's people are named as it arrives (setWaveChannel), so
+    // nobody already in it loses it; everyone was checked against the channel
+    // above. Filing again into a channel everyone can see settles a review.
+    if (wave.reviewState) db.setWaveReviewState(wave.id, null);
     const updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'wave.file', targetType: 'wave', targetId: req.params.waveId,
@@ -26621,11 +26827,47 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
 // the people outside: who is in a crew or a private wave is not the
 // Community's to learn.
 
+/**
+ * Take a wave out of its channel (v2.134.0). Outside a Community, participant
+ * rows decide again, so a narrowed wave's rows are made to match who it
+ * admitted: its named people who still see it stay or join, and a leftover row
+ * of anyone it no longer admitted does not come back to life. Owners, admins and role holders
+ * who were never named do not follow it out. A wave in review keeps its rows
+ * as they are: that is "Move it out".
+ */
+function unfileWave(wave) {
+  const lost = new Set();
+  if (db.isNarrowedChannelWave(wave) && !isGroupWave(wave)) {
+    const before = db.narrowedWaveMemberIds(wave);
+    const keep = new Set(db.getWaveAudience(wave.id).userIds.filter(uid => before.has(uid)));
+    // Every row, including those getWaveParticipants already hides. An admin
+    // who only looked in has a row from opening it, and is not in it.
+    for (const uid of db.db.prepare('SELECT user_id FROM wave_participants WHERE wave_id = ?').all(wave.id).map(r => r.user_id)) {
+      if (!keep.has(uid)) participation.removeParticipant(wave.id, uid);
+    }
+    for (const uid of keep) {
+      if (db.findUserById(uid) && !participation.isParticipant(wave.id, uid)) participation.addParticipant(wave.id, uid);
+    }
+    for (const uid of before) if (!keep.has(uid)) lost.add(uid);
+  }
+  db.clearWaveAudience(wave.id);
+  if (wave.reviewState) db.setWaveReviewState(wave.id, null);
+  return { updated: db.setWaveChannel(wave.id, null), lost };
+}
+
+/** After the commit: tell the people a moved-out wave left behind. */
+function announceUnfiled(wave, lost) {
+  for (const uid of lost) broadcastToUser(uid, { type: 'removed_from_wave', wave: { id: wave.id, title: wave.title } });
+}
+
 // Everyone a wave admits by its own rules: participants, plus the whole crew
 // of a crew wave. Public waves are not asked about: in a channel they already
 // follow the channel (v2.128.0). The crew comes from crew_members, the table
 // canAccessWave reads, so this counts exactly who can open the wave.
 function waveMemberIds(wave) {
+  // v2.134.0: a narrowed Community wave admits its audience, not its rows.
+  const narrowed = db.narrowedWaveMemberIds(wave);
+  if (narrowed) return narrowed;
   const ids = new Set(participation.getWaveParticipants(wave.id));
   if ((wave.privacy === 'group' || wave.privacy === 'crew') && wave.groupId) {
     for (const m of db.getGroupMembers(wave.groupId)) ids.add(m.id);
@@ -26644,8 +26886,8 @@ function waveMemberIds(wave) {
  *   restricted channel is not told about it: the notification carries a
  *   preview of the message;
  * - any other wave: everyone the wave admits (waveMemberIds), so a crew wave
- *   reaches its whole crew, not only those who have opened it. A private wave
- *   filed in a channel is still only its own people.
+ *   reaches its whole crew, not only those who have opened it, and a narrowed
+ *   Community wave its whole audience (v2.134.0).
  *
  * Never the whole node: a public wave outside a Community reaches its
  * participants, as before.
@@ -26697,6 +26939,10 @@ function communityWaveFindings(communityId, memo = new Map()) {
   for (const r of rows) {
     const wave = db.getWave(r.id);
     if (!wave) continue;
+    // v2.134.0: only the waves still waiting for a decision. Every other wave
+    // in a channel is public to it or narrowed, and admits nobody who cannot
+    // see it.
+    if (wave.reviewState !== 'needs_review') continue;
     const people = [...waveMemberIds(wave)];
     const outside = people.filter(uid => !canSee(r.channel_id, uid));
     if (outside.length === 0) continue;
@@ -26737,6 +26983,230 @@ app.get('/api/communities/:id/wave-report', authenticateToken, apiLimiter, (req,
   });
 });
 
+// ----- Deciding a wave in review (v2.134.0, wave-access phase 4) -----
+//
+// A wave that, when narrowing shipped, included people who cannot see its
+// channel keeps the access it had until the Community's owner or an admin
+// decides (docs/wave-access/01-design.md, "Migrating Community waves"):
+//
+// - move_out: the wave leaves the channel. Nobody gains or loses access.
+// - make_role: narrowed. A crew wave's crew becomes a Community role (a copy,
+//   granted to the crew's members who can see the channel); a hand-picked wave
+//   is narrowed to its people who can see the channel. The people outside lose
+//   it, unless `invite` is set: then each is invited into the Community, and
+//   accepting makes them a member who sees the wave.
+
+/**
+ * A personal invitation into a Community (v2.134.0): a membership in state
+ * 'invited', accepted or declined by the person. Granting `roleId` now is
+ * harmless: roles count only on an active membership. Returns whether an
+ * invitation now stands. Database work only; the caller notifies after commit.
+ */
+function inviteToCommunity(communityId, userId, inviterId, { roleId = null } = {}) {
+  if (!db.findUserById(userId)) return false;
+  if (db.getCommunityBan(communityId, userId)) return false;
+  if (db.isBlocked?.(userId, inviterId) || db.isBlocked?.(inviterId, userId)) return false;
+  const existing = db.getCommunityMembership(communityId, userId);
+  // Already in, or removed by the Community (removal is not undone by a review).
+  if (existing && (existing.state === 'active' || existing.state === 'removed')) return false;
+  const membershipId = db.addCommunityMember(communityId, userId, { state: 'invited', invitedBy: inviterId });
+  if (roleId) db.grantCommunityRole(membershipId, roleId, { grantedBy: inviterId });
+  return true;
+}
+
+function notifyCommunityInvitation(communityId, userId, inviterId) {
+  const community = db.getCommunityById(communityId);
+  const inviter = db.findUserById(inviterId);
+  const who = inviter?.displayName || inviter?.handle || 'Someone';
+  try {
+    if (shouldCreateNotification(userId, 'community_invitation', null)) {
+      const notification = db.createNotification({
+        userId, type: 'community_invitation', actorId: inviterId,
+        title: `${who} invited you to join ${community?.name || 'a community'}`,
+        body: community?.name || '',
+        groupKey: `community_invitation:${communityId}`,
+      });
+      db.markNotificationPushSent?.(notification.id);
+      sendPushNotification(userId, { type: 'community_invitation', title: notification.title, body: community?.name || '', url: '/?invitations=1' }).catch(() => {});
+      broadcastToUser(userId, { type: 'notification', notification });
+    }
+  } catch (err) {
+    console.error('[community invitations] notify failed:', err.message);
+  }
+  broadcastToUser(userId, { type: 'wave_invitations_changed' });
+}
+
+function uniqueRoleName(communityId, base) {
+  const clean = (base || '').trim().slice(0, COMMUNITY_LIMITS.roleName) || 'Review role';
+  if (!db.getCommunityRole(communityId, clean)) return clean;
+  for (let i = 2; i < 100; i++) {
+    const suffix = ` (${i})`;
+    const name = clean.slice(0, COMMUNITY_LIMITS.roleName - suffix.length) + suffix;
+    if (!db.getCommunityRole(communityId, name)) return name;
+  }
+  return null;
+}
+
+app.post('/api/communities/:id/waves/:waveId/review', authenticateToken, apiLimiter, (req, res) => {
+  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_COMMUNITY)) return;
+  const wave = db.getWave(sanitizeInput(req.params.waveId));
+  const channel = wave?.channelId ? db.getChannelById(wave.channelId) : null;
+  if (!wave || channel?.community_id !== req.params.id) return res.status(404).json({ error: 'Not found' });
+  if (wave.reviewState !== 'needs_review') {
+    return res.status(409).json({ error: `This ${T_WAVE()} is not waiting for review`, code: 'NOT_IN_REVIEW' });
+  }
+  const action = req.body?.action;
+  if (action !== 'move_out' && action !== 'make_role') {
+    return res.status(400).json({ error: "action must be 'move_out' or 'make_role'" });
+  }
+  if (!chargeCommunityMutation(req, res, req.params.id)) return;
+
+  if (action === 'move_out') {
+    const { updated } = inCommunityTransaction(() => {
+      const result = unfileWave(wave);
+      db.logCommunityAudit(req.params.id, {
+        actorId: req.user.userId, action: 'wave.review_move_out', targetType: 'wave', targetId: wave.id,
+      });
+      return result;
+    });
+    broadcastToWave(wave.id, { type: 'wave_updated', wave: db.getWave(wave.id) });
+    return res.json({ action, wave: updated });
+  }
+
+  // make_role
+  const people = [...waveMemberIds(wave)].filter(uid => db.findUserById(uid));
+  if (db.findUserById(wave.createdBy) && !isGroupWave(wave)) people.push(wave.createdBy);
+  const memo = new Map();
+  const inside = [...new Set(people)].filter(uid => db.canSeeChannelFor(channel.id, uid, memo));
+  const outside = [...new Set(people)].filter(uid => !db.canSeeChannelFor(channel.id, uid, memo));
+  const invite = req.body?.invite === true;
+
+  let role = null;
+  if (isGroupWave(wave)) {
+    if (!requireRoomFor(res, db, 'role', req.params.id)) return;
+    // Named after the group only if it has a name of its own: an auto-named
+    // group's label lists its people, and the Community does not learn who
+    // the people outside are. Nor a title the decider cannot read.
+    const canOpen = canAccessWaveFromCache(wave.id, req.user.userId);
+    const group = db.getGroup(wave.groupId);
+    const asked = boundedString(req.body?.roleName, COMMUNITY_LIMITS.roleName);
+    const name = uniqueRoleName(req.params.id,
+      asked || (canOpen && group && !group.autoNamed ? group.name : canOpen ? wave.title : `${T_WAVE()} group`));
+    if (!name) return res.status(409).json({ error: 'Choose another role name', code: 'ROLE_NAME' });
+    role = { name };
+  }
+
+  let invited = 0;
+  const result = inCommunityTransaction(() => {
+    if (role) {
+      const memberRole = db.getCommunityRole(req.params.id, 'member');
+      role = db.createCommunityRole(req.params.id, { name: role.name, priority: memberRole?.priority ?? 100, permissions: [] });
+      for (const uid of inside) {
+        const m = db.getCommunityMembership(req.params.id, uid);
+        if (m?.state === 'active') db.grantCommunityRole(m.id, role.id, { grantedBy: req.user.userId });
+      }
+    }
+    const named = new Set([req.user.userId]);
+    if (!role) inside.forEach(uid => named.add(uid));
+    const invitedIds = [];
+    if (invite) {
+      for (const uid of outside) {
+        if (inviteToCommunity(req.params.id, uid, req.user.userId, { roleId: role?.id || null })) {
+          invitedIds.push(uid);
+          // A hand-picked wave names them now; they see it once they accept.
+          if (!role) named.add(uid);
+        }
+      }
+    }
+    invited = invitedIds.length;
+    db.updateWavePrivacy(wave.id, 'private', null);
+    db.setWaveAudience(wave.id, { userIds: [...named], roleIds: role ? [role.id] : [] });
+    db.setWaveReviewState(wave.id, null);
+    db.logCommunityAudit(req.params.id, {
+      actorId: req.user.userId, action: 'wave.review_make_role', targetType: 'wave', targetId: wave.id,
+      metadata: { role: role?.name || null, inside: inside.length, outside: outside.length, invited: invitedIds.length },
+    });
+    return { invitedIds };
+  });
+
+  for (const uid of result.invitedIds) notifyCommunityInvitation(req.params.id, uid, req.user.userId);
+  const community = db.getCommunityById(req.params.id);
+  for (const uid of outside) {
+    if (canAccessWaveFromCache(wave.id, uid)) continue;
+    // Told, without the wave's messages: it now belongs to a Community.
+    broadcastToUser(uid, { type: 'removed_from_wave', wave: { id: wave.id, title: wave.title }, reason: 'community', communityName: community?.name });
+  }
+  for (const uid of inside) {
+    if (role) pushCommunityRolesChanged(req.params.id, uid);
+  }
+  broadcastToWave(wave.id, { type: 'wave_updated', wave: db.getWave(wave.id) });
+  res.json({ action, role: role ? { id: role.id, name: role.name } : null, inside: inside.length, outside: outside.length, invited });
+});
+
+// ----- Personal Community invitations (v2.134.0) -----
+
+app.get('/api/community-invitations', authenticateToken, (req, res) => {
+  const rows = db.db.prepare(`
+    SELECT m.community_id, m.invited_by, m.updated_at, c.name, c.logo_url,
+      u.handle AS inviter_handle, u.display_name AS inviter_name, u.avatar AS inviter_avatar
+    FROM community_memberships m
+    JOIN communities c ON c.id = m.community_id
+    LEFT JOIN users u ON u.id = m.invited_by
+    WHERE m.user_id = ? AND m.state = 'invited' AND c.status = 'active'
+    ORDER BY m.updated_at DESC
+  `).all(req.user.userId);
+  res.json({ invitations: rows.map(r => ({
+    communityId: r.community_id,
+    communityName: r.name,
+    logoUrl: r.logo_url || null,
+    invitedBy: r.invited_by ? { id: r.invited_by, handle: r.inviter_handle, displayName: r.inviter_name, avatar: r.inviter_avatar } : null,
+    createdAt: r.updated_at,
+  })) });
+});
+
+function ownCommunityInvitation(req, res) {
+  if (!requireFeature('communities', res)) return null;
+  const communityId = sanitizeInput(req.params.communityId);
+  const membership = db.getCommunityMembership(communityId, req.user.userId);
+  const community = db.getCommunityById(communityId);
+  if (!membership || membership.state !== 'invited' || !community || community.status !== 'active') {
+    res.status(404).json({ error: 'Invitation not found' });
+    return null;
+  }
+  return { communityId, membership, community };
+}
+
+app.post('/api/community-invitations/:communityId/accept', authenticateToken, apiLimiter, (req, res) => {
+  const inv = ownCommunityInvitation(req, res);
+  if (!inv) return;
+  if (db.getCommunityBan(inv.communityId, req.user.userId)) return res.status(404).json({ error: 'Invitation not found' });
+  if (!requireRoomFor(res, db, 'member', inv.communityId)) return;
+  inCommunityTransaction(() => {
+    const membershipId = db.addCommunityMember(inv.communityId, req.user.userId, { state: 'active' });
+    const memberRole = db.getCommunityRole(inv.communityId, 'member');
+    if (memberRole) db.grantCommunityRole(membershipId, memberRole.id, { grantedBy: inv.membership.invited_by || null });
+    db.logCommunityAudit(inv.communityId, {
+      actorId: req.user.userId, action: 'member.accept_invitation', targetType: 'user', targetId: req.user.userId,
+    });
+  });
+  broadcastToUser(req.user.userId, { type: 'wave_invitations_changed' });
+  pushCommunityRolesChanged(inv.communityId, req.user.userId);
+  res.json({ success: true, community: { id: inv.community.id, name: inv.community.name } });
+});
+
+app.post('/api/community-invitations/:communityId/decline', authenticateToken, (req, res) => {
+  const inv = ownCommunityInvitation(req, res);
+  if (!inv) return;
+  inCommunityTransaction(() => {
+    // Never a member: no trace kept. A former member goes back to having left.
+    if (!inv.membership.joined_at) db.db.prepare('DELETE FROM community_memberships WHERE id = ?').run(inv.membership.id);
+    else db.setCommunityMemberState(inv.communityId, req.user.userId, 'left');
+  });
+  if (req.body?.block === true && inv.membership.invited_by) db.blockUser(req.user.userId, inv.membership.invited_by);
+  broadcastToUser(req.user.userId, { type: 'wave_invitations_changed' });
+  res.json({ success: true });
+});
+
 app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MOVE_WAVE,
     { resource: { type: 'channel', id: req.params.channelId } })) return;
@@ -26756,13 +27226,14 @@ app.delete('/api/communities/:id/channels/:channelId/waves/:waveId', authenticat
   if (!canManageWave(wave, req.user.userId)) {
     return res.status(403).json({ error: 'You cannot move that wave' });
   }
-  const updated = inCommunityTransaction(() => {
-    const updated = db.setWaveChannel(req.params.waveId, null);
+  const { updated, lost } = inCommunityTransaction(() => {
+    const result = unfileWave(wave);
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'wave.unfile', targetType: 'wave', targetId: req.params.waveId,
     });
-    return updated;
+    return result;
   });
+  announceUnfiled(wave, lost);
   res.json({ wave: updated });
 });
 
@@ -28661,6 +29132,11 @@ function broadcastToWave(waveId, message, excludeWs = null) {
     db.getGroupMembers(wave.groupId).forEach(m => recipients.add(m.id));
   }
 
+  // A narrowed Community wave reaches its audience, participant row or not,
+  // and nobody else (v2.134.0). Asked only for people who are connected.
+  const narrowed = db.narrowedWaveMemberIds(wave, { only: (uid) => clients.has(uid) });
+  if (narrowed) recipients = narrowed;
+
   // For public waves, all connected users (they can see it in their list).
   // A public wave in a Community channel only reaches those who may see the
   // channel (v2.128.0); that includes dropping participants who may not.
@@ -28833,6 +29309,15 @@ function broadcastToWaveWithPush(waveId, message, pushPayload = null, excludeWs 
   // For group waves, all group members
   if (wave.privacy === 'group' && wave.groupId) {
     db.getGroupMembers(wave.groupId).forEach(m => recipients.add(m.id));
+  }
+
+  // A narrowed Community wave (v2.134.0): its named people too, and only
+  // those it still admits. Owners, admins and role holders see it but are not
+  // pushed about it unless they are in it, as with a public channel wave.
+  if (db.isNarrowedChannelWave(wave)) {
+    db.getWaveAudience(waveId).userIds.forEach(id => recipients.add(id));
+    const admits = db.channelPublicWaveAudience(waveId);
+    if (admits) recipients = new Set([...recipients].filter(admits));
   }
 
   for (const userId of recipients) {

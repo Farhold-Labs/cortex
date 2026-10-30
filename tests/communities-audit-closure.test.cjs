@@ -369,9 +369,12 @@ test('CORTEX-COMM-014: a private Community does not announce itself', { timeout:
 
       // A wave inside the private Community's channel that the outsider is in
       // personally. Since v2.130.0 nobody can be put into a channel wave
-      // without being able to see the channel, so it is built the way such
-      // waves exist today: they were a member when it was made, then were
-      // removed from the Community and kept their place in the wave.
+      // without being able to see the channel, and since v2.134.0 someone who
+      // loses the channel loses its narrowed waves. Such a wave exists only
+      // waiting for its owner's review: it had outsiders when narrowing
+      // shipped and keeps its old access until then. Built that way: they were
+      // a member when it was made, then were removed from the Community, and
+      // the wave is in review.
       await api('POST', `/api/communities/${priv.id}/members`, { token: owner.token, body: { handle: 'outsider' } });
       const wave = (await api('POST', '/api/waves', {
         token: owner.token,
@@ -380,6 +383,12 @@ test('CORTEX-COMM-014: a private Community does not announce itself', { timeout:
       assert.ok(wave && wave.id, `wave creation failed: ${JSON.stringify(wave)}`);
       const removed = await api('DELETE', `/api/communities/${priv.id}/members/${outsider.id}`, { token: owner.token });
       assert.ok(removed.status < 300, `remove: ${removed.status} ${JSON.stringify(removed.body)}`);
+      {
+        const Database = require(path.join(root, 'server/node_modules/better-sqlite3'));
+        const raw = new Database(path.join(serverDir, 'data/farhold.db'));
+        raw.prepare(`UPDATE waves SET review_state = 'needs_review' WHERE id = ?`).run(wave.id);
+        raw.close();
+      }
 
       const mine = await api('GET', '/api/waves', { token: outsider.token });
       const seen = (mine.body.waves || mine.body).find(w => w.id === wave.id);
