@@ -26657,13 +26657,17 @@ function everyoneMentionIds(wave) {
   let channel = null;
   try { channel = db.getChannelById(channelId); } catch { channel = null; }
   if (!channel?.community_id) return ids;
-  const memo = new Map();
+  // Asked per person. channelPublicWaveVisible's memo is keyed by channel and
+  // belongs to ONE person (a wave list); shared across members it gave every
+  // member the first member's answer, so a restricted channel's @everyone
+  // reached the whole Community whenever the first member could see it
+  // (v2.133.0, fixed in v2.133.1).
   for (const m of db.listCommunityMembers(channel.community_id, { state: 'active' })) {
-    if (db.channelPublicWaveVisible(wave, m.user_id, memo) === true) ids.add(m.user_id);
+    if (db.channelPublicWaveVisible(wave, m.user_id) === true) ids.add(m.user_id);
   }
   // Participant rows of people who can no longer see the channel do not count.
   for (const uid of [...ids]) {
-    if (db.channelPublicWaveVisible(wave, uid, memo) === false) ids.delete(uid);
+    if (db.channelPublicWaveVisible(wave, uid) === false) ids.delete(uid);
   }
   return ids;
 }
