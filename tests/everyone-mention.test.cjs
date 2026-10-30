@@ -21,7 +21,7 @@ const { spawn } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const password = 'Everyone123!';
 
-async function startServer(temp, { stripFix = false } = {}) {
+async function startServer(temp, { stripFix = false, sharedMemo = false } = {}) {
   const serverDir = path.join(temp, 'server');
   fs.mkdirSync(serverDir);
   for (const name of fs.readdirSync(path.join(root, 'server'))) {
@@ -40,6 +40,17 @@ async function startServer(temp, { stripFix = false } = {}) {
     const reach = 'for (const participantId of everyoneMentionIds(wave)) {';
     assert.ok(s.includes(reach), 'counterfactual: could not find the @everyone reach');
     s = s.replace(reach, 'for (const participantId of participants.map(p => p.id)) {');
+    fs.writeFileSync(srvFile, s);
+  }
+  if (sharedMemo) {
+    // v2.133.0 as released: one channel memo shared across every member.
+    const srvFile = path.join(serverDir, 'server.js');
+    let s = fs.readFileSync(srvFile, 'utf8');
+    const ask = 'if (db.channelPublicWaveVisible(wave, m.user_id) === true) ids.add(m.user_id);';
+    assert.ok(s.includes(ask), 'counterfactual: could not find the per-member check');
+    s = s.replace(ask, 'if (db.channelPublicWaveVisible(wave, m.user_id, everyoneMemo) === true) ids.add(m.user_id);')
+      .replace('if (db.channelPublicWaveVisible(wave, uid) === false) ids.delete(uid);', 'if (db.channelPublicWaveVisible(wave, uid, everyoneMemo) === false) ids.delete(uid);')
+      .replace('function everyoneMentionIds(wave) {', 'function everyoneMentionIds(wave) {\n  const everyoneMemo = new Map();');
     fs.writeFileSync(srvFile, s);
   }
 
@@ -96,7 +107,9 @@ async function startServer(temp, { stripFix = false } = {}) {
 
 async function scenario({ api, makeUser }) {
   await makeUser('nodeadmin');
-  const founder = await makeUser('founder');
+  // 'able' sorts first among the members, so a memo shared across members
+  // (v2.133.0) would hand the author's own answer to everyone.
+  const founder = await makeUser('able');
   const reader = await makeUser('reader');       // member who has opened the wave
   const quiet = await makeUser('quiet');         // member who never has
   const blocker = await makeUser('blocker');     // member who blocked the founder
@@ -177,4 +190,9 @@ test('counterfactual: with participant rows only, members who never opened the w
   assert.equal(r.reader.general, true);
   assert.equal(r.quiet.general, false, 'the gap comes back');
   assert.equal(r.crewmate.crew, false, 'and the crew member is missed');
+});
+
+test('counterfactual: a channel memo shared across members leaks a restricted channel to all of them', async () => {
+  const r = await run({ sharedMemo: true });
+  assert.equal(r.quiet.staff, true, 'the v2.133.0 leak comes back: the author could see it, so everyone was told');
 });

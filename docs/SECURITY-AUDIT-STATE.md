@@ -179,6 +179,26 @@ Test: `tests/community-wave-report.test.cjs`, with a counterfactual that puts
 both paths back and sees the filing succeed, the report miss the crew wave, and
 a late crew join open it.
 
+### CORTEX-COMM-027: @everyone in a restricted channel could reach the whole Community — Medium (introduced v2.133.0, fixed v2.133.1)
+
+v2.133.0 made `@everyone` in a public Community channel wave reach every
+member who can see the channel. `everyoneMentionIds()` asked
+`channelPublicWaveVisible()` for each member, passing one memo for all of them.
+That memo is keyed by channel and is meant for one person (a wave list), so
+every member got the first member's answer. Members are listed by display
+name: whenever the first one could see a restricted channel, `@everyone`
+there notified every active member, with a preview of the message. Live for
+a few hours on 2026-10-30. Only public waves in restricted channels of
+Communities were affected.
+
+Found while extending the same function for wave-access phase 4: its new memo
+also caches the channel, which made the sharing visible. The v2.133.0 test
+passed by the order of its names.
+
+Fix: each member is asked separately. Test: `tests/everyone-mention.test.cjs`,
+whose author now sorts first; a counterfactual shares the memo again and sees
+a member outside the restricted channel notified.
+
 ## Prior findings still open in current code
 
 - **002, cross-port browser/request binding:** guest session lookup uses a nonce
