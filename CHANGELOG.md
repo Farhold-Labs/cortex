@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.133.0] - 2026-10-30
+
+Video links play in the wave. YouTube already did; TikTok was only a card that opened TikTok, and most other providers were plain links.
+
+### Added
+- **TikTok plays in place.** The card that left the app is gone. TikTok's iframe player (`tiktok.com/player/v1/<id>`) replaces it, in an upright box. The old card existed because TikTok's `embed.js` rewrote the page and could not live inside React; the iframe player has no such problem. Short links (`vm.tiktok.com`, `vt.tiktok.com`, `tiktok.com/t/…`) do not say which video they are, so the server asks TikTok's oEmbed for the video number (`embed_product_id`), or failing that follows the short link's redirect once.
+- **Instagram** posts and reels (`/p/`, `/reel/`, `/reels/`, `/tv/`) through Instagram's `/embed/` frame.
+- **Facebook** videos, watch links, reels, `fb.watch` and share links through Facebook's video plugin.
+- **Twitch** videos, clips and channels. Twitch refuses to play unless told the framing site's host (`parent=`), which the client fills in from the page.
+- **Dailymotion**, **Streamable** and **Rumble.** A Rumble page's address is not its player's, so the server takes the player from Rumble's oEmbed.
+- **Upright video gets an upright box:** TikTok, Instagram, Facebook reels and YouTube Shorts. All players now keep their shape at any width; they were a fixed 315 px high, which letterboxed on a phone.
+
+### Security
+- The oEmbed proxy (`GET /api/embeds/oembed`) now returns `playerUrl`, and the client puts it straight into an iframe, so it is accepted only if it is the provider's own player (`OEMBED_PLAYERS`: `tiktok.com/player/v1/<digits>`, `rumble.com/embed/<id>`). A TikTok short link is re-requested on TikTok's own host from the captured code, never fetched as given.
+- The new providers' link patterns are anchored to their host. The old ones match anywhere in a link, so `https://example.com/?u=https://www.tiktok.com/@a/video/1` counted as TikTok.
+- `frame-src` lists the new player hosts.
+
+### Verified
+- `tests/video-embeds.test.cjs` (7 tests): each provider's player address, Twitch's `parent`, short links waiting for the server, Shorts upright, links that only mention a provider refused, and the server's player check (a foreign host, a look-alike host, `javascript:` and a non-numeric TikTok id all refused).
+- Headless at phone width on dev, with real posts: a NASA TikTok loaded and **played** in the wave (the frame changed and the play button went away); an Instagram post, a Rumble video (player taken from oEmbed), a Facebook video and an upright YouTube Short all loaded. TikTok's oEmbed no longer gives a title or picture, so a TikTok card shows only the logo until it is tapped. An Instagram reel and Twitch were not tried with real posts.
+
 ## [2.132.0] - 2026-10-29
 
 Phase 3 of the wave-access redesign (docs/wave-access/01-design.md): groups that make themselves. Starting a conversation with a few people no longer means making a crew first.

@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.132.0** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.133.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -134,7 +134,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 - **Broadcast recording** — Record a broadcast to an S3-compatible bucket (Backblaze B2 in production); wave members watch it afterwards, and it is posted to the wave when ready
 - **Attachments** — Any file up to 25 MB, with an uploading screen that shows progress, warns before a refresh would cancel it, and lets you keep browsing. Attached audio and video play right in the conversation
 - **Private attachments** — A file posted to a wave can only be opened by people in that wave, and is deleted with the wave
-- **Rich embeds** — YouTube, Spotify, Vimeo, Twitter, SoundCloud
+- **Rich embeds** — videos play in the wave from YouTube, TikTok, Instagram, Facebook, Vimeo, Twitch, Dailymotion, Streamable and Rumble; also Spotify, Twitter and SoundCloud
 - **Images & GIFs** — Upload, paste, or search via GIPHY/Klipy (Tenor was shut down by Google in 2026)
 - **Media server integration** — Jellyfin, Emby, and Plex with OAuth and HLS transcoding
 - **Scoped media sharing** — Shared media requires an explicit, wave-scoped grant, and playback is proxied through Cortex so upstream credentials never reach a viewer ([docs/MEDIA-SECURITY.md](docs/MEDIA-SECURITY.md))
