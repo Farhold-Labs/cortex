@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.133.1] - 2026-10-30
+
+### Security
+- **CORTEX-COMM-027: `@everyone` in a restricted channel could reach the whole Community.** v2.133.0's `everyoneMentionIds()` checked each member against the channel but shared one memo across all of them, and that memo is keyed by channel and meant for one person. Every member got the first member's answer: whenever the alphabetically first member could see a restricted channel, `@everyone` in it notified every member, with a preview of the message. Each member is now asked separately. `tests/everyone-mention.test.cjs` now has its author sort first, and a counterfactual shares the memo again and sees someone outside the restricted channel notified. Found while extending the same function for wave-access phase 4; the v2.133.0 test passed only because of how its names sorted.
+
 ## [2.133.0] - 2026-10-30
 
 Video links play in the wave. YouTube already did; TikTok was only a card that opened TikTok, and most other providers were plain links. And `@everyone` in a Community reaches the Community.
