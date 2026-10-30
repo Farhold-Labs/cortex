@@ -1428,12 +1428,54 @@ const EMBED_PATTERNS = {
     ],
     embedUrl: (type, id) => `https://open.spotify.com/embed/${type}/${id}`,
   },
+  // TikTok and the providers after it (v2.133.0) are anchored to their host.
+  // The client builds their players (client/src/utils/embed.js); the server's
+  // part is the oEmbed proxy, for a link that does not name its video.
   tiktok: {
     patterns: [
-      /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@[\w.-]+\/video\/(\d+)/i,
-      /(?:https?:\/\/)?(?:vm\.)?tiktok\.com\/([a-zA-Z0-9]+)/i,
+      /^https?:\/\/(?:www\.|m\.)?tiktok\.com\/@[\w.-]+\/video\/(\d+)/i,
+      /^https?:\/\/(?:www\.)?tiktok\.com\/(?:embed\/v2|player\/v1)\/(\d+)/i,
+      /^https?:\/\/(?:vm|vt)\.tiktok\.com\/([a-zA-Z0-9]+)/i,
+      /^https?:\/\/(?:www\.)?tiktok\.com\/t\/([a-zA-Z0-9]+)/i,
     ],
     oembedUrl: (url) => `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`,
+  },
+  instagram: {
+    patterns: [
+      /^https?:\/\/(?:www\.)?instagram\.com\/(?:[\w.]+\/)?(p|reels?|tv)\/([\w-]+)/i,
+    ],
+  },
+  facebook: {
+    patterns: [
+      /^https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/(?:[\w.-]+\/videos\/(?:[\w.-]+\/)?\d+|watch\/?\?v=\d+|reel\/\d+|share\/[vr]\/[\w-]+)/i,
+      /^https?:\/\/fb\.watch\/[\w-]+/i,
+    ],
+  },
+  twitch: {
+    patterns: [
+      /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/videos\/(\d+)/i,
+      /^https?:\/\/clips\.twitch\.tv\/([\w-]+)/i,
+      /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/\w+\/clip\/([\w-]+)/i,
+      /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/(\w{3,25})\/?(?:[?#]|$)/i,
+    ],
+  },
+  dailymotion: {
+    patterns: [
+      /^https?:\/\/(?:www\.)?dailymotion\.com\/video\/([a-zA-Z0-9]+)/i,
+      /^https?:\/\/dai\.ly\/([a-zA-Z0-9]+)/i,
+    ],
+  },
+  streamable: {
+    patterns: [
+      /^https?:\/\/(?:www\.)?streamable\.com\/(?:e\/)?([a-z0-9]+)\/?(?:[?#]|$)/i,
+    ],
+  },
+  rumble: {
+    patterns: [
+      /^https?:\/\/(?:www\.)?rumble\.com\/embed\/(v[a-z0-9]+)/i,
+      /^https?:\/\/(?:www\.)?rumble\.com\/(v[a-z0-9]+)-[^\s]*\.html/i,
+    ],
+    oembedUrl: (url) => `https://rumble.com/api/Media/oembed.json?url=${encodeURIComponent(url)}`,
   },
   twitter: {
     patterns: [
@@ -1462,6 +1504,54 @@ const EMBED_PATTERNS = {
     oembedUrl: (url) => `https://giphy.com/services/oembed?url=${encodeURIComponent(url)}`,
   },
 };
+
+/**
+ * The player address for a link that does not name its video (v2.133.0): a
+ * TikTok short link, a Rumble page. Taken from the provider's oEmbed answer
+ * and accepted only if it is that provider's own player, since the client
+ * puts it straight into an iframe.
+ */
+const OEMBED_PLAYERS = {
+  tiktok: /^https:\/\/www\.tiktok\.com\/player\/v1\/\d+(?:\?[^\s"'<>]*)?$/,
+  rumble: /^https:\/\/rumble\.com\/embed\/[a-z0-9]+\/?(?:\?[^\s"'<>]*)?$/i,
+};
+
+function tiktokPlayerUrl(videoId) {
+  return /^\d{1,30}$/.test(String(videoId || ''))
+    ? `https://www.tiktok.com/player/v1/${videoId}?music_info=1&description=1&rel=0`
+    : null;
+}
+
+function oembedPlayerUrl(platform, data) {
+  const rule = OEMBED_PLAYERS[platform];
+  if (!rule || !data) return null;
+  if (platform === 'tiktok' && data.embed_product_id) return tiktokPlayerUrl(data.embed_product_id);
+  const src = String(data.html || '').match(/<iframe\b[^>]*\ssrc="([^"]+)"/i)?.[1]?.replace(/&amp;/g, '&');
+  return src && rule.test(src) ? src : null;
+}
+
+/**
+ * A TikTok short link names no video. When TikTok's oEmbed will not resolve
+ * one, follow its redirect by hand, once. The request is rebuilt from the
+ * captured code on TikTok's own host, never sent to the address as given, and
+ * only a tiktok.com video page is accepted from the redirect.
+ */
+async function resolveTiktokShortLink(url) {
+  const m = url.match(/^https?:\/\/(vm|vt)\.tiktok\.com\/([a-zA-Z0-9]+)/i)
+    || url.match(/^https?:\/\/(?:www\.)?tiktok\.com\/(t)\/([a-zA-Z0-9]+)/i);
+  if (!m) return null;
+  const target = m[1].toLowerCase() === 't'
+    ? `https://www.tiktok.com/t/${m[2]}/`
+    : `https://${m[1].toLowerCase()}.tiktok.com/${m[2]}/`;
+  try {
+    const r = await fetch(target, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(5000) });
+    const location = r.headers.get('location') || '';
+    const id = location.match(/^https:\/\/(?:www\.|m\.)?tiktok\.com\/@[\w.-]+\/video\/(\d+)/i)?.[1];
+    return tiktokPlayerUrl(id);
+  } catch {
+    return null;
+  }
+}
 
 // Simple in-memory cache for oEmbed responses (15 min TTL)
 const oembedCache = new Map();
@@ -4891,6 +4981,13 @@ app.use(helmet({
         'https://player.vimeo.com',
         'https://open.spotify.com',
         'https://www.tiktok.com',
+        'https://www.instagram.com',
+        'https://www.facebook.com',
+        'https://player.twitch.tv',
+        'https://clips.twitch.tv',
+        'https://geo.dailymotion.com',
+        'https://streamable.com',
+        'https://rumble.com',
         'https://platform.twitter.com',
         'https://w.soundcloud.com',
       ],
@@ -16597,11 +16694,14 @@ app.get('/api/embeds/oembed', oembedLimiter, async (req, res) => {
         embedUrl: embed.embedUrl,
         contentId: embed.contentId,
         thumbnail: embed.thumbnail,
+        playerUrl: embed.platform === 'tiktok' ? await resolveTiktokShortLink(url) : null,
         error: 'oEmbed data unavailable',
       });
     }
 
     const data = await response.json();
+    let playerUrl = oembedPlayerUrl(embed.platform, data);
+    if (!playerUrl && embed.platform === 'tiktok') playerUrl = await resolveTiktokShortLink(url);
 
     const result = {
       platform: embed.platform,
@@ -16611,6 +16711,7 @@ app.get('/api/embeds/oembed', oembedLimiter, async (req, res) => {
       title: data.title,
       author: data.author_name,
       html: data.html, // Some platforms provide embed HTML
+      playerUrl,
       width: data.width,
       height: data.height,
     };

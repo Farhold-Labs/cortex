@@ -12,33 +12,29 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
   const [error, setError] = useState(false);
   const [oembedHtml, setOembedHtml] = useState(null);
   const [oembedLoading, setOembedLoading] = useState(false);
-  const [tiktokData, setTiktokData] = useState(null);
+  const [meta, setMeta] = useState(null);
   const [gifData, setGifData] = useState(null);
   const platform = EMBED_PLATFORMS[embed.platform] || { icon: '🔗', color: '#666', name: 'Link' };
   const embedContainerRef = useRef(null);
 
   // Platforms that require oEmbed HTML injection (no direct iframe embed URL)
-  // Note: TikTok removed - their embed.js doesn't work well with React's virtual DOM
   const requiresOembed = ['twitter', 'soundcloud'].includes(embed.platform);
 
-  // Fetch TikTok oEmbed data for thumbnail and title
+  // Title, picture and, where the link does not name the video, the player's
+  // address (v2.133.0): a TikTok short link or a Rumble page only says which
+  // video it is through the provider's oEmbed, which the server proxies.
+  const wantsMeta = ['tiktok', 'rumble', 'vimeo'].includes(embed.platform);
   useEffect(() => {
-    if (embed.platform === 'tiktok' && !tiktokData) {
-      fetch(`${API_URL}/embeds/oembed?url=${encodeURIComponent(embed.url)}`)
-        .then(res => res.json())
-        .then(data => {
-          // Server returns 'thumbnail' and 'author', normalize to what we expect
-          if (data.thumbnail || data.author || data.title) {
-            setTiktokData({
-              thumbnail_url: data.thumbnail,
-              author_name: data.author,
-              title: data.title,
-            });
-          }
-        })
-        .catch(() => {}); // Silently fail - link card still works without thumbnail
-    }
-  }, [embed.platform, embed.url, tiktokData]);
+    if (!wantsMeta || meta) return;
+    let live = true;
+    fetch(`${API_URL}/embeds/oembed?url=${encodeURIComponent(embed.url)}`)
+      .then(res => res.json())
+      .then(data => { if (live) setMeta(data || {}); })
+      .catch(() => { if (live) setMeta({}); }); // the card still opens the link
+    return () => { live = false; };
+  }, [wantsMeta, embed.url, meta]);
+  const playerSrc = embed.embedUrl || meta?.playerUrl || null;
+  const thumbnail = embed.thumbnail || meta?.thumbnail || null;
 
   // Fetch Tenor/GIPHY oEmbed data to get the actual GIF URL
   useEffect(() => {
@@ -65,10 +61,8 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
         return { width: '100%', height: '166px' };
       case 'twitter':
         return { width: '100%', height: '400px' };
-      case 'tiktok':
-        return { width: '100%', height: '750px' };
-      default: // YouTube, Vimeo
-        return { width: '100%', height: '315px' };
+      default: // video players size by aspect ratio, below
+        return { width: '100%', height: '100%' };
     }
   };
 
@@ -162,119 +156,24 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
     );
   }
 
-  // TikTok doesn't work with React - show a styled link card with thumbnail
-  if (embed.platform === 'tiktok') {
-    const hasThumbnail = tiktokData?.thumbnail_url;
-    const authorName = tiktokData?.author_name || '';
-    const title = tiktokData?.title || 'Click to open in TikTok';
+  // The player's box. Video keeps its shape at any width instead of a fixed
+  // 315 px height (v2.133.0); upright video (TikTok, Instagram, Shorts, Reels)
+  // gets an upright box. Instagram's frame adds its own header and caption
+  // around the picture, so it is taller still.
+  const frameBox = embed.platform === 'spotify'
+    ? { width: '100%', maxWidth: '100%', height: dimensions.height }
+    : embed.platform === 'instagram'
+      ? { width: '100%', maxWidth: '400px', aspectRatio: '400 / 720' }
+      : embed.portrait
+        ? { width: '100%', maxWidth: '325px', aspectRatio: '9 / 16' }
+        : { width: '100%', maxWidth: '560px', aspectRatio: '16 / 9' };
 
-    return (
-      <a
-        href={embed.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{
-          display: 'flex',
-          alignItems: 'stretch',
-          gap: '0',
-          background: 'linear-gradient(135deg, var(--bg-elevated), var(--bg-base))',
-          border: '1px solid #ff0050',
-          borderRadius: '8px',
-          color: '#e5e5e5',
-          textDecoration: 'none',
-          marginTop: '8px',
-          maxWidth: '400px',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Thumbnail or fallback icon */}
-        <div style={{
-          width: hasThumbnail ? '100px' : '60px',
-          minHeight: hasThumbnail ? '130px' : '60px',
-          flexShrink: 0,
-          background: hasThumbnail ? '#000' : '#ff0050',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          position: 'relative',
-          overflow: 'hidden',
-        }}>
-          {hasThumbnail ? (
-            <>
-              <img
-                src={tiktokData.thumbnail_url}
-                alt=""
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                }}
-                onError={(e) => { e.target.style.display = 'none'; }}
-              />
-              {/* Play button overlay */}
-              <div style={{
-                position: 'absolute',
-                top: '50%',
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-                width: '36px',
-                height: '36px',
-                borderRadius: '50%',
-                background: 'rgba(255, 0, 80, 0.9)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '14px',
-                color: 'white',
-              }}>
-                ▶
-              </div>
-            </>
-          ) : (
-            <span style={{ fontSize: '24px' }}>♪</span>
-          )}
-        </div>
-        {/* Text content */}
-        <div style={{
-          padding: '12px',
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          flex: 1,
-        }}>
-          <div style={{ color: '#ff0050', fontSize: '0.7rem', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <span>♪</span> TikTok
-          </div>
-          {authorName && (
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-              @{authorName}
-            </div>
-          )}
-          <div style={{
-            fontSize: '0.85rem',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            lineHeight: '1.3',
-          }}>
-            {title}
-          </div>
-        </div>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 12px',
-          color: '#ff0050',
-          fontSize: '1.2rem',
-        }}>→</div>
-      </a>
-    );
-  }
+  // Clicked, but the player's address is still being asked for, or the
+  // provider would not say: show the way to the provider instead.
+  const awaitingPlayer = loaded && !requiresOembed && !playerSrc && wantsMeta && meta === null;
+  const noPlayer = loaded && !requiresOembed && !playerSrc && !awaitingPlayer;
 
-  if (error) {
+  if (error || noPlayer) {
     return (
       <a
         href={embed.url}
@@ -297,16 +196,14 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
     );
   }
 
-  if (!loaded) {
+  if (!loaded || awaitingPlayer) {
     return (
       <div
         onClick={() => setLoaded(true)}
         style={{
+          ...frameBox,
           position: 'relative',
-          width: '100%',
-          maxWidth: '560px',
-          aspectRatio: embed.platform === 'spotify' ? 'auto' : '16/9',
-          height: embed.platform === 'spotify' ? dimensions.height : 'auto',
+          boxSizing: 'border-box',
           background: 'var(--bg-elevated)',
           border: '1px solid var(--border-subtle)',
           borderRadius: '4px',
@@ -318,10 +215,10 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
           justifyContent: 'center',
         }}
       >
-        {/* Thumbnail background for YouTube */}
-        {embed.thumbnail && (
+        {/* The video's picture, where the provider gives one */}
+        {thumbnail && (
           <img
-            src={embed.thumbnail}
+            src={thumbnail}
             alt=""
             style={{
               position: 'absolute',
@@ -344,6 +241,8 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
           flexDirection: 'column',
           alignItems: 'center',
           gap: '8px',
+          padding: '0 12px',
+          textAlign: 'center',
         }}>
           <div style={{
             width: '60px',
@@ -360,8 +259,16 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
             {platform.icon}
           </div>
           <span style={{ color: 'var(--text-primary)', fontSize: '0.85rem', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
-            Click to load {platform.name}
+            {awaitingPlayer ? `Loading ${platform.name}…` : `Click to load ${platform.name}`}
           </span>
+          {(meta?.title || meta?.author) && (
+            <span style={{
+              color: 'var(--text-secondary)', fontSize: '0.75rem', textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+              overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+            }}>
+              {meta.author ? `@${meta.author}` : ''}{meta.author && meta.title ? ' · ' : ''}{meta.title || ''}
+            </span>
+          )}
         </div>
       </div>
     );
@@ -402,27 +309,26 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
     );
   }
 
-  // Loaded state - render iframe (for YouTube, Vimeo, Spotify)
+  // Loaded state: the provider's own player in a frame
   return (
-    <div style={{
-      width: '100%',
-      maxWidth: embed.platform === 'spotify' || embed.platform === 'soundcloud' ? '100%' : '560px',
-      marginTop: '8px',
-    }}>
+    <div style={{ ...frameBox, marginTop: '8px' }}>
       <iframe
-        src={embed.embedUrl}
-        width={dimensions.width}
-        height={dimensions.height}
+        src={playerSrc}
+        title={meta?.title || `${platform.name} player`}
+        width="100%"
+        height="100%"
         style={{
           border: '1px solid var(--border-subtle)',
           borderRadius: '4px',
           display: 'block',
+          boxSizing: 'border-box',
+          background: '#000',
         }}
         frameBorder="0"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share"
         allowFullScreen
         loading="lazy"
-        sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+        sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"
         onError={() => setError(true)}
       />
     </div>

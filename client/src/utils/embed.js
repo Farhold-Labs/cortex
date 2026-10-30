@@ -6,6 +6,12 @@ export const EMBED_PLATFORMS = {
   vimeo: { icon: '▶', color: '#1ab7ea', name: 'Vimeo' },
   spotify: { icon: '🎵', color: '#1db954', name: 'Spotify' },
   tiktok: { icon: '♪', color: '#ff0050', name: 'TikTok' },
+  instagram: { icon: '◎', color: '#e1306c', name: 'Instagram' },
+  facebook: { icon: 'f', color: '#1877f2', name: 'Facebook' },
+  twitch: { icon: '▶', color: '#9146ff', name: 'Twitch' },
+  dailymotion: { icon: '▶', color: '#0d0d0d', name: 'Dailymotion' },
+  streamable: { icon: '▶', color: '#0f90fa', name: 'Streamable' },
+  rumble: { icon: '▶', color: '#85c742', name: 'Rumble' },
   twitter: { icon: '𝕏', color: '#1da1f2', name: 'X/Twitter' },
   soundcloud: { icon: '☁', color: '#ff5500', name: 'SoundCloud' },
   tenor: { icon: '🎬', color: '#5856d6', name: 'Tenor' },
@@ -30,9 +36,39 @@ export const EMBED_URL_PATTERNS = {
   spotify: [
     /(?:https?:\/\/)?open\.spotify\.com\/(track|album|playlist|episode|show)\/([a-zA-Z0-9]+)/i,
   ],
+  // TikTok, Instagram and the rest below (v2.133.0) are anchored to their
+  // host: a link that merely mentions one of these addresses is not a video.
   tiktok: [
-    /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@[\w.-]+\/video\/(\d+)/i,
-    /(?:https?:\/\/)?(?:vm\.)?tiktok\.com\/([a-zA-Z0-9]+)/i,
+    /^https?:\/\/(?:www\.|m\.)?tiktok\.com\/@[\w.-]+\/video\/(\d+)/i,
+    /^https?:\/\/(?:www\.)?tiktok\.com\/(?:embed\/v2|player\/v1)\/(\d+)/i,
+    // Short links name no video; the server asks TikTok which one (oEmbed).
+    /^https?:\/\/(?:vm|vt)\.tiktok\.com\/([a-zA-Z0-9]+)/i,
+    /^https?:\/\/(?:www\.)?tiktok\.com\/t\/([a-zA-Z0-9]+)/i,
+  ],
+  instagram: [
+    /^https?:\/\/(?:www\.)?instagram\.com\/(?:[\w.]+\/)?(p|reels?|tv)\/([\w-]+)/i,
+  ],
+  facebook: [
+    /^https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/(?:[\w.-]+\/videos\/(?:[\w.-]+\/)?\d+|watch\/?\?v=\d+|reel\/\d+|share\/[vr]\/[\w-]+)/i,
+    /^https?:\/\/fb\.watch\/[\w-]+/i,
+  ],
+  twitch: [
+    /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/videos\/(\d+)/i,
+    /^https?:\/\/clips\.twitch\.tv\/([\w-]+)/i,
+    /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/\w+\/clip\/([\w-]+)/i,
+    /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/(\w{3,25})\/?(?:[?#]|$)/i,
+  ],
+  dailymotion: [
+    /^https?:\/\/(?:www\.)?dailymotion\.com\/video\/([a-zA-Z0-9]+)/i,
+    /^https?:\/\/dai\.ly\/([a-zA-Z0-9]+)/i,
+  ],
+  streamable: [
+    /^https?:\/\/(?:www\.)?streamable\.com\/(?:e\/)?([a-z0-9]+)\/?(?:[?#]|$)/i,
+  ],
+  rumble: [
+    /^https?:\/\/(?:www\.)?rumble\.com\/embed\/(v[a-z0-9]+)/i,
+    // A page address is not the player's; the server asks Rumble (oEmbed).
+    /^https?:\/\/(?:www\.)?rumble\.com\/(v[a-z0-9]+)-[^\s]*\.html/i,
   ],
   twitter: [
     /(?:https?:\/\/)?(?:www\.)?(twitter|x)\.com\/\w+\/status\/(\d+)/i,
@@ -49,6 +85,61 @@ export const EMBED_URL_PATTERNS = {
     /(?:https?:\/\/)?gph\.is\/([a-zA-Z0-9]+)/i,
   ],
 };
+
+/**
+ * Where the newer video providers' players live (v2.133.0).
+ *
+ * Each is the provider's own iframe player, the same arrangement as YouTube:
+ * the video plays inside the wave. `embedUrl: null` means the link does not
+ * say which video it is (a TikTok short link, a Rumble page), so the player
+ * address comes from the server's oEmbed proxy as `playerUrl` instead.
+ * `portrait` marks upright video, which gets a tall box rather than 16:9.
+ */
+export function videoPlayer(platform, rawUrl, match) {
+  const url = rawUrl.replace(/&amp;/g, '&');
+  switch (platform) {
+    case 'tiktok':
+      // TikTok's iframe player (2023) plays in place; its older embed.js
+      // rewrote the page and could not live inside React, so TikTok was a
+      // link card until v2.133.0.
+      return {
+        portrait: true,
+        embedUrl: /^\d+$/.test(match[1])
+          ? `https://www.tiktok.com/player/v1/${match[1]}?music_info=1&description=1&rel=0`
+          : null,
+      };
+    case 'instagram': {
+      const kind = match[1].toLowerCase() === 'p' ? 'p' : match[1].toLowerCase() === 'tv' ? 'tv' : 'reel';
+      return {
+        contentId: match[2],
+        portrait: true,
+        embedUrl: `https://www.instagram.com/${kind}/${match[2]}/embed/`,
+      };
+    }
+    case 'facebook':
+      return {
+        contentId: url,
+        portrait: /\/(reel|share\/r)\//i.test(url),
+        embedUrl: `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=false`,
+      };
+    case 'twitch': {
+      // Twitch refuses to play unless told which site it is framed in.
+      const parent = encodeURIComponent(typeof window !== 'undefined' ? window.location.hostname : 'localhost');
+      const id = encodeURIComponent(match[1]);
+      if (/\/videos\//i.test(url)) return { embedUrl: `https://player.twitch.tv/?video=${id}&parent=${parent}&autoplay=false` };
+      if (/clips\.twitch\.tv|\/clip\//i.test(url)) return { embedUrl: `https://clips.twitch.tv/embed?clip=${id}&parent=${parent}&autoplay=false` };
+      return { embedUrl: `https://player.twitch.tv/?channel=${id}&parent=${parent}&autoplay=false` };
+    }
+    case 'dailymotion':
+      return { embedUrl: `https://geo.dailymotion.com/player.html?video=${match[1]}` };
+    case 'streamable':
+      return { embedUrl: `https://streamable.com/e/${match[1]}` };
+    case 'rumble':
+      return { embedUrl: /\/embed\//i.test(url) ? `https://rumble.com/embed/${match[1]}/` : null };
+    default:
+      return {};
+  }
+}
 
 // Detect embed URLs in text (skip image URLs already embedded as <img> tags)
 export function detectEmbedUrls(text) {
@@ -157,10 +248,14 @@ export function detectEmbedUrls(text) {
               embed.embedUrl = `https://www.youtube.com/embed/${embed.contentId}?rel=0`;
               embed.thumbnail = `https://img.youtube.com/vi/${embed.contentId}/hqdefault.jpg`;
             }
+            // Shorts are upright; the player box follows the video.
+            if (/\/shorts\//i.test(url)) embed.portrait = true;
           } else if (platform === 'vimeo') {
             embed.embedUrl = `https://player.vimeo.com/video/${embed.contentId}`;
           } else if (platform === 'spotify') {
             embed.embedUrl = `https://open.spotify.com/embed/${embed.contentType}/${embed.contentId}`;
+          } else {
+            Object.assign(embed, videoPlayer(platform, url, match));
           }
 
           embeds.push(embed);
