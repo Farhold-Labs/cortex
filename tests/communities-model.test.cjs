@@ -259,6 +259,12 @@ test('Communities Phase 1 domain model', async (t) => {
       // THE invariant. A four-person private wave joining a large Community must
       // not become readable by the Community — that is the failure the container
       // model exists to prevent.
+      //
+      // Since v2.134.0 a private wave in a channel is narrowed to its people,
+      // who must be able to see the channel. The ban test above took the
+      // member's roles (CORTEX-COMM-005), so they get the member role back.
+      const memberRole = db.getCommunityRole(community.id, 'member');
+      db.grantCommunityRole(db.getCommunityMembership(community.id, users.member.id).id, memberRole.id);
       const wave = db.createWave({
         title: 'Earnest rehearsal', createdBy: users.owner.id, privacy: 'private',
         participants: [users.member.id],

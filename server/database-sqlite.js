@@ -18,7 +18,7 @@ import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import sanitizeHtml from 'sanitize-html';
 import crypto from 'crypto';
-import { canInviteConferRole, canDiscoverChannel } from './lib/communities/authorize.js';
+import { canInviteConferRole, canDiscoverChannel, effectiveCapabilities } from './lib/communities/authorize.js';
 import { CAPS as COMMUNITY_CAPS } from './lib/communities/limits.js';
 
 /** Shared with the HTTP admission paths — see lib/communities/limits.js. */
@@ -458,6 +458,12 @@ export class DatabaseSQLite {
 
     // Prepare commonly used statements
     this.prepareStatements();
+
+    if (this._channelAudienceMigrationDue) {
+      this._channelAudienceMigrationDue = false;
+      const r = this.migrateChannelWaveAudiences();
+      console.log(`✅ Channel waves sorted (v2.134.0): ${r.narrowed} narrowed to their people, ${r.review} need their owner's review`);
+    }
   }
 
   applySchemaUpdates() {
@@ -3838,6 +3844,36 @@ export class DatabaseSQLite {
       console.log('✅ waves.community_id / waves.channel_id added');
     }
 
+    // v2.134.0 — who can see a wave in a Community channel (wave-access phase 4).
+    //
+    // A wave in a channel is either open to the channel (public, v2.128.0) or
+    // NARROWED: only the people and Community roles named in wave_audience, the
+    // crew of a crew wave, and the Community's owners and admins, all of whom
+    // must also be able to see the channel (db.channelWaveVisible). Participant
+    // rows do not count: opening a wave writes one.
+    //
+    // review_state 'needs_review' marks a wave that, when this shipped, included
+    // people who cannot see its channel. It keeps exactly the access it had
+    // until the Community's owner or an admin moves it out or makes it a role.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS wave_audience (
+        wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        kind    TEXT NOT NULL CHECK(kind IN ('user','role')),
+        ref_id  TEXT NOT NULL,
+        PRIMARY KEY (wave_id, kind, ref_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wave_audience_ref ON wave_audience(kind, ref_id);
+    `);
+    const waveColsV2134 = this.db.prepare(`PRAGMA table_info(waves)`).all();
+    if (waveColsV2134.length && !waveColsV2134.some(c => c.name === 'review_state')) {
+      console.log('📝 Adding waves.review_state (v2.134.0)...');
+      this.db.exec(`ALTER TABLE waves ADD COLUMN review_state TEXT;`);
+      // Sorting the existing channel waves needs the Community evaluator,
+      // which needs the prepared statements: done once the database is ready.
+      this._channelAudienceMigrationDue = true;
+      console.log('✅ waves.review_state and wave_audience added');
+    }
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -6386,7 +6422,9 @@ export class DatabaseSQLite {
         : [];
       // Federated participant waves
       const fedWaves = this.db.prepare("SELECT id FROM waves WHERE (privacy = 'crossServer' OR privacy = 'cross-server') AND federation_state = 'participant' AND (is_profile_wave IS NULL OR is_profile_wave = 0)").all().map(r => r.id);
-      waveIds = [...new Set([...userWaveIds, ...publicWaves, ...crewWaves, ...fedWaves])];
+      // v2.134.0: narrowed Community waves someone is named in, holds a named
+      // role for, or manages: no participant row needed.
+      waveIds = [...new Set([...userWaveIds, ...publicWaves, ...crewWaves, ...fedWaves, ...this.audienceWaveIdsForUser(userId)])];
     } else {
       // Fallback: get from DB
       waveIds = this.db.prepare(`
@@ -6403,6 +6441,7 @@ export class DatabaseSQLite {
         )
         AND (w.is_profile_wave IS NULL OR w.is_profile_wave = 0)
       `).all(userId, ...userCrewIds).map(r => r.id);
+      waveIds = [...new Set([...waveIds, ...this.audienceWaveIdsForUser(userId)])];
     }
 
     if (waveIds.length === 0) return [];
@@ -6566,6 +6605,8 @@ export class DatabaseSQLite {
       communityId: visibleCommunities.has(r.community_id) ? (r.community_id || null) : null,
       channelId: visibleCommunities.has(r.community_id) ? (r.channel_id || null) : null,
       channelPosition: visibleCommunities.has(r.community_id) && r.channel_id && r.channel_position != null ? r.channel_position : null,
+      // v2.134.0: 'needs_review' while the Community's owner decides it.
+      reviewState: visibleCommunities.has(r.community_id) ? (r.review_state || null) : null,
       // Disappearing pings (v2.122.0): seconds, or null for none.
       pingTtl: r.ping_ttl || null,
       muted: mutedWaveIds.has(r.id),
@@ -6596,7 +6637,9 @@ export class DatabaseSQLite {
         ? this.db.prepare(`SELECT id FROM waves WHERE (privacy = 'crew' OR privacy = 'group') AND crew_id IN (${userCrewIds.map(() => '?').join(',')}) AND (is_profile_wave IS NULL OR is_profile_wave = 0)`).all(...userCrewIds).map(r => r.id)
         : [];
       const fedWaves = this.db.prepare("SELECT id FROM waves WHERE (privacy = 'crossServer' OR privacy = 'cross-server') AND federation_state = 'participant' AND (is_profile_wave IS NULL OR is_profile_wave = 0)").all().map(r => r.id);
-      waveIds = [...new Set([...userWaveIds, ...publicWaves, ...crewWaves, ...fedWaves])];
+      // v2.134.0: narrowed Community waves someone is named in, holds a named
+      // role for, or manages: no participant row needed.
+      waveIds = [...new Set([...userWaveIds, ...publicWaves, ...crewWaves, ...fedWaves, ...this.audienceWaveIdsForUser(userId)])];
     } else {
       waveIds = this.db.prepare(`
         SELECT DISTINCT w.id FROM waves w
@@ -6612,6 +6655,7 @@ export class DatabaseSQLite {
         )
         AND (w.is_profile_wave IS NULL OR w.is_profile_wave = 0)
       `).all(userId, ...userCrewIds).map(r => r.id);
+      waveIds = [...new Set([...waveIds, ...this.audienceWaveIdsForUser(userId)])];
     }
 
     if (waveIds.length === 0) return [];
@@ -6630,6 +6674,9 @@ export class DatabaseSQLite {
         w.created_at, w.channel_position,
         -- v2.122.0: the wave's ping timer.
         w.ping_ttl,
+        -- v2.134.0: channelWaveVisible needs the crew and the review state, or
+        -- a crew's narrowed wave and every wave in review vanish from the list.
+        w.crew_id, w.review_state,
         (SELECT COUNT(*) FROM pings WHERE wave_id = w.id AND deleted = 0) as ping_count,
         (SELECT COUNT(*) FROM wave_participants WHERE wave_id = w.id) as participant_count
       FROM waves w
@@ -6729,6 +6776,8 @@ export class DatabaseSQLite {
       communityId: visibleCommunities.has(r.community_id) ? (r.community_id || null) : null,
       channelId: visibleCommunities.has(r.community_id) ? (r.channel_id || null) : null,
       channelPosition: visibleCommunities.has(r.community_id) && r.channel_id && r.channel_position != null ? r.channel_position : null,
+      // v2.134.0: 'needs_review' while the Community's owner decides it.
+      reviewState: visibleCommunities.has(r.community_id) ? (r.review_state || null) : null,
       // Disappearing pings (v2.122.0): seconds, or null for none.
       pingTtl: r.ping_ttl || null,
       muted: mutedWaveIds.has(r.id),
@@ -6788,6 +6837,7 @@ export class DatabaseSQLite {
       // them is a documented trap (CLAUDE.md) that has cost time before.
       communityId: row.community_id || null,
       channelId: row.channel_id || null,
+      reviewState: row.review_state || null,
       // Where the channel's managers placed it (v2.121.0); null = not placed,
       // listed after the placed ones.
       channelPosition: row.channel_id && row.channel_position != null ? row.channel_position : null,
@@ -13887,6 +13937,8 @@ export class DatabaseSQLite {
         p.id,
         p.wave_id,
         w.channel_id AS wave_channel_id,
+        w.crew_id AS wave_crew_id,
+        w.review_state AS wave_review_state,
         p.author_id,
         p.content,
         p.media_url,
@@ -13954,7 +14006,10 @@ export class DatabaseSQLite {
     // channelPublicWaveVisible).
     const channelMemo = new Map();
     const rows = this.db.prepare(query).all(...params).filter(row =>
-      this.channelPublicWaveVisible({ privacy: row.wave_privacy, channelId: row.wave_channel_id }, userId, channelMemo) !== false);
+      this.channelWaveVisible({
+        id: row.wave_id, privacy: row.wave_privacy, channelId: row.wave_channel_id,
+        crew_id: row.wave_crew_id, review_state: row.wave_review_state,
+      }, userId, channelMemo) !== false);
 
     // Seeded random generator for consistent discovery randomness per session
     const seededRandom = (s) => {
@@ -15152,6 +15207,19 @@ export class DatabaseSQLite {
   setWaveChannel(waveId, channelId) {
     const channel = channelId ? this.getChannelById(channelId) : null;
     if (channelId && !channel) throw new Error('Channel not found');
+    // v2.134.0: a private wave arriving in a Community channel is narrowed, and
+    // participant rows stop counting there, so its people are named first.
+    // Filing changes nobody's access (beyond the Community's owners and admins,
+    // who see every narrowed wave). A crew wave follows its crew.
+    if (channel?.community_id) {
+      const w = this.db.prepare('SELECT privacy, crew_id, created_by FROM waves WHERE id = ?').get(waveId);
+      const audienceEmpty = !this.db.prepare('SELECT 1 FROM wave_audience WHERE wave_id = ? LIMIT 1').get(waveId);
+      if (w && audienceEmpty && !['public', 'crossServer', 'cross-server', 'group', 'crew'].includes(w.privacy)) {
+        const ins = this.db.prepare(`INSERT OR IGNORE INTO wave_audience (wave_id, kind, ref_id) VALUES (?, 'user', ?)`);
+        for (const r of this.db.prepare('SELECT user_id FROM wave_participants WHERE wave_id = ?').all(waveId)) ins.run(waveId, r.user_id);
+        if (w.created_by && this.findUserById(w.created_by)) ins.run(waveId, w.created_by);
+      }
+    }
     // A wave arriving in (or leaving) a channel has no place in its order yet,
     // so it goes after the waves the channel's managers have placed.
     this.db.prepare('UPDATE waves SET community_id = ?, channel_id = ?, channel_position = NULL, updated_at = ? WHERE id = ?')
@@ -15176,6 +15244,287 @@ export class DatabaseSQLite {
    * being in one.
    */
   /**
+   * Whether a wave's channel decides who sees it, and how (v2.128.0, v2.134.0).
+   *
+   * - 'public': a public wave in a channel is public to the channel, not the
+   *   node. A node-level channel has no Community, so its public waves are
+   *   node-public, as before.
+   * - 'narrowed': a wave in a Community channel that is not public. Only its
+   *   audience sees it: the people and Community roles named in wave_audience,
+   *   the crew of a crew wave, and the Community's owners and admins, all of
+   *   whom must also be able to see the channel.
+   * - null: the channel does not decide. No channel; a wave still waiting for
+   *   its owner's review, which keeps the access it had; a wave with people on
+   *   other servers (phase 6); a non-public wave in a node-level channel.
+   *
+   * Returns { kind, channel } or null. A channel that cannot be read fails
+   * closed: { kind: 'unreadable' }.
+   */
+  channelWaveRule(wave, memo = null) {
+    if (!wave) return null;
+    const channelId = wave.channelId ?? wave.channel_id ?? null;
+    if (!channelId) return null;
+    const isPublic = wave.privacy === 'public';
+    if (!isPublic) {
+      if ((wave.reviewState ?? wave.review_state) === 'needs_review') return null;
+      if (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') return null;
+    }
+    // Channels are the same for everyone, so this part of the memo may be
+    // shared; answers about a person are keyed by that person.
+    const key = `channel\u0000${channelId}`;
+    let channel;
+    if (memo?.has(key)) channel = memo.get(key);
+    else {
+      try { channel = this.getChannelById(channelId) || null; } catch { channel = undefined; }
+      memo?.set(key, channel);
+    }
+    if (channel === undefined) return { kind: 'unreadable' };
+    if (!channel) return isPublic ? { kind: 'unreadable' } : null;
+    if (channel.community_id === null) return isPublic ? { kind: 'node', channel } : null;
+    return { kind: isPublic ? 'public' : 'narrowed', channel };
+  }
+
+  /**
+   * May this person see this wave, as far as its channel decides? (v2.128.0,
+   * narrowed waves since v2.134.0.)
+   *
+   * Participant rows never count here. Reading or posting in a public wave adds
+   * a participant row, and so does opening any wave someone can see; honouring
+   * them would let anyone who once saw a wave keep it after losing the channel,
+   * or after the wave was narrowed. Only the channel and the audience decide.
+   *
+   * Returns null when the channel does not decide (see channelWaveRule), else
+   * true or false. `memo` may be shared across waves AND people: every answer
+   * about a person is keyed by that person (CORTEX-COMM-027 was a memo keyed
+   * only by channel, shared across people).
+   */
+  channelWaveVisible(wave, userId, memo = null) {
+    const rule = this.channelWaveRule(wave, memo);
+    if (!rule) return null;
+    if (rule.kind === 'unreadable') return false; // fail closed
+    if (rule.kind === 'node') return true;
+    if (!userId) return false;
+    if (!this.canSeeChannelFor(rule.channel.id, userId, memo)) return false;
+    if (rule.kind === 'public') return true;
+    return this.narrowedWaveAdmits(wave, rule.channel.community_id, userId, memo);
+  }
+
+  /** Kept for the v2.128.0 call sites; the rule now covers narrowed waves too. */
+  channelPublicWaveVisible(wave, userId, memo = null) {
+    return this.channelWaveVisible(wave, userId, memo);
+  }
+
+  canSeeChannelFor(channelId, userId, memo = null) {
+    const key = `see\u0000${userId}\u0000${channelId}`;
+    if (memo?.has(key)) return memo.get(key);
+    let ok = false;
+    try { ok = canDiscoverChannel(this, { kind: 'user', userId }, channelId).allowed === true; }
+    catch { ok = false; } // fail closed
+    memo?.set(key, ok);
+    return ok;
+  }
+
+  /**
+   * Whether someone who can see a narrowed wave's channel is in its audience
+   * (v2.134.0): named; holding a named role (live: a role granted later counts,
+   * one taken away stops counting); in the crew of a crew wave; or an owner or
+   * admin of the Community, who see every narrowed wave as Discord
+   * administrators see every channel.
+   */
+  narrowedWaveAdmits(wave, communityId, userId, memo = null) {
+    const waveId = wave?.id;
+    if (!waveId || !userId) return false;
+    if (this.isCommunityManager(communityId, userId, memo)) return true;
+    const named = this.db.prepare(`
+      SELECT 1 FROM wave_audience a
+      WHERE a.wave_id = ? AND (
+        (a.kind = 'user' AND a.ref_id = ?)
+        OR (a.kind = 'role' AND EXISTS (
+          SELECT 1 FROM community_membership_roles mr
+          JOIN community_memberships m ON m.id = mr.membership_id
+          JOIN community_roles r ON r.id = mr.role_id
+          WHERE mr.role_id = a.ref_id AND m.user_id = ? AND m.state = 'active'
+            AND m.community_id = ? AND r.community_id = ?
+        ))
+      ) LIMIT 1`).get(waveId, userId, userId, communityId, communityId);
+    if (named) return true;
+    const crewId = wave.groupId ?? wave.crewId ?? wave.crew_id ?? null;
+    if ((wave.privacy === 'group' || wave.privacy === 'crew') && crewId) return this.isGroupMember(crewId, userId);
+    return false;
+  }
+
+  /** A Community owner or admin: whoever effectively holds community.manage. */
+  isCommunityManager(communityId, userId, memo = null) {
+    const key = `manager\u0000${userId}\u0000${communityId}`;
+    if (memo?.has(key)) return memo.get(key);
+    let ok = false;
+    try { ok = effectiveCapabilities(this, { kind: 'user', userId }, communityId).has('community.manage'); }
+    catch { ok = false; }
+    memo?.set(key, ok);
+    return ok;
+  }
+
+  /** A non-public wave in a Community channel that is not waiting for review. */
+  isNarrowedChannelWave(wave) {
+    return this.channelWaveRule(wave)?.kind === 'narrowed';
+  }
+
+  getWaveAudience(waveId) {
+    const rows = this.db.prepare('SELECT kind, ref_id FROM wave_audience WHERE wave_id = ?').all(waveId);
+    return {
+      userIds: rows.filter(r => r.kind === 'user').map(r => r.ref_id),
+      roleIds: rows.filter(r => r.kind === 'role').map(r => r.ref_id),
+    };
+  }
+
+  setWaveAudience(waveId, { userIds = [], roleIds = [] } = {}) {
+    const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM wave_audience WHERE wave_id = ?').run(waveId);
+      const ins = this.db.prepare('INSERT OR IGNORE INTO wave_audience (wave_id, kind, ref_id) VALUES (?, ?, ?)');
+      for (const u of new Set(userIds)) ins.run(waveId, 'user', u);
+      for (const r of new Set(roleIds)) ins.run(waveId, 'role', r);
+    });
+    tx();
+  }
+
+  clearWaveAudience(waveId) {
+    this.db.prepare('DELETE FROM wave_audience WHERE wave_id = ?').run(waveId);
+  }
+
+  isWaveAudienceUser(waveId, userId) {
+    return !!this.db.prepare(`SELECT 1 FROM wave_audience WHERE wave_id = ? AND kind = 'user' AND ref_id = ?`).get(waveId, userId);
+  }
+
+  addWaveAudienceUser(waveId, userId) {
+    this.db.prepare(`INSERT OR IGNORE INTO wave_audience (wave_id, kind, ref_id) VALUES (?, 'user', ?)`).run(waveId, userId);
+  }
+
+  removeWaveAudienceUser(waveId, userId) {
+    this.db.prepare(`DELETE FROM wave_audience WHERE wave_id = ? AND kind = 'user' AND ref_id = ?`).run(waveId, userId);
+  }
+
+  setWaveReviewState(waveId, state) {
+    this.db.prepare('UPDATE waves SET review_state = ? WHERE id = ?').run(state, waveId);
+  }
+
+  /**
+   * Narrowed waves someone may be in without a participant row (v2.134.0):
+   * named, holding a named role, or managing the Community. The wave lists add
+   * these and then filter every wave through channelWaveVisible, so this only
+   * has to be a superset.
+   */
+  audienceWaveIdsForUser(userId) {
+    return this.db.prepare(`
+      SELECT DISTINCT w.id FROM waves w
+      JOIN channels ch ON ch.id = w.channel_id
+      WHERE w.privacy NOT IN ('public', 'crossServer', 'cross-server')
+        AND (w.review_state IS NULL OR w.review_state != 'needs_review')
+        AND ch.community_id IS NOT NULL
+        AND (w.is_profile_wave IS NULL OR w.is_profile_wave = 0)
+        AND (
+          EXISTS (SELECT 1 FROM wave_audience a WHERE a.wave_id = w.id AND a.kind = 'user' AND a.ref_id = ?)
+          OR EXISTS (
+            SELECT 1 FROM wave_audience a
+            JOIN community_membership_roles mr ON mr.role_id = a.ref_id
+            JOIN community_memberships m ON m.id = mr.membership_id
+            WHERE a.wave_id = w.id AND a.kind = 'role' AND m.user_id = ? AND m.state = 'active')
+          OR EXISTS (
+            SELECT 1 FROM community_memberships m
+            JOIN community_membership_roles mr ON mr.membership_id = m.id
+            JOIN community_roles r ON r.id = mr.role_id
+            WHERE m.community_id = ch.community_id AND m.user_id = ? AND m.state = 'active'
+              AND r.permissions LIKE '%community.manage%')
+        )`).all(userId, userId, userId).map(r => r.id);
+  }
+
+  /**
+   * Everyone a narrowed wave admits (v2.134.0), for fan-out: live updates,
+   * push, @everyone. Candidates are the named people, the holders of named
+   * roles, the crew of a crew wave and the Community's members who might
+   * manage it; each is then asked through channelWaveVisible, one by one.
+   * `only` narrows the candidates first (live updates ask only about people
+   * who are connected). Null for a wave that is not narrowed.
+   */
+  narrowedWaveMemberIds(wave, { only = null } = {}) {
+    const rule = this.channelWaveRule(wave);
+    if (rule?.kind !== 'narrowed') return null;
+    const communityId = rule.channel.community_id;
+    const candidates = new Set(this.db.prepare(`
+      SELECT a.ref_id AS user_id FROM wave_audience a WHERE a.wave_id = ? AND a.kind = 'user'
+      UNION
+      SELECT m.user_id FROM wave_audience a
+        JOIN community_membership_roles mr ON mr.role_id = a.ref_id
+        JOIN community_memberships m ON m.id = mr.membership_id
+        WHERE a.wave_id = ? AND a.kind = 'role' AND m.state = 'active' AND m.community_id = ?
+      UNION
+      SELECT m.user_id FROM community_memberships m
+        JOIN community_membership_roles mr ON mr.membership_id = m.id
+        JOIN community_roles r ON r.id = mr.role_id
+        WHERE m.community_id = ? AND m.state = 'active' AND r.permissions LIKE '%community.manage%'
+    `).all(wave.id, wave.id, communityId, communityId).map(r => r.user_id));
+    const crewId = wave.groupId ?? wave.crewId ?? wave.crew_id ?? null;
+    if ((wave.privacy === 'group' || wave.privacy === 'crew') && crewId) {
+      for (const r of this.db.prepare('SELECT user_id FROM crew_members WHERE crew_id = ?').all(crewId)) candidates.add(r.user_id);
+    }
+    const memo = new Map();
+    return new Set([...candidates].filter(uid => (!only || only(uid)) && this.channelWaveVisible(wave, uid, memo) === true));
+  }
+
+  /**
+   * Sort the channel waves that existed before v2.134.0, once. A non-public
+   * wave whose people (participants and creator, or its crew) can all see the
+   * channel becomes narrowed: a private wave to those people by name, a crew
+   * wave to its crew. One that includes anyone who cannot is marked for its
+   * owner's review and keeps its access until then.
+   */
+  migrateChannelWaveAudiences() {
+    const rows = this.db.prepare(`
+      SELECT w.id, w.privacy, w.crew_id, w.channel_id, w.created_by
+      FROM waves w JOIN channels ch ON ch.id = w.channel_id
+      WHERE ch.community_id IS NOT NULL AND w.privacy NOT IN ('public', 'crossServer', 'cross-server')
+        AND w.review_state IS NULL
+    `).all();
+    let narrowed = 0, review = 0;
+    const memo = new Map();
+    const ins = this.db.prepare(`INSERT OR IGNORE INTO wave_audience (wave_id, kind, ref_id) VALUES (?, 'user', ?)`);
+    const tx = this.db.transaction(() => {
+      for (const w of rows) {
+        const isCrew = (w.privacy === 'group' || w.privacy === 'crew') && w.crew_id;
+        const people = new Set(this.db.prepare('SELECT user_id FROM wave_participants WHERE wave_id = ?').all(w.id).map(r => r.user_id));
+        if (isCrew) {
+          for (const m of this.db.prepare('SELECT user_id FROM crew_members WHERE crew_id = ?').all(w.crew_id)) people.add(m.user_id);
+        } else if (w.created_by && this.findUserById(w.created_by)) {
+          people.add(w.created_by);
+        }
+        if ([...people].some(uid => !this.canSeeChannelFor(w.channel_id, uid, memo))) {
+          this.setWaveReviewState(w.id, 'needs_review');
+          review++;
+          continue;
+        }
+        // A private wave's people, named, so that participant rows can stop
+        // counting. A crew wave is narrowed to its crew, which stays live.
+        if (!isCrew) for (const uid of people) ins.run(w.id, uid);
+        narrowed++;
+      }
+    });
+    tx();
+    return { narrowed, review };
+  }
+
+  /**
+   * For a wave in a Community channel, a predicate saying who of its
+   * participants may still see it; null when the channel does not decide
+   * (v2.128.0, narrowed waves since v2.134.0). Each person is asked for
+   * themselves.
+   */
+  channelPublicWaveAudience(waveId) {
+    const w = this.db.prepare('SELECT id, privacy, channel_id, crew_id, review_state FROM waves WHERE id = ?').get(waveId);
+    const memo = new Map();
+    if (!this.channelWaveRule(w, memo)) return null;
+    return (userId) => this.channelWaveVisible(w, userId, memo) === true;
+  }
+
+  /**
    * Which Communities may this person know exist? (CORTEX-COMM-014)
    *
    * A wave carries the id of the channel and Community it was filed into, and
@@ -15188,58 +15537,6 @@ export class DatabaseSQLite {
    * Public Communities are knowable by anyone; the rest need an active
    * membership. Computed once per list rather than per wave.
    */
-  /**
-   * A public wave inside a Community channel (v2.128.0).
-   *
-   * `privacy` is read relative to its container (plan §2b): a public wave filed
-   * in a channel means "visible to whoever may see that channel", not "visible
-   * to everyone on the node". Until v2.128.0 nothing read it that way, so a
-   * private Community's public waves were listed, readable, searchable and
-   * pushed live to every account on the node, and their files were served to
-   * anyone.
-   *
-   * Participation deliberately does not count here. Opening or posting in a
-   * public wave used to add the reader as a participant, so everyone who found
-   * one of these waves through the leak holds a participant row; honouring it
-   * would keep the leak open for exactly those people. Only the channel decides.
-   *
-   * This restricts; it never grants. Private, crew and cross-server waves keep
-   * their own rules wherever they are filed.
-   *
-   * Returns null when the rule does not apply (not public, or not in a
-   * channel), otherwise whether this person may see the wave. Pass a Map as
-   * `memo` when checking many waves for one person.
-   */
-  channelPublicWaveVisible(wave, userId, memo = null) {
-    if (!wave || wave.privacy !== 'public') return null;
-    const channelId = wave.channelId ?? wave.channel_id ?? null;
-    if (!channelId) return null;
-    if (!userId) return false;
-    if (memo?.has(channelId)) return memo.get(channelId);
-    let ok = false;
-    try {
-      const channel = this.getChannelById(channelId);
-      // A node-level channel has no Community to be a member of: its public
-      // waves are node-public, as before.
-      if (channel && channel.community_id === null) ok = true;
-      else if (channel) ok = canDiscoverChannel(this, { kind: 'user', userId }, channelId).allowed === true;
-    } catch {
-      ok = false; // fail closed
-    }
-    memo?.set(channelId, ok);
-    return ok;
-  }
-
-  /**
-   * For a public wave in a Community channel, a predicate saying who of its
-   * participants may still see it; null for every other wave (v2.128.0).
-   */
-  channelPublicWaveAudience(waveId) {
-    const w = this.db.prepare('SELECT privacy, channel_id FROM waves WHERE id = ?').get(waveId);
-    if (!w || w.privacy !== 'public' || !w.channel_id) return null;
-    return (userId) => this.channelPublicWaveVisible(w, userId) !== false;
-  }
-
   visibleCommunityIds(userId) {
     const ids = new Set();
     try {

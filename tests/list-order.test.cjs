@@ -240,8 +240,11 @@ test('list order through a real server', { timeout: 180000 }, async (t) => {
 
     await t.test('waves in a channel: one shared order, set by a manager', async () => {
       const channelId = channels.zulu.id;
-      // The member's private wave: the owner manages the channel but is not in it.
-      const hidden = await newWave(member, 'Members only', { channelId });
+      // The member's private wave, which the owner is not in. Since v2.134.0 it
+      // cannot be in the channel (a member cannot narrow a wave there, and the
+      // owner would see it if it were), so it is not filed: the order still
+      // only places waves of this channel that the manager can read.
+      const hidden = await newWave(member, 'Members only');
       const w2 = await newWave(owner, 'Two', { channelId, privacy: 'public' });
       const w3 = await newWave(owner, 'Three', { channelId, privacy: 'public' });
 
@@ -259,7 +262,7 @@ test('list order through a real server', { timeout: 180000 }, async (t) => {
       const waves = await myWaves(member);
       assert.equal(waves.get(w3).channelPosition, 0);
       assert.equal(waves.get(w2).channelPosition, 1);
-      assert.equal(waves.get(hidden).channelPosition, null, 'their private wave lists after the placed ones');
+      assert.equal(waves.get(hidden).channelPosition, null, 'their private wave is not placed');
 
       // A wave from another channel cannot be placed in this one.
       const res2 = await api('PUT', `/api/communities/${community.id}/channels/${channels.yankee.id}/wave-order`, {

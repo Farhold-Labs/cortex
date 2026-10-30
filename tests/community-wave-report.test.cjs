@@ -96,12 +96,30 @@ async function startServer(temp, { stripFix = false } = {}) {
     assert.equal(login.status, 200, `login failed for ${handle}: ${JSON.stringify(login.body)}`);
     return { handle, token: login.body.token, id: login.body.user.id };
   };
-  return { child, base, api, makeUser };
+  return { child, base, api, makeUser, dbPath: path.join(serverDir, 'data/farhold.db') };
 }
 
 
 
-async function scenario({ api, makeUser }) {
+// v2.134.0 narrows channel waves as they are made, so the waves this report
+// is for (filed with people who cannot see the channel) exist only from
+// before. `asBeforeNarrowing` puts the channel waves back as they were before
+// v2.134.0 (no audience, no review state) and runs the real migration on them.
+async function asBeforeNarrowing(dbPath, raw = () => {}) {
+  const Database = require(path.join(root, 'server/node_modules/better-sqlite3'));
+  const conn = new Database(dbPath);
+  raw(conn);
+  conn.prepare(`DELETE FROM wave_audience WHERE wave_id IN (SELECT id FROM waves WHERE channel_id IS NOT NULL)`).run();
+  conn.prepare(`UPDATE waves SET review_state = NULL WHERE channel_id IS NOT NULL`).run();
+  conn.close();
+  const { DatabaseSQLite } = await import('../server/database-sqlite.js');
+  const db = new DatabaseSQLite({ dbPath });
+  const result = db.migrateChannelWaveAudiences();
+  db.db.close();
+  return result;
+}
+
+async function scenario({ api, makeUser, dbPath }) {
   const nodeadmin = await makeUser('nodeadmin');
   const mal = await makeUser('mal'), zoe = await makeUser('zoe'), wash = await makeUser('wash');
   const kaylee = await makeUser('kaylee'), stranger = await makeUser('stranger');
@@ -131,8 +149,14 @@ async function scenario({ api, makeUser }) {
 
   // A: mal's channel wave with zoe and wash, while wash is a member.
   const a = await wave(mal, { title: 'Cargo manifest', channelId: channel.id, participants: [zoe.id, wash.id] });
-  // D: zoe's channel wave with wash, which mal is not in.
-  const d = await wave(zoe, { title: 'Zoe and Wash only', channelId: channel.id, participants: [wash.id] });
+  // D: zoe's channel wave with wash, which mal is not in. A member cannot
+  // start one in a channel since v2.134.0; before, they could, so it is made
+  // outside and put in the channel as the old data would have it.
+  const d = await wave(zoe, { title: 'Zoe and Wash only', participants: [wash.id] });
+  {
+    const inv = ((await api('GET', '/api/wave-invitations', { token: wash.token })).body.invitations || []).find(i => i.waveId === d.id);
+    assert.equal((await api('POST', `/api/wave-invitations/${inv.id}/accept`, { token: wash.token })).status, 200);
+  }
   // C: members only; never affected.
   await wave(mal, { title: 'All hands', channelId: channel.id, participants: [zoe.id] });
   // Wash leaves the Community: now an outsider in A and D, the way such waves exist today.
@@ -162,6 +186,10 @@ async function scenario({ api, makeUser }) {
   r.crewAddOutsider = (await api('POST', `/api/groups/${bridgeCrew}/members`, { token: mal.token, body: { userId: wash.id } })).status;
   r.strangerReadsB = (await api('GET', `/api/waves/${b.id}`, { token: stranger.token })).status;
 
+  r.migration = await asBeforeNarrowing(dbPath, (conn) => {
+    conn.prepare('UPDATE waves SET channel_id = ?, community_id = ? WHERE id = ?').run(channel.id, community.id, d.id);
+  });
+
   const owner = await api('GET', `/api/communities/${community.id}/wave-report`, { token: mal.token });
   r.owner = owner;
   r.byTitle = Object.fromEntries((owner.body?.waves || []).map(w => [w.title ?? `hidden:${w.id}`, w]));
@@ -190,6 +218,10 @@ test('Community wave report: owners see their waves, admins see numbers, nobody 
       assert.equal(r.strangerReadsB, 403);
       assert.deepEqual(r.crewInviteOutsider, { status: 201, sent: 0 });
       assert.equal(r.crewAddOutsider, 403);
+    });
+
+    await t.test('the migration narrows the members-only wave and sends the rest to review', () => {
+      assert.deepEqual(r.migration, { narrowed: 1, review: 3 });
     });
 
     await t.test('the owner sees each affected wave, with counts', () => {
@@ -246,7 +278,9 @@ test('counterfactual: without the crew checks, a crew wave with an outsider is f
     assert.equal(r.fileCrewWithOutsider.status, 200, 'the crew wave with an outsider was filed');
     assert.equal(r.byTitle['Bridge crew wave'], undefined, 'the crew wave with an outsider went unreported');
     assert.equal(r.lateAccept, 200, 'joining the crew reached the channel wave');
-    assert.equal(r.strangerReadsB, 200);
+    // Since v2.134.0 the wave is narrowed to its crew AND the channel, so the
+    // channel rule keeps them out even then.
+    assert.equal(r.strangerReadsB, 403);
   } finally {
     srv?.child.kill();
     fs.rmSync(temp, { recursive: true, force: true });
