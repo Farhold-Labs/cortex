@@ -52,6 +52,15 @@ async function startServer(temp, { stripFix = false, sharedMemo = false } = {}) 
       .replace('if (db.channelPublicWaveVisible(wave, uid) === false) ids.delete(uid);', 'if (db.channelPublicWaveVisible(wave, uid, everyoneMemo) === false) ids.delete(uid);')
       .replace('function everyoneMentionIds(wave) {', 'function everyoneMentionIds(wave) {\n  const everyoneMemo = new Map();');
     fs.writeFileSync(srvFile, s);
+    // And the memo keyed by channel alone, as it was. Since v2.134.0 every
+    // answer about a person is keyed by that person, so sharing a memo across
+    // people is safe; this puts the v2.133.0 key back.
+    const dbFile = path.join(serverDir, 'database-sqlite.js');
+    let d = fs.readFileSync(dbFile, 'utf8');
+    const key = 'const key = `see\\u0000${userId}\\u0000${channelId}`;';
+    assert.ok(d.includes(key), 'counterfactual: could not find the per-person memo key');
+    d = d.replace(key, 'const key = `see\\u0000${channelId}`;');
+    fs.writeFileSync(dbFile, d);
   }
 
   {

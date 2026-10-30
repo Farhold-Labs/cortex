@@ -602,6 +602,14 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
           </div>
         </div>
 
+        {wave?.channelId && wave?.communityId ? (
+          // v2.134.0: in a Community channel, who sees a wave is chosen under
+          // ⋮ → Who can see this, by the community's owners and admins.
+          <div style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.45 }}>
+            <div style={{ color: 'var(--text-dim)', marginBottom: '6px' }}>PRIVACY LEVEL</div>
+            This {T.wave} is in a community channel. Who can see it is under ⋮ → Who can see this.
+          </div>
+        ) : (
         <div style={{ marginBottom: '16px' }}>
           <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>PRIVACY LEVEL</div>
           {Object.entries(PRIVACY_LEVELS).map(([key, config]) => (
@@ -621,8 +629,9 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
             </button>
           ))}
         </div>
+        )}
 
-        {privacy === 'group' && (
+        {privacy === 'group' && !(wave?.channelId && wave?.communityId) && (
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SELECT {T.CREW}</div>
             {groups.length === 0 ? (

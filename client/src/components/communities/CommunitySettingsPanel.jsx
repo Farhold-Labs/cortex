@@ -181,6 +181,33 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
     return () => clearTimeout(timer);
   }, [memberSearch, fetchAPI, members]);
 
+  // ----- WAVES TO REVIEW (v2.134.0) -----
+  // One wave at a time: the owner or an admin chooses, with a second tap to
+  // confirm, because Make it a role takes the wave away from the people outside
+  // (unless they are invited and accept).
+  const [reviewing, setReviewing] = useState(null); // { id, action, invite }
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const decideWave = async (w, action, invite) => {
+    setReviewBusy(true);
+    try {
+      const res = await fetchAPI(`/communities/${community.id}/waves/${w.id}/review`, { method: 'POST', body: { action, invite } });
+      if (action === 'move_out') showToast(`Moved out of #${w.channelName}. Nobody gained or lost access.`, 'success');
+      else {
+        const parts = [res.role ? `Narrowed to the role ${res.role.name}` : `Narrowed to its people in #${w.channelName}`];
+        if (res.invited) parts.push(`${res.invited} invited to join`);
+        else if (res.outside) parts.push(`${res.outside} outside no longer see it`);
+        showToast(parts.join('. '), 'success');
+      }
+      setReviewing(null);
+      load();
+      onChanged && onChanged();
+    } catch (err) {
+      showToast(err?.error || 'Could not decide that one', 'error');
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+
   // ----- ABOUT -----
 
   const saveAbout = async () => {
@@ -662,21 +689,60 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
               <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: '0.6rem' }}>
                 {waveReport.totals.waves} {waveReport.totals.waves === 1 ? T.wave : T.waves} in your channels {waveReport.totals.waves === 1 ? 'includes' : 'include'}{' '}
                 {waveReport.totals.outsiders === 1 ? 'someone who is' : `${waveReport.totals.outsiders} people who are`} not able to see the channel.
-                Nothing has changed for them: they keep their access. A later update will ask you to decide each one,
-                either moving it out of the community or keeping it for a community role.
+                Nothing has changed for them yet: they keep their access until you decide each one.
+                <br /><b>Move it out</b>: the {T.wave} leaves the community. Nobody gains or loses access.
+                <br /><b>Make it a role</b>: only people who can see the channel keep it (a {T.crew}'s members get a new community role). The people outside lose it, unless you invite them to join.
               </div>
-              {waveReport.waves.map(w => (
-                <div key={w.id} style={{ padding: '0.4rem 0', borderTop: '1px solid var(--border-subtle)', fontSize: '0.78rem' }}>
-                  <div style={{ color: w.canOpen ? 'var(--text-primary)' : 'var(--text-dim)', overflowWrap: 'anywhere' }}>
-                    {w.canOpen ? w.title : `A ${T.wave} you are not in`}
+              {waveReport.waves.map(w => {
+                const open = reviewing?.id === w.id;
+                return (
+                  <div key={w.id} style={{ padding: '0.4rem 0', borderTop: '1px solid var(--border-subtle)', fontSize: '0.78rem' }}>
+                    <div style={{ color: w.canOpen ? 'var(--text-primary)' : 'var(--text-dim)', overflowWrap: 'anywhere' }}>
+                      {w.canOpen ? w.title : `A ${T.wave} you are not in`}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.15rem' }}>
+                      #{w.channelName} · {w.kind === 'crew' ? (w.crewName ? `${T.crew} ${w.crewName}` : `${T.crew} ${T.wave}`) : w.kind === 'crossServer' ? 'across servers' : 'private'}
+                      {' · '}
+                      <span style={{ color: 'var(--accent-orange)' }}>{w.outsiders} of {w.people} can't see #{w.channelName}</span>
+                    </div>
+                    {!open ? (
+                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <button type="button" style={action} onClick={() => setReviewing({ id: w.id, action: 'move_out', invite: false })}>MOVE IT OUT</button>
+                        {w.kind !== 'crossServer' && (
+                          <button type="button" style={action} onClick={() => setReviewing({ id: w.id, action: 'make_role', invite: true })}>MAKE IT A ROLE</button>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: '0.35rem', padding: '0.45rem', border: '1px solid var(--border-subtle)' }}>
+                        {reviewing.action === 'move_out' ? (
+                          <div style={{ lineHeight: 1.45 }}>Move it out of #{w.channelName}? It becomes an ordinary {T.wave} outside the community, with the same people.</div>
+                        ) : (
+                          <>
+                            <div style={{ lineHeight: 1.45 }}>
+                              {w.kind === 'crew'
+                                ? <>Its {T.crew}'s members who can see #{w.channelName} get a new community role, and only that role sees it.</>
+                                : <>Only its people who can see #{w.channelName} keep it.</>}
+                              {' '}Community owners and admins always see it.
+                            </div>
+                            <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start', marginTop: '0.4rem', cursor: 'pointer' }}>
+                              <input type="checkbox" checked={!!reviewing.invite} onChange={e => setReviewing({ ...reviewing, invite: e.target.checked })} />
+                              <span>Invite the {w.outsiders === 1 ? 'person' : `${w.outsiders} people`} outside to join the community. Until they accept, they can't see it.</span>
+                            </label>
+                            {!reviewing.invite && <div style={{ ...hint, color: 'var(--accent-orange)' }}>The {w.outsiders === 1 ? 'person' : `${w.outsiders} people`} outside will lose it.</div>}
+                          </>
+                        )}
+                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                          <button type="button" style={reviewing.action === 'make_role' && !reviewing.invite ? danger : action} disabled={reviewBusy}
+                            onClick={() => decideWave(w, reviewing.action, !!reviewing.invite)}>
+                            {reviewBusy ? '…' : reviewing.action === 'move_out' ? 'MOVE OUT' : 'MAKE IT A ROLE'}
+                          </button>
+                          <button type="button" style={action} disabled={reviewBusy} onClick={() => setReviewing(null)}>CANCEL</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.15rem' }}>
-                    #{w.channelName} · {w.kind === 'crew' ? (w.crewName ? `${T.crew} ${w.crewName}` : `${T.crew} ${T.wave}`) : w.kind === 'crossServer' ? 'across servers' : 'private'}
-                    {' · '}
-                    <span style={{ color: 'var(--accent-orange)' }}>{w.outsiders} of {w.people} can't see #{w.channelName}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               <div style={hint}>Names are not shown: who is in a {T.crew} or a private {T.wave} is not the community's to see.</div>
             </>
           )}

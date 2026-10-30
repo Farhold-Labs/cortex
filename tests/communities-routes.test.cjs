@@ -510,7 +510,7 @@ test('Communities API', async (t) => {
       })).body.channel;
 
       const wave = await api('POST', '/api/waves', {
-        token: member.token, body: { title: 'Outlives its channel', privacy: 'private', channelId: doomed.id },
+        token: member.token, body: { title: 'Outlives its channel', privacy: 'public', channelId: doomed.id },
       });
       assert.equal(wave.status, 201);
       const waveId = (wave.body.wave || wave.body).id;
@@ -592,7 +592,7 @@ test('Communities API', async (t) => {
       // governs what you do inside — otherwise every restricted channel would
       // need each capability listed before it was usable at all.
       const started = await api('POST', '/api/waves', {
-        token: member.token, body: { title: 'Allowed in', privacy: 'private', channelId: staffOnly.id },
+        token: member.token, body: { title: 'Allowed in', privacy: 'public', channelId: staffOnly.id },
       });
       assert.equal(started.status, 201, 'admitted members behave normally inside');
 
@@ -647,15 +647,17 @@ test('Communities API', async (t) => {
     // ----- Filing a wave: the invariant -----
 
     await t.test('filing a wave needs authority over the wave, not just the channel', async () => {
+      // Public, because since v2.134.0 only owners and admins may file a wave
+      // that only some people can see (tested below).
       const wave = await api('POST', '/api/waves', {
-        token: member.token, body: { title: 'Rehearsal notes', privacy: 'private' },
+        token: member.token, body: { title: 'Rehearsal notes', privacy: 'public' },
       });
       assert.equal(wave.status, 201, JSON.stringify(wave.body));
       const waveId = wave.body.wave ? wave.body.wave.id : wave.body.id;
 
       // The Community OWNER holds every Community capability, and still may not
-      // file someone else's private wave: Community staff do not acquire
-      // authority over a wave by virtue of it being near them.
+      // file someone else's wave: Community staff do not acquire authority over
+      // a wave by virtue of it being near them.
       const byOwner = await api('PUT',
         `/api/communities/${community.id}/channels/${channel.id}/waves/${waveId}`,
         { token: owner.token });
@@ -670,35 +672,50 @@ test('Communities API', async (t) => {
     });
 
     await t.test('filing a wave changes where it is listed and nothing else', async () => {
-      // The invariant the whole container model exists for.
-      const wave = await api('POST', '/api/waves', {
+      // The invariant the whole container model exists for: nobody already in
+      // the wave loses it, and no member gains it. Since v2.134.0 a private wave
+      // in a channel is narrowed to its people, so only the Community's owners
+      // and admins may file one, and they (only they) see every narrowed wave.
+      const mine = await api('POST', '/api/waves', {
         token: member.token, body: { title: 'Private notes', privacy: 'private' },
       });
-      const waveId = wave.body.wave ? wave.body.wave.id : wave.body.id;
+      const mineId = mine.body.wave ? mine.body.wave.id : mine.body.id;
+      const refused = await api('PUT',
+        `/api/communities/${community.id}/channels/${channel.id}/waves/${mineId}`,
+        { token: member.token });
+      assert.equal(refused.status, 403, 'a member may not narrow a wave into a channel');
+      assert.equal(refused.body.code, 'NARROWING_NOT_ALLOWED');
 
-      const before = await api('GET', `/api/waves/${waveId}`, { token: member.token });
+      const wave = await api('POST', '/api/waves', {
+        token: owner.token, body: { title: 'Owner private notes', privacy: 'private', participants: [member.id] },
+      });
+      const waveId = wave.body.wave ? wave.body.wave.id : wave.body.id;
+      // Outside a Community the member is invited, not added (v2.130.0).
+      const inv = (await api('GET', '/api/wave-invitations', { token: member.token })).body.invitations
+        .find(i => i.waveId === waveId);
+      assert.ok(inv, 'the member was invited');
+      assert.equal((await api('POST', `/api/wave-invitations/${inv.id}/accept`, { token: member.token })).status, 200);
+
+      const before = await api('GET', `/api/waves/${waveId}`, { token: owner.token });
       const participantsBefore = (before.body.wave || before.body).participants;
+      assert.equal(participantsBefore.length, 2);
 
       // Assert the move SUCCEEDED before asserting what it did not change —
       // otherwise "nothing changed" passes trivially when nothing happened.
       const moved = await api('PUT',
         `/api/communities/${community.id}/channels/${channel.id}/waves/${waveId}`,
-        { token: member.token });
+        { token: owner.token });
       assert.equal(moved.status, 200, `the move must succeed: ${JSON.stringify(moved.body)}`);
       assert.equal(moved.body.wave.channel_id, channel.id);
 
       const after = await api('GET', `/api/waves/${waveId}`, { token: member.token });
+      assert.equal(after.status, 200, 'its member still reads it');
       const w = after.body.wave || after.body;
       assert.equal(w.privacy, 'private', 'privacy unchanged');
       assert.deepEqual(
         (w.participants || []).map(p => p.id).sort(),
         (participantsBefore || []).map(p => p.id).sort(),
         'participants unchanged');
-
-      // And the Community owner still cannot read it.
-      const asOwner = await api('GET', `/api/waves/${waveId}`, { token: owner.token });
-      assert.ok([403, 404].includes(asOwner.status),
-        `the Community owner must not be able to read a private wave filed in their channel (got ${asOwner.status})`);
     });
 
     await t.test('a wave can be started directly in a channel, in one request', async () => {
@@ -706,7 +723,7 @@ test('Communities API', async (t) => {
       // orphan wave the person never asked for and cannot find. This is one.
       const res = await api('POST', '/api/waves', {
         token: member.token,
-        body: { title: 'Born in a channel', privacy: 'private', channelId: channel.id },
+        body: { title: 'Born in a channel', privacy: 'public', channelId: channel.id },
       });
       assert.equal(res.status, 201, JSON.stringify(res.body));
       const created = res.body.wave || res.body;
@@ -715,7 +732,15 @@ test('Communities API', async (t) => {
       const listed = await api('GET', `/api/waves/${created.id}`, { token: member.token });
       const w = listed.body.wave || listed.body;
       assert.equal(w.channelId ?? w.channel_id, channel.id, 'and it is really filed there');
-      assert.equal(w.privacy, 'private', 'privacy is whatever was asked for, not inherited from the channel');
+      assert.equal(w.privacy, 'public', 'privacy is whatever was asked for, not inherited from the channel');
+
+      // Since v2.134.0 a member cannot start one only some people see.
+      const narrowed = await api('POST', '/api/waves', {
+        token: member.token,
+        body: { title: 'Members only, no', privacy: 'private', channelId: channel.id },
+      });
+      assert.equal(narrowed.status, 403);
+      assert.equal(narrowed.body.code, 'NARROWING_NOT_ALLOWED');
     });
 
     await t.test('someone outside the Community cannot start a wave in its channel', async () => {
@@ -747,7 +772,7 @@ test('Communities API', async (t) => {
       // a poor connection. No other test caught it because tests are never slow.
       const wave = await api('POST', '/api/waves', {
         token: member.token,
-        body: { title: 'Visible when slow', privacy: 'private', channelId: channel.id },
+        body: { title: 'Visible when slow', privacy: 'public', channelId: channel.id },
       });
       assert.equal(wave.status, 201);
 
@@ -770,7 +795,7 @@ test('Communities API', async (t) => {
         token: owner.token, body: { name: 'Temp', slug: 'temp' },
       });
       const wave = await api('POST', '/api/waves', {
-        token: member.token, body: { title: 'Survives', privacy: 'private' },
+        token: member.token, body: { title: 'Survives', privacy: 'public' },
       });
       const waveId = wave.body.wave ? wave.body.wave.id : wave.body.id;
       const filed = await api('PUT',

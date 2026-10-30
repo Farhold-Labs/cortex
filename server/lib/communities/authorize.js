@@ -14,12 +14,20 @@
  *     Channel visibility gates DISCOVERY. Wave privacy gates CONTENT.
  *
  * So this module can say a channel is listable, and it must never be consulted
- * to decide whether a member may open a wave inside it — that stays with the
- * wave's own participants and privacy. The moment Community membership starts
- * conferring read access to waves, moving a wave into a Community becomes a mass
- * disclosure, which is precisely what the container model exists to prevent.
- * There is deliberately no `canReadWave` here, and `assertNeverGrantsWaveAccess`
- * below exists so a future refactor has to delete a named guard to break it.
+ * to decide whether a member may open a wave inside it. The moment Community
+ * membership on its own starts conferring read access to waves, moving a wave
+ * into a Community becomes a mass disclosure, which is precisely what the
+ * container model exists to prevent. There is deliberately no `canReadWave`
+ * here, and `assertNeverGrantsWaveAccess` below exists so a future refactor has
+ * to delete a named guard to break it.
+ *
+ * The one rule for a wave in a Community channel is `db.channelWaveVisible`
+ * (v2.128.0, v2.134.0). It asks this module whether someone can see the
+ * channel, and then the WAVE decides: public to the channel, or narrowed to the
+ * people and roles named in it (plus the Community's owners and admins, who
+ * see every narrowed wave as Discord administrators see every channel).
+ * Filing a wave never widens it: a private wave is narrowed to its own people
+ * as it arrives (db.setWaveChannel), and only owners and admins may file one.
  *
  * ACTORS MAY BE REMOTE, FROM DAY ONE
  * Plan §1.2: write this to take an actor that may be remote even while every
@@ -585,6 +593,6 @@ export function assertNeverGrantsWaveAccess() {
   return {
     allowed: false,
     reason: 'community_membership_never_confers_wave_access',
-    detail: 'Wave privacy and participants decide who may read a wave. See plan §2b.',
+    detail: 'The wave decides who may read it (db.channelWaveVisible). See plan §2b and docs/wave-access/01-design.md.',
   };
 }

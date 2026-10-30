@@ -5,7 +5,7 @@ import { FEDERATION } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 import { T } from '../../config/terminology.js';
 
-const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null, initialGroupId = null }) => {
+const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null, inChannel = false, initialGroupId = null }) => {
   const [title, setTitle] = useState('');
   const [privacy, setPrivacy] = useState('private');
   const [selectedParticipants, setSelectedParticipants] = useState([]);
@@ -17,6 +17,13 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
   useEffect(() => {
     if (isOpen && initialGroupId) { setPrivacy('group'); setSelectedGroup(initialGroupId); }
   }, [isOpen, initialGroupId]);
+
+  // In a Community channel a new wave is open to the channel (v2.134.0). Only
+  // the Community's owners and admins narrow one, afterwards, under "Who can
+  // see this"; a private conversation belongs outside the Community.
+  useEffect(() => {
+    if (isOpen && inChannel) setPrivacy('public');
+  }, [isOpen, inChannel]);
 
   /**
    * The same dismissal every other modal uses: Escape and the Close button
@@ -105,6 +112,12 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
             }} />
         </div>
 
+        {inChannel ? (
+          <div style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.45 }}>
+            Everyone who can see {containerLabel} can see this {T.wave}. The community's owners and admins can
+            narrow it afterwards, under Who can see this. For a private conversation, start a {T.wave} outside the community.
+          </div>
+        ) : (
         <div style={{ marginBottom: '16px' }}>
           <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>PRIVACY LEVEL</div>
           {Object.entries(PRIVACY_LEVELS).map(([key, config]) => (
@@ -124,6 +137,7 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
             </button>
           ))}
         </div>
+        )}
 
         {privacy === 'group' && (
           <div style={{ marginBottom: '16px' }}>
@@ -171,7 +185,7 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
         )}
 
         {/* Federated participants section */}
-        {federationEnabled && privacy !== 'group' && (
+        {federationEnabled && privacy !== 'group' && !inChannel && (
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
               {FEDERATION.travelersLabel} <span style={{ color: 'var(--accent-teal)' }}>◇</span>

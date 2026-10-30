@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS waves (
     -- Profile Wave fields (v2.9.0)
     is_profile_wave INTEGER DEFAULT 0,      -- 1 if this is a user's profile video wave
     profile_owner_id TEXT REFERENCES users(id) -- Owner of the profile wave
-, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL, post_policy TEXT NOT NULL DEFAULT 'all', allow_replies INTEGER NOT NULL DEFAULT 1, allow_reactions INTEGER NOT NULL DEFAULT 1, community_id TEXT REFERENCES communities(id) ON DELETE SET NULL, channel_id   TEXT REFERENCES channels(id) ON DELETE SET NULL, channel_position INTEGER, ping_ttl INTEGER);
+, audio_encryption_enabled INTEGER DEFAULT 0, topic TEXT DEFAULT NULL, post_policy TEXT NOT NULL DEFAULT 'all', allow_replies INTEGER NOT NULL DEFAULT 1, allow_reactions INTEGER NOT NULL DEFAULT 1, community_id TEXT REFERENCES communities(id) ON DELETE SET NULL, channel_id   TEXT REFERENCES channels(id) ON DELETE SET NULL, channel_position INTEGER, ping_ttl INTEGER, review_state TEXT);
 CREATE INDEX IF NOT EXISTS idx_waves_created_by ON waves(created_by);
 CREATE INDEX IF NOT EXISTS idx_waves_privacy ON waves(privacy);
 CREATE INDEX IF NOT EXISTS idx_waves_crew ON waves(crew_id);
@@ -1541,6 +1541,14 @@ CREATE TABLE IF NOT EXISTS wave_invitations (
         );
 CREATE INDEX IF NOT EXISTS idx_wave_invitations_invitee ON wave_invitations(invited_user_id);
 CREATE INDEX IF NOT EXISTS idx_wave_invitations_wave ON wave_invitations(wave_id);
+
+CREATE TABLE IF NOT EXISTS wave_audience (
+        wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        kind    TEXT NOT NULL CHECK(kind IN ('user','role')),
+        ref_id  TEXT NOT NULL,
+        PRIMARY KEY (wave_id, kind, ref_id)
+      );
+CREATE INDEX IF NOT EXISTS idx_wave_audience_ref ON wave_audience(kind, ref_id);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
