@@ -2387,7 +2387,7 @@ It refreshes the access token before a long upload, and retries once on `TOKEN_E
 
 #### POST /api/embeds/detect
 
-Detect embeddable URLs in content (YouTube, Vimeo, Spotify, TikTok, Twitter, SoundCloud).
+Detect embeddable URLs in content (YouTube, Vimeo, Spotify, TikTok, Instagram, Facebook, Twitch, Dailymotion, Streamable, Rumble, Twitter, SoundCloud, Tenor, GIPHY).
 
 **Authentication:** Required
 
@@ -2417,26 +2417,38 @@ Detect embeddable URLs in content (YouTube, Vimeo, Spotify, TikTok, Twitter, Sou
 
 #### GET /api/embeds/oembed
 
-Proxy oEmbed requests for Twitter and SoundCloud embeds.
+Proxy a provider's oEmbed for a supported link: titles and pictures (Vimeo, Rumble, Tenor, GIPHY), embed HTML (Twitter, SoundCloud) and, since v2.133.0, the player address for links that do not name their video (TikTok short links, Rumble pages). Answers are cached for 15 minutes.
 
-**Authentication:** Required
+**Authentication:** None (public, rate limited; it proxies only public oEmbed APIs)
 
-**Rate Limit:** 30 requests per minute
+**Rate Limit:** `RATE_LIMIT_OEMBED_MAX` requests per minute
 
 **Query Parameters:**
 
-- `url` (string, required): URL to fetch oEmbed data for
+- `url` (string, required): a link from a supported provider; anything else is 400
 
 **Example:**
 
 ```bash
-curl "http://localhost:3001/api/embeds/oembed?url=https://twitter.com/..." \
-  -H "Authorization: Bearer <token>"
+curl "http://localhost:3001/api/embeds/oembed?url=https://vm.tiktok.com/ZMabc123/"
 ```
 
 **Response (200 OK):**
 
-Returns oEmbed JSON response from the platform's oEmbed endpoint.
+```json
+{
+  "platform": "tiktok",
+  "embedUrl": null,
+  "contentId": "ZMabc123",
+  "thumbnail": null,
+  "title": null,
+  "author": null,
+  "html": "<iframe …>",
+  "playerUrl": "https://www.tiktok.com/player/v1/7679483952507276558?music_info=1&description=1&rel=0"
+}
+```
+
+`playerUrl` is set only when it is the provider's own player (`tiktok.com/player/v1/<digits>`, `rumble.com/embed/<id>`); the client puts it into an iframe as is. If the provider's oEmbed fails, the response carries `error` and whatever is known without it.
 
 **Notes:**
 
