@@ -22421,11 +22421,15 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
   // v2.134.0: in a Community channel, who sees a wave is chosen through
   // PUT /api/waves/:id/audience, by the Community's owners and admins. A
   // privacy change here would narrow or widen it around them.
-  if (privacy && privacy !== wave.privacy && wave.channelId && db.getChannelById(wave.channelId)?.community_id) {
+  // Swapping a crew wave's crew would change its people around the channel
+  // check just the same.
+  const inCommunityChannel = wave.channelId && db.getChannelById(wave.channelId)?.community_id;
+  if (inCommunityChannel && privacy && (privacy !== wave.privacy
+      || (privacy === 'group' && sanitizeInput(req.body.groupId || '') !== (wave.groupId || '')))) {
     return res.status(409).json({ error: `Choose who can see this ${T_WAVE()} under "Who can see this"`, code: 'USE_AUDIENCE' });
   }
 
-  if (privacy && ['private', 'group', 'crossServer', 'public'].includes(privacy)) {
+  if (privacy && !inCommunityChannel && ['private', 'group', 'crossServer', 'public'].includes(privacy)) {
     let groupId = null;
     if (privacy === 'group') {
       groupId = sanitizeInput(req.body.groupId);
@@ -26031,11 +26035,20 @@ app.get('/api/communities/:id/members', authenticateToken, (req, res) => {
   const rows = db.listCommunityMembers(req.params.id, { limit: pageSize, offset, ...filters });
   const rolesByUser = db.getMemberRolesBulk(req.params.id, rows.map(m => m.user_id));
 
+  // v2.134.0: ?channel= marks who can see that channel, for the "Who can see
+  // this" picker (only they can be named). Only for a channel of this
+  // Community that the caller can see themselves.
+  const askedChannel = typeof req.query.channel === 'string' ? db.getChannelById(sanitizeInput(req.query.channel)) : null;
+  const forChannel = askedChannel && askedChannel.community_id === req.params.id
+    && db.canSeeChannelFor(askedChannel.id, req.user.userId) ? askedChannel : null;
+  const channelMemo = new Map();
+
   const members = rows.map(m => ({
     userId: m.user_id, handle: m.handle, displayName: m.display_name,
     avatarUrl: m.avatar_url, state: m.state, joinedAt: m.joined_at,
     isCrossPort: m.is_cross_port === 1, homeNode: m.home_node,
     roles: rolesByUser.get(m.user_id) || [],
+    ...(forChannel ? { canSeeChannel: db.canSeeChannelFor(forChannel.id, m.user_id, channelMemo) } : {}),
   }));
   res.json({
     members,

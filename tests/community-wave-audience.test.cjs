@@ -248,6 +248,9 @@ async function scenario({ api, makeUser, dbPath }) {
   r.reportBefore = (await api('GET', `/api/communities/${community.id}/wave-report`, { token: mal.token })).body?.totals;
   r.riverInReview = { deck: await read(river, deck.id), oldWays: await read(river, oldWays.id) };
   r.audienceInReview = (await api('PUT', `/api/waves/${deck.id}/audience`, { token: mal.token, body: { mode: 'channel' } })).status;
+  // Swapping a channel crew wave's crew would change its people around the channel.
+  const other = (await api('POST', '/api/groups', { token: mal.token, body: { name: 'Other crew' } })).body;
+  r.crewSwap = (await api('PUT', `/api/waves/${deck.id}`, { token: mal.token, body: { title: 'Deck', privacy: 'group', groupId: other.id || other.group?.id } })).status;
   const review = (u, w, body) => api('POST', `/api/communities/${community.id}/waves/${w.id}/review`, { token: u.token, body });
   r.memberReview = (await review(zoe, oldWays, { action: 'move_out' })).status;
 
@@ -343,6 +346,7 @@ test('who can see a Community wave: narrowing, roles, review', { timeout: 180000
     assert.deepEqual(r.reportBefore, { waves: 3, outsiders: 1 });
     assert.deepEqual(r.riverInReview, { deck: 200, oldWays: 200 });
     assert.equal(r.audienceInReview, 409);
+    assert.equal(r.crewSwap, 409, 'a channel crew wave keeps its crew');
     assert.equal(r.memberReview, 403);
   });
 

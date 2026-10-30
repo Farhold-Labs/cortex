@@ -52,6 +52,18 @@ const listMoves = (ids, id, apply) => {
 // the categorised one ever had this menu, so anyone who had not created a
 // category saw no ⋮ at all: Pin was unreachable, and Mute (v2.84.0) never
 // appeared for them. Extracted rather than copied so the two cannot drift.
+/**
+ * A Community wave waiting for its owner's review (v2.134.0): it had people
+ * who cannot see its channel when narrowing shipped, and keeps the access it
+ * had until the owner or an admin decides (Manage community → WAVES TO REVIEW).
+ */
+const NeedsReview = () => (
+  <span title="Waiting for the community's owner to decide who can see it"
+    style={{ color: 'var(--accent-orange)', fontSize: '0.6rem', letterSpacing: '0.04em', fontWeight: 400, whiteSpace: 'nowrap' }}>
+    REVIEW
+  </span>
+);
+
 const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen, onToggle, onWavePin, onWaveMute, onWaveMove, onWaveFile }) => {
   // A voice channel holds no waves (v2.118.0), so it is not somewhere to file one.
   const channels = allChannels.filter(ch => ch.type !== 'voice');
@@ -434,6 +446,8 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
             {wave.title}
           </div>
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+            {/* Beside the title, not in it: a long title's ellipsis would hide it. */}
+            {wave.reviewState === 'needs_review' && <NeedsReview />}
             {showNotificationBadge && (
               <span style={{
                 background: badgeStyle.bg,
@@ -825,6 +839,33 @@ const WaveInvitations = ({ invitations, onAccept, onDecline, isMobile, density }
       </div>
       {invitations.map(inv => {
         const who = plainText(inv.invitedBy?.displayName || inv.invitedBy?.handle || 'Someone');
+        // v2.134.0: an invitation to join a Community, sent when its owner
+        // kept a conversation you were in for the Community.
+        if (inv.kind === 'community') {
+          return (
+            <div key={inv.id} style={{ padding: '8px 12px', borderTop: '1px solid var(--border-subtle)' }}>
+              <div style={{ color: 'var(--text-primary)', fontSize: density?.fontSize || '0.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {plainText(inv.communityName || 'A community')}
+              </div>
+              <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', margin: '2px 0 6px' }}>
+                {who} invited you to join this community, so you keep a {T.wave} you're in.
+              </div>
+              {confirmBlock === inv.id ? (
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>Block {who}?</span>
+                  <button disabled={busy === inv.id} style={button(true)} onClick={() => act(inv.id, () => onDecline?.(inv, { block: true }))}>BLOCK</button>
+                  <button style={button(false)} onClick={() => setConfirmBlock(null)}>CANCEL</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <button disabled={busy === inv.id} style={button(true)} onClick={() => act(inv.id, () => onAccept?.(inv))}>JOIN</button>
+                  <button disabled={busy === inv.id} style={button(false)} onClick={() => act(inv.id, () => onDecline?.(inv))}>DECLINE</button>
+                  <button disabled={busy === inv.id} style={button(false)} onClick={() => setConfirmBlock(inv.id)}>DECLINE &amp; BLOCK</button>
+                </div>
+              )}
+            </div>
+          );
+        }
         // The inviter is already named; "with" lists everyone else in it.
         const rest = (inv.members || []).filter(m => m.id !== inv.invitedBy?.id);
         const others = rest.map(m => plainText(m.name || m.handle || '')).filter(Boolean);
@@ -1335,6 +1376,7 @@ const WaveList = ({ waveInvitations = [], onAcceptInvitation, onDeclineInvitatio
                 {wave.is_archived && '📦 '}{wave.title}
               </div>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                {wave.reviewState === 'needs_review' && <NeedsReview />}
                 {showNotificationBadge && (
                   <span style={{
                     background: badgeStyle.bg,

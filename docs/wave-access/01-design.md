@@ -194,14 +194,21 @@ whatever their client had already decrypted, as with any removal today.
    - A group wave is a crew wave; existing crews are already groups. "Crew" stays the Firefly word for one (instance terminology), so nothing was renamed.
    - Removing someone from a group wave acts on the group, or splits the wave off without them; before, it removed only a participant row and the crew still let them in.
    - Waves with people on other servers are unchanged (phase 6).
-4. **Community wave review and narrowing.** Needs review; the owner's Move it out / Make it a role (with or without invitations); Who can see this with people and live roles. Each Community switches to the strict rule when its review is done.
+4. **Community wave review and narrowing (built, v2.134.0).** As built:
+   - **The strict rule is per wave, not per Community.** Migration sorts every non-public channel wave once: if all its people (participants and creator, or its crew) can see the channel, it is narrowed straight away (a private wave to its people by name, a crew wave to its crew); otherwise it is marked Needs review and keeps exactly the access it had. So a Community with one wave in review does not hold back the rest.
+   - **One rule:** `db.channelWaveVisible()` — can see the channel AND (public, or named, or holds a named role, or in the crew of a crew wave, or holds `community.manage`). Participant rows never count. A memo shared across people is safe: every answer is keyed by the person (the COMM-027 bug class).
+   - **Who can see this** (wave ⋮): everyone sees the answer, including "and the community's owners and admins"; owners and admins change it. Narrowing names the person narrowing it. Widening is one choice. A crew wave narrowed by hand stops following its crew.
+   - **Members cannot narrow:** starting or filing a non-public wave in a channel needs `community.manage`. The new-wave dialog in a channel has no privacy choice. Wave settings no longer change privacy (or a crew wave's crew) in a channel.
+   - **Review** (Manage Community → WAVES TO REVIEW): Move it out, or Make it a role, with "Invite the people outside" on by default. A crew becomes a role with no capabilities, named after the crew only if it has a name of its own (an automatic name lists its people, outsiders included) and the decider can open the wave. Invitations are a membership in state `invited`, accepted from the invitations box at the top of the list.
+   - **Moving a narrowed wave out** keeps its named people who could see it, and removes every other participant row, including those of admins who only opened it.
+   - Still to come: the federated side (phase 6) — a Verse-Wide wave in a channel stays in review or out of narrowing.
 5. **Clean-up.** Categories → Folders, privacy labels replaced by audience in the UI, docs.
 6. **Federated invitations.**
 
 ## Decisions (Jared, 2026-10-29)
 
 1. **A group shared by several waves:** ask each time, "This wave only" or "The whole group".
-2. **Narrowing in Communities is Discord-like:** only owners and admins can create narrowed waves; members cannot. Read as: owners and admins also always see them, as Discord administrators do. Confirm if that reading is wrong.
+2. **Narrowing in Communities is Discord-like:** only owners and admins can create narrowed waves; members cannot. Owners and admins also always see them, as Discord administrators do (confirmed by Jared, 2026-10-30).
 3. **Categories are renamed Folders** and leave the create-wave dialog.
 4. **Auto-accept from contacts:** a per-person setting, off by default.
 5. **In a Community, people and group pickers list only the Community:** members who can see the channel, and the Community's roles. The server refuses anyone else.

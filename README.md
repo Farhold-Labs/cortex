@@ -94,7 +94,8 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Across servers** — Members from allied ports join with their home identity; their standing is re-checked with their home server, so suspending or unpairing reaches them
 - **Public means the Community** — A public wave in a Community channel is visible to whoever can see that channel, not to the whole server
 - **Joining is the consent** — Inside a Community, members who can see a channel are added to its waves directly; anyone else cannot be added
-- **Waves to review** — Owners and admins see which filed waves include people who can't see the channel, ahead of deciding each one; node admins see the numbers per Community
+- **Who can see this** — A wave in a channel is open to the channel, or narrowed by owners and admins to chosen people and Community roles (Discord-style; owners and admins always see narrowed waves). Roles are live
+- **Waves to review** — Waves that had people who can't see their channel wait for the owner: move it out, or make it a role (optionally inviting the people outside to join). Node admins see the numbers per Community
 - **Voice channels** — Drop-in voice and video rooms (opt-in per server), with a camera limit, stage channels with raised hands, moving people between rooms, and media end-to-end encrypted against LiveKit
 - **Managing a Community** — Appoint admins and moderators, remove, ban, leave or close from the Community menu; logos for Communities; channel order and wave order within a channel set by staff
 - **Opt-in per server** — An instance feature, off unless the admin turns it on; abuse limits and admin suspend/close controls built in
