@@ -97,7 +97,7 @@ Restart **`cortex-web` as well** after every client build. `serve.mjs` holds `in
 
 - `npm test` and `tools/generate-schema.mjs --check`;
 - a client build, checking the service worker was stamped;
-- `npm audit --audit-level=moderate` for server and client;
+- `npm audit` at moderate for server and client, through `tools/audit-gate.mjs`, which excuses only listed advisories, each with a reason and a review date on which it fails again (v2.135.0);
 - `tools/secret-scan.py` over the whole history.
 
 It runs on PRs, but merges use `--admin`, so run the tests yourself before merging.

@@ -17,6 +17,9 @@ Wave-access phase 5, the clean-up: categories are called folders, and waves are 
 - **Wave settings** say WHO CAN SEE IT, offer People, a whole crew or Everyone on this server, and describe a federated wave instead of offering to switch it.
 - **Waves are labelled by audience.** The header badge, the list dot and the focus and thread views read `waveAudience(wave)`: People, Crew, Verse-Wide, Everyone, and, in a Community channel, **Channel**, **Narrowed** or **Review**. Before, a wave open to its channel was labelled "Public", which since v2.128.0 has not meant the whole server. In a Community the badge is a button that opens *Who can see this*.
 
+### CI
+- **The dependency audit can excuse an advisory, in writing and only until a review date.** Two moderate advisories were published on 2026-10-30, minimatch < 11.0.1 (GHSA-g3hv-75wg-m249, a pattern DoS) and glob 9–14.0.1 (GHSA-3g3m-2fjr-6pw4, an aborted glob keeps walking). Each is fixed only in a new major version. They reach us through rimraf/glob under firebase-admin (google-gax) on the server and through electron-builder and the Capacitor CLI on the client. Nothing there matches a pattern or walks a path a user chose, and npm's suggested fix downgrades those packages by years. `tools/audit-gate.mjs` runs `npm audit --omit=dev` as before and fails on anything moderate or worse, except advisories listed with a reason and a date. Both are excused until 2026-11-30; on that date they fail again unless upstream has moved or someone decides again. Its first run proved the gate: with only minimatch listed, it failed on glob.
+
 ### Fixed
 - A Community channel in a wave's ⋮ menu said filing a wave there "does not change who can read it". Since v2.128.0 it does: everyone who can see the channel can see the wave. The hint now says so.
 
