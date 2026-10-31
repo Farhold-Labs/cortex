@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { SUCCESS, formatError, CONFIRM_DIALOG } from '../../../messages.js';
-import { PRIVACY_LEVELS, THREAD_DEPTH_LIMIT } from '../../config/constants.js';
+import { waveAudience, THREAD_DEPTH_LIMIT } from '../../config/constants.js';
 import { Avatar } from '../ui/SimpleComponents.jsx';
 import { uploadFile, deliverUpload, registerUploadTarget } from '../../utils/uploads.js';
 import { registerAttachments } from '../../utils/attachments.js';
@@ -168,7 +168,7 @@ const ThreadPanel = ({
   }, [liveRoot]);
 
   const focusedRoot = liveRoot || rootMessage;
-  const config = PRIVACY_LEVELS[wave?.privacy] || PRIVACY_LEVELS.private;
+  const config = waveAudience(wave);
 
   // Filter out blocked/muted users
   const isBlocked = (userId) => blockedUsers?.some(u => u.blockedUserId === userId) || false;

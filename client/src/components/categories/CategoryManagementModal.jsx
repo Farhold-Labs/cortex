@@ -18,7 +18,7 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
 
   const handleCreateCategory = async () => {
     if (!newCategoryName.trim()) {
-      showToast('Category name is required', 'error');
+      showToast('Folder name is required', 'error');
       return;
     }
 
@@ -32,12 +32,12 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
         },
       });
 
-      showToast('Category created successfully', 'success');
+      showToast('Folder created', 'success');
       setNewCategoryName('');
       setNewCategoryColor('var(--accent-green)');
       onCategoriesChange();
     } catch (error) {
-      showToast(error.message || formatError('Failed to create category'), 'error');
+      showToast(error.message || formatError('Failed to create folder'), 'error');
     }
   };
 
@@ -49,11 +49,11 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
         body: updates,
       });
 
-      showToast('Category updated successfully', 'success');
+      showToast('Folder updated', 'success');
       setEditingCategory(null);
       onCategoriesChange();
     } catch (error) {
-      showToast(error.message || formatError('Failed to update category'), 'error');
+      showToast(error.message || formatError('Failed to update folder'), 'error');
     }
   };
 
@@ -67,10 +67,10 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
         method: 'DELETE',
       });
 
-      showToast('Category deleted successfully', 'success');
+      showToast('Folder deleted', 'success');
       onCategoriesChange();
     } catch (error) {
-      showToast(error.message || formatError('Failed to delete category'), 'error');
+      showToast(error.message || formatError('Failed to delete folder'), 'error');
     }
   };
 
@@ -95,11 +95,11 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
         body: { categories: reorderedCategories },
       });
 
-      showToast('Categories reordered successfully', 'success');
+      showToast('Folders reordered', 'success');
       onCategoriesChange();
     } catch (error) {
       console.error('Error reordering categories:', error);
-      showToast(error.message || formatError('Failed to reorder categories'), 'error');
+      showToast(error.message || formatError('Failed to reorder folders'), 'error');
     }
   };
 
@@ -118,7 +118,7 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
         boxShadow: '0 0 30px var(--glow-green)',
       }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <GlowText color="var(--accent-green)" size="1.2rem">MANAGE CATEGORIES</GlowText>
+          <GlowText color="var(--accent-green)" size="1.2rem">MANAGE FOLDERS</GlowText>
           <button onClick={onClose} style={{
             background: 'transparent', border: 'none', color: 'var(--text-dim)',
             cursor: 'pointer', fontSize: '1.5rem', padding: '4px 8px',
@@ -131,12 +131,12 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
           border: '1px solid var(--border-subtle)', borderRadius: '4px', marginBottom: '24px',
         }}>
           <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '12px', fontSize: '0.9rem' }}>
-            Create New Category
+            New Folder
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <input
               type="text"
-              placeholder="Category name (e.g., Work, Personal)"
+              placeholder="Folder name (e.g., Work, Personal)"
               value={newCategoryName}
               onChange={(e) => setNewCategoryName(e.target.value)}
               maxLength={50}
@@ -177,7 +177,7 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
 
         {/* Existing Categories */}
         <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '12px', fontSize: '0.9rem' }}>
-          Your Categories ({categories.length})
+          Your Folders ({categories.length})
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {categories.map((category, index) => (
@@ -260,7 +260,7 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
                     </button>
                     <button
                       onClick={() => setEditingCategory(category.id)}
-                      title="Rename category"
+                      title="Rename folder"
                       style={{
                         background: 'transparent', border: 'none', color: 'var(--text-dim)',
                         cursor: 'pointer', fontSize: '0.9rem', padding: '4px 8px',
@@ -270,7 +270,7 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
                     </button>
                     <button
                       onClick={() => handleDeleteCategory(category.id)}
-                      title="Delete category"
+                      title="Delete folder"
                       style={{
                         background: 'transparent', border: 'none', color: 'var(--text-dim)',
                         cursor: 'pointer', fontSize: '0.9rem', padding: '4px 8px',
@@ -285,7 +285,7 @@ const CategoryManagementModal = ({ isOpen, onClose, categories, fetchAPI, showTo
           ))}
           {categories.length === 0 && (
             <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-              No categories yet. Create one above to get started!
+              No folders yet. A folder sorts your own list; it changes nothing for anyone else.
             </div>
           )}
         </div>

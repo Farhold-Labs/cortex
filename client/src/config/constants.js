@@ -1,7 +1,7 @@
 import { T } from '../config/terminology.js';
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.134.0';
+export const VERSION = '2.135.0';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
@@ -34,12 +34,32 @@ export const BASE_URL = resolvedUrl.replace(/\/+$/, '');
 export const API_URL = `${BASE_URL}/api`;
 export const WS_URL = `${wsProtocol}//${_resolved.host}${_resolved.protocol === 'https:' ? '/ws' : ''}`;
 
-// ============ PRIVACY LEVELS ============
+// ============ WHO CAN SEE A WAVE ============
+// Keyed by the stored `privacy`, but named for the audience (v2.135.0): the
+// labels say who can see a wave, not a privacy level to pick.
 export const PRIVACY_LEVELS = {
-  private: { name: 'Private', color: 'var(--accent-orange)', bgColor: 'var(--overlay-orange)', icon: '●', desc: 'Only invited participants' },
-  group: { name: `${T.Crew}`, color: 'var(--accent-amber)', bgColor: 'var(--overlay-amber)', icon: '●', desc: 'All crew members' },
-  crossServer: { name: 'Verse-Wide', color: 'var(--accent-teal)', bgColor: 'var(--overlay-teal)', icon: '●', desc: 'Allied ports in the Verse' },
-  public: { name: 'Public', color: 'var(--accent-green)', bgColor: 'var(--overlay-green)', icon: '○', desc: 'Visible to everyone' },
+  private: { name: 'People', color: 'var(--accent-orange)', bgColor: 'var(--overlay-orange)', icon: '●', desc: 'Only the people in it' },
+  group: { name: `${T.Crew}`, color: 'var(--accent-amber)', bgColor: 'var(--overlay-amber)', icon: '●', desc: `Everyone in one ${T.crew}` },
+  crossServer: { name: 'Verse-Wide', color: 'var(--accent-teal)', bgColor: 'var(--overlay-teal)', icon: '●', desc: 'People here and on allied ports' },
+  public: { name: 'Everyone', color: 'var(--accent-green)', bgColor: 'var(--overlay-green)', icon: '○', desc: 'Everyone on this server' },
+};
+
+// A wave in a Community channel is open to the channel or narrowed (v2.128.0,
+// v2.134.0); its stored privacy alone would call a channel wave "Everyone".
+const CHANNEL_AUDIENCES = {
+  channel: { name: 'Channel', color: 'var(--accent-green)', bgColor: 'var(--overlay-green)', icon: '○', desc: 'Everyone who can see the channel' },
+  narrowed: { name: 'Narrowed', color: 'var(--accent-orange)', bgColor: 'var(--overlay-orange)', icon: '●', desc: "Only the people and roles named, and the community's owners and admins" },
+  review: { name: 'Review', color: 'var(--accent-orange)', bgColor: 'var(--overlay-orange)', icon: '●', desc: "Keeps its old access until the community's owner or an admin decides" },
+};
+
+/** Who can see this wave, as a label: { name, color, bgColor, icon, desc }. */
+export const waveAudience = (wave) => {
+  if (wave?.channelId) {
+    if (wave.reviewState === 'needs_review') return CHANNEL_AUDIENCES.review;
+    return wave.privacy === 'public' ? CHANNEL_AUDIENCES.channel : CHANNEL_AUDIENCES.narrowed;
+  }
+  const key = wave?.privacy === 'cross-server' ? 'crossServer' : wave?.privacy;
+  return PRIVACY_LEVELS[key] || PRIVACY_LEVELS.private;
 };
 
 // ============ ROLE-BASED ACCESS (v1.20.0) ============

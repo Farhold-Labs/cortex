@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture.js';
 import { SUCCESS, EMPTY, formatError, CONFIRM_DIALOG } from '../../../messages.js';
-import { PRIVACY_LEVELS, BASE_URL } from '../../config/constants.js';
+import { waveAudience, BASE_URL } from '../../config/constants.js';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { uploadFile, deliverUpload, registerUploadTarget } from '../../utils/uploads.js';
 import { registerAttachments } from '../../utils/attachments.js';
@@ -163,7 +163,7 @@ const FocusView = ({
 
   const filteredPings = filterPings([...focusPings]);
 
-  const config = PRIVACY_LEVELS[wave?.privacy] || PRIVACY_LEVELS.private;
+  const config = waveAudience(wave);
 
   // Typing indicator
   const sendTypingIndicator = () => {

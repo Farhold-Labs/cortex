@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.134.0** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.135.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -54,9 +54,9 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 - **Asked before being added** — Adding someone to a wave sends them an invitation: they see who invited them, the title and who is in it, and choose Accept, Decline, or Decline and block. Blocks are honoured both ways, invitations expire after 30 days, and contacts' invitations can be accepted automatically (a setting, off by default)
 - **Groups that make themselves** — Start a wave with two or more people and it forms a group, named after them until someone renames it; reuse it with "New wave with these people". A group shared by several waves asks whether someone joins or leaves this wave only or the whole group
 - **Crews & Contacts** — Organize connections with request/invitation workflows
-- **One home list** — Communities first, then pinned waves, categories and waves, under one header. A Community or category opens in its own panel; on desktop the list folds to a rail of icons (◀ or Ctrl+B), on a phone it drills down
-- **Your own order** — Reorder Communities, categories and waves by hand; the order is kept rather than shuffled by activity, and stored encrypted
-- **Wave Categories** — Personal folders for your waves with per-category unread badges
+- **One home list** — Communities first, then pinned waves, folders and waves, under one header. A Community or folder opens in its own panel; on desktop the list folds to a rail of icons (◀ or Ctrl+B), on a phone it drills down
+- **Your own order** — Reorder Communities, folders and waves by hand; the order is kept rather than shuffled by activity, and stored encrypted
+- **Folders** — Sort your own list into folders with per-folder unread badges; a folder is yours alone and changes nothing for anyone else (called categories before v2.135.0)
 - **Expiring pings** — Send a ping that erases itself after a set time, or give a wave a timer that caps every ping in it
 - **Search** — Full-text search across all pings (SQLite FTS5)
 - **Inline emoji autocomplete** — Type `:shortcode:` to pick from 826 emoji; closing colon auto-inserts
@@ -449,14 +449,19 @@ To adapt for your own domain, replace `farhold.com` / `cortex.farhold.com` with 
 
 ---
 
-## Privacy Levels
+## Who Can See a Wave
 
-| Level | Icon | Description |
-|-------|------|-------------|
-| Private | &#9673; | Only participants, each of whom accepted an invitation |
-| Crew | &#9672; | All crew members |
-| Cross-Server | &#9671; | Federated across the Verse |
-| Public | &#9675; | Everyone on the server; in a Community channel, whoever can see the channel |
+A new wave is either for **people** (picked one by one, or a whole crew) or for **everyone on this server**. Inside a Community it is for the channel, unless the Community's owners or admins narrow it. Each wave's header says which:
+
+| Label | Who can see it |
+|-------|----------------|
+| People | Only the people in it, each of whom accepted an invitation |
+| Crew | Everyone in one crew |
+| Verse-Wide | Its people, here and on allied servers. Not a choice: a wave becomes federated when someone from another server is in it |
+| Everyone | Everyone on this server |
+| Channel | Everyone who can see its Community channel |
+| Narrowed | Only the people and roles named, and the Community's owners and admins |
+| Review | Keeps its old access until the Community's owner or an admin decides |
 
 ---
 

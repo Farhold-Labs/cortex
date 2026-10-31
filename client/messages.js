@@ -147,7 +147,7 @@ export const CONFIRM_DIALOG = {
   declineFederationRequest: "Deny docking clearance for this request?",
   deleteAlert: "Scrub this alert from the cortex?",
   unsubscribe: "Stop listening on this channel?",
-  deleteCategory: `Jettison this category? ${T.Waves} inside will go uncategorized.`,
+  deleteCategory: `Delete this folder? ${T.Waves} in it stay in your list, outside any folder.`,
   removeParticipant: (name) => `Show ${name} the airlock?`,
   revokeAccess: (title) => `Revoke access to "${title}"? They'll be cut off.`,
   deleteWebhook: "Pull the plug on this webhook?",
