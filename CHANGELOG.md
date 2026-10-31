@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.135.0] - 2026-10-30
+
+Wave-access phase 5, the clean-up: categories are called folders, and waves are labelled by who can see them instead of by a privacy level. No migration; the API is unchanged.
+
+### Changed
+- **Categories are Folders.** The wave list, the rail and the manager all say it: "Manage Folders", "NOT IN A FOLDER" (was UNCATEGORIZED), and a "MOVE TO FOLDER" heading in a wave's ⋮ menu, so folders no longer sit unlabelled beside Community channels. The folder routes' error messages say folder too. The API keeps its `/wave-categories` paths and `category` fields, so older apps keep working. Deleting a folder now says the waves in it stay in your list (it said "Jettison", and that they would "go uncategorized").
+- **The new-wave dialog asks who can see it.** Two choices, *People* (pick people one by one, or a whole crew) and *Everyone on this server*, replace the four privacy levels. *Verse-Wide* is no longer something to pick: a wave with someone from another server is federated because of who is in it, which the server already decided (it forced `crossServer` whenever federated people were added). Picking a crew clears people picked one by one, and the other way round, since a crew wave's people are its crew.
+- **Wave settings** say WHO CAN SEE IT, offer People, a whole crew or Everyone on this server, and describe a federated wave instead of offering to switch it.
+- **Waves are labelled by audience.** The header badge, the list dot and the focus and thread views read `waveAudience(wave)`: People, Crew, Verse-Wide, Everyone, and, in a Community channel, **Channel**, **Narrowed** or **Review**. Before, a wave open to its channel was labelled "Public", which since v2.128.0 has not meant the whole server. In a Community the badge is a button that opens *Who can see this*.
+
+### CI
+- **The dependency audit can excuse an advisory, in writing and only until a review date.** Two moderate advisories were published on 2026-10-30, minimatch < 11.0.1 (GHSA-g3hv-75wg-m249, a pattern DoS) and glob 9–14.0.1 (GHSA-3g3m-2fjr-6pw4, an aborted glob keeps walking). Each is fixed only in a new major version. They reach us through rimraf/glob under firebase-admin (google-gax) on the server and through electron-builder and the Capacitor CLI on the client. Nothing there matches a pattern or walks a path a user chose, and npm's suggested fix downgrades those packages by years. `tools/audit-gate.mjs` runs `npm audit --omit=dev` as before and fails on anything moderate or worse, except advisories listed with a reason and a date. Both are excused until 2026-11-30; on that date they fail again unless upstream has moved or someone decides again. Its first run proved the gate: with only minimatch listed, it failed on glob.
+
+### Fixed
+- A Community channel in a wave's ⋮ menu said filing a wave there "does not change who can read it". Since v2.128.0 it does: everyone who can see the channel can see the wave. The hint now says so.
+
+### Verified
+- `npm test`: 650/650.
+- Headless on dev, at phone (390 px) and desktop width:
+  - the list shows NOT IN A FOLDER and a folder's empty text;
+  - the new-wave dialog shows WHO CAN SEE IT with People / Everyone on this server, contacts, OR A WHOLE CREW and travellers; picking a crew highlights it;
+  - channel waves' badges read Channel, Narrowed and Review with their descriptions, and tapping the badge opens Who can see this.
+
 ## [2.134.0] - 2026-10-30
 
 Wave-access phase 4: inside a Community, a conversation is open to its channel or narrowed to chosen people and roles, Discord-style, and the conversations that had people outside their channel wait for the owner's decision. Migrating release.

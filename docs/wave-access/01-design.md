@@ -1,6 +1,6 @@
 # Wave access, groups and invitations — design
 
-Status: **decided** (2026-10-29). **Phase 1 built in v2.130.0, phase 2 in v2.131.0, phase 3 in v2.132.0**; the rest not yet. Jared's decisions are recorded at the end and folded into the text.
+Status: **decided** (2026-10-29). **Phase 1 built in v2.130.0, phase 2 in v2.131.0, phase 3 in v2.132.0, phase 4 in v2.134.0, phase 5 in v2.135.0**; phase 6 not yet. Jared's decisions are recorded at the end and folded into the text.
 
 ## Why
 
@@ -202,7 +202,11 @@ whatever their client had already decrypted, as with any removal today.
    - **Review** (Manage Community → WAVES TO REVIEW): Move it out, or Make it a role, with "Invite the people outside" on by default. A crew becomes a role with no capabilities, named after the crew only if it has a name of its own (an automatic name lists its people, outsiders included) and the decider can open the wave. Invitations are a membership in state `invited`, accepted from the invitations box at the top of the list.
    - **Moving a narrowed wave out** keeps its named people who could see it, and removes every other participant row, including those of admins who only opened it.
    - Still to come: the federated side (phase 6) — a Verse-Wide wave in a channel stays in review or out of narrowing.
-5. **Clean-up.** Categories → Folders, privacy labels replaced by audience in the UI, docs.
+5. **Clean-up (built, v2.135.0).** As built:
+   - **Folders** everywhere a person reads it (list, rail, manager, ⋮ menu, error messages). The API and database keep `category`, so older apps keep working. Creating a wave from an open folder still files it there: that is filing from the list, not a choice in the dialog, and the dialog never had a folder picker.
+   - **The new-wave dialog asks who can see it:** People (one by one, or a whole crew) or Everyone on this server. Verse-Wide is no longer a choice; the server already made a wave federated when someone from another server was added. Wave settings match, and describe a federated wave rather than offer to switch it.
+   - **Labels by audience:** `waveAudience(wave)` on the client gives People, Crew, Verse-Wide, Everyone, and in a channel Channel, Narrowed or Review. The header badge opens Who can see this in a Community.
+   - **Not done:** "Everyone on this server" stays open to every account, as it was; the plan's "admin-only to create" was never enforced and changing it is a separate decision.
 6. **Federated invitations.**
 
 ## Decisions (Jared, 2026-10-29)

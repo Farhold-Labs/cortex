@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.134.0**. Last brought current 2026-10-30.
+Current version: **2.135.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2134000 / versionName "2.134.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2134000 / MARKETING_VERSION 2.134.0
+client/android/app/build.gradle                  versionCode 2135000 / versionName "2.135.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2135000 / MARKETING_VERSION 2.135.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -97,7 +97,7 @@ Restart **`cortex-web` as well** after every client build. `serve.mjs` holds `in
 
 - `npm test` and `tools/generate-schema.mjs --check`;
 - a client build, checking the service worker was stamped;
-- `npm audit --audit-level=moderate` for server and client;
+- `npm audit` at moderate for server and client, through `tools/audit-gate.mjs`, which excuses only listed advisories, each with a reason and a review date on which it fails again (v2.135.0);
 - `tools/secret-scan.py` over the whole history.
 
 It runs on PRs, but merges use `--admin`, so run the tests yourself before merging.
@@ -307,7 +307,7 @@ A first-class layer of Community → channel → waves (a channel **contains** w
 - **Design docs:** `docs/communities/`. The audit register is in `docs/SECURITY-AUDIT-STATE.md` and the Communities docs.
 - **Sidebar order (v2.121.0)** is kept, never sorted by activity. Personal order (waves, Communities) is one encrypted row per person in `user_list_order`, under the participation key; channel order and `waves.channel_position` are shared, set with `channel.manage`. The low-bandwidth wave query names its columns, so a new wave field must be SELECTed there too.
 - **Being put into a wave is asked (v2.130.0).** Every way of adding someone goes through `addOrInviteToWave()`: in a Community channel a member who can see it is added, anyone else refused; elsewhere an invitation (`wave_invitations`, pending rows only), unless they auto-accept from contacts. Blocks are honoured both ways. A new path that adds participants must use it. A crew wave's people are its whole crew (`waveMemberIds()`), and joining a crew is joining its waves, so a crew with a wave filed in a channel takes only people who can see the channel (`crewChannelRefusal()`, v2.131.0). Since v2.132.0 a wave started with two or more others makes a group with it (a crew wave; accepting joins the group); an unnamed group's name is computed by `db.groupLabel()`, never stored; and adding to or removing from a group with several waves needs `scope` (`wave` splits the wave off, `group` acts on all of them). A path that removes someone from a group wave must act on the group, not just the participant row.
-- **A wave in a channel is public to the channel or narrowed (v2.128.0, v2.134.0).** `db.channelWaveVisible()` (alias `channelPublicWaveVisible`) is the one rule: can see the channel (`canDiscoverChannel`) AND public, or named in `wave_audience` (people, live Community roles), or in a crew wave's crew, or holding `community.manage` (owners and admins see every narrowed wave). Participant rows never count. Waves that had people outside their channel at migration are `review_state = 'needs_review'` and keep their old access (the rule returns null) until the owner moves them out or makes them a role. Every read, list, search, fan-out and the attachment gate goes through it; a new path that treats `privacy` alone as the answer must too. Only `community.manage` narrows (starting or filing a non-public wave in a channel). Its memo may be shared across people because every answer is keyed by the person; never key one by channel alone (CORTEX-COMM-027).
+- **A wave in a channel is public to the channel or narrowed (v2.128.0, v2.134.0).** `db.channelWaveVisible()` (alias `channelPublicWaveVisible`) is the one rule: can see the channel (`canDiscoverChannel`) AND public, or named in `wave_audience` (people, live Community roles), or in a crew wave's crew, or holding `community.manage` (owners and admins see every narrowed wave). Participant rows never count. Waves that had people outside their channel at migration are `review_state = 'needs_review'` and keep their old access (the rule returns null) until the owner moves them out or makes them a role. Every read, list, search, fan-out and the attachment gate goes through it; a new path that treats `privacy` alone as the answer must too. The client labels a wave by audience with `waveAudience()` (`config/constants.js`, v2.135.0), never by `privacy` alone, which would call a channel wave "Everyone". Only `community.manage` narrows (starting or filing a non-public wave in a channel). Its memo may be shared across people because every answer is keyed by the person; never key one by channel alone (CORTEX-COMM-027).
 - **Two panels (v2.125.0; one home list v2.126.0).** The home panel is one list under one WAVES header: a row per Community on top, then pinned, categories and waves; one Reorder moves Communities among Communities and waves among waves. A Community (or, on desktop, a category) opens in its own panel. On desktop the home panel then shrinks to a rail (`WaveRail.jsx`; since v2.129.0 collapsing the list, ◀ or Ctrl+B, also leaves the rail): ⌂, Communities, pinned waves, then categories, or one tile per wave for someone without categories. On a phone it is a drill-down. `openContainer` in `MainApp` is navigation state, kept per device in localStorage. Grouping and unread counts come from `utils/waveGroups.js`, which the list and the rail share. `useSystemBack` ignores a pop that lands on its own entry, so stacked back handlers (a wave over a panel) each take one press. Community logos are unbound uploads like avatars (`communities.logo_url`).
 
 ### Expiring pings (v2.122.0)
@@ -451,7 +451,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/API.md** — API endpoints
 - **docs/DEPLOYMENT.md** — hardened VPS deployment, hardware sizing, broadcasts/recording setup, release backups
 - **docs/HIGH-AVAILABILITY.md** — proposed warm-standby failover (DNS health checks, Litestream, lease + boot guard); not built yet
-- **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0)
+- **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0, phase 5 folders and audience labels in v2.135.0)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy

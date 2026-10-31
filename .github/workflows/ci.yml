@@ -120,12 +120,14 @@ jobs:
       # were open in firebase-admin's Google Cloud tree; that upgrade has landed,
       # so the accommodation is gone. Do not raise this back to `high` to get a
       # red build green — that is how the gate quietly stops doing its job.
+      # npm audit at moderate, except advisories excused in tools/audit-gate.mjs,
+      # each with a reason and a review date on which it fails again (v2.135.0).
       - name: Audit server dependencies
-        run: npm audit --audit-level=moderate --omit=dev
+        run: node ../tools/audit-gate.mjs
         working-directory: server
 
       - name: Audit client production dependencies
-        run: npm audit --audit-level=moderate --omit=dev
+        run: node ../tools/audit-gate.mjs
         working-directory: client
 
   secrets:

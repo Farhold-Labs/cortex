@@ -4,7 +4,7 @@ import { useVoiceCall } from '../../hooks/useVoiceCall.js';
 import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
 import { useSystemBack } from '../../hooks/useSystemBack.js';
 import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL } from '../../../messages.js';
-import { PRIVACY_LEVELS, BASE_URL, canAccess } from '../../config/constants.js';
+import { waveAudience, BASE_URL, canAccess } from '../../config/constants.js';
 import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { LegacyWaveNotice, PartialEncryptionBanner } from '../../../e2ee-components.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
@@ -1650,7 +1650,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     }
   };
 
-  const config = PRIVACY_LEVELS[wave.privacy] || PRIVACY_LEVELS.private;
+  // The wave as loaded knows its channel and review state; the tab may not.
+  const config = waveAudience({ ...wave, ...(waveData || {}) });
 
   // Must be declared before any conditional returns (Rules of Hooks)
   const allPings = waveData?.all_messages || [];
@@ -2174,7 +2175,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             </button>
           )}
           {/* Privacy badge (always visible, farthest right) */}
-          <PrivacyBadge level={wave.privacy} compact={isMobile} />
+          <PrivacyBadge wave={{ ...wave, ...(waveData || {}) }} compact={isMobile}
+            onClick={waveData?.channelId && waveData?.communityId ? () => setShowAudience(true) : null} />
         </div>
       </div>
 

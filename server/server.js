@@ -22888,7 +22888,7 @@ app.get('/api/wave-categories', authenticateToken, (req, res) => {
     res.json(categories);
   } catch (error) {
     console.error('Error fetching wave categories:', error);
-    res.status(500).json({ error: 'Failed to fetch categories' });
+    res.status(500).json({ error: 'Failed to fetch folders' });
   }
 });
 
@@ -22897,11 +22897,11 @@ app.post('/api/wave-categories', authenticateToken, (req, res) => {
   const { name, color } = req.body;
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
-    return res.status(400).json({ error: 'Category name is required' });
+    return res.status(400).json({ error: 'Folder name is required' });
   }
 
   if (name.length > 50) {
-    return res.status(400).json({ error: 'Category name must be 50 characters or less' });
+    return res.status(400).json({ error: 'Folder name must be 50 characters or less' });
   }
 
   try {
@@ -22933,7 +22933,7 @@ app.post('/api/wave-categories', authenticateToken, (req, res) => {
     res.json(result.category);
   } catch (error) {
     console.error('Error creating category:', error);
-    res.status(500).json({ error: 'Failed to create category' });
+    res.status(500).json({ error: 'Failed to create folder' });
   }
 });
 
@@ -22942,7 +22942,7 @@ app.put('/api/wave-categories/reorder', authenticateToken, (req, res) => {
   const { categories } = req.body;
 
   if (!Array.isArray(categories)) {
-    return res.status(400).json({ error: 'Categories must be an array' });
+    return res.status(400).json({ error: 'Folders must be an array' });
   }
 
   try {
@@ -22976,7 +22976,7 @@ app.put('/api/wave-categories/reorder', authenticateToken, (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Error reordering categories:', error);
-    res.status(500).json({ error: 'Failed to reorder categories' });
+    res.status(500).json({ error: 'Failed to reorder folders' });
   }
 });
 
@@ -22988,10 +22988,10 @@ app.put('/api/wave-categories/:id', authenticateToken, (req, res) => {
   const updates = {};
   if (name !== undefined) {
     if (typeof name !== 'string' || name.trim().length === 0) {
-      return res.status(400).json({ error: 'Category name cannot be empty' });
+      return res.status(400).json({ error: 'Folder name cannot be empty' });
     }
     if (name.length > 50) {
-      return res.status(400).json({ error: 'Category name must be 50 characters or less' });
+      return res.status(400).json({ error: 'Folder name must be 50 characters or less' });
     }
     updates.name = sanitizeInput(name.trim());
   }
@@ -23025,7 +23025,7 @@ app.put('/api/wave-categories/:id', authenticateToken, (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Error updating category:', error);
-    res.status(500).json({ error: 'Failed to update category' });
+    res.status(500).json({ error: 'Failed to update folder' });
   }
 });
 
@@ -23059,7 +23059,7 @@ app.delete('/api/wave-categories/:id', authenticateToken, (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting category:', error);
-    res.status(500).json({ error: 'Failed to delete category' });
+    res.status(500).json({ error: 'Failed to delete folder' });
   }
 });
 
@@ -23112,7 +23112,7 @@ app.put('/api/waves/:waveId/category', authenticateToken, (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Error assigning wave to category:', error);
-    res.status(500).json({ error: 'Failed to assign wave to category' });
+    res.status(500).json({ error: 'Failed to move the wave to that folder' });
   }
 });
 
