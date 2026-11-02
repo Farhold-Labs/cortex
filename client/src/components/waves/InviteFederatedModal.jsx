@@ -31,34 +31,28 @@ const InviteFederatedModal = ({ isOpen, onClose, wave, fetchAPI, showToast, isMo
     setFederatedParticipants(federatedParticipants.filter(x => x !== fp));
   };
 
+  // v2.137.0: they are asked on their own server, and join once they accept.
+  // (fetchAPI returns the parsed body and throws on an error; this used to
+  // treat it as a fetch Response, so every invitation reported failure.)
   const handleInvite = async () => {
     if (federatedParticipants.length === 0) return;
     setInviting(true);
-
     try {
-      const res = await fetchAPI(`/waves/${wave.id}/invite-federated`, {
+      const data = await fetchAPI(`/waves/${wave.id}/invite-federated`, {
         method: 'POST',
-        body: JSON.stringify({ participants: federatedParticipants }),
+        body: { participants: federatedParticipants },
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        const invited = data.results?.invited || [];
-        const failed = data.results?.failed || [];
-
-        if (invited.length > 0) {
-          showToast(`Invited: ${invited.join(', ')}`, 'success');
-        }
-        if (failed.length > 0) {
-          showToast(`Failed to invite: ${failed.join(', ')}`, 'error');
-        }
-        onClose();
-      } else {
-        const error = await res.json();
-        showToast(error.error || formatError('Failed to invite'), 'error');
+      const r = data?.results || {};
+      const asked = [...(r.invited || []), ...(r.queued || [])];
+      if (asked.length > 0) {
+        showToast(`Asked ${asked.join(', ')}. They join once they accept on their own port.`, 'success');
       }
+      if ((r.refused || []).length > 0) {
+        showToast(`Could not invite ${r.refused.join(', ')}`, 'error');
+      }
+      onClose();
     } catch (err) {
-      showToast(formatError(FEDERATION.failedToInviteTravelers), 'error');
+      showToast(err?.data?.error || formatError(FEDERATION.failedToInviteTravelers), 'error');
     } finally {
       setInviting(false);
     }
@@ -74,11 +68,11 @@ const InviteFederatedModal = ({ isOpen, onClose, wave, fetchAPI, showToast, isMo
     }} onClick={onClose}>
       <div style={{
         background: 'var(--bg-base)', border: '1px solid var(--accent-teal)',
-        padding: '24px', width: isMobile ? '100%' : '400px', maxWidth: '90vw',
+        padding: '24px', width: isMobile ? '100%' : '400px', maxWidth: '90vw', boxSizing: 'border-box',
         maxHeight: '80vh', overflowY: 'auto',
       }} onClick={e => e.stopPropagation()}>
         <h3 style={{ color: 'var(--accent-teal)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '1.2rem' }}>◇</span> {FEDERATION.broadcastToVerse}
+          <span style={{ fontSize: '1.2rem' }}>◇</span> {FEDERATION.inviteTravelersTitle}
         </h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
           {FEDERATION.inviteTravelers} "{wave.title || wave.name}".
@@ -96,7 +90,7 @@ const InviteFederatedModal = ({ isOpen, onClose, wave, fetchAPI, showToast, isMo
               onKeyDown={(e) => e.key === 'Enter' && handleAddFederated()}
               placeholder="@handle@server.com"
               style={{
-                flex: 1, padding: '8px', boxSizing: 'border-box',
+                flex: 1, minWidth: 0, padding: '8px', boxSizing: 'border-box',
                 background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
                 color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: '0.85rem',
               }}

@@ -18298,7 +18298,7 @@ async function sendSignedFederationRequest(targetNode, method, path, body = null
 // Helper to send wave invite to a federated server
 // Called when creating a wave with federated participants or adding federated participants to an existing wave
 // Uses optimistic send (try immediately) with queue fallback on failure
-async function sendWaveInvite(targetNode, wave, participants, invitedUserHandle) {
+async function sendWaveInvite(targetNode, wave, participants, invitedUserHandle, inviter = null) {
   const messageId = `wave-invite-${uuidv4()}`;
   const ourIdentity = db.getServerIdentity();
 
@@ -18323,6 +18323,13 @@ async function sendWaveInvite(targetNode, wave, participants, invitedUserHandle)
     },
     participants: participantList,
     invitedUserHandle,
+    // v2.137.0: who is asking. The invitee's server shows it, checks its
+    // blocks against it, and answers through /api/federation/wave-invitations/answer.
+    invitedBy: inviter ? {
+      id: inviter.id, handle: inviter.handle, displayName: inviter.displayName || inviter.name || inviter.handle,
+      avatar: inviter.avatar, avatarUrl: inviter.avatarUrl,
+    } : null,
+    memberCount: participantList.length,
   });
 
   try {
@@ -18357,10 +18364,70 @@ async function sendWaveInvite(targetNode, wave, participants, invitedUserHandle)
   }
 }
 
+/**
+ * Answer an invitation into a wave on another server (v2.137.0), as the
+ * invitee's server. Signed like every federation request, and only honoured
+ * there if that server asked this person: see the answer endpoint.
+ * Resolves to { status, body }.
+ */
+async function answerRemoteWaveInvitation(originNode, originWaveId, handle, accepted) {
+  const response = await sendSignedFederationRequest(originNode, 'POST', '/api/federation/wave-invitations/answer',
+    { originWaveId, handle, accepted: accepted === true });
+  let body = null;
+  try { body = await response.json(); } catch { /* none */ }
+  return { status: response.status, body };
+}
+
+/** Tell someone's server their invitation was withdrawn (v2.137.0). Best effort. */
+function sendRemoteInvitationWithdrawn(nodeName, originWaveId, handle) {
+  const node = db.getFederationNodeByName(nodeName);
+  if (!node || node.status !== 'active') return;
+  const envelope = createFederationEnvelope(`wave-invite-withdrawn-${uuidv4()}`, 'wave_invite_withdrawn', { originWaveId, handle });
+  sendSignedFederationRequest(node, 'POST', '/api/federation/inbox', envelope)
+    .catch(err => console.warn(`[federation] withdrawing at ${nodeName}: ${err.message}`));
+}
+
+/**
+ * Ask people on other servers into a wave (v2.137.0, wave-access phase 6).
+ *
+ * Their server is sent a signed invitation and asks them; nothing of the wave
+ * goes there until one of them accepts, which their server tells us through
+ * /api/federation/wave-invitations/answer. Until then the server is not one
+ * of the wave's (wave_federation), so it receives no pings and cannot fetch
+ * its history. Before v2.137.0 they were put in at once, never asked.
+ *
+ * Someone the inviter has blocked is refused, without saying why. The other
+ * direction, the invitee having blocked the inviter, is their server's to
+ * check, and it declines.
+ *
+ * Returns the outcomes, plus the sends for the caller to await or not.
+ */
+function inviteRemotePeople(wave, inviterId, federatedParticipants) {
+  const inviter = db.findUserById(inviterId);
+  const participants = db.getWaveParticipants(wave.id);
+  const outcome = { invited: [], refused: [], sends: [] };
+  for (const fp of federatedParticipants) {
+    const address = `@${fp.handle}@${fp.nodeName}`;
+    const known = db.getRemoteUserByHandle(fp.nodeName, fp.handle);
+    if (db.hasBlockedRemote(inviterId, fp.nodeName, fp.handle) || (known && db.isBlocked(inviterId, known.id))) {
+      outcome.refused.push(address);
+      continue;
+    }
+    db.createRemoteWaveInvitation({ waveId: wave.id, nodeName: fp.nodeName, handle: fp.handle, invitedBy: inviterId });
+    outcome.invited.push(address);
+    // Asking again is harmless: their server keeps one question per wave.
+    outcome.sends.push(sendWaveInvite(fp.node, wave, participants, fp.handle, inviter)
+      .then(sent => ({ address, sent }))
+      .catch(err => { console.error(`Failed to send wave invite to ${fp.nodeName}:`, err.message); return { address, sent: false }; }));
+  }
+  if (outcome.invited.length) broadcastToWave(wave.id, { type: 'wave_invitations_changed', waveId: wave.id });
+  return outcome;
+}
+
 // Helper to parse federated user identifier
 // Returns { handle, nodeName } or null if not federated
 function parseFederatedIdentifier(identifier) {
-  const match = identifier.match(/^@?([^@]+)@(.+)$/);
+  const match = String(identifier || '').trim().match(/^@?([^@\s]+)@([^@\s]+)$/);
   if (match) {
     return { handle: match[1], nodeName: match[2] };
   }
@@ -19062,6 +19129,68 @@ app.post('/api/federation/inbox/request', federationRequestLimiter, async (req, 
   res.json({ success: true, message: 'Federation request received', requestId: request.id });
 });
 
+/**
+ * Fetch a participant wave's history from its origin, page by page (newest
+ * first), and cache it. The origin serves only servers that are in the wave.
+ * Used by the admin resync and when someone here accepts an invitation into a
+ * wave from another server (v2.137.0).
+ */
+async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
+  let before = null, cached = 0, failed = 0, pages = 0;
+  const MAX_PAGES = maxPages; // safety bound (~100k pings at 500)
+  while (pages < MAX_PAGES) {
+    pages++;
+    const resp = await sendSignedFederationRequest(originNode, 'POST', '/api/federation/wave-backfill', {
+      originWaveId: wave.originWaveId, before, limit: 100,
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      const err = new Error(`Origin returned ${resp.status}`);
+      err.status = resp.status; err.detail = t.slice(0, 200);
+      throw err;
+    }
+    const data = await resp.json();
+    const pings = data.pings || [];
+    if (pings.length === 0) break;
+
+    for (const d of pings) {
+      try {
+        if (d.author && d.author.id) {
+          db.cacheRemoteUser({
+            id: d.author.id,
+            nodeName: wave.originNode,
+            handle: d.author.handle,
+            displayName: d.author.displayName,
+            avatar: d.author.avatar,
+            avatarUrl: d.author.avatarUrl,
+          });
+        }
+        db.cacheRemotePing({
+          id: d.id,
+          waveId: wave.id,
+          originWaveId: wave.originWaveId,
+          originNode: wave.originNode,
+          authorId: d.author?.id,
+          authorNode: wave.originNode,
+          parentId: d.parentId,
+          content: d.content,
+          createdAt: d.createdAt,
+          editedAt: d.editedAt,
+          reactions: d.reactions,
+          expiresAt: d.expiresAt,
+        });
+        cached++;
+      } catch (e) {
+        failed++;
+        console.error(`⚠️ history: skipped ping ${d.id}: ${e.message}`);
+      }
+    }
+    before = pings[pings.length - 1].createdAt; // oldest in this page
+    if (!data.hasMore) break;
+  }
+  return { cached, failed, pages };
+}
+
 // Resync a federated (participant) wave's full history from its origin (admin).
 // Pages the origin's /api/federation/wave-backfill and caches everything, so a
 // partial/failed initial sync can be repaired without touching the DB directly.
@@ -19080,60 +19209,12 @@ app.post('/api/admin/federation/waves/:waveId/resync', authenticateToken, async 
     return res.status(400).json({ error: 'Origin node is not an active federation partner' });
   }
 
-  let before = null, cached = 0, failed = 0, pages = 0;
-  const MAX_PAGES = 500; // safety bound (~100k pings)
   try {
-    while (pages < MAX_PAGES) {
-      pages++;
-      const resp = await sendSignedFederationRequest(originNode, 'POST', '/api/federation/wave-backfill', {
-        originWaveId: wave.originWaveId, before, limit: 100,
-      });
-      if (!resp.ok) {
-        const t = await resp.text();
-        return res.status(502).json({ error: `Origin returned ${resp.status}`, detail: t.slice(0, 200) });
-      }
-      const data = await resp.json();
-      const pings = data.pings || [];
-      if (pings.length === 0) break;
-
-      for (const d of pings) {
-        try {
-          if (d.author && d.author.id) {
-            db.cacheRemoteUser({
-              id: d.author.id,
-              nodeName: wave.originNode,
-              handle: d.author.handle,
-              displayName: d.author.displayName,
-              avatar: d.author.avatar,
-              avatarUrl: d.author.avatarUrl,
-            });
-          }
-          db.cacheRemotePing({
-            id: d.id,
-            waveId: wave.id,
-            originWaveId: wave.originWaveId,
-            originNode: wave.originNode,
-            authorId: d.author?.id,
-            authorNode: wave.originNode,
-            parentId: d.parentId,
-            content: d.content,
-            createdAt: d.createdAt,
-            editedAt: d.editedAt,
-            reactions: d.reactions,
-            expiresAt: d.expiresAt,
-          });
-          cached++;
-        } catch (e) {
-          failed++;
-          console.error(`⚠️ resync: skipped ping ${d.id}: ${e.message}`);
-        }
-      }
-      before = pings[pings.length - 1].createdAt; // oldest in this page
-      if (!data.hasMore) break;
-    }
+    const { cached, failed, pages } = await pullFederatedHistory(wave, originNode);
     console.log(`🔄 Wave ${waveId} resync from ${wave.originNode}: cached ${cached}, failed ${failed}, pages ${pages}`);
     res.json({ ok: true, cached, failed, pages });
   } catch (err) {
+    if (err.status) return res.status(502).json({ error: err.message, detail: err.detail });
     console.error('Wave resync error:', err);
     res.status(500).json({ error: 'Resync failed', message: err.message });
   }
@@ -19428,104 +19509,102 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
   try {
     switch (type) {
       case 'wave_invite': {
-        // Handle wave invitation from origin server
-        // payload: { wave, participants, invitedUserHandle }
-        console.log(`📨 Received wave_invite from ${sourceNode.nodeName}`);
-
-        const { wave, participants, invitedUserHandle } = payload;
-        if (!wave || !invitedUserHandle) {
+        // An invitation for someone here into a wave on sourceNode
+        // (v2.137.0, wave-access phase 6). They are asked: the question goes
+        // in their invitations box, and nothing of the wave is fetched or
+        // stored until they accept. Until v2.137.0 this put them in at once.
+        // payload: { wave, participants, invitedUserHandle, invitedBy, memberCount }
+        const { wave, invitedUserHandle } = payload || {};
+        if (!wave?.id || typeof invitedUserHandle !== 'string' || /[@\s]/.test(invitedUserHandle)) {
           console.error('Invalid wave_invite payload');
           break;
         }
-
-        // Find the local user being invited
+        // A handle, never an email (findUserByHandle also takes those).
         const invitedUser = db.findUserByHandle(invitedUserHandle);
-        if (!invitedUser) {
-          console.error(`wave_invite: User @${invitedUserHandle} not found locally`);
+        if (!invitedUser || invitedUser.handle?.toLowerCase() !== invitedUserHandle.toLowerCase()) {
+          console.warn(`wave_invite from ${sourceNode.nodeName}: no such person here`);
           break;
         }
 
-        // Check if we already have this wave as a participant
-        let localWave = db.getWaveByOrigin(sourceNode.nodeName, wave.id);
-
-        // v2.83.1 — the origin is authoritative for who may post here, so bring
-        // an existing copy into line. Without this a re-broadcast could never
-        // repair a wave that arrived before the settings were federated, and
-        // tightening the origin would silently leave other ports permissive.
-        if (localWave) syncFederatedPingTtl(localWave, wave);
-        if (localWave && db.updateWaveAnnouncementSettings) {
-          db.updateWaveAnnouncementSettings(localWave.id, {
-            postPolicy: ['all', 'staff'].includes(wave.postPolicy) ? wave.postPolicy : 'all',
-            allowReplies: wave.allowReplies !== false,
-            allowReactions: wave.allowReactions !== false,
-          });
-          console.log(`🔄 Updated announcement settings on participant wave ${localWave.id}`);
+        // Who asked. The envelope is signed by sourceNode, so they are on
+        // sourceNode whatever the payload says. An origin from before v2.137.0
+        // does not say: the wave's creator, from the participant list.
+        const claimed = payload.invitedBy
+          || (payload.participants || []).find(p => p.id === wave.createdBy)
+          || { id: wave.createdBy, handle: null };
+        const inviter = {
+          id: typeof claimed.id === 'string' ? claimed.id.slice(0, 100) : null,
+          handle: typeof claimed.handle === 'string' ? claimed.handle.slice(0, 64) : null,
+          displayName: typeof claimed.displayName === 'string' ? claimed.displayName.slice(0, 100) : null,
+          avatar: typeof claimed.avatar === 'string' ? claimed.avatar.slice(0, 8) : null,
+          avatarUrl: typeof claimed.avatarUrl === 'string' ? claimed.avatarUrl.slice(0, 500) : null,
+          nodeName: sourceNode.nodeName,
+        };
+        if (inviter.id && inviter.handle) {
+          db.cacheRemoteUser({ id: inviter.id, nodeName: sourceNode.nodeName, handle: inviter.handle,
+            displayName: inviter.displayName, avatar: inviter.avatar, avatarUrl: inviter.avatarUrl });
         }
 
-        if (!localWave) {
-          // Create participant wave
-          const participantWaveId = uuidv4();
-          localWave = db.createParticipantWave({
-            id: participantWaveId,
-            title: wave.title,
-            privacy: wave.privacy || 'cross-server',
-            createdBy: invitedUser.id, // Local user as creator reference
-            originNode: sourceNode.nodeName,
-            originWaveId: wave.id,
-            postPolicy: wave.postPolicy,
-            allowReplies: wave.allowReplies,
-            allowReactions: wave.allowReactions,
-          });
-          syncFederatedPingTtl(localWave, wave);
+        const answer = (accepted) => answerRemoteWaveInvitation(sourceNode, wave.id, invitedUser.handle, accepted)
+          .catch(err => console.warn(`[federation] answering ${sourceNode.nodeName}: ${err.message}`));
 
-          // Cache any remote participants
-          if (participants) {
-            for (const p of participants) {
-              if (p.nodeName && p.nodeName !== db.getServerIdentity()?.nodeName) {
-                // Remote user, cache them
-                db.cacheRemoteUser({
-                  id: p.id,
-                  nodeName: p.nodeName,
-                  handle: p.handle,
-                  displayName: p.displayName,
-                  avatar: p.avatar,
-                  avatarUrl: p.avatarUrl,
-                  bio: p.bio,
-                });
-              }
-            }
+        // Blocked: declined, and the inviter is not told why.
+        if ((inviter.handle && db.hasBlockedRemote(invitedUser.id, sourceNode.nodeName, inviter.handle))
+            || (inviter.id && db.isBlocked(invitedUser.id, inviter.id))) {
+          answer(false);
+          break;
+        }
+
+        // Already in it here (a copy someone else accepted): nothing to ask.
+        const existing = db.getWaveByOrigin(sourceNode.nodeName, wave.id);
+        if (existing && participation.isParticipant(existing.id, invitedUser.id)) {
+          answer(true);
+          break;
+        }
+
+        const invitation = db.createFederatedWaveInvitation({
+          invitedUserId: invitedUser.id,
+          originNode: sourceNode.nodeName,
+          originWaveId: String(wave.id).slice(0, 200),
+          waveTitle: sanitizeInput(String(wave.title || '')).slice(0, 200),
+          inviter,
+          memberCount: payload.memberCount ?? (payload.participants || []).length,
+        });
+        if (!invitation) break; // asked already; the question stands
+
+        const who = `${inviter.displayName || inviter.handle || 'Someone'} (${sourceNode.nodeName})`;
+        try {
+          if (shouldCreateNotification(invitedUser.id, 'wave_invitation', null)) {
+            const notification = db.createNotification({
+              userId: invitedUser.id,
+              type: 'wave_invitation',
+              title: `${who} invited you to a ${T_WAVE()}`,
+              body: invitation.wave_title,
+              groupKey: `wave_invitation:${invitation.id}`,
+            });
+            db.markNotificationPushSent?.(notification.id);
+            sendPushNotification(invitedUser.id, {
+              type: 'wave_invitation', title: notification.title, body: invitation.wave_title, url: '/?invitations=1',
+            }).catch(() => {});
+            broadcastToUser(invitedUser.id, { type: 'notification', notification });
           }
+        } catch (err) {
+          console.error('[invitations] notify failed:', err.message);
         }
+        broadcastToUser(invitedUser.id, { type: 'wave_invitations_changed' });
+        console.log(`📨 Invitation from ${sourceNode.nodeName} put to a local account`);
+        break;
+      }
 
-        // Add local user as participant - use crypto module for cache synchronization (v2.21.0)
-        participation.addParticipant(localWave.id, invitedUser.id);
-
-        // Track that this node is participating
-        db.addWaveFederationNode(localWave.id, sourceNode.nodeName);
-
-        // Notify the local user via WebSocket
-        const wsClients = clients.get(invitedUser.id);
-        if (wsClients) {
-          const notification = {
-            type: 'wave_invite_received',
-            wave: {
-              id: localWave.id,
-              title: localWave.title,
-              privacy: localWave.privacy,
-              federationState: 'participant',
-              originNode: sourceNode.nodeName,
-              originWaveId: wave.id,
-            },
-            fromNode: sourceNode.nodeName,
-          };
-          wsClients.forEach(client => {
-            if (client.readyState === 1) {
-              client.send(JSON.stringify(notification));
-            }
-          });
+      case 'wave_invite_withdrawn': {
+        // The wave's server took the question back (v2.137.0).
+        const { originWaveId, handle } = payload || {};
+        if (typeof originWaveId !== 'string' || typeof handle !== 'string') break;
+        const user = db.findUserByHandle(handle);
+        if (!user || user.handle?.toLowerCase() !== handle.toLowerCase()) break;
+        if (db.deleteFederatedWaveInvitationFrom(sourceNode.nodeName, originWaveId, user.id)) {
+          broadcastToUser(user.id, { type: 'wave_invitations_changed' });
         }
-
-        console.log(`✅ Created participant wave ${localWave.id} for @${invitedUserHandle}`);
         break;
       }
 
@@ -20092,6 +20171,48 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
     console.error(`Federation inbox error processing ${type}:`, error.message);
     res.status(500).json({ error: 'Failed to process message' });
   }
+});
+
+// An answer to an invitation this server sent (v2.137.0, wave-access phase 6),
+// from the invitee's own server. Only a question this server put to that
+// person on that server can be answered: being paired is not being invited,
+// so a server cannot join its people to a wave by claiming they accepted.
+// Accepting makes the server one of the wave's, which is what lets it
+// receive pings and fetch the history.
+app.post('/api/federation/wave-invitations/answer', federationInboxLimiter, authenticateFederationRequest, (req, res) => {
+  const sourceNode = req.federationNode;
+  const originWaveId = typeof req.body?.originWaveId === 'string' ? req.body.originWaveId : '';
+  const handle = typeof req.body?.handle === 'string' ? req.body.handle : '';
+  if (!originWaveId || !handle) return res.status(400).json({ error: 'originWaveId and handle required' });
+
+  const wave = db.getWave(originWaveId);
+  const invitation = wave && wave.federationState === 'origin'
+    && db.findRemoteWaveInvitation(wave.id, sourceNode.nodeName, handle);
+  if (!invitation) {
+    return res.status(404).json({ error: 'No such invitation', code: 'INVITATION_GONE' });
+  }
+  db.deleteRemoteWaveInvitation(invitation.id);
+  broadcastToWave(wave.id, { type: 'wave_invitations_changed', waveId: wave.id });
+  if (req.body.accepted !== true) {
+    console.log(`📭 ${sourceNode.nodeName} declined an invitation into ${wave.id}`);
+    return res.json({ ok: true, accepted: false });
+  }
+
+  db.addWaveFederationNode(wave.id, sourceNode.nodeName);
+  console.log(`📬 ${sourceNode.nodeName} accepted an invitation into ${wave.id}`);
+  res.json({
+    ok: true,
+    accepted: true,
+    wave: {
+      id: wave.id,
+      title: wave.title,
+      postPolicy: wave.postPolicy || 'all',
+      allowReplies: wave.allowReplies !== false,
+      allowReactions: wave.allowReactions !== false,
+      pingTtl: wave.pingTtl || null,
+      audience: wave.federationAudience === 'everyone' ? 'everyone' : 'people',
+    },
+  });
 });
 
 // Federation catch-up/backfill (origin side): serve a page of a wave's ping
@@ -20796,10 +20917,17 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
   // can see a public wave without being in it is not shown who was asked.
   const invited = (participation.isParticipant(wave.id, req.user.userId)
       || (isGroupWave(wave) && db.isGroupMember(wave.groupId, req.user.userId)))
-    ? db.listWaveInvitationsForWave(wave.id).map(i => ({
-        invitationId: i.id, id: i.invited_user_id, handle: i.handle, name: i.display_name,
-        avatar: i.avatar, invitedBy: i.invited_by, createdAt: i.created_at,
-      }))
+    ? [
+        ...db.listWaveInvitationsForWave(wave.id).map(i => ({
+          invitationId: i.id, id: i.invited_user_id, handle: i.handle, name: i.display_name,
+          avatar: i.avatar, invitedBy: i.invited_by, createdAt: i.created_at,
+        })),
+        // v2.137.0: people on other servers, until their server answers.
+        ...db.listRemoteWaveInvitations(wave.id).map(i => ({
+          invitationId: i.id, id: `${i.handle}@${i.node_name}`, handle: `${i.handle}@${i.node_name}`,
+          name: `@${i.handle}@${i.node_name}`, avatar: null, invitedBy: i.invited_by, createdAt: i.created_at, remote: true,
+        })),
+      ]
     : [];
 
   // Get user's archive status for this wave (uses method that works for both JSON and SQLite)
@@ -22251,34 +22379,12 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   // If federated, mark as origin and send invites
   if (hasFederatedParticipants) {
     db.setWaveAsOrigin(wave.id);
-
-    // Get creator info for participant list
-    const creator = db.findUserById(req.user.userId);
-    const localParticipants = db.getWaveParticipants(wave.id);
-
     // v2.136.1: a conversation with people on other servers is theirs, not a broadcast.
     db.setWaveFederationAudience(wave.id, 'people');
-    // Send wave invites to each federated node
-    // Group by node to send one invite per node
-    const nodeInvites = new Map();
-    for (const fp of federatedParticipants) {
-      const nodeKey = fp.nodeName;
-      if (!nodeInvites.has(nodeKey)) {
-        nodeInvites.set(nodeKey, { node: fp.node, handles: [] });
-      }
-      nodeInvites.get(nodeKey).handles.push(fp.handle);
-    }
-
-    // Send invites asynchronously (don't block response)
-    for (const [nodeName, { node, handles }] of nodeInvites) {
-      for (const handle of handles) {
-        sendWaveInvite(node, wave, localParticipants, handle).catch(err => {
-          console.error(`Failed to send wave invite to ${nodeName}:`, err.message);
-        });
-      }
-      // Track federation relationship
-      db.addWaveFederationNode(wave.id, nodeName);
-    }
+    // v2.137.0: they are asked. Sent without waiting; their servers answer later.
+    const remote = inviteRemotePeople(db.getWave(wave.id), req.user.userId, federatedParticipants);
+    joined.invited.push(...remote.invited);
+    joined.refused.push(...remote.refused);
   }
 
   const result = {
@@ -22291,7 +22397,8 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     invited: joined.invited,
     refused: joined.refused,
     federationState: hasFederatedParticipants ? 'origin' : 'local',
-    federatedNodes: hasFederatedParticipants ? federatedParticipants.map(fp => fp.nodeName) : [],
+    // v2.137.0: none until someone there accepts.
+    federatedNodes: [],
   };
 
   broadcastToWave(wave.id, { type: 'wave_created', wave: result });
@@ -22726,7 +22833,7 @@ app.post('/api/waves/:id/invite-federated', authenticateToken, async (req, res) 
   }
 
   if (federatedParticipants.length === 0) {
-    return res.status(400).json({ error: 'No valid federated participants found' });
+    return res.status(400).json({ error: 'Nobody to invite: each must be @handle@server, on an allied port' });
   }
 
   // v2.134.0: people on other servers are not Community members, and a
@@ -22738,6 +22845,15 @@ app.post('/api/waves/:id/invite-federated', authenticateToken, async (req, res) 
 
   // Update wave to crossServer if not already federated
   if (wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server') {
+    // v2.137.0: a crew wave's people are its crew, and a Verse-Wide wave's are
+    // its participants. Name the crew's members first, so turning it into a
+    // conversation with people elsewhere takes it from nobody. (It used to
+    // drop every member who had never been given a participant row.)
+    if (isGroupWave(wave)) {
+      for (const m of db.getGroupMembers(wave.groupId)) {
+        if (!participation.isParticipant(waveId, m.id)) participation.addParticipant(waveId, m.id);
+      }
+    }
     db.updateWavePrivacy(waveId, 'crossServer', null);
     wave.privacy = 'crossServer';
   }
@@ -22754,39 +22870,17 @@ app.post('/api/waves/:id/invite-federated', authenticateToken, async (req, res) 
     wave.federationState = 'origin';
   }
 
-  // Get current local participants for the invite
-  const localParticipants = db.getWaveParticipants(waveId);
-
-  // Group invites by node
-  const nodeInvites = new Map();
-  for (const fp of federatedParticipants) {
-    const nodeKey = fp.nodeName;
-    if (!nodeInvites.has(nodeKey)) {
-      nodeInvites.set(nodeKey, { node: fp.node, handles: [] });
-    }
-    nodeInvites.get(nodeKey).handles.push(fp.handle);
-  }
-
-  // Send invites and track federation relationships
-  const results = { invited: [], failed: [] };
-  for (const [nodeName, { node, handles }] of nodeInvites) {
-    // Track federation relationship if not already
-    db.addWaveFederationNode(waveId, nodeName);
-
-    for (const handle of handles) {
-      try {
-        const success = await sendWaveInvite(node, wave, localParticipants, handle);
-        if (success) {
-          results.invited.push(`@${handle}@${nodeName}`);
-        } else {
-          results.failed.push(`@${handle}@${nodeName}`);
-        }
-      } catch (err) {
-        console.error(`Failed to send wave invite to ${nodeName}:`, err.message);
-        results.failed.push(`@${handle}@${nodeName}`);
-      }
-    }
-  }
+  // v2.137.0: asked, not added; see inviteRemotePeople. Waiting for the
+  // send lets the answer say whether their server has the question yet.
+  const outcome = inviteRemotePeople(wave, req.user.userId, federatedParticipants);
+  const sends = await Promise.all(outcome.sends);
+  const results = {
+    invited: sends.filter(x => x.sent).map(x => x.address),
+    // Not reached yet: sent again from the queue until it is.
+    queued: sends.filter(x => !x.sent).map(x => x.address),
+    refused: outcome.refused,
+    failed: [],
+  };
 
   // Broadcast update to local users
   broadcastToWave(waveId, { type: 'wave_updated', wave });
@@ -23966,12 +24060,119 @@ function invitationView(row) {
   };
 }
 
+/** An invitation from another server (v2.137.0): who asked, where, the title. */
+function federatedInvitationView(row) {
+  let inviter = {};
+  try { inviter = JSON.parse(row.inviter || '{}'); } catch { /* keep empty */ }
+  return {
+    id: row.id,
+    kind: 'federated',
+    waveTitle: row.wave_title,
+    originNode: row.origin_node,
+    invitedBy: {
+      id: inviter.id || null,
+      handle: inviter.handle ? `${inviter.handle}@${row.origin_node}` : null,
+      displayName: inviter.displayName || null,
+      avatar: inviter.avatar || null,
+    },
+    members: [],
+    memberCount: row.member_count || 0,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+}
+
 app.get('/api/wave-invitations', authenticateToken, (req, res) => {
-  res.json({ invitations: db.listWaveInvitationsForUser(req.user.userId).map(invitationView) });
+  res.json({ invitations: [
+    ...db.listWaveInvitationsForUser(req.user.userId).map(invitationView),
+    ...db.listFederatedWaveInvitationsForUser(req.user.userId).map(federatedInvitationView),
+  ] });
 });
 
-app.post('/api/wave-invitations/:id/accept', authenticateToken, (req, res) => {
-  const invitation = db.getWaveInvitation(sanitizeInput(req.params.id));
+/**
+ * Accept an invitation from another server (v2.137.0). Their server is told
+ * first, and only once it agrees is the wave made here and its history
+ * fetched: before that this server holds nothing of it.
+ */
+async function acceptFederatedInvitation(req, res, invitation) {
+  const user = db.findUserById(req.user.userId);
+  let inviter = {};
+  try { inviter = JSON.parse(invitation.inviter || '{}'); } catch { /* keep empty */ }
+  if ((inviter.handle && db.hasBlockedRemote(user.id, invitation.origin_node, inviter.handle))
+      || (inviter.id && db.isBlocked(user.id, inviter.id))) {
+    db.deleteFederatedWaveInvitation(invitation.id);
+    broadcastToUser(user.id, { type: 'wave_invitations_changed' });
+    return res.status(403).json({ error: 'This invitation can no longer be accepted' });
+  }
+  const originNode = db.getFederationNodeByName(invitation.origin_node);
+  if (!FEDERATION_ENABLED || !originNode || originNode.status !== 'active') {
+    return res.status(409).json({ error: `${invitation.origin_node} is no longer an allied server`, code: 'NOT_ALLIED' });
+  }
+
+  let answer;
+  try {
+    answer = await answerRemoteWaveInvitation(originNode, invitation.origin_wave_id, user.handle, true);
+  } catch (err) {
+    console.warn(`[federation] accepting at ${originNode.nodeName}: ${err.message}`);
+    return res.status(502).json({ error: `${invitation.origin_node} can't be reached right now. Try again later.`, code: 'ORIGIN_UNREACHABLE' });
+  }
+  if (answer.status === 404 && answer.body?.code !== 'INVITATION_GONE') {
+    // A server from before v2.137.0 has no answer endpoint.
+    return res.status(409).json({ error: `${invitation.origin_node} needs to update Cortex before this can be accepted`, code: 'ORIGIN_OUTDATED' });
+  }
+  if (answer.status === 404) {
+    db.deleteFederatedWaveInvitation(invitation.id);
+    broadcastToUser(user.id, { type: 'wave_invitations_changed' });
+    return res.status(410).json({ error: 'This invitation was withdrawn or has expired', code: 'INVITATION_GONE' });
+  }
+  if (answer.status < 200 || answer.status >= 300) {
+    return res.status(502).json({ error: `${invitation.origin_node} can't take the answer right now. Try again later.`, code: 'ORIGIN_UNREACHABLE' });
+  }
+
+  const origin = answer.body?.wave || {};
+  let localWave = db.getWaveByOrigin(originNode.nodeName, invitation.origin_wave_id);
+  const created = !localWave;
+  if (!localWave) {
+    localWave = db.createParticipantWave({
+      id: uuidv4(),
+      title: sanitizeInput(String(origin.title || invitation.wave_title || '')).slice(0, 200) || invitation.wave_title,
+      privacy: 'crossServer',
+      federationAudience: origin.audience === 'everyone' ? 'everyone' : 'people',
+      createdBy: user.id,
+      originNode: originNode.nodeName,
+      originWaveId: invitation.origin_wave_id,
+      postPolicy: origin.postPolicy,
+      allowReplies: origin.allowReplies,
+      allowReactions: origin.allowReactions,
+    });
+  }
+  syncFederatedPingTtl(localWave, origin);
+  participation.addParticipant(localWave.id, user.id);
+  db.addWaveFederationNode(localWave.id, originNode.nodeName);
+  db.deleteFederatedWaveInvitation(invitation.id);
+  broadcastToUser(user.id, { type: 'wave_invitations_changed' });
+  if (db.logActivity) db.logActivity(user.id, 'accept_wave_invitation', 'wave', localWave.id, getRequestMeta(req));
+
+  // Its history, now that this server is one of the wave's.
+  if (created) {
+    pullFederatedHistory(localWave, originNode, { maxPages: 50 })
+      .then(r => {
+        console.log(`📥 Fetched ${r.cached} ping(s) for an accepted invitation (${localWave.id})`);
+        broadcastToWave(localWave.id, { type: 'wave_updated', wave: { id: localWave.id } });
+      })
+      .catch(err => console.warn(`[federation] history for ${localWave.id}: ${err.message}`));
+  }
+  res.json({ success: true, wave: { id: localWave.id, title: localWave.title, privacy: localWave.privacy, encrypted: false } });
+}
+
+app.post('/api/wave-invitations/:id/accept', authenticateToken, async (req, res) => {
+  const id = sanitizeInput(req.params.id);
+  if (id.startsWith('finv-')) {
+    const remote = db.getFederatedWaveInvitation(id);
+    if (!remote || remote.invited_user_id !== req.user.userId) return res.status(404).json({ error: 'Invitation not found' });
+    return acceptFederatedInvitation(req, res, remote);
+  }
+  const invitation = db.getWaveInvitation(id);
   if (!invitation || invitation.invited_user_id !== req.user.userId) {
     return res.status(404).json({ error: 'Invitation not found' });
   }
@@ -23996,7 +24197,28 @@ app.post('/api/wave-invitations/:id/accept', authenticateToken, (req, res) => {
 });
 
 app.post('/api/wave-invitations/:id/decline', authenticateToken, (req, res) => {
-  const invitation = db.getWaveInvitation(sanitizeInput(req.params.id));
+  const id = sanitizeInput(req.params.id);
+  if (id.startsWith('finv-')) {
+    // From another server (v2.137.0). Its server is told it was declined,
+    // never whether it was also a block.
+    const remote = db.getFederatedWaveInvitation(id);
+    if (!remote || remote.invited_user_id !== req.user.userId) return res.status(404).json({ error: 'Invitation not found' });
+    db.deleteFederatedWaveInvitation(remote.id);
+    let inviter = {};
+    try { inviter = JSON.parse(remote.inviter || '{}'); } catch { /* keep empty */ }
+    if (req.body?.block === true && inviter.handle) {
+      db.blockRemoteUser(req.user.userId, { id: inviter.id || null, nodeName: remote.origin_node, handle: inviter.handle });
+    }
+    const node = db.getFederationNodeByName(remote.origin_node);
+    const me = db.findUserById(req.user.userId);
+    if (FEDERATION_ENABLED && node && node.status === 'active' && me) {
+      answerRemoteWaveInvitation(node, remote.origin_wave_id, me.handle, false)
+        .catch(err => console.warn(`[federation] declining at ${node.nodeName}: ${err.message}`));
+    }
+    broadcastToUser(req.user.userId, { type: 'wave_invitations_changed' });
+    return res.json({ success: true });
+  }
+  const invitation = db.getWaveInvitation(id);
   if (!invitation || invitation.invited_user_id !== req.user.userId) {
     return res.status(404).json({ error: 'Invitation not found' });
   }
@@ -24010,7 +24232,22 @@ app.post('/api/wave-invitations/:id/decline', authenticateToken, (req, res) => {
 
 // Withdraw: the person who invited, or the wave's owner or admins.
 app.delete('/api/wave-invitations/:id', authenticateToken, (req, res) => {
-  const invitation = db.getWaveInvitation(sanitizeInput(req.params.id));
+  const id = sanitizeInput(req.params.id);
+  if (id.startsWith('rinv-')) {
+    // Someone on another server (v2.137.0): their server is told too.
+    const remote = db.getRemoteWaveInvitation(id);
+    const rWave = remote && db.getWave(remote.wave_id);
+    const may = remote && rWave && (
+      remote.invited_by === req.user.userId ||
+      rWave.createdBy === req.user.userId ||
+      waveRoles.getStoredRole(rWave.id, req.user.userId) === waveRoles.WAVE_ROLES.ADMIN);
+    if (!may) return res.status(404).json({ error: 'Invitation not found' });
+    db.deleteRemoteWaveInvitation(remote.id);
+    sendRemoteInvitationWithdrawn(remote.node_name, rWave.id, remote.handle);
+    broadcastToWave(rWave.id, { type: 'wave_invitations_changed', waveId: rWave.id });
+    return res.json({ success: true });
+  }
+  const invitation = db.getWaveInvitation(id);
   const wave = invitation && db.getWave(invitation.wave_id);
   const allowed = invitation && wave && (
     invitation.invited_by === req.user.userId ||

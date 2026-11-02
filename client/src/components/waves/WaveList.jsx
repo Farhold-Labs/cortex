@@ -884,6 +884,13 @@ const WaveInvitations = ({ invitations, onAccept, onDecline, isMobile, density }
             </div>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', margin: '2px 0 6px' }}>
               {who} invited you{others.length ? ` · with ${others.join(', ')}${more ? ` +${more}` : ''}` : ''}
+              {/* v2.137.0: from someone on another port. Nothing of it is here until you accept. */}
+              {inv.kind === 'federated' && (
+                <div style={{ marginTop: '2px' }}>
+                  From {plainText(inv.originNode || '')}{inv.invitedBy?.handle ? ` (@${plainText(inv.invitedBy.handle)})` : ''}
+                  {inv.memberCount > 0 ? ` · ${inv.memberCount} in it` : ''}
+                </div>
+              )}
               {/* v2.132.0: accepting joins the group, and so every wave of it. */}
               {inv.group?.waveCount > 1 && (
                 <div style={{ marginTop: '2px' }}>Joins {plainText(inv.group.name || '')}: {inv.group.waveCount} {T.waves}</div>

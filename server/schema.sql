@@ -1550,6 +1550,45 @@ CREATE TABLE IF NOT EXISTS wave_audience (
       );
 CREATE INDEX IF NOT EXISTS idx_wave_audience_ref ON wave_audience(kind, ref_id);
 
+CREATE TABLE IF NOT EXISTS remote_wave_invitations (
+        id          TEXT PRIMARY KEY,
+        wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        node_name   TEXT NOT NULL,
+        handle      TEXT NOT NULL,
+        invited_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TEXT NOT NULL,
+        expires_at  TEXT NOT NULL,
+        UNIQUE (wave_id, node_name, handle)
+      );
+CREATE INDEX IF NOT EXISTS idx_remote_wave_invitations_wave ON remote_wave_invitations(wave_id);
+
+CREATE TABLE IF NOT EXISTS federated_wave_invitations (
+        id              TEXT PRIMARY KEY,
+        invited_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        origin_node     TEXT NOT NULL,
+        origin_wave_id  TEXT NOT NULL,
+        wave_title      TEXT NOT NULL,
+        -- Who asked: { id, handle, displayName, avatar, avatarUrl } on origin_node.
+        inviter         TEXT NOT NULL,
+        member_count    INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        expires_at      TEXT NOT NULL,
+        UNIQUE (invited_user_id, origin_node, origin_wave_id)
+      );
+CREATE INDEX IF NOT EXISTS idx_federated_wave_invitations_user ON federated_wave_invitations(invited_user_id);
+
+CREATE TABLE IF NOT EXISTS remote_blocks (
+        id             TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        remote_user_id TEXT,
+        node_name      TEXT NOT NULL,
+        handle         TEXT NOT NULL,
+        blocked_at     TEXT NOT NULL,
+        UNIQUE (user_id, node_name, handle)
+      );
+CREATE INDEX IF NOT EXISTS idx_remote_blocks_user ON remote_blocks(user_id);
+CREATE INDEX IF NOT EXISTS idx_remote_blocks_remote ON remote_blocks(remote_user_id);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);

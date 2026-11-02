@@ -3917,6 +3917,74 @@ export class DatabaseSQLite {
       console.log('✅ waves.federation_audience added (v2.136.1)');
     }
 
+    // v2.137.0 — people on other servers are asked (wave-access phase 6).
+    // remote_wave_invitations: on the wave's server, who on another server has
+    // been asked and not answered. Answering needs one of these, so a paired
+    // server cannot join its people to a wave by claiming they accepted.
+    // federated_wave_invitations: on the invitee's server, the question itself.
+    // No copy of the wave is made, and nothing of it is sent, until they accept.
+    // remote_blocks: blocking someone on another server. `blocks` points at
+    // users(id), so a block of a remote account failed its foreign key and
+    // was never saved.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS remote_wave_invitations (
+        id          TEXT PRIMARY KEY,
+        wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        node_name   TEXT NOT NULL,
+        handle      TEXT NOT NULL,
+        invited_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TEXT NOT NULL,
+        expires_at  TEXT NOT NULL,
+        UNIQUE (wave_id, node_name, handle)
+      );
+      CREATE INDEX IF NOT EXISTS idx_remote_wave_invitations_wave ON remote_wave_invitations(wave_id);
+      CREATE TABLE IF NOT EXISTS federated_wave_invitations (
+        id              TEXT PRIMARY KEY,
+        invited_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        origin_node     TEXT NOT NULL,
+        origin_wave_id  TEXT NOT NULL,
+        wave_title      TEXT NOT NULL,
+        -- Who asked: { id, handle, displayName, avatar, avatarUrl } on origin_node.
+        inviter         TEXT NOT NULL,
+        member_count    INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        expires_at      TEXT NOT NULL,
+        UNIQUE (invited_user_id, origin_node, origin_wave_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_federated_wave_invitations_user ON federated_wave_invitations(invited_user_id);
+      CREATE TABLE IF NOT EXISTS remote_blocks (
+        id             TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        remote_user_id TEXT,
+        node_name      TEXT NOT NULL,
+        handle         TEXT NOT NULL,
+        blocked_at     TEXT NOT NULL,
+        UNIQUE (user_id, node_name, handle)
+      );
+      CREATE INDEX IF NOT EXISTS idx_remote_blocks_user ON remote_blocks(user_id);
+      CREATE INDEX IF NOT EXISTS idx_remote_blocks_remote ON remote_blocks(remote_user_id);
+    `);
+    // Any block of a remote account that did reach `blocks` (before foreign
+    // keys were enforced) moves across, before the orphan repair below drops it.
+    {
+      const stray = this.db.prepare(`
+        SELECT b.id, b.user_id, b.blocked_user_id, b.blocked_at, ru.node_name, ru.handle
+        FROM blocks b JOIN remote_users ru ON ru.id = b.blocked_user_id
+        WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = b.blocked_user_id)
+      `).all();
+      if (stray.length) {
+        const move = this.db.transaction(() => {
+          for (const r of stray) {
+            this.db.prepare(`INSERT OR IGNORE INTO remote_blocks (id, user_id, remote_user_id, node_name, handle, blocked_at)
+                             VALUES (?, ?, ?, ?, ?, ?)`).run(`rblk-${uuidv4()}`, r.user_id, r.blocked_user_id, r.node_name, r.handle, r.blocked_at);
+            this.db.prepare('DELETE FROM blocks WHERE id = ?').run(r.id);
+          }
+        });
+        move();
+        console.log(`✅ Moved ${stray.length} block(s) of remote accounts to remote_blocks (v2.137.0)`);
+      }
+    }
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -5966,36 +6034,71 @@ export class DatabaseSQLite {
     const user = this.findUserById(userId);
     if (!user) return false;
 
-    // Check if target is local user or remote user
-    const blockedUser = this.findUserById(blockedUserId) || this.getRemoteUser(blockedUserId);
-    if (!blockedUser) return false;
-
-    try {
-      this.db.prepare('INSERT INTO blocks (id, user_id, blocked_user_id, blocked_at) VALUES (?, ?, ?, ?)').run(uuidv4(), userId, blockedUserId, new Date().toISOString());
-      return true;
-    } catch {
-      return false;
+    if (this.findUserById(blockedUserId)) {
+      try {
+        this.db.prepare('INSERT INTO blocks (id, user_id, blocked_user_id, blocked_at) VALUES (?, ?, ?, ?)').run(uuidv4(), userId, blockedUserId, new Date().toISOString());
+        return true;
+      } catch {
+        return false;
+      }
     }
+    // v2.137.0: someone on another server. `blocks` points at users(id), so
+    // this used to fail its foreign key and save nothing.
+    const remote = this.getRemoteUser(blockedUserId);
+    if (!remote) return false;
+    return this.blockRemoteUser(userId, { id: remote.id, nodeName: remote.nodeName, handle: remote.handle });
   }
 
-  unblockUser(userId, blockedUserId) {
-    const result = this.db.prepare('DELETE FROM blocks WHERE user_id = ? AND blocked_user_id = ?').run(userId, blockedUserId);
+  /** Block someone on another server, by their address (v2.137.0). */
+  blockRemoteUser(userId, { id = null, nodeName, handle }) {
+    if (!nodeName || !handle) return false;
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO remote_blocks (id, user_id, remote_user_id, node_name, handle, blocked_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(`rblk-${uuidv4()}`, userId, id, nodeName, String(handle).toLowerCase(), new Date().toISOString());
+    if (!result.changes && id) {
+      // Blocked by address before the account was known here: record its id now.
+      this.db.prepare('UPDATE remote_blocks SET remote_user_id = ? WHERE user_id = ? AND node_name = ? AND handle = ? AND remote_user_id IS NULL')
+        .run(id, userId, nodeName, String(handle).toLowerCase());
+    }
     return result.changes > 0;
   }
 
+  /** Has this person blocked handle@nodeName? (v2.137.0) */
+  hasBlockedRemote(userId, nodeName, handle) {
+    if (!nodeName || !handle) return false;
+    return !!this.db.prepare('SELECT 1 FROM remote_blocks WHERE user_id = ? AND node_name = ? AND handle = ?')
+      .get(userId, nodeName, String(handle).toLowerCase());
+  }
+
+  /** Everyone this person has blocked, here and on other servers, by id. */
+  blockedIdsFor(userId) {
+    return this.db.prepare(`
+      SELECT blocked_user_id AS id FROM blocks WHERE user_id = ?
+      UNION SELECT remote_user_id AS id FROM remote_blocks WHERE user_id = ? AND remote_user_id IS NOT NULL
+    `).all(userId, userId).map(r => r.id);
+  }
+
+  unblockUser(userId, blockedUserId) {
+    const local = this.db.prepare('DELETE FROM blocks WHERE user_id = ? AND blocked_user_id = ?').run(userId, blockedUserId).changes;
+    const remote = this.db.prepare('DELETE FROM remote_blocks WHERE user_id = ? AND (remote_user_id = ? OR id = ?)').run(userId, blockedUserId, blockedUserId).changes;
+    return local + remote > 0;
+  }
+
   getBlockedUsers(userId) {
-    // Get locally blocked users
     const localRows = this.db.prepare(`
       SELECT b.*, u.handle, u.display_name, NULL as node_name FROM blocks b
       JOIN users u ON b.blocked_user_id = u.id
       WHERE b.user_id = ?
     `).all(userId);
 
-    // Get blocked remote users
+    // v2.137.0: people on other servers. A block made by address before the
+    // account was seen here has no id; it is unblocked by its own id.
     const remoteRows = this.db.prepare(`
-      SELECT b.*, ru.handle, ru.display_name, ru.node_name FROM blocks b
-      JOIN remote_users ru ON b.blocked_user_id = ru.id
-      WHERE b.user_id = ?
+      SELECT rb.id, rb.user_id, COALESCE(rb.remote_user_id, rb.id) AS blocked_user_id, rb.blocked_at,
+             rb.handle, ru.display_name, rb.node_name
+      FROM remote_blocks rb LEFT JOIN remote_users ru ON ru.id = rb.remote_user_id
+      WHERE rb.user_id = ?
     `).all(userId);
 
     const allRows = [...localRows, ...remoteRows];
@@ -6016,7 +6119,11 @@ export class DatabaseSQLite {
     const row = this.db.prepare(`
       SELECT 1 FROM blocks WHERE
         (user_id = ? AND blocked_user_id = ?) OR (user_id = ? AND blocked_user_id = ?)
-    `).get(userId, otherUserId, otherUserId, userId);
+      UNION ALL
+      SELECT 1 FROM remote_blocks WHERE
+        (user_id = ? AND remote_user_id = ?) OR (user_id = ? AND remote_user_id = ?)
+      LIMIT 1
+    `).get(userId, otherUserId, otherUserId, userId, userId, otherUserId, otherUserId, userId);
     return !!row;
   }
 
@@ -6451,7 +6558,7 @@ export class DatabaseSQLite {
     const userCrewIds = this.db.prepare('SELECT crew_id FROM crew_members WHERE user_id = ?').all(userId).map(r => r.crew_id);
 
     // Get blocked/muted user IDs for unread count calculation
-    const blockedIds = this.db.prepare('SELECT blocked_user_id FROM blocks WHERE user_id = ?').all(userId).map(r => r.blocked_user_id);
+    const blockedIds = this.blockedIdsFor(userId);
     const mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
 
     // v2.27.0: Build wave ID list from cache if participation module available
@@ -6670,7 +6777,7 @@ export class DatabaseSQLite {
     const userCrewIds = this.db.prepare('SELECT crew_id FROM crew_members WHERE user_id = ?').all(userId).map(r => r.crew_id);
 
     // Get blocked/muted user IDs for unread count calculation
-    const blockedIds = this.db.prepare('SELECT blocked_user_id FROM blocks WHERE user_id = ?').all(userId).map(r => r.blocked_user_id);
+    const blockedIds = this.blockedIdsFor(userId);
     const mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
 
     // v2.27.0: Build wave ID list from cache if available
@@ -8229,7 +8336,7 @@ export class DatabaseSQLite {
     let blockedIds = [];
     let mutedIds = [];
     if (userId) {
-      blockedIds = this.db.prepare('SELECT blocked_user_id FROM blocks WHERE user_id = ?').all(userId).map(r => r.blocked_user_id);
+      blockedIds = this.blockedIdsFor(userId);
       mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
     }
 
@@ -8405,7 +8512,7 @@ export class DatabaseSQLite {
     let blockedIds = [];
     let mutedIds = [];
     if (userId) {
-      blockedIds = this.db.prepare('SELECT blocked_user_id FROM blocks WHERE user_id = ?').all(userId).map(r => r.blocked_user_id);
+      blockedIds = this.blockedIdsFor(userId);
       mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
     }
 
@@ -11360,6 +11467,9 @@ export class DatabaseSQLite {
         LEFT JOIN users u ON b.blocked_user_id = u.id
         WHERE b.user_id = ?
       `).all(userId),
+      remoteBlockedUsers: this.db.prepare(`
+        SELECT node_name, handle, blocked_at FROM remote_blocks WHERE user_id = ?
+      `).all(userId),
       mutedUsers: this.db.prepare(`
         SELECT m.*, u.handle
         FROM mutes m
@@ -13946,9 +14056,7 @@ export class DatabaseSQLite {
     limit = Math.min(Math.max(1, limit), 50);
 
     // Get blocked users for this user
-    const blockedUsers = this.db.prepare(`
-      SELECT blocked_user_id FROM blocks WHERE user_id = ?
-    `).all(userId).map(r => r.blocked_user_id);
+    const blockedUsers = this.blockedIdsFor(userId);
 
     // Get users who have opted out of video feed (showInFeed: false)
     const optedOutUsers = this.db.prepare(`
@@ -15708,6 +15816,89 @@ export class DatabaseSQLite {
 
   deleteWaveInvitation(id) {
     return this.db.prepare('DELETE FROM wave_invitations WHERE id = ?').run(id).changes > 0;
+  }
+
+  // ----- Invitations across servers (v2.137.0) -----
+  // Sent: on the wave's server, who elsewhere was asked. Received: on the
+  // invitee's server, the question. Both pending only, like wave_invitations.
+
+  _dropExpiredFederatedInvitations() {
+    const now = new Date().toISOString();
+    this.db.prepare('DELETE FROM remote_wave_invitations WHERE expires_at <= ?').run(now);
+    this.db.prepare('DELETE FROM federated_wave_invitations WHERE expires_at <= ?').run(now);
+  }
+
+  createRemoteWaveInvitation({ waveId, nodeName, handle, invitedBy, ttlDays = 30 }) {
+    this._dropExpiredFederatedInvitations();
+    const now = new Date();
+    const row = {
+      id: `rinv-${uuidv4()}`, wave_id: waveId, node_name: nodeName, handle: String(handle).toLowerCase(),
+      invited_by: invitedBy, created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + ttlDays * 86400000).toISOString(),
+    };
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO remote_wave_invitations (id, wave_id, node_name, handle, invited_by, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(row.id, row.wave_id, row.node_name, row.handle, row.invited_by, row.created_at, row.expires_at);
+    return result.changes > 0 ? row : null;
+  }
+
+  getRemoteWaveInvitation(id) {
+    this._dropExpiredFederatedInvitations();
+    return this.db.prepare('SELECT * FROM remote_wave_invitations WHERE id = ?').get(id) || null;
+  }
+
+  findRemoteWaveInvitation(waveId, nodeName, handle) {
+    this._dropExpiredFederatedInvitations();
+    return this.db.prepare('SELECT * FROM remote_wave_invitations WHERE wave_id = ? AND node_name = ? AND handle = ?')
+      .get(waveId, nodeName, String(handle).toLowerCase()) || null;
+  }
+
+  listRemoteWaveInvitations(waveId) {
+    this._dropExpiredFederatedInvitations();
+    return this.db.prepare('SELECT * FROM remote_wave_invitations WHERE wave_id = ? ORDER BY created_at').all(waveId);
+  }
+
+  deleteRemoteWaveInvitation(id) {
+    return this.db.prepare('DELETE FROM remote_wave_invitations WHERE id = ?').run(id).changes > 0;
+  }
+
+  createFederatedWaveInvitation({ invitedUserId, originNode, originWaveId, waveTitle, inviter, memberCount = 0, ttlDays = 30 }) {
+    this._dropExpiredFederatedInvitations();
+    const now = new Date();
+    const row = {
+      id: `finv-${uuidv4()}`, invited_user_id: invitedUserId, origin_node: originNode, origin_wave_id: originWaveId,
+      wave_title: String(waveTitle || '').slice(0, 200), inviter: JSON.stringify(inviter || {}),
+      member_count: Math.max(0, Math.min(10000, parseInt(memberCount, 10) || 0)),
+      created_at: now.toISOString(), expires_at: new Date(now.getTime() + ttlDays * 86400000).toISOString(),
+    };
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO federated_wave_invitations
+        (id, invited_user_id, origin_node, origin_wave_id, wave_title, inviter, member_count, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(row.id, row.invited_user_id, row.origin_node, row.origin_wave_id, row.wave_title, row.inviter,
+      row.member_count, row.created_at, row.expires_at);
+    return result.changes > 0 ? row : null;
+  }
+
+  getFederatedWaveInvitation(id) {
+    this._dropExpiredFederatedInvitations();
+    return this.db.prepare('SELECT * FROM federated_wave_invitations WHERE id = ?').get(id) || null;
+  }
+
+  listFederatedWaveInvitationsForUser(userId) {
+    this._dropExpiredFederatedInvitations();
+    return this.db.prepare('SELECT * FROM federated_wave_invitations WHERE invited_user_id = ? ORDER BY created_at DESC').all(userId);
+  }
+
+  deleteFederatedWaveInvitation(id) {
+    return this.db.prepare('DELETE FROM federated_wave_invitations WHERE id = ?').run(id).changes > 0;
+  }
+
+  /** The origin withdrew it: drop the question it put to this person. */
+  deleteFederatedWaveInvitationFrom(originNode, originWaveId, userId) {
+    return this.db.prepare('DELETE FROM federated_wave_invitations WHERE origin_node = ? AND origin_wave_id = ? AND invited_user_id = ?')
+      .run(originNode, originWaveId, userId).changes > 0;
   }
 
   // ----- Attachments (v2.104.0, CORTEX-COMM-009) -----
