@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.137.0**. Last brought current 2026-10-30.
+Current version: **2.138.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2137000 / versionName "2.137.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2137000 / MARKETING_VERSION 2.137.0
+client/android/app/build.gradle                  versionCode 2138000 / versionName "2.138.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2138000 / MARKETING_VERSION 2.138.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -344,6 +344,8 @@ Node-to-node, **push-only and opt-in**. There is no discovery, join or subscribe
 
 **People on other servers are asked (v2.137.0).** `inviteRemotePeople()` records the question on the wave's server (`remote_wave_invitations`) and sends a signed `wave_invite`; the invitee's server stores it (`federated_wave_invitations`) and makes no copy. Accepting calls `/api/federation/wave-invitations/answer` on the wave's server, which honours only a question it asked and only then adds the server to `wave_federation`; the copy is made and the history pulled (`pullFederatedHistory()`) after that. Never add a server to `wave_federation` on invitation. Blocks of remote accounts live in `remote_blocks` (by address), since `blocks` references `users(id)`; read block lists through `db.blockedIdsFor()`.
 
+**Groups and travellers (v2.138.0).** A group wave stays a group wave with people elsewhere: its group is its people here, its travellers are `wave_remote_members` on its own server (recorded on accept and when they post). `isFederatedWave()` is the test for "has people on other servers", never `privacy === 'crossServer'` alone. Removing a traveller goes through their server (`/api/federation/wave-members/remove`); leaving a copy tells the origin (`wave_member_left`); an empty copy is deleted (`dropEmptyFederatedCopy`). On a copy, `createdBy` is only whoever accepted first and must not be treated as its owner. Remote mutes live in `remote_mutes`; read mute lists through `db.mutedIdsFor()`.
+
 ### Role-based access control
 
 Hierarchy **Admin > Moderator > User**.
@@ -455,7 +457,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/API.md** — API endpoints
 - **docs/DEPLOYMENT.md** — hardened VPS deployment, hardware sizing, broadcasts/recording setup, release backups
 - **docs/HIGH-AVAILABILITY.md** — proposed warm-standby failover (DNS health checks, Litestream, lease + boot guard); not built yet
-- **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0, phase 5 folders and audience labels in v2.135.0, phase 6 federated audience v2.136.1 and invitations v2.137.0)
+- **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0, phase 5 folders and audience labels in v2.135.0, phase 6 federated audience v2.136.1, invitations v2.137.0, groups and travellers v2.138.0)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy

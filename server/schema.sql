@@ -1589,6 +1589,28 @@ CREATE TABLE IF NOT EXISTS remote_blocks (
 CREATE INDEX IF NOT EXISTS idx_remote_blocks_user ON remote_blocks(user_id);
 CREATE INDEX IF NOT EXISTS idx_remote_blocks_remote ON remote_blocks(remote_user_id);
 
+CREATE TABLE IF NOT EXISTS wave_remote_members (
+        wave_id        TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        node_name      TEXT NOT NULL,
+        handle         TEXT NOT NULL,
+        remote_user_id TEXT,
+        display_name   TEXT,
+        avatar         TEXT,
+        joined_at      TEXT NOT NULL,
+        PRIMARY KEY (wave_id, node_name, handle)
+      );
+
+CREATE TABLE IF NOT EXISTS remote_mutes (
+        id             TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        remote_user_id TEXT,
+        node_name      TEXT NOT NULL,
+        handle         TEXT NOT NULL,
+        muted_at       TEXT NOT NULL,
+        UNIQUE (user_id, node_name, handle)
+      );
+CREATE INDEX IF NOT EXISTS idx_remote_mutes_user ON remote_mutes(user_id);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);

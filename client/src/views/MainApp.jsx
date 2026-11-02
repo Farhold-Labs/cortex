@@ -1416,12 +1416,14 @@ function MainApp({ sharePingId }) {
   // "New wave with these people" (v2.132.0): the wave's group (made from its
   // people if it is a private wave), then the new-wave dialog with it chosen.
   const [newWaveGroupId, setNewWaveGroupId] = useState(null);
-  const startWaveWithPeople = useCallback(async (waveId) => {
+  const [newWaveTravellers, setNewWaveTravellers] = useState(null);
+  const startWaveWithPeople = useCallback(async (waveId, travellers = []) => {
     try {
       const { groupId } = await fetchAPI(`/waves/${waveId}/group`, { method: 'POST' });
       setGroups(await fetchAPI('/groups'));
       setNewWaveContainer(null);
       setNewWaveGroupId(groupId);
+      setNewWaveTravellers(travellers.length ? travellers : null);
       setShowNewWave(true);
     } catch (err) {
       showToastMsg(err.message || `Could not start a new ${T.wave}`, 'error');
@@ -2726,10 +2728,11 @@ function MainApp({ sharePingId }) {
       )}
 
       <NewWaveModal isOpen={showNewWave}
-        onClose={() => { setShowNewWave(false); setNewWaveContainer(null); setNewWaveGroupId(null); }}
+        onClose={() => { setShowNewWave(false); setNewWaveContainer(null); setNewWaveGroupId(null); setNewWaveTravellers(null); }}
         containerLabel={newWaveContainer?.label || null}
         inChannel={!!newWaveContainer?.channelId}
         initialGroupId={newWaveGroupId}
+        initialTravellers={newWaveTravellers}
         onCreate={handleCreateWave} contacts={contacts} groups={groups} federationEnabled={federationEnabled} />
 
       {showSearch && (

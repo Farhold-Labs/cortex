@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.138.0] - 2026-11-02
+
+Groups and travellers: the last part of wave-access phase 6. A group wave keeps its group when people on other servers join, and the wave's owner can see and remove them. Migrating (adds `wave_remote_members` and `remote_mutes`).
+
+### Changed
+- **A group wave keeps its group with people elsewhere in it.** Starting a wave with two or more others makes a group of its people here, even when some are on other servers; inviting travellers into a group wave keeps the group. (v2.137.0 turned it into a Verse-Wide wave, so its crew stopped mattering.) The group is its people here; people elsewhere are the wave's **travellers**.
+- **The wave lists its travellers** (◇ TRAVELER, with their address) in the participants panel. Its server records them when their server accepts the invitation, and, for travellers who joined before v2.137.0 when nobody recorded them, when they post.
+- **Removing a traveller.** The owner, a wave admin or a group admin presses REMOVE; their server takes them off its copy and says how many are left there. At none, the wave is no longer sent there, and that server's copy is deleted with everything cached of it.
+- **Leaving a copy tells the wave's server**, which stops listing them; once nobody there is left, it stops sending the wave there. A copy nobody is in any more is deleted.
+- **New wave with these people** includes the travellers (they are asked again), and works for a conversation with people elsewhere (it becomes a group of its people here). The new-wave dialog keeps travellers when a group is chosen; it used to drop them.
+- People elsewhere join only a conversation kept to its people: inviting them into a wave everyone here can read is refused (409 `PUBLIC_WAVE`), as is starting a public or Community wave with them (409 `CROSS_SERVER`). Both used to turn the wave quietly into one only its participants could read.
+- Settings changes (who may post, replies, reactions, the message timer) reach other servers for every wave sent there, not only Verse-Wide ones; Community checks treat any wave with people elsewhere as such.
+
+### Security
+- **On a copy, whoever accepted first was its owner here.** They could remove everyone else on their server from someone else's conversation, and could not leave it themselves ("Wave creator cannot leave"). On a copy, people now only leave; removing is the wave owner's, on the wave's server.
+- **Only the server a copy came from can remove people from it** (the copy is found by sender and wave id). A server can report only its own people leaving.
+- **Muting someone on another server is saved.** Like blocks before v2.137.0, `mutes` references local accounts only, so it failed its foreign key; mutes now live in `remote_mutes` and count wherever mute lists are read, including the data export.
+
+### Verified
+- `npm test`: 690/690. New `federation-groups.test.cjs` plays two other servers:
+  - a wave started with bob, dave and zed@near is a group wave sent from here; bob reads it through the group; zed is invited;
+  - zed's server accepting lists him by name, and a settings change reaches his server; yan, who posts without having been recorded, is listed;
+  - a server outside the wave saying yan left changes nothing; his own server saying so removes him;
+  - bob cannot remove zed (403); alice can: his server is asked, he is no longer listed, and with nobody there left that server gets no more pings and may not fetch the history (403);
+  - inviting travellers into a public wave or starting one with them is refused; a conversation with someone elsewhere becomes a group of its people here, still sent from here;
+  - on a copy, the first to accept cannot remove bob (403) and can leave; the wave's server is told (`alice:0`), and the empty copy is deleted;
+  - another server cannot remove bob from a copy (404); the wave's server can (`remaining: 1`);
+  - muting carol@peer is saved and listed.
+- Counterfactuals: finding the copy by wave id alone, another server removes bob; without the copy rule, whoever accepted first removes the others. (A third, for the partner check on `wave_member_left`, could not fail: the list is kept per server, so a server can only ever strike its own people. The check stays as a second line; the test asserts the outcome.)
+- Headless on dev at 390 px: the participants panel lists a traveller (◇ TRAVELER, @river@qa.farhold.com) with REMOVE; against QA (v2.137.0) REMOVE answers "qa.farhold.com needs to update Cortex before people can be removed there".
+
+### Not changed
+- A copy on another server does not know its wave's travellers from third servers; it shows them as they post.
+- Wave roles (owner, admin, moderator) still do not travel to other servers.
+
 ## [2.137.0] - 2026-11-02
 
 People on other servers are asked before they join a conversation, and blocks work across servers. Wave-access phase 6, second part. Migrating (adds `remote_wave_invitations`, `federated_wave_invitations`, `remote_blocks`).
