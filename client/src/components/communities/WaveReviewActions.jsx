@@ -39,7 +39,7 @@ const WaveReviewActions = ({ communityId, w, fetchAPI, showToast, onDone, styles
       setConfirming(null);
       onDone && onDone(action, res);
     } catch (err) {
-      showToast(err?.error || 'Could not decide that one', 'error');
+      showToast(err?.data?.error || 'Could not decide that one', 'error');
     } finally {
       setBusy(false);
     }

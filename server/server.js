@@ -26804,10 +26804,18 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
   // open it, not only those with participant rows.
   const outsiders = [...waveMemberIds(wave)].filter(uid =>
     !communityAuthz.canDiscoverChannel(db, { kind: 'user', userId: uid }, targetForFile.id).allowed);
-  if (outsiders.length > 0) {
+  // v2.135.1: the Community's owners and admins may file it anyway and invite
+  // the people outside. A wave that is not public goes in under review and
+  // keeps its people until they have all joined (then it settles by itself);
+  // a public one is the channel's at once, and they see it once they join.
+  const isManager = db.isCommunityManager(req.params.id, req.user.userId);
+  const crossServerWave = wave.privacy === 'crossServer' || wave.privacy === 'cross-server';
+  const inviteOutsiders = outsiders.length > 0 && isManager && !crossServerWave && req.body?.inviteOutsiders === true;
+  if (outsiders.length > 0 && !inviteOutsiders) {
     return res.status(409).json({
       error: `${outsiders.length} ${outsiders.length === 1 ? 'person' : 'people'} in this ${T_WAVE()} cannot see that channel`,
       code: 'OUTSIDERS_IN_WAVE', count: outsiders.length,
+      canInvite: isManager && !crossServerWave, waitsForThem: wave.privacy !== 'public',
     });
   }
 
@@ -26824,18 +26832,38 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
     return res.status(409).json({ error: `A ${T_WAVE()} with people on other servers cannot be filed in a community`, code: 'CROSS_SERVER' });
   }
 
-  const updated = inCommunityTransaction(() => {
+  const { updated, invitedIds } = inCommunityTransaction(() => {
     // A private wave's people are named as it arrives (setWaveChannel), so
     // nobody already in it loses it; everyone was checked against the channel
     // above. Filing again into a channel everyone can see settles a review.
-    if (wave.reviewState) db.setWaveReviewState(wave.id, null);
-    const updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
+    if (wave.reviewState && !inviteOutsiders) db.setWaveReviewState(wave.id, null);
+    let updated = db.setWaveChannel(req.params.waveId, req.params.channelId);
+    const invitedIds = [];
+    if (inviteOutsiders) {
+      if (wave.privacy !== 'public') {
+        db.setWaveReviewState(wave.id, 'needs_review');
+        updated = db.getWave(wave.id);
+      }
+      for (const uid of outsiders) {
+        if (db.getCommunityMembership(req.params.id, uid)?.state === 'invited') continue;
+        if (inviteToCommunity(req.params.id, uid, req.user.userId)) invitedIds.push(uid);
+      }
+    }
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'wave.file', targetType: 'wave', targetId: req.params.waveId,
+      ...(inviteOutsiders ? { metadata: { outside: outsiders.length, invited: invitedIds.length } } : {}),
     });
-    return updated;
+    return { updated, invitedIds };
   });
-  res.json({ wave: updated });
+  for (const uid of invitedIds) notifyCommunityInvitation(req.params.id, uid, req.user.userId);
+  if (inviteOutsiders && wave.privacy === 'public') {
+    // Told, without the wave's messages: it now belongs to a Community.
+    const community = db.getCommunityById(req.params.id);
+    for (const uid of outsiders) {
+      broadcastToUser(uid, { type: 'removed_from_wave', wave: { id: wave.id, title: wave.title }, reason: 'community', communityName: community?.name });
+    }
+  }
+  res.json({ wave: updated, ...(inviteOutsiders ? { outside: outsiders.length, invited: invitedIds.length, review: wave.privacy !== 'public' } : {}) });
 });
 
 // ----- Community wave report (v2.131.0, wave-access phase 2) -----

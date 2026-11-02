@@ -50,7 +50,7 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
         setRoles((r?.roles || []).filter(x => x.name !== 'owner' && x.name !== 'admin'));
       }
     } catch (err) {
-      setError(err?.error || err?.message || 'Could not load who can see this');
+      setError(err?.data?.error || err?.message || 'Could not load who can see this');
     }
   }, [fetchAPI, waveId, currentUserId]);
 
@@ -68,7 +68,7 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
       onChanged && onChanged();
       onClose();
     } catch (err) {
-      showToast(err?.error || err?.message || 'Could not change who can see this', 'error');
+      showToast(err?.data?.error || err?.message || 'Could not change who can see this', 'error');
     } finally {
       setSaving(false);
     }

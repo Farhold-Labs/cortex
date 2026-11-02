@@ -199,7 +199,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       showToast('Community updated', 'success');
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not update the community', 'error');
+      showToast(err?.data?.error || 'Could not update the community', 'error');
     }
   };
 
@@ -231,7 +231,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       showToast('Logo removed', 'success');
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not remove the logo', 'error');
+      showToast(err?.data?.error || 'Could not remove the logo', 'error');
     } finally { setLogoBusy(false); }
   };
 
@@ -274,7 +274,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setActionsFor(null);
       refreshPeople();
     } catch (err) {
-      showToast(err?.error || 'Could not change that role', 'error');
+      showToast(err?.data?.error || 'Could not change that role', 'error');
       refreshPeople();
     }
   };
@@ -286,7 +286,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setConfirming(null); setActionsFor(null);
       refreshPeople();
     } catch (err) {
-      showToast(err?.error || 'Could not remove them', 'error');
+      showToast(err?.data?.error || 'Could not remove them', 'error');
     }
   };
 
@@ -299,7 +299,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setConfirming(null); setActionsFor(null); setBanReason('');
       refreshPeople();
     } catch (err) {
-      showToast(err?.error || 'Could not ban them', 'error');
+      showToast(err?.data?.error || 'Could not ban them', 'error');
     }
   };
 
@@ -345,7 +345,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       load();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not rename that channel', 'error');
+      showToast(err?.data?.error || 'Could not rename that channel', 'error');
     }
   };
 
@@ -363,7 +363,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       load();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not delete that channel', 'error');
+      showToast(err?.data?.error || 'Could not delete that channel', 'error');
     }
   };
 
@@ -378,7 +378,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       load();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not change that channel', 'error');
+      showToast(err?.data?.error || 'Could not change that channel', 'error');
     }
   };
 
@@ -395,7 +395,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       load();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not create that channel', 'error');
+      showToast(err?.data?.error || 'Could not create that channel', 'error');
     }
   };
 
@@ -412,7 +412,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       refreshPeople();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not add that person', 'error');
+      showToast(err?.data?.error || 'Could not add that person', 'error');
     }
   };
 
@@ -424,7 +424,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setMintedToken(res.invite.token);
       load();
     } catch (err) {
-      showToast(err?.error || 'Could not create an invite', 'error');
+      showToast(err?.data?.error || 'Could not create an invite', 'error');
     }
   };
 
@@ -436,7 +436,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setRemoteAddress('');
       showToast(`Invitation waiting for ${address}`, 'success');
     } catch (err) {
-      showToast(err?.error || 'Could not invite that address', 'error');
+      showToast(err?.data?.error || 'Could not invite that address', 'error');
     }
   };
 
@@ -456,7 +456,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       onGone && onGone();
     } catch (err) {
       setConfirmLeave(false);
-      showToast(err?.error || 'Could not leave', 'error');
+      showToast(err?.data?.error || 'Could not leave', 'error');
     }
   };
 
@@ -470,7 +470,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       onGone && onGone();
     } catch (err) {
       setConfirmClose(false);
-      showToast(err?.error || err?.message || 'Could not close the community', 'error');
+      showToast(err?.data?.error || err?.message || 'Could not close the community', 'error');
     }
   };
 
