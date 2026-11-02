@@ -16424,6 +16424,13 @@ app.post('/api/admin/portal', authenticateToken, async (req, res) => {
     if (wave.encrypted) return res.status(400).json({ error: 'Cannot add an E2EE-encrypted wave to the portal' });
 
     if (db.getPortalWave(wave.id)) return res.status(409).json({ error: 'Wave already in portal' });
+    // v2.136.0: not a wave whose Community says only some people can see it.
+    const portalChannel = wave.channelId ? db.getChannelById(wave.channelId) : null;
+    if (portalChannel?.community_id && portalPlaceConflict({
+      narrowed: wave.privacy !== 'public', channel: portalChannel, community: db.getCommunityById(portalChannel.community_id),
+    })) {
+      return res.status(409).json({ error: `This ${T_WAVE()} is in a community where only some people can see it. Move it out of the community, or make it open to a public community's channel, first.`, code: 'NOT_PUBLIC_IN_COMMUNITY' });
+    }
 
     db.addWaveToPortal(wave.id, label ? sanitizeInput(label) : null, req.user.userId);
     db.logActivity(req.user.userId, 'portal_wave_added', 'wave', wave.id, { label });
@@ -23640,6 +23647,10 @@ const inviteLimiter = rateLimit({
 function T_WAVE() {
   try { return resolveTerminology(db.getInstanceConfig?.()).terms.wave.one; } catch { return 'wave'; }
 }
+/** …and for several. */
+function T_WAVES() {
+  try { return resolveTerminology(db.getInstanceConfig?.()).terms.wave.many; } catch { return 'waves'; }
+}
 
 function waveJoinRefusal(wave, inviterId, inviteeId) {
   const NOPE = { status: 403, error: 'Cannot add this person', code: 'CANNOT_ADD' };
@@ -23963,6 +23974,42 @@ app.post('/api/waves/:id/group', authenticateToken, (req, res) => {
 // they always see narrowed waves. Everyone named must be able to see the
 // channel; the server refuses anyone else without saying whether they exist.
 
+// ----- Portal waves in Communities (v2.136.0) -----
+//
+// The public portal shows whatever a node admin published, to anyone on the
+// internet, whatever the wave's own privacy. A portal wave may sit in a
+// public Community's open channel (Who can see this says it is also on the
+// portal), but it may not be narrowed, nor live in a private or unlisted
+// Community or a restricted channel: every one of those would tell the
+// people in it that it is not public when it is.
+
+const PORTAL_REFUSAL = { error: 'It is on the public portal, where anyone can read it. Remove it from the portal first.', code: 'ON_PORTAL' };
+
+/** Would this wave, published on the portal, be in a place that says it isn't public? */
+function portalPlaceConflict({ narrowed = false, channel = null, community = null } = {}) {
+  if (narrowed) return true;
+  if (channel?.visibility === 'restricted') return true;
+  if (community && community.visibility !== 'public') return true;
+  return false;
+}
+
+/** Portal waves among the waves filed in these channels. */
+function portalWavesInChannels(channelIds) {
+  if (!channelIds.length) return [];
+  return db.db.prepare(`
+    SELECT w.id FROM waves w JOIN portal_waves pw ON pw.wave_id = w.id
+    WHERE w.channel_id IN (${channelIds.map(() => '?').join(',')})
+  `).all(...channelIds).map(r => r.id);
+}
+
+/** Everyone active in a Community re-reads its channels and waves (access changed). */
+function pushCommunityAccessChanged(communityId) {
+  const members = db.db.prepare(
+    "SELECT user_id FROM community_memberships WHERE community_id = ? AND state = 'active'"
+  ).all(communityId).map(r => r.user_id);
+  broadcast({ type: 'community_roles_changed', communityId }, members);
+}
+
 function waveAudienceContext(wave) {
   if (!wave?.channelId) return null;
   const channel = db.getChannelById(wave.channelId);
@@ -23979,6 +24026,7 @@ function waveAudienceView(wave, viewerId) {
     : (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') ? 'federated'
     : 'only';
   const view = { mode, communityId: ctx.communityId, channelId: ctx.channel.id, channelName: ctx.channel.name, canEdit: isManager && (mode === 'channel' || mode === 'only') };
+  if (db.getPortalWave(wave.id)) view.portal = true;
   // v2.135.1: the owner or an admin decides a wave in review from the wave itself.
   if (mode === 'review' && isManager) {
     const f = communityWaveFindings(ctx.communityId).findings.find(x => x.wave.id === wave.id);
@@ -24025,6 +24073,7 @@ app.put('/api/waves/:id/audience', authenticateToken, apiLimiter, (req, res) => 
   }
 
   const mode = req.body?.mode;
+  if (mode === 'only' && db.getPortalWave(wave.id)) return res.status(409).json(PORTAL_REFUSAL);
   let userIds = [], roleIds = [];
   if (mode === 'only') {
     const asList = (v) => Array.isArray(v) ? [...new Set(v.map(x => sanitizeInput(String(x || ''))).filter(Boolean))] : [];
@@ -25915,6 +25964,13 @@ app.patch('/api/communities/:id', authenticateToken, apiLimiter, (req, res) => {
       return res.status(400).json({ error: 'Invalid visibility' });
     }
     fields.visibility = req.body.visibility;
+    if (fields.visibility !== 'public') {
+      const channelIds = db.db.prepare('SELECT id FROM channels WHERE community_id = ?').all(req.params.id).map(r => r.id);
+      const onPortal = portalWavesInChannels(channelIds).length;
+      if (onPortal) {
+        return res.status(409).json({ ...PORTAL_REFUSAL, error: `${onPortal} ${onPortal === 1 ? T_WAVE() : T_WAVES()} in this community ${onPortal === 1 ? 'is' : 'are'} on the public portal. Remove ${onPortal === 1 ? 'it' : 'them'} from the portal, or move ${onPortal === 1 ? 'it' : 'them'} out, first.`, count: onPortal });
+      }
+    }
   }
 
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
@@ -26662,6 +26718,12 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
     }
   }
   if (['members', 'restricted'].includes(req.body.visibility)) fields.visibility = req.body.visibility;
+  if (fields.visibility === 'restricted') {
+    const onPortal = portalWavesInChannels([req.params.channelId]).length;
+    if (onPortal) {
+      return res.status(409).json({ ...PORTAL_REFUSAL, error: `${onPortal} ${onPortal === 1 ? T_WAVE() : T_WAVES()} in this channel ${onPortal === 1 ? 'is' : 'are'} on the public portal. Remove ${onPortal === 1 ? 'it' : 'them'} from the portal, or move ${onPortal === 1 ? 'it' : 'them'} out, first.`, count: onPortal });
+    }
+  }
   if (Number.isInteger(req.body.sortOrder)) fields.sort_order = req.body.sortOrder;
   if (req.body.stage !== undefined) {
     if (typeof req.body.stage !== 'boolean') return res.status(400).json({ error: 'stage must be true or false' });
@@ -26684,6 +26746,8 @@ app.patch('/api/communities/:id/channels/:channelId', authenticateToken, apiLimi
     });
     return channel;
   });
+  // v2.136.0: who can see the channel changed; everyone's list and channels follow.
+  if (fields.visibility !== undefined) pushCommunityAccessChanged(req.params.id);
   if (fields.stage !== undefined && channel?.type === 'voice') {
     // Everyone in the room is re-permissioned, and everyone watching the
     // channel learns it is (or is no longer) a stage.
@@ -26753,6 +26817,7 @@ app.put('/api/communities/:id/channels/:channelId/roles/:roleId', authenticateTo
     });
     return saved;
   });
+  pushCommunityAccessChanged(req.params.id);
   res.json({ permission: saved });
 });
 
@@ -26766,6 +26831,7 @@ app.delete('/api/communities/:id/channels/:channelId/roles/:roleId', authenticat
       targetType: 'channel', targetId: req.params.channelId,
     });
   });
+  pushCommunityAccessChanged(req.params.id);
   res.json({ success: true });
 });
 
@@ -26830,6 +26896,11 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
   }
   if (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') {
     return res.status(409).json({ error: `A ${T_WAVE()} with people on other servers cannot be filed in a community`, code: 'CROSS_SERVER' });
+  }
+  if (db.getPortalWave(wave.id) && portalPlaceConflict({
+    narrowed: wave.privacy !== 'public', channel: targetForFile, community: db.getCommunityById(req.params.id),
+  })) {
+    return res.status(409).json(PORTAL_REFUSAL);
   }
 
   const { updated, invitedIds } = inCommunityTransaction(() => {
@@ -27111,6 +27182,7 @@ app.post('/api/communities/:id/waves/:waveId/review', authenticateToken, apiLimi
   if (action !== 'move_out' && action !== 'make_role' && action !== 'invite') {
     return res.status(400).json({ error: "action must be 'move_out', 'make_role' or 'invite'" });
   }
+  if (action === 'make_role' && db.getPortalWave(wave.id)) return res.status(409).json(PORTAL_REFUSAL);
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
 
   // v2.135.1: invite the people outside without deciding yet. The wave keeps

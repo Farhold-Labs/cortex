@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import WaveReviewActions from './WaveReviewActions.jsx';
+import ChannelAccessEditor from './ChannelAccessEditor.jsx';
 import { T } from '../../config/terminology.js';
 import { storage } from '../../utils/storage.js';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
@@ -73,6 +74,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
   const [channelName, setChannelName] = useState('');
   const [channelType, setChannelType] = useState('text'); // 'text' | 'voice' | 'stage'
   const [renaming, setRenaming] = useState(null);
+  const [accessFor, setAccessFor] = useState(null);       // channel id whose access is being edited
   const [renameTo, setRenameTo] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
 
@@ -124,7 +126,8 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
         setChannels(res.channels || []);
       } catch { /* the rest of the panel is still useful */ }
     }
-    if (can('member.roles')) {
+    // Also for whoever manages channels: limiting a channel is choosing roles (v2.136.0).
+    if (can('member.roles') || can('channel.manage')) {
       try {
         const r = await fetchAPI(`/communities/${community.id}/roles`);
         setRoles(r.roles || []);
@@ -586,9 +589,16 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
                   </button>
                   <button onClick={() => setConfirmDelete(null)} style={{ ...action, marginTop: 0, marginLeft: 6 }}>Keep it</button>
                 </div>
+              ) : accessFor === ch.id ? (
+                <ChannelAccessEditor community={community} channel={ch} roles={roles} fetchAPI={fetchAPI} showToast={showToast}
+                  styles={{ action, hint, label }} onCancel={() => setAccessFor(null)}
+                  onSaved={() => { setAccessFor(null); load(); onChanged && onChanged(); }} />
               ) : (
-                <div style={row}>
-                  <span style={{ fontSize: '0.82rem', minWidth: 0 }}>{ch.type === 'voice' ? (ch.stage ? '🎤' : '🔊') : '#'} {ch.name}</span>
+                <div style={{ ...row, flexWrap: 'wrap', rowGap: '0.3rem' }}>
+                  <span style={{ fontSize: '0.82rem', minWidth: 0, flex: '1 1 7rem', overflowWrap: 'anywhere' }}>
+                    {ch.type === 'voice' ? (ch.stage ? '🎤' : '🔊') : '#'} {ch.name}
+                    {ch.visibility === 'restricted' && <span style={{ color: 'var(--accent-amber)', fontSize: '0.68rem', marginLeft: 6 }} title="Only some roles can see it">LIMITED</span>}
+                  </span>
                   {can('channel.manage') && (
                     <span style={{ display: 'flex', gap: '0.3rem', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       {ch.type === 'voice' && (
@@ -598,6 +608,11 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
                           title={ch.stage ? 'Let everyone speak' : 'Only hosts speak; others raise a hand'}
                         >{ch.stage ? 'Not a stage' : 'Make stage'}</button>
                       )}
+                      <button
+                        onClick={() => { setAccessFor(ch.id); setRenaming(null); setConfirmDelete(null); }}
+                        style={{ ...action, marginTop: 0 }}
+                        title="Who can see this channel"
+                      >Access</button>
                       <button
                         onClick={() => { setRenaming(ch.id); setRenameTo(ch.name); setConfirmDelete(null); }}
                         style={{ ...action, marginTop: 0 }}
