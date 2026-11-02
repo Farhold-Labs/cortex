@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
-import { PRIVACY_LEVELS, NOTIFICATION_BADGE_COLORS, WAVE_DENSITY, DEFAULT_WAVE_DENSITY } from '../../config/constants.js';
+import { waveAudience, NOTIFICATION_BADGE_COLORS, WAVE_DENSITY, DEFAULT_WAVE_DENSITY } from '../../config/constants.js';
 import { EMPTY, GHOST_PROTOCOL } from '../../../messages.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
@@ -134,7 +134,13 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
               {wave.muted ? '🔔 Unmute' : '🔕 Mute notifications'}
             </div>
           )}
-          {/* Category options */}
+          {/* Folders (v2.135.0, were categories): personal, they grant nothing. */}
+          {categories.length > 0 && (
+            <div style={{
+              padding: '6px 12px 2px', fontSize: '0.65rem', letterSpacing: '0.08em',
+              color: 'var(--text-muted)', borderTop: '1px solid var(--border-subtle)',
+            }}>MOVE TO FOLDER</div>
+          )}
           {categories.map(cat => (
             <div
               key={cat.id}
@@ -157,7 +163,7 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
             </div>
           ))}
           {/* Community channels (v2.99.0).
-              A channel is the SHARED version of a category, so it belongs in
+              A channel is the SHARED version of a folder, so it belongs in
               the same menu — this is where people already look to move a wave,
               and a separate screen for it was the thing that made Communities
               feel bolted on. */}
@@ -184,7 +190,7 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
               }}
               onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
               onMouseLeave={(e) => e.currentTarget.style.background = wave.channelId === ch.id ? 'var(--accent-amber)20' : 'transparent'}
-              title={`${ch.communityName} — filing a ${T.wave} here does not change who can read it`}
+              title={`${ch.communityName} — everyone who can see #${ch.name} can see a ${T.wave} filed here`}
             >
               {wave.channelId === ch.id ? '✓ ' : ''}# {ch.name}
               <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: 6 }}>
@@ -211,7 +217,7 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
             </div>
           )}
 
-          {/* Uncategorized option */}
+          {/* Out of its folder */}
           {wave.category_id && (
             <div
               onClick={(e) => {
@@ -230,7 +236,7 @@ const WaveRowMenu = ({ wave, categories = [], channels: allChannels = [], isOpen
               onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
             >
-              Remove from category
+              Remove from folder
             </div>
           )}
         </div>
@@ -379,7 +385,7 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
   // headers: a wave in a channel (2) sits inside its channel (1), not level
   // with the Community heading.
   const renderWaveItem = (wave, showPinButton = false, move = null, indent = 0) => {
-    const config = PRIVACY_LEVELS[wave.privacy] || PRIVACY_LEVELS.private;
+    const config = waveAudience(wave);
     const isSelected = selectedWave?.id === wave.id;
     const notifInfo = waveNotifications[wave.id];
     const notifCount = notifInfo?.count || 0;
@@ -723,7 +729,7 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
         const list = categoryId === UNCATEGORIZED_ID ? groupedWaves.uncategorized : (groupedWaves.categorized[categoryId] || []);
         return list.length === 0 ? (
           <div style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
-            No {T.waves} in this category
+            No {T.waves} in this folder
           </div>
         ) : list.map(wave => renderWaveItem(wave, true, personalMove(wave, list)));
       })()}
@@ -752,7 +758,7 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
               headerAction={arrows(categoryMoves, category.name)}
               menuTitle={`${category.name} options`}
               menu={reorder?.mode ? undefined : [
-                // Desktop opens a category beside the rail (v2.125.0); a phone
+                // Desktop opens a folder beside the rail (v2.125.0); a phone
                 // folds it in place, because there is no rail to come back by.
                 ...(onOpenContainer && !isMobile ? [{
                   label: '▣ Open in Panel', onClick: () => onOpenContainer({ kind: 'category', id: category.id }),
@@ -762,14 +768,14 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
                   onClick: () => onNewWaveIn({ categoryId: category.id, label: category.name }),
                 }] : []),
                 ...(onManageCategories ? [{
-                  label: '⚙ Manage Categories', onClick: onManageCategories,
+                  label: '⚙ Manage Folders', onClick: onManageCategories,
                 }] : []),
               ]}
             >
               {renderDropZone(category.id, category.name)}
               {categoryWaves.length === 0 ? (
                 <div style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
-                  No {T.waves} in this category
+                  No {T.waves} in this folder
                 </div>
               ) : (
                 categoryWaves.map(wave => renderWaveItem(wave, true, personalMove(wave, categoryWaves)))
@@ -783,8 +789,8 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
       {homeWaves && groupedWaves.uncategorized.length > 0 && (
         <div style={{ marginBottom: '1px' }}>
           <CollapsibleSection
-            title="UNCATEGORIZED"
-            menuTitle="Uncategorized options"
+            title="NOT IN A FOLDER"
+            menuTitle="Not in a folder options"
             menu={onOpenContainer && !isMobile && !reorder?.mode ? [{
               label: '▣ Open in Panel', onClick: () => onOpenContainer({ kind: 'category', id: UNCATEGORIZED_ID }),
             }] : undefined}
@@ -797,7 +803,7 @@ const WaveCategoryList = ({ show = 'all', communityId = null, categoryId = null,
             compact
             titleSize={densityStyle.headingSize}
           >
-            {renderDropZone(null, 'Uncategorized')}
+            {renderDropZone(null, 'Not in a folder')}
             {groupedWaves.uncategorized.map(wave => renderWaveItem(wave, true, personalMove(wave, groupedWaves.uncategorized)))}
           </CollapsibleSection>
         </div>
@@ -1135,7 +1141,7 @@ const WaveList = ({ waveInvitations = [], onAcceptInvitation, onDeclineInvitatio
     ? communities.find(c => c.id === openContainer.id) : null;
   const openCategory = openContainer?.kind === 'category'
     ? (openContainer.id === UNCATEGORIZED_ID
-      ? { id: UNCATEGORIZED_ID, name: 'Uncategorized', color: 'var(--text-dim)' }
+      ? { id: UNCATEGORIZED_ID, name: 'Not in a folder', color: 'var(--text-dim)' }
       : categories.find(c => c.id === openContainer.id))
     : null;
 
@@ -1154,7 +1160,7 @@ const WaveList = ({ waveInvitations = [], onAcceptInvitation, onDeclineInvitatio
       ...(onNewWaveIn && openCategory.id !== UNCATEGORIZED_ID ? [{
         label: `+ New ${T.Wave} Here`, onClick: () => onNewWaveIn({ categoryId: openCategory.id, label: name }),
       }] : []),
-      ...(onManageCategories ? [{ label: '⚙ Manage Categories', onClick: onManageCategories }] : []),
+      ...(onManageCategories ? [{ label: '⚙ Manage Folders', onClick: onManageCategories }] : []),
       ...(canReorder ? [{ label: '↕ Reorder', onClick: () => setReorderMode('waves') }] : []),
     ];
     return (
@@ -1249,7 +1255,7 @@ const WaveList = ({ waveInvitations = [], onAcceptInvitation, onDeclineInvitatio
       menuTitle="List options"
       menu={[
         ...(communitiesEnabled && onManageCommunities ? [{ label: '⚙ Manage Communities', onClick: () => onManageCommunities() }] : []),
-        { label: categories.length > 0 ? '⚙ Manage Categories' : '⚙ Create Category', onClick: onManageCategories },
+        { label: categories.length > 0 ? '⚙ Manage Folders' : '⚙ New Folder', onClick: onManageCategories },
         { label: ghostMode ? '👻 Exit Ghost Mode' : '👻 Ghost Protocol',
           color: ghostMode ? 'var(--accent-orange)' : undefined, onClick: onToggleGhostProtocol },
         { label: showArchived ? '📬 Show Active' : '📦 Show Archived',
@@ -1320,7 +1326,7 @@ const WaveList = ({ waveInvitations = [], onAcceptInvitation, onDeclineInvitatio
             {showArchived ? `No archived ${T.waves}` : EMPTY.noWavesCreate}
           </div>
         ) : waves.map((wave, index) => {
-        const config = PRIVACY_LEVELS[wave.privacy] || PRIVACY_LEVELS.private;
+        const config = waveAudience(wave);
         // Reorder mode: here the section is the whole list.
         const move = reorderMode === 'home' ? {
           onUp: index > 0 ? () => onReorderWaves?.(moveInList(waves.map(w => w.id), wave.id, -1)) : null,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { confirmLeaveDuringUpload } from '../../utils/uploads.js';
-import { BASE_URL, PRIVACY_LEVELS } from '../../config/constants.js';
+import { BASE_URL, PRIVACY_LEVELS, waveAudience } from '../../config/constants.js';
 import { OFFLINE, VERSION_CHECK } from '../../../messages.js';
 
 // ============ SCAN LINES EFFECT ============
@@ -64,10 +64,15 @@ export const Avatar = ({ letter, color = 'var(--accent-amber)', size = 40, statu
 };
 
 // ============ PRIVACY BADGE ============
-export const PrivacyBadge = ({ level, compact = false }) => {
-  const config = PRIVACY_LEVELS[level] || PRIVACY_LEVELS.private;
+// Given a `wave`, it says who can see it (v2.135.0); `level` alone is the
+// stored privacy, for a ping. With `onClick` it is a button (Who can see this).
+export const PrivacyBadge = ({ level, wave = null, compact = false, onClick = null }) => {
+  const config = wave ? waveAudience(wave) : (PRIVACY_LEVELS[level] || PRIVACY_LEVELS.private);
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div style={{
+    <Tag onClick={onClick || undefined} title={`${config.name}: ${config.desc}`} aria-label={wave ? `Who can see this: ${config.name}` : undefined}
+      style={{
+      fontFamily: 'inherit', cursor: onClick ? 'pointer' : 'default',
       display: 'inline-flex', alignItems: 'center', gap: '6px',
       padding: compact ? '2px 8px' : '4px 12px',
       background: config.bgColor,
@@ -78,7 +83,7 @@ export const PrivacyBadge = ({ level, compact = false }) => {
     }}>
       <span style={{ color: config.color }}>{config.icon}</span>
       {!compact && <span style={{ color: config.color }}>{config.name}</span>}
-    </div>
+    </Tag>
   );
 };
 

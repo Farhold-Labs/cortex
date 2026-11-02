@@ -7,7 +7,11 @@ import { T } from '../../config/terminology.js';
 
 const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null, inChannel = false, initialGroupId = null }) => {
   const [title, setTitle] = useState('');
-  const [privacy, setPrivacy] = useState('private');
+  // Who can see it (v2.135.0): the people picked (one by one or a whole
+  // crew), or everyone on the server. The stored privacy follows from that;
+  // a wave with people on other servers is federated because of who is in it,
+  // which the server decides, so Verse-Wide is no longer a choice.
+  const [everyone, setEveryone] = useState(false);
   const [selectedParticipants, setSelectedParticipants] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [federatedInput, setFederatedInput] = useState('');
@@ -15,14 +19,14 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
 
   // Opened from "New wave with these people" (v2.132.0): that group, chosen.
   useEffect(() => {
-    if (isOpen && initialGroupId) { setPrivacy('group'); setSelectedGroup(initialGroupId); }
+    if (isOpen && initialGroupId) { setEveryone(false); setSelectedGroup(initialGroupId); }
   }, [isOpen, initialGroupId]);
 
   // In a Community channel a new wave is open to the channel (v2.134.0). Only
   // the Community's owners and admins narrow one, afterwards, under "Who can
   // see this"; a private conversation belongs outside the Community.
   useEffect(() => {
-    if (isOpen && inChannel) setPrivacy('public');
+    if (isOpen && inChannel) setEveryone(true);
   }, [isOpen, inChannel]);
 
   /**
@@ -46,10 +50,6 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
       const normalized = `@${match[1]}@${match[2]}`;
       if (!federatedParticipants.includes(normalized)) {
         setFederatedParticipants([...federatedParticipants, normalized]);
-        // Auto-switch to cross-server privacy when adding federated participant
-        if (privacy !== 'crossServer') {
-          setPrivacy('crossServer');
-        }
       }
       setFederatedInput('');
     }
@@ -59,18 +59,38 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
     setFederatedParticipants(federatedParticipants.filter(f => f !== fp));
   };
 
+  const open = inChannel || everyone;
   const handleCreate = () => {
     if (!title.trim()) return;
-    if (privacy === 'group' && !selectedGroup) return;
-    // Combine local participant IDs with federated participant strings
-    const allParticipants = [...selectedParticipants, ...federatedParticipants];
+    const privacy = open ? 'public' : selectedGroup ? 'group' : 'private';
+    // Local participant IDs and federated "@handle@server" strings together
+    const allParticipants = open || selectedGroup ? [] : [...selectedParticipants, ...federatedParticipants];
     onCreate({ title, privacy, participants: allParticipants, groupId: privacy === 'group' ? selectedGroup : null });
-    setTitle(''); setPrivacy('private'); setSelectedParticipants([]); setSelectedGroup(null);
+    setTitle(''); setEveryone(false); setSelectedParticipants([]); setSelectedGroup(null);
     setFederatedInput(''); setFederatedParticipants([]);
     onClose();
   };
 
-  const canCreate = title.trim() && (privacy !== 'group' || selectedGroup);
+  const canCreate = Boolean(title.trim());
+  // A whole crew, or people one by one: picking one clears the other.
+  const pickGroup = (id) => { setSelectedGroup(g => g === id ? null : id); setSelectedParticipants([]); setFederatedParticipants([]); };
+  const pickPerson = (id) => { setSelectedGroup(null); setSelectedParticipants(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]); };
+  const audienceChoice = (isEveryone, config, title, desc) => (
+    <button key={title} onClick={() => setEveryone(isEveryone)} aria-pressed={everyone === isEveryone}
+      style={{
+        width: '100%', padding: '12px', marginBottom: '8px', textAlign: 'left',
+        background: everyone === isEveryone ? config.bgColor : 'var(--bg-elevated)',
+        border: `1px solid ${everyone === isEveryone ? config.color : 'var(--border-subtle)'}`, cursor: 'pointer',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <span style={{ color: config.color, fontSize: '1.1rem' }}>{config.icon}</span>
+        <div>
+          <div style={{ color: config.color }}>{title}</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{desc}</div>
+        </div>
+      </div>
+    </button>
+  );
 
   return (
     <div
@@ -119,50 +139,18 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
           </div>
         ) : (
         <div style={{ marginBottom: '16px' }}>
-          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>PRIVACY LEVEL</div>
-          {Object.entries(PRIVACY_LEVELS).map(([key, config]) => (
-            <button key={key} onClick={() => { setPrivacy(key); if (key !== 'group') setSelectedGroup(null); }}
-              style={{
-                width: '100%', padding: '12px', marginBottom: '8px', textAlign: 'left',
-                background: privacy === key ? config.bgColor : 'var(--bg-elevated)',
-                border: `1px solid ${privacy === key ? config.color : 'var(--border-subtle)'}`, cursor: 'pointer',
-              }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ color: config.color, fontSize: '1.1rem' }}>{config.icon}</span>
-                <div>
-                  <div style={{ color: config.color }}>{config.name}</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{config.desc}</div>
-                </div>
-              </div>
-            </button>
-          ))}
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>WHO CAN SEE IT</div>
+          {audienceChoice(false, PRIVACY_LEVELS.private, 'People', `Only the people you pick, or a whole ${T.crew}. Each is asked first.`)}
+          {audienceChoice(true, PRIVACY_LEVELS.public, 'Everyone on this server', 'Anyone here can find and read it.')}
         </div>
         )}
 
-        {privacy === 'group' && (
-          <div style={{ marginBottom: '16px' }}>
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>SELECT {T.CREW}</div>
-            {groups.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', padding: '10px', background: 'var(--bg-elevated)' }}>No {T.crews}. Create one first.</div>
-            ) : groups.map(g => (
-              <button key={g.id} onClick={() => setSelectedGroup(g.id)} style={{
-                width: '100%', padding: '10px', marginBottom: '4px', textAlign: 'left',
-                background: selectedGroup === g.id ? 'var(--accent-amber)15' : 'var(--bg-elevated)',
-                border: `1px solid ${selectedGroup === g.id ? 'var(--accent-amber)' : 'var(--border-subtle)'}`, cursor: 'pointer',
-              }}>
-                <div style={{ color: 'var(--text-primary)' }}>{g.name}</div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{g.memberCount} members</div>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {privacy !== 'group' && privacy !== 'public' && contacts.length > 0 && (
+        {!open && contacts.length > 0 && (
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>LOCAL CONTACTS</div>
             <div style={{ maxHeight: '120px', overflowY: 'auto' }}>
               {contacts.map(c => (
-                <button key={c.id} onClick={() => setSelectedParticipants(p => p.includes(c.id) ? p.filter(x => x !== c.id) : [...p, c.id])}
+                <button key={c.id} onClick={() => pickPerson(c.id)}
                   style={{
                     width: '100%', padding: '8px', marginBottom: '4px',
                     background: selectedParticipants.includes(c.id) ? 'var(--accent-amber)15' : 'transparent',
@@ -177,15 +165,33 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
             </div>
             {/* v2.132.0: two or more people make a group; the server decides, this says so. */}
             <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginTop: '6px', lineHeight: 1.4 }}>
-              {privacy === 'private' && selectedParticipants.length >= 2 && federatedParticipants.length === 0 && !containerLabel
+              {selectedParticipants.length >= 2 && federatedParticipants.length === 0 && !containerLabel
                 ? `With you and ${selectedParticipants.length} others this starts a group, named after its people until someone renames it. Each is asked first.`
                 : 'Everyone you pick is asked first.'}
             </div>
           </div>
         )}
 
+        {!open && groups.length > 0 && (
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>OR A WHOLE {T.CREW}</div>
+            <div style={{ maxHeight: '160px', overflowY: 'auto' }}>
+              {groups.map(g => (
+                <button key={g.id} onClick={() => pickGroup(g.id)} aria-pressed={selectedGroup === g.id} style={{
+                  width: '100%', padding: '10px', marginBottom: '4px', textAlign: 'left',
+                  background: selectedGroup === g.id ? 'var(--accent-amber)15' : 'var(--bg-elevated)',
+                  border: `1px solid ${selectedGroup === g.id ? 'var(--accent-amber)' : 'var(--border-subtle)'}`, cursor: 'pointer',
+                }}>
+                  <div style={{ color: 'var(--text-primary)' }}>{g.name}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{g.memberCount} members</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Federated participants section */}
-        {federationEnabled && privacy !== 'group' && !inChannel && (
+        {federationEnabled && !open && !selectedGroup && (
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
               {FEDERATION.travelersLabel} <span style={{ color: 'var(--accent-teal)' }}>◇</span>

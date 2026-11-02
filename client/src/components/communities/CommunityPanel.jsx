@@ -16,7 +16,7 @@ import { useModalDismiss } from '../../hooks/useModalDismiss.js';
  * made one activity — reading a conversation — span two destinations, and it
  * was worse than no Communities UI at all. Reading now happens where reading
  * has always happened: the {T.wave} list, where a channel appears as a group
- * beside your own categories. A community channel is the shared version of a
+ * beside your own folders. A community channel is the shared version of a
  * category, so that is where it belongs.
  *
  * Opened from the ⋮ on a Community, or from the COMMUNITIES heading's menu.
@@ -240,7 +240,7 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
             >
               <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '0.6rem', lineHeight: 1.4 }}>
                 A community holds channels; a channel holds {T.waves}. Channels appear in the {T.wave} list
-                beside your own categories — this is only where you set them up.
+                beside your own folders — this is only where you set them up.
               </div>
               <div style={{ marginBottom: '0.6rem' }}>
                 {communities.map(c => (
