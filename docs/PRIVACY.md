@@ -160,6 +160,8 @@ When federation is enabled and your instance connects to other Cortex instances 
 - Wave titles for federated waves
 - Message ciphertext (still encrypted — remote servers can't read it either)
 
+**Who can read a federated wave (v2.136.1):** a conversation with people on other servers is readable only by its people, on every server, and is sent only to the servers they are on. Only an instance admin can *broadcast* a wave to every allied server; a broadcast is readable by every account on every allied server, and on its own. Before v2.136.1 a server receiving a conversation let all its accounts read it.
+
 **What is NOT shared:**
 - Your email address
 - Your IP address

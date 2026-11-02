@@ -1,7 +1,7 @@
 import { T } from '../config/terminology.js';
 // ============ CONFIGURATION ============
 // Version - keep in sync with package.json
-export const VERSION = '2.136.0';
+export const VERSION = '2.136.1';
 
 // Native app detection (Capacitor / Electron)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor !== undefined;
@@ -40,7 +40,7 @@ export const WS_URL = `${wsProtocol}//${_resolved.host}${_resolved.protocol === 
 export const PRIVACY_LEVELS = {
   private: { name: 'People', color: 'var(--accent-orange)', bgColor: 'var(--overlay-orange)', icon: '●', desc: 'Only the people in it' },
   group: { name: `${T.Crew}`, color: 'var(--accent-amber)', bgColor: 'var(--overlay-amber)', icon: '●', desc: `Everyone in one ${T.crew}` },
-  crossServer: { name: 'Verse-Wide', color: 'var(--accent-teal)', bgColor: 'var(--overlay-teal)', icon: '●', desc: 'People here and on allied ports' },
+  crossServer: { name: 'Verse-Wide', color: 'var(--accent-teal)', bgColor: 'var(--overlay-teal)', icon: '●', desc: 'Everyone here and on every allied port' },
   public: { name: 'Everyone', color: 'var(--accent-green)', bgColor: 'var(--overlay-green)', icon: '○', desc: 'Everyone on this server' },
 };
 
@@ -52,6 +52,8 @@ const CHANNEL_AUDIENCES = {
   review: { name: 'Review', color: 'var(--accent-orange)', bgColor: 'var(--overlay-orange)', icon: '●', desc: "Keeps its old access until the community's owner or an admin decides" },
 };
 
+const FEDERATED_PEOPLE = { name: 'People', color: 'var(--accent-teal)', bgColor: 'var(--overlay-teal)', icon: '●', desc: 'Only the people in it, here and on other ports' };
+
 /** Who can see this wave, as a label: { name, color, bgColor, icon, desc }. */
 export const waveAudience = (wave) => {
   if (wave?.channelId) {
@@ -59,6 +61,9 @@ export const waveAudience = (wave) => {
     return wave.privacy === 'public' ? CHANNEL_AUDIENCES.channel : CHANNEL_AUDIENCES.narrowed;
   }
   const key = wave?.privacy === 'cross-server' ? 'crossServer' : wave?.privacy;
+  // v2.136.1: Verse-Wide is a broadcast; a conversation with people on other
+  // ports is still a People wave, only theirs.
+  if (key === 'crossServer' && wave?.federationAudience !== 'everyone') return FEDERATED_PEOPLE;
   return PRIVACY_LEVELS[key] || PRIVACY_LEVELS.private;
 };
 
