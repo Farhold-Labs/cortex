@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.136.1] - 2026-11-02
+
+**[SECURITY]** Who may read a Verse-Wide wave. Wave-access phase 6 starts here, with the leak it found. Migrating (adds `waves.federation_audience`).
+
+### Security
+- **A conversation shared with one person on another server was readable by everyone on that server.** "Verse-Wide" meant two things. One was a broadcast, sent to every allied server for everyone there (Cortex Updates). The other was a conversation someone invited a person on another server into (*Invite travelers*). The receiving server could not tell them apart and let every account read every federated copy (`canAccessWave*` and both wave lists treated any `federation_state = 'participant'` wave as everyone's). So inviting @alice@pmp into a private conversation shared it with every account on PMP.
+- **The sending server widened them too.** Changing a Verse-Wide wave's announcement settings or message timer, or re-broadcasting it, sent it as a broadcast to *every* allied server, including servers none of its people were on. Once there, the copy was everyone's.
+
+### Changed
+- Every Verse-Wide wave records its audience (`federation_audience`):
+  - `'everyone'` is a broadcast: every account here and on every allied server may read it, on its home server too (before, only its participants could there, which is likely why a farhold account could not see Cortex Updates while every PMP account could);
+  - `'people'` is only its participants, on every server.
+- **Only an instance admin broadcasts.** Wave settings → THE VERSE → *Broadcast to allied ports* / *Stop broadcasting* (`POST /api/waves/:id/broadcast { everyone }`, admins only, 403 `BROADCAST_ADMIN_ONLY`); switching a wave's privacy to Verse-Wide is admin-only for the same reason. v2.135.0 had removed that choice from the settings without replacing it.
+- A conversation is sent only to the servers its people are on (`broadcastWaveToAlliedNodes`); the payload carries `audience`. A receiving server makes no copy from a `'people'` update for a conversation nobody there is in, and follows the origin when it broadcasts a wave or stops. A sender from before v2.136.1 says nothing, which still means a broadcast.
+- The settings button that opened the invite dialog said "Broadcast to the Verse"; it now says *Invite travelers from other ports*. The labels say *Verse-Wide* only for a broadcast ("Everyone here and on every allied port"); a conversation with travellers is *People* ("Only the people in it, here and on other ports").
+
+### Migration
+- Existing Verse-Wide waves are sorted at boot, and on every boot for any without an audience. A copy made by a broadcast has an id starting `wave-` and a local admin as its owner: `'everyone'`. Everything else is `'people'`: copies made by an invitation (a bare id), and every wave sent *from* this server. Making one a broadcast again is an admin's explicit choice. **Cortex Updates on farhold will be `'people'`: an admin turns it back into a broadcast under its settings.** Copies already on other servers follow on that broadcast.
+
+### Verified
+- `npm test`: 665/665. New `federation-audience.test.cjs` plays a signed peer and two allied servers:
+  - copies from before are sorted (an invitation's copy refused to an uninvited account, a broadcast's read);
+  - an invitation for alice is hers alone (bob: 403, and not listed);
+  - a broadcast is everyone's, a `'people'` update makes no copy, and the origin can take a broadcast back;
+  - a member cannot broadcast (`BROADCAST_ADMIN_ONLY`), and a settings change reaches only the invited server, as `people`;
+  - an admin's broadcast reaches the other server as `everyone` and is readable at home.
+- Two counterfactuals: with the old read rule, the uninvited account reads the private conversation; with the old targets, a settings change reaches the uninvited server.
+- Headless on dev: Wave settings → THE VERSE shows *Invite travelers from other ports* and, for an admin, *Broadcast to allied ports* with its explanation.
+
 ## [2.136.0] - 2026-11-02
 
 Portal waves are honest about being public inside Communities, and a channel can be limited to chosen roles from the app. No migration.

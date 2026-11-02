@@ -209,7 +209,7 @@ whatever their client had already decrypted, as with any removal today.
    - **Not done:** "Everyone on this server" stays open to every account, as it was; the plan's "admin-only to create" was never enforced and changing it is a separate decision.
    - **Since v2.135.1:** Invite them to join (the wave waits, then settles once everyone outside has joined), review from the wave's own Who can see this, and filing a wave with people outside offers to invite them (owners and admins).
    - **Since v2.136.0:** a portal wave can't be narrowed or hidden behind a private Community or limited channel; channels can be limited to roles from the app.
-6. **Federated invitations.**
+6. **Federated invitations.** Started with a security fix (v2.136.1): every Verse-Wide wave records whether it is a broadcast (`'everyone'`, instance admins only) or a conversation kept to its people (`'people'`). A receiving server used to let every account read every federated copy. Still to come: travellers are asked (a signed invitation answered from their home server), blocks honoured across servers, and groups for waves with people on other servers.
 
 ## Decisions (Jared, 2026-10-29)
 

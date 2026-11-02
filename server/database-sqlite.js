@@ -459,11 +459,45 @@ export class DatabaseSQLite {
     // Prepare commonly used statements
     this.prepareStatements();
 
+    this.backfillFederationAudience();
+
     if (this._channelAudienceMigrationDue) {
       this._channelAudienceMigrationDue = false;
       const r = this.migrateChannelWaveAudiences();
       console.log(`✅ Channel waves sorted (v2.134.0): ${r.narrowed} narrowed to their people, ${r.review} need their owner's review`);
     }
+  }
+
+  /**
+   * Verse-Wide waves with no recorded audience (v2.136.1). A copy made by a
+   * broadcast was given an id starting `wave-` and a local admin as its
+   * owner; a copy made by an invitation, a bare id and the invitee. So the
+   * first are broadcasts ('everyone') and everything else is kept to its
+   * people, including waves sent from here: making one a broadcast again is
+   * an admin's explicit choice. Every boot; silent when nothing is missing.
+   */
+  backfillFederationAudience() {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(waves)').all();
+      if (!cols.some(c => c.name === 'federation_audience')) return;
+      const everyone = this.db.prepare(`
+        UPDATE waves SET federation_audience = 'everyone'
+        WHERE federation_audience IS NULL AND privacy IN ('crossServer', 'cross-server')
+          AND federation_state = 'participant' AND id LIKE 'wave-%'
+      `).run().changes;
+      const people = this.db.prepare(`
+        UPDATE waves SET federation_audience = 'people'
+        WHERE federation_audience IS NULL AND privacy IN ('crossServer', 'cross-server')
+      `).run().changes;
+      if (everyone || people) console.log(`✅ Verse-Wide waves sorted (v2.136.1): ${everyone} broadcasts, ${people} kept to their people`);
+    } catch (err) {
+      console.error('federation audience backfill failed:', err.message);
+    }
+  }
+
+  setWaveFederationAudience(waveId, audience) {
+    this.db.prepare('UPDATE waves SET federation_audience = ? WHERE id = ?')
+      .run(audience === 'everyone' ? 'everyone' : 'people', waveId);
   }
 
   applySchemaUpdates() {
@@ -3873,6 +3907,15 @@ export class DatabaseSQLite {
       this._channelAudienceMigrationDue = true;
       console.log('✅ waves.review_state and wave_audience added');
     }
+    // v2.136.1 — [SECURITY] who may read a Verse-Wide wave. 'everyone': a
+    // broadcast, readable by every account here (and on every allied server).
+    // 'people': only its participants. Until now a receiving server let every
+    // account read every federated copy, including a private conversation
+    // someone on another server had invited ONE person here into.
+    if (waveColsV2134.length && !waveColsV2134.some(c => c.name === 'federation_audience')) {
+      this.db.exec(`ALTER TABLE waves ADD COLUMN federation_audience TEXT;`);
+      console.log('✅ waves.federation_audience added (v2.136.1)');
+    }
 
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
@@ -6421,7 +6464,8 @@ export class DatabaseSQLite {
         ? this.db.prepare(`SELECT id FROM waves WHERE (privacy = 'crew' OR privacy = 'group') AND crew_id IN (${userCrewIds.map(() => '?').join(',')}) AND (is_profile_wave IS NULL OR is_profile_wave = 0)`).all(...userCrewIds).map(r => r.id)
         : [];
       // Federated participant waves
-      const fedWaves = this.db.prepare("SELECT id FROM waves WHERE (privacy = 'crossServer' OR privacy = 'cross-server') AND federation_state = 'participant' AND (is_profile_wave IS NULL OR is_profile_wave = 0)").all().map(r => r.id);
+      // v2.136.1: broadcasts only; a Verse-Wide wave kept to its people is listed by its rows.
+      const fedWaves = this.db.prepare("SELECT id FROM waves WHERE (privacy = 'crossServer' OR privacy = 'cross-server') AND federation_audience = 'everyone' AND (is_profile_wave IS NULL OR is_profile_wave = 0)").all().map(r => r.id);
       // v2.134.0: narrowed Community waves someone is named in, holds a named
       // role for, or manages: no participant row needed.
       waveIds = [...new Set([...userWaveIds, ...publicWaves, ...crewWaves, ...fedWaves, ...this.audienceWaveIdsForUser(userId)])];
@@ -6435,8 +6479,8 @@ export class DatabaseSQLite {
           OR (w.privacy = 'private' AND wp.user_id IS NOT NULL)
           OR (w.privacy = 'crossServer' AND wp.user_id IS NOT NULL)
           OR (w.privacy = 'cross-server' AND wp.user_id IS NOT NULL)
-          OR (w.privacy = 'crossServer' AND w.federation_state = 'participant')
-          OR (w.privacy = 'cross-server' AND w.federation_state = 'participant')
+          OR (w.privacy = 'crossServer' AND w.federation_audience = 'everyone')
+          OR (w.privacy = 'cross-server' AND w.federation_audience = 'everyone')
           OR ((w.privacy = 'crew' OR w.privacy = 'group') AND w.crew_id IN (${userCrewIds.map(() => '?').join(',') || 'NULL'}))
         )
         AND (w.is_profile_wave IS NULL OR w.is_profile_wave = 0)
@@ -6607,6 +6651,7 @@ export class DatabaseSQLite {
       channelPosition: visibleCommunities.has(r.community_id) && r.channel_id && r.channel_position != null ? r.channel_position : null,
       // v2.134.0: 'needs_review' while the Community's owner decides it.
       reviewState: visibleCommunities.has(r.community_id) ? (r.review_state || null) : null,
+      federationAudience: r.federation_audience || null,
       // Disappearing pings (v2.122.0): seconds, or null for none.
       pingTtl: r.ping_ttl || null,
       muted: mutedWaveIds.has(r.id),
@@ -6636,7 +6681,8 @@ export class DatabaseSQLite {
       const crewWaves = userCrewIds.length > 0
         ? this.db.prepare(`SELECT id FROM waves WHERE (privacy = 'crew' OR privacy = 'group') AND crew_id IN (${userCrewIds.map(() => '?').join(',')}) AND (is_profile_wave IS NULL OR is_profile_wave = 0)`).all(...userCrewIds).map(r => r.id)
         : [];
-      const fedWaves = this.db.prepare("SELECT id FROM waves WHERE (privacy = 'crossServer' OR privacy = 'cross-server') AND federation_state = 'participant' AND (is_profile_wave IS NULL OR is_profile_wave = 0)").all().map(r => r.id);
+      // v2.136.1: broadcasts only; a Verse-Wide wave kept to its people is listed by its rows.
+      const fedWaves = this.db.prepare("SELECT id FROM waves WHERE (privacy = 'crossServer' OR privacy = 'cross-server') AND federation_audience = 'everyone' AND (is_profile_wave IS NULL OR is_profile_wave = 0)").all().map(r => r.id);
       // v2.134.0: narrowed Community waves someone is named in, holds a named
       // role for, or manages: no participant row needed.
       waveIds = [...new Set([...userWaveIds, ...publicWaves, ...crewWaves, ...fedWaves, ...this.audienceWaveIdsForUser(userId)])];
@@ -6649,8 +6695,8 @@ export class DatabaseSQLite {
           OR (w.privacy = 'private' AND wp.user_id IS NOT NULL)
           OR (w.privacy = 'crossServer' AND wp.user_id IS NOT NULL)
           OR (w.privacy = 'cross-server' AND wp.user_id IS NOT NULL)
-          OR (w.privacy = 'crossServer' AND w.federation_state = 'participant')
-          OR (w.privacy = 'cross-server' AND w.federation_state = 'participant')
+          OR (w.privacy = 'crossServer' AND w.federation_audience = 'everyone')
+          OR (w.privacy = 'cross-server' AND w.federation_audience = 'everyone')
           OR ((w.privacy = 'crew' OR w.privacy = 'group') AND w.crew_id IN (${userCrewIds.map(() => '?').join(',') || 'NULL'}))
         )
         AND (w.is_profile_wave IS NULL OR w.is_profile_wave = 0)
@@ -6677,6 +6723,8 @@ export class DatabaseSQLite {
         -- v2.134.0: channelWaveVisible needs the crew and the review state, or
         -- a crew's narrowed wave and every wave in review vanish from the list.
         w.crew_id, w.review_state,
+        -- v2.136.1: who may read a Verse-Wide wave.
+        w.federation_state, w.federation_audience,
         (SELECT COUNT(*) FROM pings WHERE wave_id = w.id AND deleted = 0) as ping_count,
         (SELECT COUNT(*) FROM wave_participants WHERE wave_id = w.id) as participant_count
       FROM waves w
@@ -6778,6 +6826,7 @@ export class DatabaseSQLite {
       channelPosition: visibleCommunities.has(r.community_id) && r.channel_id && r.channel_position != null ? r.channel_position : null,
       // v2.134.0: 'needs_review' while the Community's owner decides it.
       reviewState: visibleCommunities.has(r.community_id) ? (r.review_state || null) : null,
+      federationAudience: r.federation_audience || null,
       // Disappearing pings (v2.122.0): seconds, or null for none.
       pingTtl: r.ping_ttl || null,
       muted: mutedWaveIds.has(r.id),
@@ -6838,6 +6887,7 @@ export class DatabaseSQLite {
       communityId: row.community_id || null,
       channelId: row.channel_id || null,
       reviewState: row.review_state || null,
+      federationAudience: row.federation_audience || null,
       // Where the channel's managers placed it (v2.121.0); null = not placed,
       // listed after the placed ones.
       channelPosition: row.channel_id && row.channel_position != null ? row.channel_position : null,
@@ -6912,8 +6962,9 @@ export class DatabaseSQLite {
     if (inChannel !== null) return inChannel;
     if (wave.privacy === 'public') return true;
 
-    // Federated participant waves are accessible to all local users
-    if ((wave.privacy === 'crossServer' || wave.privacy === 'cross-server') && wave.federationState === 'participant') {
+    // A Verse-Wide broadcast is everyone's; any other Verse-Wide wave is its
+    // people's (v2.136.1 — every federated copy used to be everyone's here).
+    if ((wave.privacy === 'crossServer' || wave.privacy === 'cross-server') && wave.federationAudience === 'everyone') {
       return true;
     }
 
@@ -9931,17 +9982,19 @@ export class DatabaseSQLite {
   // announcements-only on its origin arrived elsewhere accepting replies and
   // reactions from anyone.
   createParticipantWave({ id, title, privacy, createdBy, originNode, originWaveId,
-                          postPolicy, allowReplies, allowReactions }) {
+                          postPolicy, allowReplies, allowReactions, federationAudience = 'people' }) {
     const now = new Date().toISOString();
 
+    // v2.136.1: kept to its people unless the origin broadcast it.
     this.db.prepare(`
       INSERT INTO waves (id, title, privacy, created_by, created_at, updated_at, federation_state, origin_node, origin_wave_id,
-                         post_policy, allow_replies, allow_reactions)
-      VALUES (?, ?, ?, ?, ?, ?, 'participant', ?, ?, ?, ?, ?)
+                         post_policy, allow_replies, allow_reactions, federation_audience)
+      VALUES (?, ?, ?, ?, ?, ?, 'participant', ?, ?, ?, ?, ?, ?)
     `).run(id, title, privacy, createdBy, now, now, originNode, originWaveId,
            ['all', 'staff'].includes(postPolicy) ? postPolicy : 'all',
            allowReplies === false ? 0 : 1,
-           allowReactions === false ? 0 : 1);
+           allowReactions === false ? 0 : 1,
+           federationAudience === 'everyone' ? 'everyone' : 'people');
 
     return this.getWave(id);
   }

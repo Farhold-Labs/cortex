@@ -231,7 +231,7 @@ export const FEDERATION = {
 
   // Wave federation
   broadcastToVerse: "BROADCAST TO THE VERSE",
-  broadcastBtn: "Broadcast to the Verse",
+  broadcastBtn: "Invite travelers from other ports",
   inviteTravelers: "Invite travelers from other ports to join",
   scopeFederated: "Verse-Wide (broadcast to allied ports)",
 

@@ -2841,6 +2841,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         setShowParticipants={setShowParticipants}
         federationEnabled={federationEnabled}
         currentUserId={currentUser?.id}
+        isAdmin={canAccess(currentUser, 'admin')}
         onFederate={() => { setShowSettings(false); setShowFederateModal(true); }}
         isMobile={isMobile} />
 
