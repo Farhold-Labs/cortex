@@ -6,7 +6,7 @@ import { useE2EE } from '../../../e2ee-context.jsx';
 import { T } from '../../config/terminology.js';
 import { PING_TTLS, ttlLabel } from '../../utils/expiry.js';
 
-const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast, onUpdate, participants = [], showParticipants, setShowParticipants, federationEnabled, currentUserId, onFederate, isMobile }) => {
+const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast, onUpdate, participants = [], showParticipants, setShowParticipants, federationEnabled, currentUserId, onFederate, isMobile, isAdmin = false }) => {
   const e2ee = useE2EE();
   const [privacy, setPrivacy] = useState(wave?.privacy || 'private');
   // Announcement settings (v2.82.0)
@@ -326,6 +326,24 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
     }
   };
 
+  // v2.136.1: a broadcast is everyone's, here and on every allied port; only
+  // an instance admin makes or ends one.
+  const [broadcasting, setBroadcasting] = useState(false);
+  const handleBroadcast = async (everyone) => {
+    setBroadcasting(true);
+    try {
+      const r = await fetchAPI(`/waves/${wave.id}/broadcast`, { method: 'POST', body: { everyone } });
+      showToast(everyone
+        ? `Broadcast: everyone here and on ${r.delivered} allied port${r.delivered === 1 ? '' : 's'} can read it`
+        : 'No longer broadcast: only the people in it can read it', 'success');
+      onUpdate && onUpdate();
+    } catch (err) {
+      showToast(err?.data?.error || err.message || 'Could not change that', 'error');
+    } finally {
+      setBroadcasting(false);
+    }
+  };
+
   const handleDecryptWave = async () => {
     if (!wave.encrypted) {
       showToast(`${T.Wave} is not encrypted`, 'error');
@@ -613,7 +631,9 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
           // Federated because of who is in it, not a setting to switch (v2.135.0).
           <div style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.45 }}>
             <div style={{ color: 'var(--text-dim)', marginBottom: '6px' }}>WHO CAN SEE IT</div>
-            The people in it, here and on allied ports ({PRIVACY_LEVELS.crossServer.name}).
+            {wave?.federationAudience === 'everyone'
+              ? <>Everyone here and on every allied port ({PRIVACY_LEVELS.crossServer.name}: a broadcast).</>
+              : <>Only the people in it, here and on other ports.</>}
           </div>
         ) : (
         <div style={{ marginBottom: '16px' }}>
@@ -675,9 +695,10 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         )}
 
         {/* Federation Section */}
-        {federationEnabled && wave?.createdBy === currentUserId && wave?.federationState !== 'participant' && (
+        {federationEnabled && (wave?.createdBy === currentUserId || isAdmin) && wave?.federationState !== 'participant' && !(wave?.channelId && wave?.communityId) && (
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>{FEDERATION.verseSection}</div>
+            {wave?.createdBy === currentUserId && (
             <button
               onClick={onFederate}
               style={{
@@ -692,6 +713,30 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
               <span>◇</span>
               {wave?.federationState === 'origin' ? FEDERATION.manageTravelers : FEDERATION.broadcastBtn}
             </button>
+            )}
+
+            {isAdmin && !wave?.encrypted && (
+              <div style={{ marginTop: '8px' }}>
+                <button
+                  onClick={() => handleBroadcast(wave?.federationAudience !== 'everyone')}
+                  disabled={broadcasting}
+                  style={{
+                    width: '100%', padding: '12px', textAlign: 'left',
+                    background: wave?.federationAudience === 'everyone' ? 'var(--accent-teal)15' : 'var(--bg-elevated)',
+                    border: `1px solid ${wave?.federationAudience === 'everyone' ? 'var(--accent-teal)' : 'var(--border-subtle)'}`,
+                    color: wave?.federationAudience === 'everyone' ? 'var(--accent-teal)' : 'var(--text-primary)',
+                    cursor: broadcasting ? 'wait' : 'pointer', fontFamily: 'monospace',
+                  }}
+                >
+                  {broadcasting ? '…' : wave?.federationAudience === 'everyone' ? 'STOP BROADCASTING' : 'BROADCAST TO ALLIED PORTS'}
+                </button>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '6px', lineHeight: 1.5 }}>
+                  {wave?.federationAudience === 'everyone'
+                    ? `Everyone on this port and every allied port can read this ${T.wave}. Stopping keeps it to the people in it, on every port.`
+                    : `Everyone on this port and every allied port will be able to read it, as with Cortex Updates. Admins only.`}
+                </div>
+              </div>
+            )}
 
             {/* v2.83.0 — a Verse-Wide wave is pushed to allied ports only at the
                 moment it is promoted. Ports allied later never received it, and

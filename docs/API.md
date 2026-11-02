@@ -1787,6 +1787,12 @@ Wave-access phase 4. A wave in a Community channel is **open to the channel** (p
 - **`POST /api/waves/:id/participants`** on a narrowed wave: `community.manage` only; names the person (they must see the channel). **`DELETE /api/waves/:id/participants/:userId`** on a narrowed wave: yourself, or anyone by `community.manage`; removes the name. Returns `stillSees` (true if a role or being an admin still admits them).
 - **`PUT /api/waves/:id`** on a Community channel wave: changing `privacy`, or a crew wave's `groupId`, → 409 `USE_AUDIENCE`.
 - **`POST /api/waves/:id/invite-federated`** on a Community channel wave → 409 `IN_COMMUNITY`.
+
+### Verse-Wide audience (v2.136.1)
+
+- **`POST /api/waves/:id/broadcast`** `{ everyone: true|false }`, instance admins only (403 `BROADCAST_ADMIN_ONLY`). `true` makes the wave a broadcast: Verse-Wide, `federationAudience: 'everyone'`, sent to every allied server, readable by every account here and there. `false` keeps it to its people, and tells the servers that have it. 400 `NOT_ORIGIN` on another server's copy, `ENCRYPTED` for an end-to-end encrypted wave; 409 `IN_COMMUNITY`. → `{ wave, everyone, delivered, attempted }`.
+- **`PUT /api/waves/:id`** with `privacy: 'crossServer'` (making a wave Verse-Wide) is a broadcast, so admins only (403 `BROADCAST_ADMIN_ONLY`).
+- Waves carry `federationAudience` (`'everyone'`, `'people'` or null for a wave that is not Verse-Wide). Federation `wave_broadcast` payloads carry `audience`; a receiver makes no copy from `'people'`.
 - **`GET /api/communities/:id/members?channel=<channelId>`** adds `canSeeChannel` to each member, for the picker, if the caller can see that channel.
 
 **Review.** Migration marks every non-public channel wave whose people (participants and creator, or its crew) include someone who cannot see the channel `needs_review`; it keeps the access it had. The rest are narrowed (a private wave to its people by name, a crew wave to its crew).

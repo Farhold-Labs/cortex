@@ -4883,7 +4883,10 @@ function canAccessWaveFromCache(waveId, userId) {
   const inChannel = db.channelPublicWaveVisible?.(wave, userId);
   if (inChannel != null) return inChannel;
   if (wave.privacy === 'public') return true;
-  if ((wave.privacy === 'crossServer' || wave.privacy === 'cross-server') && wave.federationState === 'participant') return true;
+  // v2.136.1 [SECURITY]: a Verse-Wide broadcast is everyone's, on its home
+  // server too; any other Verse-Wide wave is its people's. Every federated
+  // copy used to be readable by every account on the receiving server.
+  if ((wave.privacy === 'crossServer' || wave.privacy === 'cross-server') && wave.federationAudience === 'everyone') return true;
   if ((wave.privacy === 'group' || wave.privacy === 'crew') && wave.groupId) return db.isGroupMember(wave.groupId, userId);
   return participation.isParticipant(waveId, userId);
 }
@@ -19538,9 +19541,22 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           console.error('Invalid wave_broadcast payload');
           break;
         }
+        // v2.136.1 [SECURITY]: the origin says whether this is a broadcast
+        // (every account here may read it) or a conversation kept to its
+        // people. A sender from before v2.136.1 says nothing: a broadcast, as
+        // it always meant.
+        const broadcastAudience = payload.audience === 'people' ? 'people' : 'everyone';
 
         // Check if we already have this wave as a participant
         let localWave = db.getWaveByOrigin(sourceNode.nodeName, wave.id);
+        if (!localWave && broadcastAudience === 'people') {
+          // Settings for a conversation nobody here was invited into: nothing to update.
+          break;
+        }
+        if (localWave && localWave.federationAudience !== broadcastAudience) {
+          db.setWaveFederationAudience(localWave.id, broadcastAudience);
+          localWave = db.getWave(localWave.id);
+        }
 
         // v2.83.1 — the origin is authoritative for who may post, so bring an
         // existing copy into line on every broadcast. Without this, a wave that
@@ -19576,6 +19592,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             id: participantWaveId,
             title: wave.title,
             privacy: 'crossServer',
+            federationAudience: 'everyone',
             createdBy: referenceUser.id,
             originNode: sourceNode.nodeName,
             originWaveId: wave.id,
@@ -22239,6 +22256,8 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     const creator = db.findUserById(req.user.userId);
     const localParticipants = db.getWaveParticipants(wave.id);
 
+    // v2.136.1: a conversation with people on other servers is theirs, not a broadcast.
+    db.setWaveFederationAudience(wave.id, 'people');
     // Send wave invites to each federated node
     // Group by node to send one invite per node
     const nodeInvites = new Map();
@@ -22336,6 +22355,9 @@ function buildWaveBroadcastPayload(wave) {
       // v2.122.0 — so pings sent from other ports expire on the same terms.
       pingTtl: wave.pingTtl || null,
     },
+    // v2.136.1: 'everyone' makes a copy every account there may read;
+    // 'people' only updates a copy an invitation already made.
+    audience: wave.federationAudience === 'everyone' ? 'everyone' : 'people',
     participants: localParticipants.map(p => ({
       id: p.id, handle: p.handle, displayName: p.name, avatar: p.avatar, nodeName: ourNodeName,
     })),
@@ -22374,7 +22396,12 @@ function buildWaveBroadcastPayload(wave) {
  * the button. Reporting success without knowing would make the action useless.
  */
 async function broadcastWaveToAlliedNodes(wave, { awaitResults = false } = {}) {
-  const nodes = db.getFederationNodes().filter(n => n.status === 'active');
+  // v2.136.1: a broadcast goes to every allied server; a wave kept to its
+  // people only to the servers its people are on. Settings syncs used to
+  // send an invited conversation to every allied server, readable by all.
+  const allActive = db.getFederationNodes().filter(n => n.status === 'active');
+  const joined = new Set((db.getWaveFederationNodes(wave.id) || []).map(n => n.nodeName || n.node_name || n));
+  const nodes = wave.federationAudience === 'everyone' ? allActive : allActive.filter(n => joined.has(n.nodeName));
   if (!nodes.length) return [];
 
   const payload = buildWaveBroadcastPayload(wave);
@@ -22436,6 +22463,13 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
     return res.status(409).json({ error: `Choose who can see this ${T_WAVE()} under "Who can see this"`, code: 'USE_AUDIENCE' });
   }
 
+  // v2.136.1: making a wave Verse-Wide here broadcasts it to every allied
+  // server, readable by everyone there: an instance admin's choice. People
+  // on other servers join a conversation by invitation (invite-federated).
+  if (changingToCrossServer && !hasRole(db.findUserById(req.user.userId), ROLES.ADMIN)) {
+    return res.status(403).json({ error: 'Only a server admin can broadcast a wave to allied servers', code: 'BROADCAST_ADMIN_ONLY' });
+  }
+
   if (privacy && !inCommunityChannel && ['private', 'group', 'crossServer', 'public'].includes(privacy)) {
     let groupId = null;
     if (privacy === 'group') {
@@ -22446,6 +22480,7 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
       }
     }
     db.updateWavePrivacy(waveId, privacy, groupId);
+    if (changingToCrossServer) db.setWaveFederationAudience(waveId, 'everyone');
   }
 
   if (req.body.title) {
@@ -22545,6 +22580,42 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
 //
 // Idempotent: the receiver matches on (originNode, originWaveId) and skips a
 // wave it already holds, so pressing this twice is harmless.
+// v2.136.1: an instance admin makes a wave a broadcast (everyone here and on
+// every allied server may read it) or keeps it to its people again. Turning
+// it back tells the servers that have it, which then keep it to the people
+// who are in it there.
+app.post('/api/waves/:id/broadcast', authenticateToken, async (req, res) => {
+  if (!FEDERATION_ENABLED) return res.status(501).json({ error: 'Federation not enabled on this server' });
+  const actor = db.findUserById(req.user.userId);
+  if (!hasRole(actor, ROLES.ADMIN)) {
+    return res.status(403).json({ error: 'Only a server admin can broadcast a wave to allied servers', code: 'BROADCAST_ADMIN_ONLY' });
+  }
+  const waveId = sanitizeInput(req.params.id);
+  const wave = db.getWave(waveId);
+  if (!wave) return res.status(404).json({ error: 'Wave not found' });
+  if (wave.federationState === 'participant') {
+    return res.status(400).json({ error: 'This wave originates on ' + (wave.originNode || 'another port') + ' — broadcast it there', code: 'NOT_ORIGIN' });
+  }
+  if (wave.channelId && db.getChannelById(wave.channelId)?.community_id) {
+    return res.status(409).json({ error: `Move this ${T_WAVE()} out of its community first`, code: 'IN_COMMUNITY' });
+  }
+  const everyone = req.body?.everyone === true;
+  if (everyone && wave.encrypted) {
+    return res.status(400).json({ error: 'An end-to-end encrypted wave cannot be broadcast', code: 'ENCRYPTED' });
+  }
+  if (everyone && wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server') db.updateWavePrivacy(waveId, 'crossServer', null);
+  if (!everyone && wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server') {
+    return res.status(400).json({ error: 'This wave is not broadcast', code: 'NOT_VERSE_WIDE' });
+  }
+  if (wave.federationState !== 'origin') db.setWaveAsOrigin(waveId);
+  db.setWaveFederationAudience(waveId, everyone ? 'everyone' : 'people');
+  const updated = db.getWave(waveId);
+  const results = await broadcastWaveToAlliedNodes(updated, { awaitResults: true });
+  if (db.logActivity) db.logActivity(req.user.userId, everyone ? 'broadcast_wave' : 'unbroadcast_wave', 'wave', waveId, getRequestMeta(req));
+  broadcastToWave(waveId, { type: 'wave_updated', wave: updated });
+  res.json({ wave: updated, everyone, delivered: results.filter(r => r.ok).length, attempted: results.length });
+});
+
 app.post('/api/waves/:id/rebroadcast', authenticateToken, async (req, res) => {
   if (!FEDERATION_ENABLED) {
     return res.status(501).json({ error: 'Federation not enabled on this server' });
@@ -22669,6 +22740,12 @@ app.post('/api/waves/:id/invite-federated', authenticateToken, async (req, res) 
   if (wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server') {
     db.updateWavePrivacy(waveId, 'crossServer', null);
     wave.privacy = 'crossServer';
+  }
+  // v2.136.1: inviting people from other servers keeps the wave to its
+  // people; only an admin's broadcast makes it everyone's.
+  if (wave.federationAudience !== 'everyone') {
+    db.setWaveFederationAudience(waveId, 'people');
+    wave.federationAudience = 'people';
   }
 
   // Mark wave as origin if not already
