@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.136.0] - 2026-11-02
+
+Portal waves are honest about being public inside Communities, and a channel can be limited to chosen roles from the app. No migration.
+
+### Added
+- **Limit who can see a channel.** Manage Community → CHANNELS → **Access**: *Everyone in the community* or *Only these roles* (plus owners and admins, who see every channel). The server has had restricted channels since v2.103.3 (`visibility: 'restricted'`, admitting roles allowed `channel.view`, and anyone who manages channels), but nothing in the app could set them, so no channel could be limited. The editor changes only `channel.view` on each role's override and keeps any other allow or deny; it lets roles in before restricting, so members are not locked out for a moment. A limited channel is marked LIMITED in the list. Everyone in the Community refreshes their channels and waves live when a channel's visibility or a role's access changes (`community_roles_changed`), where before they kept seeing it until they reloaded.
+
+### Changed
+- **A portal wave may not be made to look less than public.** The public portal shows a wave to anyone on the internet, whatever its privacy, while a Community says who can see it. Now:
+  - a portal wave may be filed only into an open channel of a public Community, and *Who can see this* says "Also published on the public portal" to everyone who opens it;
+  - narrowing it, making it a role in review, filing it into a private or unlisted Community or a limited channel, limiting its channel and making its Community private or unlisted are all refused (409 `ON_PORTAL`: remove it from the portal first);
+  - the portal refuses a wave that is narrowed, or in a private or unlisted Community or a limited channel (409 `NOT_PUBLIC_IN_COMMUNITY`).
+
+  Waves already on the portal are not changed; *Who can see this* now says they are on it.
+
+### Verified
+- `npm test`: 657/657. New `community-portal-access.test.cjs`: the portal wave files into a public Community and says so to members too; every way of hiding it is refused; the portal refuses a wave in a private Community; a channel limited to a role admits its role holder and the owner, not another member, and lists itself only to them; opened again, the member reads it. Counterfactual: without the check, the portal wave files into a private Community.
+- Headless on dev at 390 px: Manage Community → CHANNELS → Access shows the two choices and the roles (moderator, member; owner and admin left out); buttons wrap under a long channel name.
+
 ## [2.135.1] - 2026-11-02
 
 Deciding a Community wave in review, from the wave itself (Jared: inviting a wave's people meant leaving the wave, and how to make it a role was not obvious). No migration.
