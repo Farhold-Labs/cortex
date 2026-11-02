@@ -18370,12 +18370,45 @@ async function sendWaveInvite(targetNode, wave, participants, invitedUserHandle,
  * there if that server asked this person: see the answer endpoint.
  * Resolves to { status, body }.
  */
-async function answerRemoteWaveInvitation(originNode, originWaveId, handle, accepted) {
+async function answerRemoteWaveInvitation(originNode, originWaveId, handle, accepted, user = null) {
+  // v2.138.0: an acceptance says who, so the wave's server can list them.
   const response = await sendSignedFederationRequest(originNode, 'POST', '/api/federation/wave-invitations/answer',
-    { originWaveId, handle, accepted: accepted === true });
+    { originWaveId, handle, accepted: accepted === true,
+      ...(accepted === true && user ? { user: { id: user.id, displayName: user.displayName || user.handle, avatar: user.avatar || null } } : {}) });
   let body = null;
   try { body = await response.json(); } catch { /* none */ }
   return { status: response.status, body };
+}
+
+/**
+ * Someone here left this server's copy of a wave on another server
+ * (v2.138.0): tell the wave's server, so it stops listing them and, once
+ * nobody here is left, stops sending the wave here. Queued if unreachable.
+ */
+function tellOriginMemberLeft(copy, handle, remaining) {
+  if (!FEDERATION_ENABLED || !copy?.originNode || !handle) return;
+  const node = db.getFederationNodeByName(copy.originNode);
+  if (!node || node.status !== 'active') return;
+  const envelope = createFederationEnvelope(`wave-member-left-${uuidv4()}`, 'wave_member_left',
+    { originWaveId: copy.originWaveId, handle, remaining });
+  sendSignedFederationRequest(node, 'POST', '/api/federation/inbox', envelope)
+    .then(r => { if (!r.ok) throw new Error(`status ${r.status}`); })
+    .catch(err => {
+      console.warn(`[federation] telling ${node.nodeName} someone left: ${err.message}; queued`);
+      db.queueFederationMessage({ targetNode: node.nodeName, messageType: 'wave_member_left', payload: envelope });
+    });
+}
+
+/**
+ * Nobody here is in this copy any more (v2.138.0): delete it, with what was
+ * cached of it. A broadcast copy is everyone's and stays.
+ */
+function dropEmptyFederatedCopy(copy) {
+  if (!copy || copy.federationState !== 'participant' || copy.federationAudience === 'everyone') return;
+  if (participation.getWaveParticipants(copy.id).length > 0) return;
+  if (USE_SQLITE) waveParticipationCrypto.deleteWaveParticipation(copy.id);
+  db.deleteWave(copy.id, copy.createdBy);
+  console.log(`🧹 Dropped this server's copy ${copy.id}: nobody here is in it`);
 }
 
 /** Tell someone's server their invitation was withdrawn (v2.137.0). Best effort. */
@@ -19596,6 +19629,20 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         break;
       }
 
+      case 'wave_member_left': {
+        // Someone on sourceNode left our wave (v2.138.0). Only a server in
+        // the wave can say so, and only about its own people.
+        const { originWaveId, handle, remaining } = payload || {};
+        if (typeof originWaveId !== 'string' || typeof handle !== 'string') break;
+        const ours = db.getWave(originWaveId);
+        if (!ours || ours.federationState !== 'origin') break;
+        if (!db.getWaveFederationNodes(ours.id).some(n => n.nodeName === sourceNode.nodeName)) break;
+        db.removeWaveRemoteMember(ours.id, sourceNode.nodeName, handle);
+        if (remaining === 0) db.removeWaveFederationNode(ours.id, sourceNode.nodeName);
+        broadcastToWave(ours.id, { type: 'wave_updated', wave: { id: ours.id } });
+        break;
+      }
+
       case 'wave_invite_withdrawn': {
         // The wave's server took the question back (v2.137.0).
         const { originWaveId, handle } = payload || {};
@@ -19833,6 +19880,18 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         if (isOriginServer && author?.nodeName && author.nodeName !== sourceNode.nodeName) {
           console.warn(`[federation] ${sourceNode.nodeName} claimed authorship for ${author.nodeName}`);
           break;
+        }
+
+        // v2.138.0: someone posting from a server in the wave is one of its
+        // people there. This is how travellers who joined before v2.137.0
+        // (when nobody recorded them) come to be listed.
+        if (isOriginServer && author?.handle && typeof author.handle === 'string' && !/[@\s]/.test(author.handle)) {
+          db.addWaveRemoteMember(localWave.id, {
+            nodeName: sourceNode.nodeName, handle: author.handle,
+            remoteUserId: typeof author.id === 'string' ? author.id.slice(0, 100) : null,
+            displayName: typeof author.displayName === 'string' ? sanitizeInput(author.displayName).slice(0, 100) : null,
+            avatar: typeof author.avatar === 'string' ? author.avatar.slice(0, 8) : null,
+          });
         }
 
         // Cache the author if remote
@@ -20173,6 +20232,28 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
   }
 });
 
+// The wave's own server removes someone here from its wave (v2.138.0). Only
+// the server a copy came from can: the copy is found by (sender, wave id).
+app.post('/api/federation/wave-members/remove', federationInboxLimiter, authenticateFederationRequest, (req, res) => {
+  const sourceNode = req.federationNode;
+  const originWaveId = typeof req.body?.originWaveId === 'string' ? req.body.originWaveId : '';
+  const handle = typeof req.body?.handle === 'string' ? req.body.handle : '';
+  if (!originWaveId || !handle || /[@\s]/.test(handle)) return res.status(400).json({ error: 'originWaveId and handle required' });
+  const copy = db.getWaveByOrigin(sourceNode.nodeName, originWaveId);
+  if (!copy) return res.status(404).json({ error: 'No such wave here', code: 'NO_COPY' });
+  const user = db.findUserByHandle(handle);
+  let removed = false;
+  if (user && user.handle?.toLowerCase() === handle.toLowerCase() && participation.isParticipant(copy.id, user.id)) {
+    participation.removeParticipant(copy.id, user.id);
+    removed = true;
+    broadcastToWave(copy.id, { type: 'participant_removed', waveId: copy.id, userId: user.id, removedBy: null, wasSelf: false });
+    broadcastToUser(user.id, { type: 'removed_from_wave', wave: { id: copy.id, title: copy.title } });
+  }
+  const remaining = participation.getWaveParticipants(copy.id).length;
+  if (remaining === 0) dropEmptyFederatedCopy(copy);
+  res.json({ ok: true, removed, remaining });
+});
+
 // An answer to an invitation this server sent (v2.137.0, wave-access phase 6),
 // from the invitee's own server. Only a question this server put to that
 // person on that server can be answered: being paired is not being invited,
@@ -20199,6 +20280,15 @@ app.post('/api/federation/wave-invitations/answer', federationInboxLimiter, auth
   }
 
   db.addWaveFederationNode(wave.id, sourceNode.nodeName);
+  // v2.138.0: listed as one of the wave's people elsewhere.
+  const who = req.body.user || {};
+  db.addWaveRemoteMember(wave.id, {
+    nodeName: sourceNode.nodeName, handle,
+    remoteUserId: typeof who.id === 'string' ? who.id.slice(0, 100) : null,
+    displayName: typeof who.displayName === 'string' ? sanitizeInput(who.displayName).slice(0, 100) : null,
+    avatar: typeof who.avatar === 'string' ? who.avatar.slice(0, 8) : null,
+  });
+  broadcastToWave(wave.id, { type: 'wave_updated', wave: { id: wave.id } });
   console.log(`📬 ${sourceNode.nodeName} accepted an invitation into ${wave.id}`);
   res.json({
     ok: true,
@@ -20929,6 +21019,16 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
         })),
       ]
     : [];
+  // v2.138.0: the people in it on other servers, as far as this server
+  // knows (it is the wave's own server). Same rule as invitations.
+  const travellers = (participation.isParticipant(wave.id, req.user.userId)
+      || (isGroupWave(wave) && db.isGroupMember(wave.groupId, req.user.userId)))
+      && wave.federationState === 'origin'
+    ? db.listWaveRemoteMembers(wave.id).map(m => ({
+        address: `${m.handle}@${m.node_name}`, handle: m.handle, nodeName: m.node_name,
+        displayName: m.display_name, avatar: m.avatar, joinedAt: m.joined_at,
+      }))
+    : [];
 
   // Get user's archive status for this wave (uses method that works for both JSON and SQLite)
   const isArchived = db.isWaveArchivedForUser(waveId, req.user.userId);
@@ -20964,6 +21064,7 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
       creator_handle: creator?.handle || 'unknown',
       participants,
       invited,
+      travellers,
       is_archived: isArchived,
       parent_wave: parentWave,
       group_name: group?.name,
@@ -21045,6 +21146,7 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     creator_handle: creator?.handle || 'unknown',
     participants,
     invited,
+    travellers,
     is_archived: isArchived,
     // v2.84.0 — per-user, so it cannot live in rowToWave
     muted: db.isWaveMuted ? db.isWaveMuted(req.user.userId, waveId) : false,
@@ -22303,13 +22405,21 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
 
   // Determine if this is a federated wave
   const hasFederatedParticipants = federatedParticipants.length > 0;
+  // v2.138.0: people elsewhere join a conversation kept to its people, never
+  // a wave everyone here can read, and never a Community's (they are not its
+  // members). Both used to turn into a Verse-Wide wave quietly.
+  if (hasFederatedParticipants && (privacy === 'public' || req.body.channelId)) {
+    return res.status(409).json({ error: `People on other servers can only join a ${T_WAVE()} kept to its people`, code: 'CROSS_SERVER' });
+  }
 
   // v2.132.0: started with two or more other people, outside Communities and on
   // this server, a wave gets a group of its own. A one-to-one conversation
   // stays a direct conversation until a third person is added.
   let autoGroupId = null;
   const others = [...new Set(localParticipantIds)].filter(id => id !== req.user.userId);
-  if (privacy === 'private' && !targetChannel && !hasFederatedParticipants && others.length >= 2) {
+  // v2.138.0: and with people elsewhere too. The group is its people here;
+  // those elsewhere are asked into this wave and listed as its travellers.
+  if (privacy === 'private' && !targetChannel && others.length >= 2) {
     autoGroupId = createGroupOf(req.user.userId, [req.user.userId]);
   }
 
@@ -22320,7 +22430,9 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
 
   const wave = db.createWave({
     title,
-    privacy: hasFederatedParticipants ? 'crossServer' : (autoGroupId ? 'group' : privacy), // Force cross-server if federated
+    // A group wave stays a group wave with travellers (v2.138.0); any other
+    // wave with people elsewhere is Verse-Wide, kept to its people.
+    privacy: autoGroupId || privacy === 'group' ? 'group' : (hasFederatedParticipants ? 'crossServer' : privacy),
     groupId: autoGroupId || (privacy === 'group' ? sanitizeInput(req.body.groupId) : null),
     createdBy: req.user.userId,
     // v2.130.0: only the creator is in at the start. Everyone else goes
@@ -22629,9 +22741,8 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
     // still accepting replies. The receiver updates an existing copy in place
     // and skips history it already holds, so this is safe to fire on every
     // save; it is an admin toggling checkboxes, not a hot path.
-    if (FEDERATION_ENABLED && updated
-        && (updated.privacy === 'crossServer' || updated.privacy === 'cross-server')
-        && updated.federationState === 'origin') {
+    // v2.138.0: any wave sent elsewhere, group waves with travellers too.
+    if (FEDERATION_ENABLED && updated && updated.federationState === 'origin') {
       broadcastWaveToAlliedNodes(updated);
       console.log(`📢 Syncing announcement settings for ${waveId} to allied ports`);
     }
@@ -22646,9 +22757,7 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
       const updated = db.setWavePingTtl(waveId, ttl);
       broadcastToWave(waveId, { type: 'wave_settings_changed', waveId, pingTtl: updated?.pingTtl || null });
       if (db.logActivity) db.logActivity(req.user.userId, 'set_ping_ttl', 'wave', waveId, { ...getRequestMeta(req), pingTtl: ttl });
-      if (FEDERATION_ENABLED && updated
-          && (updated.privacy === 'crossServer' || updated.privacy === 'cross-server')
-          && updated.federationState === 'origin') {
+      if (FEDERATION_ENABLED && updated && updated.federationState === 'origin') {
         broadcastWaveToAlliedNodes(updated);
       }
     }
@@ -22800,6 +22909,49 @@ app.delete('/api/waves/:id/mute', authenticateToken, (req, res) => {
   res.json({ success: true, muted: false, waveId });
 });
 
+// Remove someone on another server from a wave (v2.138.0): the wave's owner,
+// its admins, or its group's admins. Their server takes them off its copy and
+// says how many are left there; at none, it is sent nothing more.
+app.delete('/api/waves/:id/travellers/:address', authenticateToken, async (req, res) => {
+  const wave = db.getWave(sanitizeInput(req.params.id));
+  if (!wave || !canAccessWaveFromCache(wave.id, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
+  const may = wave.createdBy === req.user.userId
+    || waveRoles.getStoredRole(wave.id, req.user.userId) === waveRoles.WAVE_ROLES.ADMIN
+    || (isGroupWave(wave) && db.isGroupAdmin(wave.groupId, req.user.userId));
+  if (!may) return res.status(403).json({ error: `Only the ${T_WAVE()}'s owner or admins can remove people` });
+  if (wave.federationState !== 'origin') return res.status(400).json({ error: `This ${T_WAVE()} is not sent from this server`, code: 'NOT_ORIGIN' });
+
+  const parsed = parseFederatedIdentifier(String(req.params.address || ''));
+  if (!parsed) return res.status(400).json({ error: 'Expected handle@server' });
+  const partners = db.getWaveFederationNodes(wave.id).map(n => n.nodeName);
+  if (!partners.includes(parsed.nodeName)) return res.status(404).json({ error: 'Not in this wave' });
+  const node = db.getFederationNodeByName(parsed.nodeName);
+  if (!FEDERATION_ENABLED || !node || node.status !== 'active') {
+    return res.status(409).json({ error: `${parsed.nodeName} is no longer an allied server`, code: 'NOT_ALLIED' });
+  }
+
+  let answer;
+  try {
+    const response = await sendSignedFederationRequest(node, 'POST', '/api/federation/wave-members/remove',
+      { originWaveId: wave.id, handle: parsed.handle });
+    answer = { status: response.status, body: await response.json().catch(() => null) };
+  } catch (err) {
+    console.warn(`[federation] removing at ${node.nodeName}: ${err.message}`);
+    return res.status(502).json({ error: `${parsed.nodeName} can't be reached right now. Try again later.`, code: 'NODE_UNREACHABLE' });
+  }
+  if (answer.status === 404 && !answer.body?.code) {
+    return res.status(409).json({ error: `${parsed.nodeName} needs to update Cortex before people can be removed there`, code: 'NODE_OUTDATED' });
+  }
+  if (answer.status < 200 || answer.status >= 300) {
+    return res.status(502).json({ error: `${parsed.nodeName} did not take the removal. Try again later.`, code: 'NODE_UNREACHABLE' });
+  }
+  db.removeWaveRemoteMember(wave.id, parsed.nodeName, parsed.handle);
+  if (answer.body?.remaining === 0) db.removeWaveFederationNode(wave.id, parsed.nodeName);
+  broadcastToWave(wave.id, { type: 'wave_updated', wave: { id: wave.id } });
+  if (db.logActivity) db.logActivity(req.user.userId, 'remove_traveller', 'wave', wave.id, getRequestMeta(req), { nodeName: parsed.nodeName });
+  res.json({ success: true, removed: !!answer.body?.removed, remainingThere: answer.body?.remaining ?? null });
+});
+
 // Invite federated participants to an existing wave
 app.post('/api/waves/:id/invite-federated', authenticateToken, async (req, res) => {
   if (!FEDERATION_ENABLED) {
@@ -22843,17 +22995,14 @@ app.post('/api/waves/:id/invite-federated', authenticateToken, async (req, res) 
     return res.status(409).json({ error: `Move this ${T_WAVE()} out of its community first`, code: 'IN_COMMUNITY' });
   }
 
-  // Update wave to crossServer if not already federated
-  if (wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server') {
-    // v2.137.0: a crew wave's people are its crew, and a Verse-Wide wave's are
-    // its participants. Name the crew's members first, so turning it into a
-    // conversation with people elsewhere takes it from nobody. (It used to
-    // drop every member who had never been given a participant row.)
-    if (isGroupWave(wave)) {
-      for (const m of db.getGroupMembers(wave.groupId)) {
-        if (!participation.isParticipant(waveId, m.id)) participation.addParticipant(waveId, m.id);
-      }
-    }
+  // v2.138.0: a group wave keeps its group (its people here) and gains
+  // travellers; a private wave becomes Verse-Wide, kept to its people. A wave
+  // everyone here can read is refused: making it a conversation would take it
+  // from everyone else here.
+  if (wave.privacy === 'public') {
+    return res.status(409).json({ error: `Everyone here can read this ${T_WAVE()}. People on other servers can only join one kept to its people.`, code: 'PUBLIC_WAVE' });
+  }
+  if (!isGroupWave(wave) && wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server') {
     db.updateWavePrivacy(waveId, 'crossServer', null);
     wave.privacy = 'crossServer';
   }
@@ -23912,6 +24061,16 @@ function isGroupWave(wave) {
   return !!wave && (wave.privacy === 'group' || wave.privacy === 'crew') && !!wave.groupId;
 }
 
+/**
+ * Does this wave have people on other servers (v2.138.0)? A Verse-Wide wave,
+ * or since v2.138.0 a group wave its server has sent elsewhere: its group is
+ * its people here, and its travellers are listed in wave_remote_members.
+ */
+function isFederatedWave(wave) {
+  return !!wave && (wave.privacy === 'crossServer' || wave.privacy === 'cross-server'
+    || wave.federationState === 'origin' || wave.federationState === 'participant');
+}
+
 // A one-to-one conversation or a group of three or more: the people a private
 // wave has or has been asked to have.
 function privateWavePeople(wave) {
@@ -24111,7 +24270,7 @@ async function acceptFederatedInvitation(req, res, invitation) {
 
   let answer;
   try {
-    answer = await answerRemoteWaveInvitation(originNode, invitation.origin_wave_id, user.handle, true);
+    answer = await answerRemoteWaveInvitation(originNode, invitation.origin_wave_id, user.handle, true, user);
   } catch (err) {
     console.warn(`[federation] accepting at ${originNode.nodeName}: ${err.message}`);
     return res.status(502).json({ error: `${invitation.origin_node} can't be reached right now. Try again later.`, code: 'ORIGIN_UNREACHABLE' });
@@ -24268,7 +24427,13 @@ app.post('/api/waves/:id/group', authenticateToken, (req, res) => {
   const wave = db.getWave(sanitizeInput(req.params.id));
   if (!wave || !canAccessWaveFromCache(wave.id, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
   if (isGroupWave(wave)) return res.json({ groupId: wave.groupId, group: db.getGroup(wave.groupId) });
-  if (wave.privacy !== 'private' || wave.channelId || wave.federationState !== 'local') {
+  // v2.138.0: a conversation with people elsewhere too. The group is its
+  // people here; those elsewhere stay its travellers.
+  const convertible = !wave.channelId && (
+    (wave.privacy === 'private' && wave.federationState === 'local')
+    || ((wave.privacy === 'crossServer' || wave.privacy === 'cross-server')
+        && wave.federationState === 'origin' && wave.federationAudience !== 'everyone'));
+  if (!convertible) {
     return res.status(400).json({ error: `Only a private ${T_WAVE()} outside communities can become a group` });
   }
   if (!participation.isParticipant(wave.id, req.user.userId)) return res.status(404).json({ error: 'Wave not found' });
@@ -24337,7 +24502,7 @@ function waveAudienceView(wave, viewerId) {
   const isManager = db.isCommunityManager(ctx.communityId, viewerId);
   const mode = wave.reviewState === 'needs_review' ? 'review'
     : wave.privacy === 'public' ? 'channel'
-    : (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') ? 'federated'
+    : isFederatedWave(wave) ? 'federated'
     : 'only';
   const view = { mode, communityId: ctx.communityId, channelId: ctx.channel.id, channelName: ctx.channel.name, canEdit: isManager && (mode === 'channel' || mode === 'only') };
   if (db.getPortalWave(wave.id)) view.portal = true;
@@ -24382,7 +24547,7 @@ app.put('/api/waves/:id/audience', authenticateToken, apiLimiter, (req, res) => 
   if (wave.reviewState === 'needs_review') {
     return res.status(409).json({ error: `This ${T_WAVE()} is waiting for review`, code: 'NEEDS_REVIEW' });
   }
-  if (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') {
+  if (isFederatedWave(wave)) {
     return res.status(409).json({ error: `This ${T_WAVE()} has people on other servers`, code: 'CROSS_SERVER' });
   }
 
@@ -24523,6 +24688,25 @@ app.delete('/api/waves/:id/participants/:userId', authenticateToken, async (req,
   const wave = db.getWave(waveId);
   if (!wave) {
     return res.status(404).json({ error: 'Wave not found' });
+  }
+
+  // v2.138.0: this server's copy of a wave on another server. Its people are
+  // the wave owner's to remove, there; here anyone may leave. (The first
+  // person to accept is the copy's nominal creator, which used to stop them
+  // leaving and let them remove everyone else here.)
+  if (wave.federationState === 'participant') {
+    if (userId !== req.user.userId) {
+      return res.status(403).json({ error: `People are removed from this ${T_WAVE()} by its owner on ${wave.originNode || 'its own server'}`, code: 'NOT_ORIGIN' });
+    }
+    if (!participation.isParticipant(waveId, userId)) return res.status(400).json({ error: 'User is not a participant' });
+    participation.removeParticipant(waveId, userId);
+    broadcastToWave(waveId, { type: 'participant_removed', waveId, userId, removedBy: userId, wasSelf: true });
+    const me = db.findUserById(userId);
+    const remaining = participation.getWaveParticipants(waveId).length;
+    tellOriginMemberLeft(wave, me?.handle, remaining);
+    if (remaining === 0) dropEmptyFederatedCopy(wave);
+    if (db.logActivity) db.logActivity(userId, 'leave_wave', 'wave', waveId, getRequestMeta(req), { removedUserId: userId });
+    return res.json({ success: true, participants: remaining ? db.getWaveParticipants(waveId) : [] });
   }
 
   // v2.134.0: a narrowed Community wave. Leaving, or being taken off it by
@@ -27189,7 +27373,7 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
   // keeps its people until they have all joined (then it settles by itself);
   // a public one is the channel's at once, and they see it once they join.
   const isManager = db.isCommunityManager(req.params.id, req.user.userId);
-  const crossServerWave = wave.privacy === 'crossServer' || wave.privacy === 'cross-server';
+  const crossServerWave = isFederatedWave(wave);
   const inviteOutsiders = outsiders.length > 0 && isManager && !crossServerWave && req.body?.inviteOutsiders === true;
   if (outsiders.length > 0 && !inviteOutsiders) {
     return res.status(409).json({
@@ -27201,14 +27385,14 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
 
   // v2.134.0: a wave that is not public becomes narrowed in a channel, and
   // only the Community's owners and admins narrow waves.
-  const narrowing = wave.privacy !== 'public' && wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server';
+  const narrowing = wave.privacy !== 'public' && !isFederatedWave(wave);
   if (narrowing && !db.isCommunityManager(req.params.id, req.user.userId)) {
     return res.status(403).json({
       error: `Only the community's owners and admins can file a ${T_WAVE()} that only some people can see. Make it public first.`,
       code: 'NARROWING_NOT_ALLOWED',
     });
   }
-  if (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') {
+  if (isFederatedWave(wave)) {
     return res.status(409).json({ error: `A ${T_WAVE()} with people on other servers cannot be filed in a community`, code: 'CROSS_SERVER' });
   }
   if (db.getPortalWave(wave.id) && portalPlaceConflict({

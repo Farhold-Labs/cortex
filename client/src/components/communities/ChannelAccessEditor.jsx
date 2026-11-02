@@ -87,7 +87,7 @@ const ChannelAccessEditor = ({ community, channel, roles, fetchAPI, showToast, o
           {radio(true, 'Only these roles', `Plus the community's owners and admins, who see every channel. Everyone else loses the channel and its ${T.waves}.`)}
           {restricted && (
             <div style={{ paddingLeft: '1.4rem' }}>
-              {choosable.length === 0 && <div style={hint}>No roles to choose. Make one under Roles first.</div>}
+              {choosable.length === 0 && <div style={hint}>No roles to choose yet besides owners and admins.</div>}
               {choosable.map(r => (
                 <label key={r.id} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', padding: '0.2rem 0', cursor: 'pointer', fontSize: '0.8rem' }}>
                   <input type="checkbox" checked={chosen.includes(r.id)}
