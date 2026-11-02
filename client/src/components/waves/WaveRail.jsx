@@ -139,11 +139,11 @@ const WaveRail = ({
             content: <ContainerTile name={cat.name} color={cat.color || 'var(--accent-teal)'} size={36} active={isOpen('category', cat.id)} />,
           }))}
           {uncategorized.length > 0 && tile({
-            key: 'k:uncategorized', label: 'Uncategorized',
+            key: 'k:uncategorized', label: 'Not in a folder',
             onClick: () => onOpen({ kind: 'category', id: UNCATEGORIZED_ID }),
             active: isOpen('category', UNCATEGORIZED_ID),
             unread: categoryUnread[UNCATEGORIZED_ID] || 0,
-            content: <ContainerTile name="Uncategorized" color="var(--text-dim)" size={36} active={isOpen('category', UNCATEGORIZED_ID)} />,
+            content: <ContainerTile name="Not in a folder" color="var(--text-dim)" size={36} active={isOpen('category', UNCATEGORIZED_ID)} />,
           })}
         </>
       )}

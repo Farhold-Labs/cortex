@@ -606,13 +606,19 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
           // v2.134.0: in a Community channel, who sees a wave is chosen under
           // ⋮ → Who can see this, by the community's owners and admins.
           <div style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.45 }}>
-            <div style={{ color: 'var(--text-dim)', marginBottom: '6px' }}>PRIVACY LEVEL</div>
+            <div style={{ color: 'var(--text-dim)', marginBottom: '6px' }}>WHO CAN SEE IT</div>
             This {T.wave} is in a community channel. Who can see it is under ⋮ → Who can see this.
+          </div>
+        ) : (privacy === 'crossServer' || privacy === 'cross-server') ? (
+          // Federated because of who is in it, not a setting to switch (v2.135.0).
+          <div style={{ marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.45 }}>
+            <div style={{ color: 'var(--text-dim)', marginBottom: '6px' }}>WHO CAN SEE IT</div>
+            The people in it, here and on allied ports ({PRIVACY_LEVELS.crossServer.name}).
           </div>
         ) : (
         <div style={{ marginBottom: '16px' }}>
-          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>PRIVACY LEVEL</div>
-          {Object.entries(PRIVACY_LEVELS).map(([key, config]) => (
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>WHO CAN SEE IT</div>
+          {Object.entries(PRIVACY_LEVELS).filter(([key]) => key !== 'crossServer').map(([key, config]) => (
             <button key={key} onClick={() => { setPrivacy(key); if (key !== 'group') setSelectedGroup(null); }}
               style={{
                 width: '100%', padding: '12px', marginBottom: '8px', textAlign: 'left',
@@ -622,7 +628,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ color: config.color, fontSize: '1.1rem' }}>{config.icon}</span>
                 <div>
-                  <div style={{ color: config.color }}>{config.name}</div>
+                  <div style={{ color: config.color }}>{key === 'public' ? 'Everyone on this server' : key === 'group' ? `A whole ${T.crew}` : config.name}</div>
                   <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{config.desc}</div>
                 </div>
               </div>
