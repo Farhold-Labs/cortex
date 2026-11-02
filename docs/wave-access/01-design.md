@@ -1,6 +1,6 @@
 # Wave access, groups and invitations — design
 
-Status: **decided** (2026-10-29). **Phase 1 built in v2.130.0, phase 2 in v2.131.0, phase 3 in v2.132.0, phase 4 in v2.134.0, phase 5 in v2.135.0**; phase 6 not yet. Jared's decisions are recorded at the end and folded into the text.
+Status: **decided** (2026-10-29). **Phase 1 built in v2.130.0, phase 2 in v2.131.0, phase 3 in v2.132.0, phase 4 in v2.134.0, phase 5 in v2.135.0**; phase 6 in progress (v2.136.1, v2.137.0). Jared's decisions are recorded at the end and folded into the text.
 
 ## Why
 
@@ -209,7 +209,7 @@ whatever their client had already decrypted, as with any removal today.
    - **Not done:** "Everyone on this server" stays open to every account, as it was; the plan's "admin-only to create" was never enforced and changing it is a separate decision.
    - **Since v2.135.1:** Invite them to join (the wave waits, then settles once everyone outside has joined), review from the wave's own Who can see this, and filing a wave with people outside offers to invite them (owners and admins).
    - **Since v2.136.0:** a portal wave can't be narrowed or hidden behind a private Community or limited channel; channels can be limited to roles from the app.
-6. **Federated invitations.** Started with a security fix (v2.136.1): every Verse-Wide wave records whether it is a broadcast (`'everyone'`, instance admins only) or a conversation kept to its people (`'people'`). A receiving server used to let every account read every federated copy. Still to come: travellers are asked (a signed invitation answered from their home server), blocks honoured across servers, and groups for waves with people on other servers.
+6. **Federated invitations.** Started with a security fix (v2.136.1): every Verse-Wide wave records whether it is a broadcast (`'everyone'`, instance admins only) or a conversation kept to its people (`'people'`). A receiving server used to let every account read every federated copy. **Since v2.137.0:** travellers are asked. The wave's server records who it asked and sends a signed invitation; their own server shows it in the invitations box and holds nothing of the wave. Accepting answers the wave's server, which honours only a question it put to that person on that server, and only then counts their server as one of the wave's (pings, history). Declining says no, never why. Blocks are honoured across servers in both directions (the inviter's server checks its blocks, the invitee's server checks theirs and declines), and a block of someone on another server is saved, where before it failed a foreign key. Inviting travellers into a crew wave names its members first, so nobody loses it. Still to come: groups for waves with people on other servers.
 
 ## Decisions (Jared, 2026-10-29)
 

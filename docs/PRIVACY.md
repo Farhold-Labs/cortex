@@ -162,6 +162,8 @@ When federation is enabled and your instance connects to other Cortex instances 
 
 **Who can read a federated wave (v2.136.1):** a conversation with people on other servers is readable only by its people, on every server, and is sent only to the servers they are on. Only an instance admin can *broadcast* a wave to every allied server; a broadcast is readable by every account on every allied server, and on its own. Before v2.136.1 a server receiving a conversation let all its accounts read it.
 
+**Invitations from other servers (v2.137.0):** being invited into a conversation on another server sends you a question on your own server, like a local invitation. Until you answer, your server stores only who asked, from which server, the conversation's title and how many people are in it; nothing of the conversation itself is sent to your server. Accepting tells their server yes and only then fetches the conversation; declining tells it no, never whether you also blocked the person. The inviting server keeps who it is waiting on (handle and server) until they answer, it is withdrawn, or it expires after 30 days. You can block people on other servers; the block is stored on your server by their address, declines their invitations, and stops you inviting them.
+
 **What is NOT shared:**
 - Your email address
 - Your IP address
