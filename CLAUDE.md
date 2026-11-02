@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.136.0**. Last brought current 2026-10-30.
+Current version: **2.136.1**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2136000 / versionName "2.136.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2136000 / MARKETING_VERSION 2.136.0
+client/android/app/build.gradle                  versionCode 2136001 / versionName "2.136.1"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2136001 / MARKETING_VERSION 2.136.1
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -339,6 +339,8 @@ A member streams to a wave through LiveKit; viewers get hidden, subscribe-only t
 ### Federation
 
 Node-to-node, **push-only and opt-in**. There is no discovery, join or subscribe path by design: a receiving node cannot request a wave. Consequences worth remembering — a port allied after a wave was promoted never received it (hence the v2.83.0 re-broadcast action), and settings that don't travel with the broadcast payload arrive at permissive defaults on the far side.
+
+**Who may read a Verse-Wide wave is `waves.federation_audience` (v2.136.1), never `federation_state`.** `'everyone'` is a broadcast: every account here and on every allied server, made only by an instance admin (`POST /api/waves/:id/broadcast`). `'people'` is its participants, on every server; such a wave is sent only to the servers its people are on. Until v2.136.1 every federated copy was everyone's on the receiving server, so a conversation shared with one person there was readable by all (wave-access phase 6).
 
 ### Role-based access control
 
