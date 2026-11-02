@@ -164,6 +164,8 @@ When federation is enabled and your instance connects to other Cortex instances 
 
 **Invitations from other servers (v2.137.0):** being invited into a conversation on another server sends you a question on your own server, like a local invitation. Until you answer, your server stores only who asked, from which server, the conversation's title and how many people are in it; nothing of the conversation itself is sent to your server. Accepting tells their server yes and only then fetches the conversation; declining tells it no, never whether you also blocked the person. The inviting server keeps who it is waiting on (handle and server) until they answer, it is withdrawn, or it expires after 30 days. You can block people on other servers; the block is stored on your server by their address, declines their invitations, and stops you inviting them.
 
+**People elsewhere in a conversation (v2.138.0):** the server a conversation lives on keeps a list of who is in it on other servers (their handle, server, display name and avatar), recorded when their server accepts an invitation or when they post, so the owner can see and remove them. It is deleted when they leave or are removed, or with the conversation. When nobody on a server is left in a conversation, that server deletes its copy and everything it cached of it. Muting someone on another server is stored on your server by their address.
+
 **What is NOT shared:**
 - Your email address
 - Your IP address
