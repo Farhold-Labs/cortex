@@ -3,6 +3,7 @@ import { useModalDismiss } from '../../hooks/useModalDismiss.js';
 import { GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { T } from '../../config/terminology.js';
 import { plainText } from '../../utils/plainText.js';
+import WaveReviewActions from '../communities/WaveReviewActions.jsx';
 
 /**
  * Who can see a wave in a Community channel (v2.134.0, wave-access phase 4).
@@ -49,7 +50,7 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
         setRoles((r?.roles || []).filter(x => x.name !== 'owner' && x.name !== 'admin'));
       }
     } catch (err) {
-      setError(err?.error || err?.message || 'Could not load who can see this');
+      setError(err?.data?.error || err?.message || 'Could not load who can see this');
     }
   }, [fetchAPI, waveId, currentUserId]);
 
@@ -67,7 +68,7 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
       onChanged && onChanged();
       onClose();
     } catch (err) {
-      showToast(err?.error || err?.message || 'Could not change who can see this', 'error');
+      showToast(err?.data?.error || err?.message || 'Could not change who can see this', 'error');
     } finally {
       setSaving(false);
     }
@@ -113,10 +114,28 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
         {error && <div style={{ color: 'var(--accent-orange)' }}>{error}</div>}
         {!error && !view && <LoadingSpinner />}
 
-        {view && view.mode === 'review' && (
+        {view && view.mode === 'review' && !view.review && (
           <div style={{ lineHeight: 1.5 }}>
             Some people in this {T.wave} can't see #{view.channelName}. It keeps the access it had until the
             community's owner or an admin decides: move it out of the community, or keep it for a community role.
+          </div>
+        )}
+        {/* v2.135.1: the owner or an admin decides it here, without leaving the wave. */}
+        {view?.review && (
+          <div style={{ lineHeight: 1.5 }}>
+            <div style={{ marginBottom: '8px' }}>
+              <span style={{ color: 'var(--accent-orange)' }}>{view.review.outsiders} of {view.review.people}</span> people in this {T.wave} can't
+              see #{view.channelName}. It keeps the access it had until you decide:
+            </div>
+            <ul style={{ margin: '0 0 10px', paddingLeft: '18px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              <li><b>Invite them to join</b> the community. Once they all have, it is theirs in #{view.channelName}, with nothing more to decide.</li>
+              <li><b>Make it a role</b>: only people who can see #{view.channelName} keep it{view.review.kind === 'crew' ? `, through a new role for its ${T.crew}` : ''}.</li>
+              <li><b>Move it out</b> of the community. Nobody gains or loses access.</li>
+            </ul>
+            <WaveReviewActions communityId={view.communityId} fetchAPI={fetchAPI} showToast={showToast}
+              w={{ id: waveId, kind: view.review.kind, channelName: view.channelName, outsiders: view.review.outsiders, invited: view.review.invited }}
+              styles={{ action: button(false), danger: { ...button(false), borderColor: 'var(--accent-orange)', color: 'var(--accent-orange)' }, hint: { color: 'var(--text-dim)', fontSize: '0.72rem', margin: '6px 0' } }}
+              onDone={(action) => { onChanged && onChanged(); if (action === 'invite') load(); else onClose(); }} />
           </div>
         )}
         {view && view.mode === 'federated' && (

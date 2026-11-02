@@ -82,7 +82,8 @@ export const PrivacyBadge = ({ level, wave = null, compact = false, onClick = nu
       flexShrink: 0,
     }}>
       <span style={{ color: config.color }}>{config.icon}</span>
-      {!compact && <span style={{ color: config.color }}>{config.name}</span>}
+      {/* A wave waiting for a decision says so even on a phone (v2.135.1). */}
+      {(!compact || config.name === 'Review') && <span style={{ color: config.color }}>{config.name}</span>}
     </Tag>
   );
 };
