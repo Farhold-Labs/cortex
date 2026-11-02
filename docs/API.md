@@ -1793,6 +1793,16 @@ Wave-access phase 4. A wave in a Community channel is **open to the channel** (p
 - **`POST /api/waves/:id/broadcast`** `{ everyone: true|false }`, instance admins only (403 `BROADCAST_ADMIN_ONLY`). `true` makes the wave a broadcast: Verse-Wide, `federationAudience: 'everyone'`, sent to every allied server, readable by every account here and there. `false` keeps it to its people, and tells the servers that have it. 400 `NOT_ORIGIN` on another server's copy, `ENCRYPTED` for an end-to-end encrypted wave; 409 `IN_COMMUNITY`. → `{ wave, everyone, delivered, attempted }`.
 - **`PUT /api/waves/:id`** with `privacy: 'crossServer'` (making a wave Verse-Wide) is a broadcast, so admins only (403 `BROADCAST_ADMIN_ONLY`).
 - Waves carry `federationAudience` (`'everyone'`, `'people'` or null for a wave that is not Verse-Wide). Federation `wave_broadcast` payloads carry `audience`; a receiver makes no copy from `'people'`.
+### Groups and travellers (v2.138.0)
+
+- **`GET /api/waves/:id`** → `travellers: [{ address: 'h@server', handle, nodeName, displayName, avatar, joinedAt }]` on the wave's own server, for its people (same rule as `invited`).
+- **`DELETE /api/waves/:id/travellers/:address`**, the owner, a wave admin or a group admin → `{ success, removed, remainingThere }`. 409 `NOT_ALLIED` / `NODE_OUTDATED`, 502 `NODE_UNREACHABLE` (nothing changed). At `remainingThere: 0` the wave is no longer sent there.
+- **`DELETE /api/waves/:id/participants/:userId`** on a copy of a wave from another server: only yourself (403 `NOT_ORIGIN` otherwise); the wave's server is told (inbox `wave_member_left { originWaveId, handle, remaining }`), and a copy nobody is in is deleted.
+- **Federation, `POST /api/federation/wave-members/remove`** (signed) `{ originWaveId, handle }`, from the wave's server only → `{ ok, removed, remaining }`; 404 `NO_COPY` from anyone else.
+- **`POST /api/federation/wave-invitations/answer`** takes `user: { id, displayName, avatar }` with an acceptance.
+- **`POST /api/waves`** keeps `privacy: 'group'` (or makes an automatic group from two or more others here) with `@handle@server` participants; with `privacy: 'public'` or a `channelId` they are refused (409 `CROSS_SERVER`). **`POST /api/waves/:id/invite-federated`** keeps a group wave a group wave; on a public wave 409 `PUBLIC_WAVE`. **`POST /api/waves/:id/group`** also takes a Verse-Wide conversation sent from here.
+- **`POST /api/users/:id/mute`** works for someone on another server; `GET /api/users/muted` lists them with `nodeName`.
+
 ### Invitations across servers (v2.137.0)
 
 People on other servers are asked, on their own server. Nothing of the wave is sent there until one of them accepts.

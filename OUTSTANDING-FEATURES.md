@@ -150,6 +150,11 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Community Wave Report (owners and node admins); Crews No Longer a Way into Channel Waves | v2.131.0 |
 | List Menus Float Above the Page; Logos and Avatars Accept Phone Photos | v2.131.1–v2.131.2 |
 | Groups That Make Themselves (named after their people, this wave only / whole group) | v2.132.0 |
+| Community Wave Review and Narrowing (owners and admins; Make it a role, Move it out) | v2.134.0 |
+| Folders; Waves Labelled by Who Can See Them | v2.135.0 |
+| Review from the Wave Itself; Limit a Channel to Roles; Portal Waves Stay Public | v2.135.1–v2.136.0 |
+| Verse-Wide Broadcast vs Conversation (security); Travellers Asked; Blocks Across Servers | v2.136.1–v2.137.0 |
+| Group Waves With Travellers; Remove and Leave Across Servers; Remote Mutes | v2.138.0 |
 
 ---
 
@@ -157,10 +162,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 ### Near-term
 
-- **Wave access redesign, phases 4–6** (`docs/wave-access/01-design.md`; phases 1–3 shipped in v2.130.0–v2.132.0):
-  4. Community wave review (Move it out / Make it a role) and narrowing to people or roles, owners and admins only.
-  5. Categories renamed Folders; audiences replace privacy labels in the UI.
-  6. Federated invitations.
+- **Community roles editor.** The server has had custom Community roles since v2.96.0 (create, rename, choose capabilities, delete, give to members: `/api/communities/:id/roles`, `/members/:userId/roles/:roleId`), and channel access (v2.136.0) and wave narrowing (v2.134.0) are chosen by role, but the app can only appoint admins and moderators. The only other roles are those "Make it a role" creates in review. Needs: a ROLES editor in Manage Community (new role, name, what it can do, delete), giving and taking roles on each member's ⋮, and the capability list in plain words. The server already refuses a role above your own or with powers you lack.
 
 - **Mute from the wave view.** Per-wave mute (v2.84.0) is only in the wave-list row menu. It should also be in the ⋮ menu inside an open wave. The server side is done; this is UI only.
 - **Delete profile files with the account.** Account deletion leaves the profile picture and video on disk at their old addresses (nothing links to them). See PRIVACY.md.

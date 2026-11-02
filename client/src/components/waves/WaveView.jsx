@@ -18,6 +18,7 @@ import InviteFederatedModal from './InviteFederatedModal.jsx';
 import { createPlexUrl } from '../media/PlexEmbed.jsx';
 import WatchPartyBanner from '../media/WatchPartyBanner.jsx';
 import WaveContextBar from './WaveContextBar.jsx';
+import { plainText } from '../../utils/plainText.js';
 import EventDetailModal from '../calendar/EventDetailModal.jsx';
 import EventCreateModal from '../calendar/EventCreateModal.jsx';
 import { uploadFile, deliverUpload, registerUploadTarget } from '../../utils/uploads.js';
@@ -2053,10 +2054,13 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                   )}
 
                   {/* New wave with these people (v2.132.0): the same group, nobody asked again. */}
+                  {/* v2.138.0: with its people on other servers too, who are asked again. */}
                   {onNewWaveWithPeople && (waveData.group?.id
-                    || (waveData.privacy === 'private' && !waveData.channelId && (waveData.federationState || 'local') === 'local' && participants.length >= 2)) && (
+                    || (!waveData.channelId && participants.length >= 2 && (
+                      (waveData.privacy === 'private' && (waveData.federationState || 'local') === 'local')
+                      || (waveData.privacy === 'crossServer' && waveData.federationState === 'origin' && waveData.federationAudience !== 'everyone')))) && (
                     <div
-                      onClick={() => { setShowWaveMenu(false); onNewWaveWithPeople(wave.id); }}
+                      onClick={() => { setShowWaveMenu(false); onNewWaveWithPeople(wave.id, (waveData.travellers || []).map(t => `@${t.address}`)); }}
                       style={{
                         padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)',
                         background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px',
@@ -2291,6 +2295,43 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     fontFamily: 'monospace', fontSize: '0.6rem',
                   }}
                 >WITHDRAW</button>
+              )}
+            </div>
+          ))}
+          {/* In it on other servers (v2.138.0), as this server knows them. Removing
+              one asks their server to take them off its copy. */}
+          {(waveData?.travellers || []).map(t => (
+            <div key={`traveller-${t.address}`} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+              padding: '8px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                <Avatar letter={t.avatar || (t.displayName || t.handle)?.[0] || '?'} color="var(--accent-teal)" size={isMobile ? 32 : 28} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: 'var(--text-primary)', fontSize: isMobile ? '0.85rem' : '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {plainText(t.displayName || t.handle)}
+                  </div>
+                  <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>@{t.address}</div>
+                </div>
+              </div>
+              <span style={{ padding: '2px 6px', border: '1px solid var(--accent-teal)', fontSize: '0.6rem', color: 'var(--accent-teal)', fontFamily: 'monospace' }}>◇ TRAVELER</span>
+              {(waveData?.createdBy === currentUser?.id || waveData?.can_edit) && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await fetchAPI(`/waves/${wave.id}/travellers/${encodeURIComponent(t.address)}`, { method: 'DELETE' });
+                      showToast(`@${t.address} removed`, 'success');
+                      loadWave(true);
+                    } catch (err) {
+                      showToast(err?.data?.error || err.message || 'Could not remove them', 'error');
+                    }
+                  }}
+                  style={{
+                    padding: isMobile ? '6px 10px' : '2px 8px', background: 'transparent', cursor: 'pointer',
+                    border: '1px solid var(--border-primary)', color: 'var(--text-secondary)',
+                    fontFamily: 'monospace', fontSize: '0.6rem',
+                  }}
+                >REMOVE</button>
               )}
             </div>
           ))}

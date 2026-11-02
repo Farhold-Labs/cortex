@@ -3964,6 +3964,47 @@ export class DatabaseSQLite {
       CREATE INDEX IF NOT EXISTS idx_remote_blocks_user ON remote_blocks(user_id);
       CREATE INDEX IF NOT EXISTS idx_remote_blocks_remote ON remote_blocks(remote_user_id);
     `);
+    // v2.138.0 — who is in a wave on other servers, kept by the wave's own
+    // server: recorded when their server accepts an invitation (or, for
+    // travellers who joined before v2.137.0, when they post), so the owner
+    // can see and remove them, and their leaving is noticed.
+    // remote_mutes: muting someone on another server, for the same reason as
+    // remote_blocks (`mutes` points at users(id), so it was never saved).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS wave_remote_members (
+        wave_id        TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        node_name      TEXT NOT NULL,
+        handle         TEXT NOT NULL,
+        remote_user_id TEXT,
+        display_name   TEXT,
+        avatar         TEXT,
+        joined_at      TEXT NOT NULL,
+        PRIMARY KEY (wave_id, node_name, handle)
+      );
+      CREATE TABLE IF NOT EXISTS remote_mutes (
+        id             TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        remote_user_id TEXT,
+        node_name      TEXT NOT NULL,
+        handle         TEXT NOT NULL,
+        muted_at       TEXT NOT NULL,
+        UNIQUE (user_id, node_name, handle)
+      );
+      CREATE INDEX IF NOT EXISTS idx_remote_mutes_user ON remote_mutes(user_id);
+    `);
+    {
+      const stray = this.db.prepare(`
+        SELECT m.id, m.user_id, m.muted_user_id, m.muted_at, ru.node_name, ru.handle
+        FROM mutes m JOIN remote_users ru ON ru.id = m.muted_user_id
+        WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = m.muted_user_id)
+      `).all();
+      for (const r of stray) {
+        this.db.prepare(`INSERT OR IGNORE INTO remote_mutes (id, user_id, remote_user_id, node_name, handle, muted_at)
+                         VALUES (?, ?, ?, ?, ?, ?)`).run(`rmut-${uuidv4()}`, r.user_id, r.muted_user_id, r.node_name, r.handle, r.muted_at);
+        this.db.prepare('DELETE FROM mutes WHERE id = ?').run(r.id);
+      }
+      if (stray.length) console.log(`✅ Moved ${stray.length} mute(s) of remote accounts to remote_mutes (v2.138.0)`);
+    }
     // Any block of a remote account that did reach `blocks` (before foreign
     // keys were enforced) moves across, before the orphan repair below drops it.
     {
@@ -6131,21 +6172,35 @@ export class DatabaseSQLite {
     const user = this.findUserById(userId);
     if (!user) return false;
 
-    // Check if target is local user or remote user
-    const mutedUser = this.findUserById(mutedUserId) || this.getRemoteUser(mutedUserId);
-    if (!mutedUser) return false;
-
-    try {
-      this.db.prepare('INSERT INTO mutes (id, user_id, muted_user_id, muted_at) VALUES (?, ?, ?, ?)').run(uuidv4(), userId, mutedUserId, new Date().toISOString());
-      return true;
-    } catch {
-      return false;
+    if (this.findUserById(mutedUserId)) {
+      try {
+        this.db.prepare('INSERT INTO mutes (id, user_id, muted_user_id, muted_at) VALUES (?, ?, ?, ?)').run(uuidv4(), userId, mutedUserId, new Date().toISOString());
+        return true;
+      } catch {
+        return false;
+      }
     }
+    // v2.138.0: someone on another server (see remote_blocks).
+    const remote = this.getRemoteUser(mutedUserId);
+    if (!remote) return false;
+    return this.db.prepare(`
+      INSERT OR IGNORE INTO remote_mutes (id, user_id, remote_user_id, node_name, handle, muted_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(`rmut-${uuidv4()}`, userId, remote.id, remote.nodeName, String(remote.handle).toLowerCase(), new Date().toISOString()).changes > 0;
+  }
+
+  /** Everyone this person has muted, here and on other servers, by id. */
+  mutedIdsFor(userId) {
+    return this.db.prepare(`
+      SELECT muted_user_id AS id FROM mutes WHERE user_id = ?
+      UNION SELECT remote_user_id AS id FROM remote_mutes WHERE user_id = ? AND remote_user_id IS NOT NULL
+    `).all(userId, userId).map(r => r.id);
   }
 
   unmuteUser(userId, mutedUserId) {
-    const result = this.db.prepare('DELETE FROM mutes WHERE user_id = ? AND muted_user_id = ?').run(userId, mutedUserId);
-    return result.changes > 0;
+    const local = this.db.prepare('DELETE FROM mutes WHERE user_id = ? AND muted_user_id = ?').run(userId, mutedUserId).changes;
+    const remote = this.db.prepare('DELETE FROM remote_mutes WHERE user_id = ? AND (remote_user_id = ? OR id = ?)').run(userId, mutedUserId, mutedUserId).changes;
+    return local + remote > 0;
   }
 
   getMutedUsers(userId) {
@@ -6156,11 +6211,12 @@ export class DatabaseSQLite {
       WHERE m.user_id = ?
     `).all(userId);
 
-    // Get muted remote users
+    // v2.138.0: people on other servers.
     const remoteRows = this.db.prepare(`
-      SELECT m.*, ru.handle, ru.display_name, ru.node_name FROM mutes m
-      JOIN remote_users ru ON m.muted_user_id = ru.id
-      WHERE m.user_id = ?
+      SELECT rm.id, rm.user_id, COALESCE(rm.remote_user_id, rm.id) AS muted_user_id, rm.muted_at,
+             rm.handle, ru.display_name, rm.node_name
+      FROM remote_mutes rm LEFT JOIN remote_users ru ON ru.id = rm.remote_user_id
+      WHERE rm.user_id = ?
     `).all(userId);
 
     const allRows = [...localRows, ...remoteRows];
@@ -6559,7 +6615,7 @@ export class DatabaseSQLite {
 
     // Get blocked/muted user IDs for unread count calculation
     const blockedIds = this.blockedIdsFor(userId);
-    const mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
+    const mutedIds = this.mutedIdsFor(userId);
 
     // v2.27.0: Build wave ID list from cache if participation module available
     let waveIds;
@@ -6778,7 +6834,7 @@ export class DatabaseSQLite {
 
     // Get blocked/muted user IDs for unread count calculation
     const blockedIds = this.blockedIdsFor(userId);
-    const mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
+    const mutedIds = this.mutedIdsFor(userId);
 
     // v2.27.0: Build wave ID list from cache if available
     let waveIds;
@@ -8337,7 +8393,7 @@ export class DatabaseSQLite {
     let mutedIds = [];
     if (userId) {
       blockedIds = this.blockedIdsFor(userId);
-      mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
+      mutedIds = this.mutedIdsFor(userId);
     }
 
     let sql = `
@@ -8513,7 +8569,7 @@ export class DatabaseSQLite {
     let mutedIds = [];
     if (userId) {
       blockedIds = this.blockedIdsFor(userId);
-      mutedIds = this.db.prepare('SELECT muted_user_id FROM mutes WHERE user_id = ?').all(userId).map(r => r.muted_user_id);
+      mutedIds = this.mutedIdsFor(userId);
     }
 
     let sql = `
@@ -11475,6 +11531,9 @@ export class DatabaseSQLite {
         FROM mutes m
         LEFT JOIN users u ON m.muted_user_id = u.id
         WHERE m.user_id = ?
+      `).all(userId),
+      remoteMutedUsers: this.db.prepare(`
+        SELECT node_name, handle, muted_at FROM remote_mutes WHERE user_id = ?
       `).all(userId),
     };
 
@@ -15893,6 +15952,37 @@ export class DatabaseSQLite {
 
   deleteFederatedWaveInvitation(id) {
     return this.db.prepare('DELETE FROM federated_wave_invitations WHERE id = ?').run(id).changes > 0;
+  }
+
+  // ----- People in a wave on other servers (v2.138.0), on the wave's server -----
+
+  addWaveRemoteMember(waveId, { nodeName, handle, remoteUserId = null, displayName = null, avatar = null }) {
+    if (!nodeName || !handle) return false;
+    const h = String(handle).toLowerCase();
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO wave_remote_members (wave_id, node_name, handle, remote_user_id, display_name, avatar, joined_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(waveId, nodeName, h, remoteUserId, displayName, avatar, new Date().toISOString());
+    if (!result.changes && (remoteUserId || displayName)) {
+      this.db.prepare(`UPDATE wave_remote_members SET remote_user_id = COALESCE(?, remote_user_id), display_name = COALESCE(?, display_name),
+                         avatar = COALESCE(?, avatar) WHERE wave_id = ? AND node_name = ? AND handle = ?`)
+        .run(remoteUserId, displayName, avatar, waveId, nodeName, h);
+    }
+    return result.changes > 0;
+  }
+
+  listWaveRemoteMembers(waveId) {
+    return this.db.prepare('SELECT * FROM wave_remote_members WHERE wave_id = ? ORDER BY joined_at').all(waveId);
+  }
+
+  getWaveRemoteMember(waveId, nodeName, handle) {
+    return this.db.prepare('SELECT * FROM wave_remote_members WHERE wave_id = ? AND node_name = ? AND handle = ?')
+      .get(waveId, nodeName, String(handle).toLowerCase()) || null;
+  }
+
+  removeWaveRemoteMember(waveId, nodeName, handle) {
+    return this.db.prepare('DELETE FROM wave_remote_members WHERE wave_id = ? AND node_name = ? AND handle = ?')
+      .run(waveId, nodeName, String(handle).toLowerCase()).changes > 0;
   }
 
   /** The origin withdrew it: drop the question it put to this person. */

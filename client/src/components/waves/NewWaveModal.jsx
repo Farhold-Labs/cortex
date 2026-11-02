@@ -5,7 +5,7 @@ import { FEDERATION } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 import { T } from '../../config/terminology.js';
 
-const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null, inChannel = false, initialGroupId = null }) => {
+const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null, inChannel = false, initialGroupId = null, initialTravellers = null }) => {
   const [title, setTitle] = useState('');
   // Who can see it (v2.135.0): the people picked (one by one or a whole
   // crew), or everyone on the server. The stored privacy follows from that;
@@ -20,7 +20,9 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
   // Opened from "New wave with these people" (v2.132.0): that group, chosen.
   useEffect(() => {
     if (isOpen && initialGroupId) { setEveryone(false); setSelectedGroup(initialGroupId); }
-  }, [isOpen, initialGroupId]);
+    // v2.138.0: and its people on other servers, who are asked again.
+    if (isOpen && initialTravellers?.length) setFederatedParticipants(initialTravellers);
+  }, [isOpen, initialGroupId, initialTravellers]);
 
   // In a Community channel a new wave is open to the channel (v2.134.0). Only
   // the Community's owners and admins narrow one, afterwards, under "Who can
@@ -63,8 +65,9 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
   const handleCreate = () => {
     if (!title.trim()) return;
     const privacy = open ? 'public' : selectedGroup ? 'group' : 'private';
-    // Local participant IDs and federated "@handle@server" strings together
-    const allParticipants = open || selectedGroup ? [] : [...selectedParticipants, ...federatedParticipants];
+    // Local participant IDs and federated "@handle@server" strings together.
+    // A group is its people here; people elsewhere join it as travellers (v2.138.0).
+    const allParticipants = open ? [] : selectedGroup ? [...federatedParticipants] : [...selectedParticipants, ...federatedParticipants];
     onCreate({ title, privacy, participants: allParticipants, groupId: privacy === 'group' ? selectedGroup : null });
     setTitle(''); setEveryone(false); setSelectedParticipants([]); setSelectedGroup(null);
     setFederatedInput(''); setFederatedParticipants([]);
@@ -191,7 +194,7 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
         )}
 
         {/* Federated participants section */}
-        {federationEnabled && !open && !selectedGroup && (
+        {federationEnabled && !open && (
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>
               {FEDERATION.travelersLabel} <span style={{ color: 'var(--accent-teal)' }}>◇</span>
