@@ -80,6 +80,7 @@ async function run({ oldRule = false, oldTargets = false } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-fedaud-'));
   const near = await recorder();   // an allied server someone here invited a person on
   const far = await recorder();    // an allied server nobody invited anyone on
+  const peer = await recorder();   // the server inviting alice; answers whatever it is asked
   let child;
   try {
     const serverDir = path.join(temp, 'server');
@@ -111,7 +112,7 @@ async function run({ oldRule = false, oldTargets = false } = {}) {
       fs.writeFileSync(f, s);
     }
 
-    const keys = { 'peer.example': rsa() };
+    const keys = { 'peer.example': rsa(), 'near.example': rsa() };
     const dbPath = path.join(serverDir, 'data/farhold.db');
     const { DatabaseSQLite } = await import('../server/database-sqlite.js');
     const setup = new DatabaseSQLite({ dbPath });
@@ -125,8 +126,8 @@ async function run({ oldRule = false, oldTargets = false } = {}) {
     setup.setServerIdentity({ nodeName: 'host.example', publicKey: ourKeys.publicKey, privateKey: ourKeys.privateKey });
     const now = new Date().toISOString();
     for (const [node, base, key] of [
-      ['peer.example', 'https://peer.example', keys['peer.example'].publicKey],
-      ['near.example', near.base, rsa().publicKey],
+      ['peer.example', peer.base, keys['peer.example'].publicKey],
+      ['near.example', near.base, keys['near.example'].publicKey],
       ['far.example', far.base, rsa().publicKey],
     ]) {
       setup.db.prepare(`INSERT INTO federation_nodes (id, node_name, base_url, public_key, status, created_at)
@@ -197,6 +198,9 @@ async function run({ oldRule = false, oldTargets = false } = {}) {
 
     // An invitation for alice from another server.
     await send('wave_invite', { wave: { id: 'origin-chat', title: 'Private chat', privacy: 'crossServer' }, invitedUserHandle: 'alice', participants: [] });
+    // v2.137.0: she is asked; the copy is made when she accepts.
+    const question = ((await api('GET', '/api/wave-invitations', { token: alice })).body?.invitations || [])[0];
+    await api('POST', `/api/wave-invitations/${question.id}/accept`, { token: alice });
     const chat = copyOf('origin-chat');
     r.invited = { audience: chat?.federation_audience, alice: await read(alice, chat.id), bob: await read(bob, chat.id), bobLists: await listed(bob, chat.id) };
 
@@ -215,6 +219,13 @@ async function run({ oldRule = false, oldTargets = false } = {}) {
     const ours = (await api('POST', '/api/waves', { token: alice, body: { title: 'Ours', privacy: 'private' } })).body;
     r.memberBroadcast = (await api('PUT', `/api/waves/${ours.id}`, { token: alice, body: { privacy: 'crossServer' } })).body?.code;
     await api('POST', `/api/waves/${ours.id}/invite-federated`, { token: alice, body: { participants: ['@zed@near.example'] } });
+    // v2.137.0: zed accepts, through his server.
+    {
+      const body = { originWaveId: ours.id, handle: 'zed', accepted: true };
+      const pathname = '/api/federation/wave-invitations/answer';
+      const { headers, bodyString } = signedRequest({ method: 'POST', pathname, host, body, privateKey: keys['near.example'].privateKey, nodeName: 'near.example' });
+      assert.equal((await fetch(base + pathname, { method: 'POST', headers, body: bodyString })).status, 200);
+    }
     await settle();
     // A settings change used to re-send it to every allied server.
     near.got.length = 0; far.got.length = 0;
@@ -234,7 +245,7 @@ async function run({ oldRule = false, oldTargets = false } = {}) {
     return r;
   } finally {
     if (child) child.kill();
-    near.srv.close(); far.srv.close();
+    near.srv.close(); far.srv.close(); peer.srv.close();
     fs.rmSync(temp, { recursive: true, force: true });
   }
 }

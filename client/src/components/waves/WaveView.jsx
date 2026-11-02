@@ -2268,7 +2268,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               padding: '8px 12px', background: 'var(--bg-elevated)', border: '1px dashed var(--border-primary)',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                <Avatar letter={inv.avatar || inv.name?.[0] || '?'} color="var(--text-dim)" size={isMobile ? 32 : 28} />
+                <Avatar letter={inv.avatar || (inv.remote ? inv.handle?.[0] : inv.name?.[0]) || '?'} color="var(--text-dim)" size={isMobile ? 32 : 28} />
                 <div style={{ color: 'var(--text-secondary)', fontSize: isMobile ? '0.85rem' : '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {inv.name || inv.handle}
                 </div>
