@@ -207,6 +207,8 @@ whatever their client had already decrypted, as with any removal today.
    - **The new-wave dialog asks who can see it:** People (one by one, or a whole crew) or Everyone on this server. Verse-Wide is no longer a choice; the server already made a wave federated when someone from another server was added. Wave settings match, and describe a federated wave rather than offer to switch it.
    - **Labels by audience:** `waveAudience(wave)` on the client gives People, Crew, Verse-Wide, Everyone, and in a channel Channel, Narrowed or Review. The header badge opens Who can see this in a Community.
    - **Not done:** "Everyone on this server" stays open to every account, as it was; the plan's "admin-only to create" was never enforced and changing it is a separate decision.
+   - **Since v2.135.1:** Invite them to join (the wave waits, then settles once everyone outside has joined), review from the wave's own Who can see this, and filing a wave with people outside offers to invite them (owners and admins).
+   - **Since v2.136.0:** a portal wave can't be narrowed or hidden behind a private Community or limited channel; channels can be limited to roles from the app.
 6. **Federated invitations.**
 
 ## Decisions (Jared, 2026-10-29)

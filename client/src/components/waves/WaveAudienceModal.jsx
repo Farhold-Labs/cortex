@@ -142,6 +142,12 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
           <div style={{ lineHeight: 1.5 }}>This {T.wave} has people on other servers, so it follows its own list of people.</div>
         )}
 
+        {/* v2.136.0: the portal is read by anyone; say so wherever this says who can see it. */}
+        {view?.portal && (
+          <div style={{ marginBottom: '10px', padding: '8px 10px', border: '1px solid var(--accent-teal)', color: 'var(--accent-teal)', fontSize: '0.75rem', lineHeight: 1.45 }}>
+            Also published on the public portal: anyone on the internet can read it. A server admin can remove it from the portal.
+          </div>
+        )}
         {view && !view.canEdit && (view.mode === 'channel' || view.mode === 'only') && (
           <div style={{ lineHeight: 1.5 }}>
             {view.mode === 'channel' ? (
@@ -161,7 +167,9 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
         {view?.canEdit && (
           <>
             {choice('channel', `Everyone who can see #${view.channelName}`, `The ${T.wave} is open to the channel.`)}
-            {choice('only', 'Only these people and roles', "Plus you, and the community's owners and admins, who see every narrowed " + T.wave + '.')}
+            {view.portal
+              ? <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', marginBottom: '10px' }}>It can't be narrowed while it is on the public portal.</div>
+              : choice('only', 'Only these people and roles', "Plus you, and the community's owners and admins, who see every narrowed " + T.wave + '.')}
 
             {mode === 'only' && (
               <div style={{ marginTop: '4px' }}>
