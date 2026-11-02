@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.137.0] - 2026-11-02
+
+People on other servers are asked before they join a conversation, and blocks work across servers. Wave-access phase 6, second part. Migrating (adds `remote_wave_invitations`, `federated_wave_invitations`, `remote_blocks`).
+
+### Changed
+- **Travellers are asked.** Inviting someone on another server (*Invite travelers*, or starting a wave with `@handle@server`) used to put them straight in: their server made a copy, added them, and the wave's server started sending it there. Now:
+  - the wave's server records who it asked (`remote_wave_invitations`) and sends a signed invitation saying who is asking;
+  - their own server puts the question in their INVITATIONS box ("From qa.farhold.com (@inara@qa.farhold.com) · 3 in it") and holds nothing of the conversation; pings for it are dropped;
+  - **Accept** answers the wave's server first (`POST /api/federation/wave-invitations/answer`). Only once it agrees is the copy made, the person added and the history fetched;
+  - **Decline** tells it no, never whether it was also a block. A withdrawn invitation disappears from their box; an expired or deleted one says so when accepted (410), and one from a server still on an older version says that server needs to update (409 `ORIGIN_OUTDATED`).
+- **The wave shows who elsewhere it is waiting on** (`@yan@near.example`, INVITED), and the inviter or owner can withdraw it; their server is told.
+- **Inviting travellers into a crew wave no longer drops its crew.** Becoming Verse-Wide cleared the wave's crew, so every crew member without a participant row lost it. The crew's members are now named first.
+
+### Security
+- **A paired server could not be told no.** Being paired is not being invited: the wave's server honours an answer only for a question it put to that person on that server, and adds a server to the wave (`wave_federation`, which decides who gets its pings and may fetch its history) only on acceptance. It used to add the server the moment it sent the invitation.
+- **Blocks are honoured across servers.** The inviter's server refuses to ask someone the inviter blocked; the invitee's server declines an invitation from someone they blocked. A block of someone on another server is now saved: `blocks` references local accounts only, so it failed its foreign key and nothing was stored (the button said it worked). They live in `remote_blocks`, by address, and count wherever block lists are read (`db.blockedIdsFor()`), including the data export.
+
+### Fixed
+- **The Invite travelers dialog never worked.** It encoded its request twice and read the reply as a raw response, so every invitation showed "Failed to invite travelers". It now sends properly, reports who was asked, and shows the server's own error. Its title said "Broadcast to the Verse"; it now says *Invite travelers*. At phone width its ADD button ran past the edge.
+
+### Verified
+- `npm test`: 678/678. New `federation-consent.test.cjs` plays three other servers against a real instance:
+  - an invitation from another server is a question and makes no copy; a ping for it before acceptance is dropped;
+  - accepting answers that server (`origin-chat:alice:true`), makes the wave, fetches its history; another account still gets 403;
+  - bob's block of carol@peer is saved and listed, and her invitation is declined (`bob:false`) without asking him;
+  - decline and block answers no and keeps nothing; withdrawn and gone invitations go away;
+  - sending: the invited server gets the invitation with the inviter and no pings until it answers, and may not fetch the history (403); a server claiming someone accepted who was never asked gets 404 and no history; once zed accepts, his server gets the next ping and the history, and a second answer is 404;
+  - withdrawing tells their server; someone alice blocked on another server is refused and never sent anything.
+- Counterfactuals: without the invitation check, a paired server nobody invited joins and reads the history (200/200); without the block check, someone who blocked the inviter is still asked.
+- `federation-audience.test.cjs` updated: invitations are accepted before a copy exists.
+- Headless on dev at 390 px: the invitation from another server shows in the INVITATIONS box; ACCEPT against QA (still on v2.136.1) answers "qa.farhold.com needs to update Cortex before this can be accepted"; the Invite travelers dialog fits and shows the server's error for a server that is not allied.
+
+### Not changed
+- Groups for waves with people on other servers (the last part of phase 6) are still to come. A Verse-Wide wave's people are its participants, here and on each server.
+- Invitations from other servers are always asked; "accept invitations from my contacts automatically" applies to people on this server only.
+
 ## [2.136.1] - 2026-11-02
 
 **[SECURITY]** Who may read a Verse-Wide wave. Wave-access phase 6 starts here, with the leak it found. Migrating (adds `waves.federation_audience`).
