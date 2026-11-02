@@ -23979,6 +23979,14 @@ function waveAudienceView(wave, viewerId) {
     : (wave.privacy === 'crossServer' || wave.privacy === 'cross-server') ? 'federated'
     : 'only';
   const view = { mode, communityId: ctx.communityId, channelId: ctx.channel.id, channelName: ctx.channel.name, canEdit: isManager && (mode === 'channel' || mode === 'only') };
+  // v2.135.1: the owner or an admin decides a wave in review from the wave itself.
+  if (mode === 'review' && isManager) {
+    const f = communityWaveFindings(ctx.communityId).findings.find(x => x.wave.id === wave.id);
+    view.review = {
+      kind: WAVE_KIND[wave.privacy] || 'private',
+      people: f?.people ?? 0, outsiders: f?.outside.length ?? 0, invited: f?.invited ?? 0,
+    };
+  }
   if (mode !== 'only') return view;
   const audience = db.getWaveAudience(wave.id);
   view.users = audience.userIds.map(id => db.findUserById(id)).filter(Boolean)
@@ -26959,7 +26967,9 @@ function communityWaveFindings(communityId, memo = new Map()) {
     const people = [...waveMemberIds(wave)];
     const outside = people.filter(uid => !canSee(r.channel_id, uid));
     if (outside.length === 0) continue;
-    findings.push({ wave, channelId: r.channel_id, channelName: r.channel_name, people: people.length, outside });
+    // v2.135.1: invited to the Community and not yet answered.
+    const invited = outside.filter(uid => db.getCommunityMembership(communityId, uid)?.state === 'invited').length;
+    findings.push({ wave, channelId: r.channel_id, channelName: r.channel_name, people: people.length, outside, invited });
   }
   return { scanned: rows.length, findings };
 }
@@ -26986,6 +26996,7 @@ app.get('/api/communities/:id/wave-report', authenticateToken, apiLimiter, (req,
       channelName: f.channelName,
       people: f.people,
       outsiders: f.outside.length,
+      invited: f.invited,
     };
   });
   res.json({
@@ -27069,10 +27080,32 @@ app.post('/api/communities/:id/waves/:waveId/review', authenticateToken, apiLimi
     return res.status(409).json({ error: `This ${T_WAVE()} is not waiting for review`, code: 'NOT_IN_REVIEW' });
   }
   const action = req.body?.action;
-  if (action !== 'move_out' && action !== 'make_role') {
-    return res.status(400).json({ error: "action must be 'move_out' or 'make_role'" });
+  if (action !== 'move_out' && action !== 'make_role' && action !== 'invite') {
+    return res.status(400).json({ error: "action must be 'move_out', 'make_role' or 'invite'" });
   }
   if (!chargeCommunityMutation(req, res, req.params.id)) return;
+
+  // v2.135.1: invite the people outside without deciding yet. The wave keeps
+  // its access and stays in review; once everyone in it can see the channel
+  // it is narrowed to them, as the migration would have (settleReviewWaves).
+  if (action === 'invite') {
+    const memo = new Map();
+    const people = [...new Set([...waveMemberIds(wave), ...(isGroupWave(wave) ? [] : [wave.createdBy])])]
+      .filter(uid => uid && db.findUserById(uid));
+    const outside = people.filter(uid => !db.canSeeChannelFor(channel.id, uid, memo));
+    const invitedIds = inCommunityTransaction(() => {
+      const ids = outside.filter(uid => db.getCommunityMembership(req.params.id, uid)?.state !== 'invited'
+        && inviteToCommunity(req.params.id, uid, req.user.userId));
+      db.logCommunityAudit(req.params.id, {
+        actorId: req.user.userId, action: 'wave.review_invite', targetType: 'wave', targetId: wave.id,
+        metadata: { outside: outside.length, invited: ids.length },
+      });
+      return ids;
+    });
+    for (const uid of invitedIds) notifyCommunityInvitation(req.params.id, uid, req.user.userId);
+    const waiting = outside.filter(uid => db.getCommunityMembership(req.params.id, uid)?.state === 'invited').length;
+    return res.json({ action, outside: outside.length, invited: invitedIds.length, waiting });
+  }
 
   if (action === 'move_out') {
     const { updated } = inCommunityTransaction(() => {
@@ -27204,6 +27237,11 @@ app.post('/api/community-invitations/:communityId/accept', authenticateToken, ap
   });
   broadcastToUser(req.user.userId, { type: 'wave_invitations_changed' });
   pushCommunityRolesChanged(inv.communityId, req.user.userId);
+  // A wave in review whose last person outside just joined needs no decision.
+  for (const waveId of db.settleReviewWaves(inv.communityId)) {
+    db.logCommunityAudit(inv.communityId, { actorId: req.user.userId, action: 'wave.review_settled', targetType: 'wave', targetId: waveId });
+    broadcastToWave(waveId, { type: 'wave_updated', wave: db.getWave(waveId) });
+  }
   res.json({ success: true, community: { id: inv.community.id, name: inv.community.name } });
 });
 

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.135.1] - 2026-11-02
+
+Deciding a Community wave in review, from the wave itself (Jared: inviting a wave's people meant leaving the wave, and how to make it a role was not obvious). No migration.
+
+### Added
+- **Invite them to join**, a third review choice: the people in the wave who can't see its channel are invited to the Community, and the wave keeps waiting with its old access. Once all of them have joined, it is narrowed to its people (a crew wave to its crew) by itself, as the v2.134.0 migration would have, with nothing more to decide. `POST /api/communities/:id/waves/:waveId/review` takes `action: 'invite'`; it invites nobody twice and answers `{ outside, invited, waiting }`.
+- **Review from the wave.** For the Community's owners and admins, *Who can see this* on a wave in review explains the three choices and offers them: INVITE THEM TO JOIN, MAKE IT A ROLE, MOVE IT OUT. `GET /api/waves/:id/audience` carries `review: { kind, people, outsiders, invited }` for them only. Manage Community → WAVES TO REVIEW uses the same component and shows how many are already invited.
+- On a phone the header badge of a wave in review says **Review** (other badges stay a dot), and tapping it opens those choices.
+
+### Changed
+- Accepting a Community invitation settles any wave in review in that Community whose people can now all see their channel (`db.settleReviewWaves`, sharing `narrowIfAllInside` with the migration).
+
+### Verified
+- `npm test`: 651/651. The review test adds a crew wave in review, invited by an admin (a member gets 403; a second invite invites nobody; nothing changes before the answer; only the admin's view carries `review`), then settled when the person outside accepts (narrowed to its crew; a member outside it gets 403).
+- Headless on dev at 390 px: the review wave's header reads Review; tapping it shows the explanation and the three buttons.
+
 ## [2.135.0] - 2026-10-30
 
 Wave-access phase 5, the clean-up: categories are called folders, and waves are labelled by who can see them instead of by a privacy level. No migration; the API is unchanged.
