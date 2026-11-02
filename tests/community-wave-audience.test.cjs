@@ -238,10 +238,12 @@ async function scenario({ api, makeUser, dbPath }) {
   const deck = (await api('POST', '/api/waves', { token: mal.token, body: { title: 'Deck', privacy: 'group', groupId: crewId } })).body;
   const oldWays = (await api('POST', '/api/waves', { token: mal.token, body: { title: 'Old ways', privacy: 'private', participants: [zoe.id, river.id] } })).body;
   const leaving = (await api('POST', '/api/waves', { token: mal.token, body: { title: 'Leaving', privacy: 'private', participants: [river.id] } })).body;
-  for (const w of [oldWays, leaving]) await acceptWaveInvite(river, w.id);
+  const waiting = (await api('POST', '/api/waves', { token: mal.token, body: { title: 'Waiting', privacy: 'private', participants: [zoe.id, river.id] } })).body;
+  for (const w of [oldWays, leaving, waiting]) await acceptWaveInvite(river, w.id);
   await acceptWaveInvite(zoe, oldWays.id);
+  await acceptWaveInvite(zoe, waiting.id);
   r.migration = await asBeforeNarrowing(dbPath, (conn) => {
-    for (const w of [deck, oldWays, leaving]) {
+    for (const w of [deck, oldWays, leaving, waiting]) {
       conn.prepare('UPDATE waves SET channel_id = ?, community_id = ? WHERE id = ?').run(channel.id, community.id, w.id);
     }
   });
@@ -262,6 +264,35 @@ async function scenario({ api, makeUser, dbPath }) {
   r.leavingDone = leavingDone.status;
   r.afterLeaving = { river: await read(river, leaving.id), channelId: leavingDone.body?.wave?.channel_id ?? null };
 
+  // v2.135.1: invite the people outside without deciding; the wave waits.
+  r.memberInvite = (await review(zoe, waiting, { action: 'invite' })).status;
+  const inviteOnly = await review(mal, waiting, { action: 'invite' });
+  r.waitingInvite = { status: inviteOnly.status, outside: inviteOnly.body?.outside, invited: inviteOnly.body?.invited, waiting: inviteOnly.body?.waiting };
+  r.waitingInviteAgain = (await review(mal, waiting, { action: 'invite' })).body?.invited;
+  r.waitingAfterInvite = { river: await read(river, waiting.id), jayne: await read(jayne, waiting.id) };
+  const malView = (await api('GET', `/api/waves/${waiting.id}/audience`, { token: mal.token })).body;
+  const zoeView = (await api('GET', `/api/waves/${waiting.id}/audience`, { token: zoe.token })).body;
+  r.reviewViews = { mal: malView?.review, zoe: zoeView?.review ?? null, mode: zoeView?.mode };
+  r.reportWaiting = ((await api('GET', `/api/communities/${community.id}/wave-report`, { token: mal.token })).body?.waves || [])
+    .find(w => w.id === waiting.id)?.invited;
+
+  // v2.135.1: filing a wave with people outside. A member is refused and not
+  // offered the choice; an owner may file it anyway, inviting them: it goes
+  // in under review and keeps its people until they have joined.
+  const late = (await api('POST', '/api/waves', { token: mal.token, body: { title: 'Filed late', privacy: 'private', participants: [river.id] } })).body;
+  await acceptWaveInvite(river, late.id);
+  const zoesOwn = (await api('POST', '/api/waves', { token: zoe.token, body: { title: 'Zoe and River', privacy: 'private', participants: [river.id] } })).body;
+  await acceptWaveInvite(river, zoesOwn.id);
+  const fileUrl = (w) => `/api/communities/${community.id}/channels/${channel.id}/waves/${w.id}`;
+  const zoeFile = await api('PUT', fileUrl(zoesOwn), { token: zoe.token });
+  const zoeForced = await api('PUT', fileUrl(zoesOwn), { token: zoe.token, body: { inviteOutsiders: true } });
+  r.memberFile = { status: zoeFile.status, canInvite: zoeFile.body?.canInvite, forced: zoeForced.status };
+  const plain = await api('PUT', fileUrl(late), { token: mal.token });
+  r.ownerFileOffered = { status: plain.status, code: plain.body?.code, canInvite: plain.body?.canInvite, waits: plain.body?.waitsForThem };
+  const filed = await api('PUT', fileUrl(late), { token: mal.token, body: { inviteOutsiders: true } });
+  r.ownerFiled = { status: filed.status, outside: filed.body?.outside, review: filed.body?.review, state: filed.body?.wave?.reviewState ?? filed.body?.wave?.review_state };
+  r.lateAfterFiling = { river: await read(river, late.id), jayne: await read(jayne, late.id) };
+
   const deckDone = await review(mal, deck, { action: 'make_role', invite: true });
   r.deckDone = { status: deckDone.status, role: deckDone.body?.role?.name, invited: deckDone.body?.invited };
   r.afterDeck = { river: await read(river, deck.id), zoe: await read(zoe, deck.id) };
@@ -269,6 +300,15 @@ async function scenario({ api, makeUser, dbPath }) {
   r.riverInvited = invitations.some(i => i.communityId === community.id && i.communityName === 'Serenity');
   r.riverAccepts = (await api('POST', `/api/community-invitations/${community.id}/accept`, { token: river.token })).status;
   r.afterAccept = { deck: await read(river, deck.id), oldWays: await read(river, oldWays.id) };
+  // River was the only one outside Waiting (a crew wave: started with two
+  // others): joining settles it, narrowed to its crew.
+  const settledView = (await api('GET', `/api/waves/${waiting.id}/audience`, { token: mal.token })).body;
+  r.lateSettled = { state: (await api('GET', `/api/waves/${late.id}/audience`, { token: mal.token })).body?.mode, river: await read(river, late.id), jayne: await read(jayne, late.id) };
+  r.waitingSettled = {
+    mode: settledView?.mode,
+    crew: (settledView?.crew?.memberIds || []).length,
+    river: await read(river, waiting.id), zoe: await read(zoe, waiting.id), jayne: await read(jayne, waiting.id),
+  };
   r.reportAfter = (await api('GET', `/api/communities/${community.id}/wave-report`, { token: mal.token })).body?.totals;
   r.again = (await review(mal, deck, { action: 'move_out' })).status;
   return r;
@@ -342,8 +382,8 @@ test('who can see a Community wave: narrowing, roles, review', { timeout: 180000
   });
 
   await t.test('old waves with outsiders wait for review and keep their access', () => {
-    assert.deepEqual(r.migration, { narrowed: 0, review: 3 });
-    assert.deepEqual(r.reportBefore, { waves: 3, outsiders: 1 });
+    assert.deepEqual(r.migration, { narrowed: 0, review: 4 });
+    assert.deepEqual(r.reportBefore, { waves: 4, outsiders: 1 });
     assert.deepEqual(r.riverInReview, { deck: 200, oldWays: 200 });
     assert.equal(r.audienceInReview, 409);
     assert.equal(r.crewSwap, 409, 'a channel crew wave keeps its crew');
@@ -368,6 +408,21 @@ test('who can see a Community wave: narrowing, roles, review', { timeout: 180000
     assert.deepEqual(r.afterAccept, { deck: 200, oldWays: 403 });
     assert.deepEqual(r.reportAfter, { waves: 0, outsiders: 0 });
     assert.equal(r.again, 409, 'a decided wave is not decided twice');
+  });
+
+  await t.test('invite them to join: the wave waits, then settles when they have joined', () => {
+    assert.equal(r.memberInvite, 403, 'only owners and admins');
+    assert.deepEqual(r.waitingInvite, { status: 200, outside: 1, invited: 1, waiting: 1 });
+    assert.equal(r.waitingInviteAgain, 0, 'nobody is invited twice');
+    assert.deepEqual(r.waitingAfterInvite, { river: 200, jayne: 403 }, 'nothing changes until they answer');
+    assert.deepEqual(r.reviewViews, { mal: { kind: 'crew', people: 3, outsiders: 1, invited: 1 }, zoe: null, mode: 'review' });
+    assert.equal(r.reportWaiting, 1);
+    assert.deepEqual(r.memberFile, { status: 409, canInvite: false, forced: 409 });
+    assert.deepEqual(r.ownerFileOffered, { status: 409, code: 'OUTSIDERS_IN_WAVE', canInvite: true, waits: true });
+    assert.deepEqual(r.ownerFiled, { status: 200, outside: 1, review: true, state: 'needs_review' });
+    assert.deepEqual(r.lateAfterFiling, { river: 200, jayne: 403 }, 'nobody loses it, nobody gains it');
+    assert.deepEqual(r.lateSettled, { state: 'only', river: 200, jayne: 403 }, 'settled to its people once they joined');
+    assert.deepEqual(r.waitingSettled, { mode: 'only', crew: 3, river: 200, zoe: 200, jayne: 403 });
   });
 });
 

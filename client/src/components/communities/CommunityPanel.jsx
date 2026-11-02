@@ -116,7 +116,7 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
       openCommunity(res.community.id);
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not create that community', 'error');
+      showToast(err?.data?.error || 'Could not create that community', 'error');
     }
   };
 
@@ -131,7 +131,7 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
       openCommunity(res.community.id);
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'That invite is not valid', 'error');
+      showToast(err?.data?.error || 'That invite is not valid', 'error');
     }
   };
 
@@ -161,7 +161,7 @@ const CommunityPanel = ({ fetchAPI, showToast, onClose, onChanged, initialCommun
       openCommunity(community.id);
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not join that community', 'error');
+      showToast(err?.data?.error || 'Could not join that community', 'error');
     }
   };
 

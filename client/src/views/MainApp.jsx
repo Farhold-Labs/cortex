@@ -755,7 +755,7 @@ function MainApp({ sharePingId }) {
         showToastMsg(`${participant.displayName || 'They'} moved to 🔊 ${action.moveTo.name}`, 'success');
       }
     } catch (err) {
-      showToastMsg(err?.error || 'That did not work', 'error');
+      showToastMsg(err?.data?.error || 'That did not work', 'error');
     }
   }, [fetchAPI, showToastMsg]);
 
@@ -782,16 +782,33 @@ function MainApp({ sharePingId }) {
   const handleWaveFile = useCallback(async (wave, channel) => {
     const target = channel || communityChannels.find(c => c.id === wave.channelId);
     if (!target) return;
+    const path = `/communities/${target.communityId}/channels/${target.id}/waves/${wave.id}`;
     try {
-      await fetchAPI(
-        `/communities/${target.communityId}/channels/${target.id}/waves/${wave.id}`,
-        { method: channel ? 'PUT' : 'DELETE' });
+      await fetchAPI(path, { method: channel ? 'PUT' : 'DELETE' });
       showToastMsg(channel
         ? `Moved to #${channel.name}`
         : `Removed from #${target.name}`, 'success');
       loadWaves();
     } catch (err) {
-      showToastMsg(err?.error || `Could not move that ${T.wave}`, 'error');
+      // v2.135.1: people in it who can't see the channel. The community's owners
+      // and admins may file it anyway and invite them to join.
+      if (channel && err?.code === 'OUTSIDERS_IN_WAVE' && err?.data?.canInvite) {
+        const { count, waitsForThem } = err.data;
+        const n = count === 1 ? 'person' : `${count} people`;
+        const ok = window.confirm(waitsForThem
+          ? `${count} ${count === 1 ? 'person' : 'people'} in this ${T.wave} can't see #${channel.name}.\n\nFile it anyway and invite the ${n} to join the community? Nobody loses it: it waits for review in #${channel.name} until they have all joined, then it is theirs in the channel.`
+          : `${count} ${count === 1 ? 'person' : 'people'} in this ${T.wave} can't see #${channel.name}.\n\nFile it anyway and invite the ${n} to join the community? Until they join, they can't see it.`);
+        if (!ok) return;
+        try {
+          const res = await fetchAPI(path, { method: 'PUT', body: { inviteOutsiders: true } });
+          showToastMsg(`Moved to #${channel.name}. ${res.invited ? `${res.invited} invited to join.` : 'They were already invited.'}${res.review ? ` It waits for review until they join.` : ''}`, 'success');
+          loadWaves();
+        } catch (err2) {
+          showToastMsg(err2?.data?.error || `Could not move that ${T.wave}`, 'error');
+        }
+        return;
+      }
+      showToastMsg(err?.data?.error || `Could not move that ${T.wave}`, 'error');
     }
   }, [fetchAPI, communityChannels, showToastMsg, loadWaves]);
 

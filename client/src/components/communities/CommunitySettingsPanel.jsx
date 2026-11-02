@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import WaveReviewActions from './WaveReviewActions.jsx';
 import { T } from '../../config/terminology.js';
 import { storage } from '../../utils/storage.js';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
@@ -182,31 +183,8 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
   }, [memberSearch, fetchAPI, members]);
 
   // ----- WAVES TO REVIEW (v2.134.0) -----
-  // One wave at a time: the owner or an admin chooses, with a second tap to
-  // confirm, because Make it a role takes the wave away from the people outside
-  // (unless they are invited and accept).
-  const [reviewing, setReviewing] = useState(null); // { id, action, invite }
-  const [reviewBusy, setReviewBusy] = useState(false);
-  const decideWave = async (w, action, invite) => {
-    setReviewBusy(true);
-    try {
-      const res = await fetchAPI(`/communities/${community.id}/waves/${w.id}/review`, { method: 'POST', body: { action, invite } });
-      if (action === 'move_out') showToast(`Moved out of #${w.channelName}. Nobody gained or lost access.`, 'success');
-      else {
-        const parts = [res.role ? `Narrowed to the role ${res.role.name}` : `Narrowed to its people in #${w.channelName}`];
-        if (res.invited) parts.push(`${res.invited} invited to join`);
-        else if (res.outside) parts.push(`${res.outside} outside no longer see it`);
-        showToast(parts.join('. '), 'success');
-      }
-      setReviewing(null);
-      load();
-      onChanged && onChanged();
-    } catch (err) {
-      showToast(err?.error || 'Could not decide that one', 'error');
-    } finally {
-      setReviewBusy(false);
-    }
-  };
+  // Decided one wave at a time in WaveReviewActions, which the wave's own
+  // Who can see this uses too (v2.135.1).
 
   // ----- ABOUT -----
 
@@ -221,7 +199,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       showToast('Community updated', 'success');
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not update the community', 'error');
+      showToast(err?.data?.error || 'Could not update the community', 'error');
     }
   };
 
@@ -253,7 +231,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       showToast('Logo removed', 'success');
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not remove the logo', 'error');
+      showToast(err?.data?.error || 'Could not remove the logo', 'error');
     } finally { setLogoBusy(false); }
   };
 
@@ -296,7 +274,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setActionsFor(null);
       refreshPeople();
     } catch (err) {
-      showToast(err?.error || 'Could not change that role', 'error');
+      showToast(err?.data?.error || 'Could not change that role', 'error');
       refreshPeople();
     }
   };
@@ -308,7 +286,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setConfirming(null); setActionsFor(null);
       refreshPeople();
     } catch (err) {
-      showToast(err?.error || 'Could not remove them', 'error');
+      showToast(err?.data?.error || 'Could not remove them', 'error');
     }
   };
 
@@ -321,7 +299,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setConfirming(null); setActionsFor(null); setBanReason('');
       refreshPeople();
     } catch (err) {
-      showToast(err?.error || 'Could not ban them', 'error');
+      showToast(err?.data?.error || 'Could not ban them', 'error');
     }
   };
 
@@ -367,7 +345,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       load();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not rename that channel', 'error');
+      showToast(err?.data?.error || 'Could not rename that channel', 'error');
     }
   };
 
@@ -385,7 +363,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       load();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not delete that channel', 'error');
+      showToast(err?.data?.error || 'Could not delete that channel', 'error');
     }
   };
 
@@ -400,7 +378,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       load();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not change that channel', 'error');
+      showToast(err?.data?.error || 'Could not change that channel', 'error');
     }
   };
 
@@ -417,7 +395,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       load();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not create that channel', 'error');
+      showToast(err?.data?.error || 'Could not create that channel', 'error');
     }
   };
 
@@ -434,7 +412,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       refreshPeople();
       onChanged && onChanged();
     } catch (err) {
-      showToast(err?.error || 'Could not add that person', 'error');
+      showToast(err?.data?.error || 'Could not add that person', 'error');
     }
   };
 
@@ -446,7 +424,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setMintedToken(res.invite.token);
       load();
     } catch (err) {
-      showToast(err?.error || 'Could not create an invite', 'error');
+      showToast(err?.data?.error || 'Could not create an invite', 'error');
     }
   };
 
@@ -458,7 +436,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       setRemoteAddress('');
       showToast(`Invitation waiting for ${address}`, 'success');
     } catch (err) {
-      showToast(err?.error || 'Could not invite that address', 'error');
+      showToast(err?.data?.error || 'Could not invite that address', 'error');
     }
   };
 
@@ -478,7 +456,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       onGone && onGone();
     } catch (err) {
       setConfirmLeave(false);
-      showToast(err?.error || 'Could not leave', 'error');
+      showToast(err?.data?.error || 'Could not leave', 'error');
     }
   };
 
@@ -492,7 +470,7 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       onGone && onGone();
     } catch (err) {
       setConfirmClose(false);
-      showToast(err?.error || err?.message || 'Could not close the community', 'error');
+      showToast(err?.data?.error || err?.message || 'Could not close the community', 'error');
     }
   };
 
@@ -690,11 +668,11 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
                 {waveReport.totals.waves} {waveReport.totals.waves === 1 ? T.wave : T.waves} in your channels {waveReport.totals.waves === 1 ? 'includes' : 'include'}{' '}
                 {waveReport.totals.outsiders === 1 ? 'someone who is' : `${waveReport.totals.outsiders} people who are`} not able to see the channel.
                 Nothing has changed for them yet: they keep their access until you decide each one.
+                <br /><b>Invite them to join</b>: the people outside are invited to the community. Once they have all joined, the {T.wave} is theirs in the channel, with nothing more to decide.
                 <br /><b>Move it out</b>: the {T.wave} leaves the community. Nobody gains or loses access.
                 <br /><b>Make it a role</b>: only people who can see the channel keep it (a {T.crew}'s members get a new community role). The people outside lose it, unless you invite them to join.
               </div>
               {waveReport.waves.map(w => {
-                const open = reviewing?.id === w.id;
                 return (
                   <div key={w.id} style={{ padding: '0.4rem 0', borderTop: '1px solid var(--border-subtle)', fontSize: '0.78rem' }}>
                     <div style={{ color: w.canOpen ? 'var(--text-primary)' : 'var(--text-dim)', overflowWrap: 'anywhere' }}>
@@ -704,42 +682,10 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
                       #{w.channelName} · {w.kind === 'crew' ? (w.crewName ? `${T.crew} ${w.crewName}` : `${T.crew} ${T.wave}`) : w.kind === 'crossServer' ? 'across servers' : 'private'}
                       {' · '}
                       <span style={{ color: 'var(--accent-orange)' }}>{w.outsiders} of {w.people} can't see #{w.channelName}</span>
+                      {w.invited > 0 && <> · {w.invited} invited</>}
                     </div>
-                    {!open ? (
-                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                        <button type="button" style={action} onClick={() => setReviewing({ id: w.id, action: 'move_out', invite: false })}>MOVE IT OUT</button>
-                        {w.kind !== 'crossServer' && (
-                          <button type="button" style={action} onClick={() => setReviewing({ id: w.id, action: 'make_role', invite: true })}>MAKE IT A ROLE</button>
-                        )}
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: '0.35rem', padding: '0.45rem', border: '1px solid var(--border-subtle)' }}>
-                        {reviewing.action === 'move_out' ? (
-                          <div style={{ lineHeight: 1.45 }}>Move it out of #{w.channelName}? It becomes an ordinary {T.wave} outside the community, with the same people.</div>
-                        ) : (
-                          <>
-                            <div style={{ lineHeight: 1.45 }}>
-                              {w.kind === 'crew'
-                                ? <>Its {T.crew}'s members who can see #{w.channelName} get a new community role, and only that role sees it.</>
-                                : <>Only its people who can see #{w.channelName} keep it.</>}
-                              {' '}Community owners and admins always see it.
-                            </div>
-                            <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start', marginTop: '0.4rem', cursor: 'pointer' }}>
-                              <input type="checkbox" checked={!!reviewing.invite} onChange={e => setReviewing({ ...reviewing, invite: e.target.checked })} />
-                              <span>Invite the {w.outsiders === 1 ? 'person' : `${w.outsiders} people`} outside to join the community. Until they accept, they can't see it.</span>
-                            </label>
-                            {!reviewing.invite && <div style={{ ...hint, color: 'var(--accent-orange)' }}>The {w.outsiders === 1 ? 'person' : `${w.outsiders} people`} outside will lose it.</div>}
-                          </>
-                        )}
-                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                          <button type="button" style={reviewing.action === 'make_role' && !reviewing.invite ? danger : action} disabled={reviewBusy}
-                            onClick={() => decideWave(w, reviewing.action, !!reviewing.invite)}>
-                            {reviewBusy ? '…' : reviewing.action === 'move_out' ? 'MOVE OUT' : 'MAKE IT A ROLE'}
-                          </button>
-                          <button type="button" style={action} disabled={reviewBusy} onClick={() => setReviewing(null)}>CANCEL</button>
-                        </div>
-                      </div>
-                    )}
+                    <WaveReviewActions communityId={community.id} w={w} fetchAPI={fetchAPI} showToast={showToast}
+                      styles={{ action, danger, hint }} onDone={() => { load(); onChanged && onChanged(); }} />
                   </div>
                 );
               })}

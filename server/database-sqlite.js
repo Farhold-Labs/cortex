@@ -15486,29 +15486,58 @@ export class DatabaseSQLite {
     `).all();
     let narrowed = 0, review = 0;
     const memo = new Map();
-    const ins = this.db.prepare(`INSERT OR IGNORE INTO wave_audience (wave_id, kind, ref_id) VALUES (?, 'user', ?)`);
     const tx = this.db.transaction(() => {
       for (const w of rows) {
-        const isCrew = (w.privacy === 'group' || w.privacy === 'crew') && w.crew_id;
-        const people = new Set(this.db.prepare('SELECT user_id FROM wave_participants WHERE wave_id = ?').all(w.id).map(r => r.user_id));
-        if (isCrew) {
-          for (const m of this.db.prepare('SELECT user_id FROM crew_members WHERE crew_id = ?').all(w.crew_id)) people.add(m.user_id);
-        } else if (w.created_by && this.findUserById(w.created_by)) {
-          people.add(w.created_by);
-        }
-        if ([...people].some(uid => !this.canSeeChannelFor(w.channel_id, uid, memo))) {
-          this.setWaveReviewState(w.id, 'needs_review');
-          review++;
-          continue;
-        }
-        // A private wave's people, named, so that participant rows can stop
-        // counting. A crew wave is narrowed to its crew, which stays live.
-        if (!isCrew) for (const uid of people) ins.run(w.id, uid);
-        narrowed++;
+        if (this.narrowIfAllInside(w, memo)) { narrowed++; continue; }
+        this.setWaveReviewState(w.id, 'needs_review');
+        review++;
       }
     });
     tx();
     return { narrowed, review };
+  }
+
+  /**
+   * Narrow a non-public channel wave when everyone in it can see its channel:
+   * a private wave to its people by name (participant rows stop counting), a
+   * crew wave to its crew, which stays live. Clears a review. False, changing
+   * nothing, while anyone in it cannot see the channel. `w` is a waves row.
+   */
+  narrowIfAllInside(w, memo = new Map()) {
+    const isCrew = (w.privacy === 'group' || w.privacy === 'crew') && w.crew_id;
+    const people = new Set(this.db.prepare('SELECT user_id FROM wave_participants WHERE wave_id = ?').all(w.id).map(r => r.user_id));
+    if (isCrew) {
+      for (const m of this.db.prepare('SELECT user_id FROM crew_members WHERE crew_id = ?').all(w.crew_id)) people.add(m.user_id);
+    } else if (w.created_by && this.findUserById(w.created_by)) {
+      people.add(w.created_by);
+    }
+    if ([...people].some(uid => !this.canSeeChannelFor(w.channel_id, uid, memo))) return false;
+    if (!isCrew) {
+      const ins = this.db.prepare(`INSERT OR IGNORE INTO wave_audience (wave_id, kind, ref_id) VALUES (?, 'user', ?)`);
+      for (const uid of people) ins.run(w.id, uid);
+    }
+    if (w.review_state) this.setWaveReviewState(w.id, null);
+    return true;
+  }
+
+  /**
+   * Waves in review in one Community whose people can now all see their
+   * channel (the people outside were invited and joined): narrowed as the
+   * migration would have narrowed them (v2.135.1). Returns their ids.
+   */
+  settleReviewWaves(communityId) {
+    const rows = this.db.prepare(`
+      SELECT w.id, w.privacy, w.crew_id, w.channel_id, w.created_by, w.review_state
+      FROM waves w JOIN channels ch ON ch.id = w.channel_id
+      WHERE ch.community_id = ? AND w.review_state = 'needs_review'
+        AND w.privacy NOT IN ('public', 'crossServer', 'cross-server')
+    `).all(communityId);
+    const memo = new Map();
+    const settled = [];
+    this.db.transaction(() => {
+      for (const w of rows) if (this.narrowIfAllInside(w, memo)) settled.push(w.id);
+    })();
+    return settled;
   }
 
   /**
