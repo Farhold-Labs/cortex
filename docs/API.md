@@ -4794,6 +4794,20 @@ What Manage Community uses beyond the routes it always had. Role grants and revo
 | GET | `/api/communities/:id` | anyone who may discover it | adds `myRoles`: your own roles there, `[{ id, name, priority }]`, highest first, or `[]` if you are not a member |
 | PUT / DELETE | `/api/communities/:id/members/:userId/roles/:roleId` | `member.roles` | unchanged rules: you grant only roles below your own priority whose capabilities you hold, and revoke only from people below you. So an owner appoints admins, and an admin appoints moderators. Both now push `community_roles_changed` (`{ communityId }`) to the person whose roles changed, so their app re-reads its channel list |
 
+## Community powers (v2.140.0)
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| POST | `/api/waves` | any account | `privacy: 'public'` without a `channelId` (everyone on this server) is 403 `SERVER_PUBLIC_STAFF_ONLY` unless the caller is a server moderator or admin. In a channel, unchanged |
+| PUT | `/api/waves/:id` | as before | switching a wave to `public` outside a channel: the same 403. A wave already public may stay so |
+| GET | `/api/waves/:id` | can read the wave | adds `can_remove_pings`: wave staff, a server moderator, or a Community member holding `content.moderate` in the wave's channel |
+| DELETE | `/api/pings/:id` (and the legacy `/api/messages/:id`) | the author, wave staff, or `content.moderate` | through the Community: only in a channel wave the caller can read, and only a ping by someone they outrank there (403 `OUTRANKED`). Audited `ping.remove` (target the wave) |
+| PUT, DELETE | `/api/events/:id` and the event's invite, chase and register routes | as before, or `event.manage` | in the channel of the event's wave, for a wave the caller can read |
+| GET | `/api/communities/:id/audit` | `audit.view` | each entry is `{ id, action, createdAt, actor: { id, name, handle } \| null, target, details }`. `target` is `{ type, id, name, gone? }`; a wave's `name` only if the caller can read it, a channel's only if they can see it listed. `details` is the stored metadata with channel ids read as names and no ping ids. Up to 200, newest first |
+| DELETE | `/api/communities/:id/channels/:channelId` | `channel.manage` | every wave in it leaves as if moved out (`unfileWave()`): a public one becomes private, kept by its participants and creator; a narrowed one keeps its named people. Previously only the columns were cleared (CORTEX-COMM-028) |
+| DELETE | `/api/communities/:id`, `/api/admin/communities/:id` | as before | the same, for every channel |
+| DELETE | `/api/communities/:id/channels/:channelId/waves/:waveId` | as before | a public wave moved out becomes private |
+
 ## Community roles editor (v2.139.0)
 
 Custom roles have had routes since v2.96.0; this release gave them an editor (Manage Community → ROLES) and tightened what the routes accept.

@@ -648,9 +648,14 @@ test('Communities API', async (t) => {
 
     await t.test('filing a wave needs authority over the wave, not just the channel', async () => {
       // Public, because since v2.134.0 only owners and admins may file a wave
-      // that only some people can see (tested below).
+      // that only some people can see (tested below); and started in another
+      // channel, because since v2.140.0 only server staff open a wave to the
+      // whole server, so a member's public wave is a channel's.
+      const side = await api('POST', `/api/communities/${community.id}/channels`, {
+        token: owner.token, body: { name: 'Side', slug: 'side' },
+      });
       const wave = await api('POST', '/api/waves', {
-        token: member.token, body: { title: 'Rehearsal notes', privacy: 'public' },
+        token: member.token, body: { title: 'Rehearsal notes', privacy: 'public', channelId: side.body.channel.id },
       });
       assert.equal(wave.status, 201, JSON.stringify(wave.body));
       const waveId = wave.body.wave ? wave.body.wave.id : wave.body.id;
@@ -795,13 +800,10 @@ test('Communities API', async (t) => {
         token: owner.token, body: { name: 'Temp', slug: 'temp' },
       });
       const wave = await api('POST', '/api/waves', {
-        token: member.token, body: { title: 'Survives', privacy: 'public' },
+        token: member.token, body: { title: 'Survives', privacy: 'public', channelId: doomed.body.channel.id },
       });
+      assert.equal(wave.status, 201, `precondition: the wave must be in the channel: ${JSON.stringify(wave.body)}`);
       const waveId = wave.body.wave ? wave.body.wave.id : wave.body.id;
-      const filed = await api('PUT',
-        `/api/communities/${community.id}/channels/${doomed.body.channel.id}/waves/${waveId}`,
-        { token: member.token });
-      assert.equal(filed.status, 200, `precondition: the wave must actually be filed: ${JSON.stringify(filed.body)}`);
 
       await api('DELETE', `/api/communities/${community.id}/channels/${doomed.body.channel.id}`,
         { token: owner.token });
@@ -810,6 +812,9 @@ test('Communities API', async (t) => {
       assert.equal(after.status, 200, 'the conversation survives its container');
       const w = after.body.wave || after.body;
       assert.equal(w.channelId ?? w.channel_id ?? null, null, 'and falls back to uncontained');
+      // v2.140.0: the channel's, not the server's.
+      assert.equal(w.privacy, 'private', 'a public channel wave does not become public to the server');
+      assert.equal((await api('GET', `/api/waves/${waveId}`, { token: outsider.token })).status, 403);
     });
 
     await t.test('the audit log is gated and records what happened', async () => {

@@ -3,7 +3,9 @@ import { GlowText } from '../ui/SimpleComponents.jsx';
 import { CONFIRM } from '../../../messages.js';
 import { T } from '../../config/terminology.js';
 
-const DeleteConfirmModal = ({ isOpen, onClose, waveTitle, onConfirm, isMobile }) => {
+// title / message / warning / confirmLabel let a ping use it too (v2.140.0):
+// it said "Delete Wave" and "All messages will be permanently deleted" there.
+const DeleteConfirmModal = ({ isOpen, onClose, waveTitle, onConfirm, isMobile, title = null, message = null, warning, confirmLabel = null }) => {
   if (!isOpen) return null;
 
   return (
@@ -17,7 +19,7 @@ const DeleteConfirmModal = ({ isOpen, onClose, waveTitle, onConfirm, isMobile })
         border: '2px solid var(--accent-orange)80', padding: isMobile ? '20px' : '24px',
       }} onClick={(e) => e.stopPropagation()}>
         <div style={{ marginBottom: '20px' }}>
-          <GlowText color="var(--accent-orange)" size={isMobile ? '1rem' : '1.1rem'}>Delete {T.Wave}</GlowText>
+          <GlowText color="var(--accent-orange)" size={isMobile ? '1rem' : '1.1rem'}>{title || `Delete ${T.Wave}`}</GlowText>
         </div>
 
         <div style={{ marginBottom: '24px' }}>
@@ -27,9 +29,9 @@ const DeleteConfirmModal = ({ isOpen, onClose, waveTitle, onConfirm, isMobile })
             lineHeight: 1.6,
             marginBottom: '12px'
           }}>
-            Are you sure you want to delete <span style={{ color: 'var(--accent-amber)', fontWeight: 600 }}>"{waveTitle}"</span>?
+            {message || <>Are you sure you want to delete <span style={{ color: 'var(--accent-amber)', fontWeight: 600 }}>"{waveTitle}"</span>?</>}
           </div>
-          <div style={{
+          {warning !== null && <div style={{
             color: 'var(--accent-orange)',
             fontSize: isMobile ? '0.85rem' : '0.9rem',
             lineHeight: 1.5,
@@ -37,8 +39,8 @@ const DeleteConfirmModal = ({ isOpen, onClose, waveTitle, onConfirm, isMobile })
             padding: '12px',
             border: '1px solid var(--accent-orange)30',
           }}>
-            ⚠ This action cannot be undone. All messages will be permanently deleted and all participants will be notified.
-          </div>
+            ⚠ {warning || 'This action cannot be undone. All messages will be permanently deleted and all participants will be notified.'}
+          </div>}
         </div>
 
         <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -62,7 +64,7 @@ const DeleteConfirmModal = ({ isOpen, onClose, waveTitle, onConfirm, isMobile })
             fontFamily: 'monospace',
             fontSize: isMobile ? '0.9rem' : '0.85rem',
             fontWeight: 600,
-          }}>{CONFIRM.delete.toUpperCase()}</button>
+          }}>{(confirmLabel || CONFIRM.delete).toUpperCase()}</button>
         </div>
       </div>
     </div>

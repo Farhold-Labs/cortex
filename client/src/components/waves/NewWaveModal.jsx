@@ -5,7 +5,7 @@ import { FEDERATION } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 import { T } from '../../config/terminology.js';
 
-const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null, inChannel = false, initialGroupId = null, initialTravellers = null }) => {
+const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationEnabled, containerLabel = null, inChannel = false, initialGroupId = null, initialTravellers = null, canOpenToServer = false }) => {
   const [title, setTitle] = useState('');
   // Who can see it (v2.135.0): the people picked (one by one or a whole
   // crew), or everyone on the server. The stored privacy follows from that;
@@ -61,7 +61,8 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
     setFederatedParticipants(federatedParticipants.filter(f => f !== fp));
   };
 
-  const open = inChannel || everyone;
+  // v2.140.0: only server moderators and admins open a wave to everyone here.
+  const open = inChannel || (everyone && canOpenToServer);
   const handleCreate = () => {
     if (!title.trim()) return;
     const privacy = open ? 'public' : selectedGroup ? 'group' : 'private';
@@ -140,13 +141,13 @@ const NewWaveModal = ({ isOpen, onClose, onCreate, contacts, groups, federationE
             Everyone who can see {containerLabel} can see this {T.wave}. The community's owners and admins can
             narrow it afterwards, under Who can see this. For a private conversation, start a {T.wave} outside the community.
           </div>
-        ) : (
+        ) : canOpenToServer ? (
         <div style={{ marginBottom: '16px' }}>
           <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>WHO CAN SEE IT</div>
           {audienceChoice(false, PRIVACY_LEVELS.private, 'People', `Only the people you pick, or a whole ${T.crew}. Each is asked first.`)}
-          {audienceChoice(true, PRIVACY_LEVELS.public, 'Everyone on this server', 'Anyone here can find and read it.')}
+          {audienceChoice(true, PRIVACY_LEVELS.public, 'Everyone on this server', 'Anyone here can find and read it. Only server moderators and admins can choose this.')}
         </div>
-        )}
+        ) : null}
 
         {!open && contacts.length > 0 && (
           <div style={{ marginBottom: '16px' }}>
