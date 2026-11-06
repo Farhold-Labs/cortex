@@ -517,10 +517,10 @@ test('CORTEX-COMM-014: a private Community does not announce itself', { timeout:
 
     await t.test('a malformed permission list is refused, not treated as no change', async () => {
       const role = (await api('POST', `/api/communities/${priv.id}/roles`, {
-        token: owner.token, body: { name: 'greeter', priority: 10, permissions: ['wave.create'] },
+        token: owner.token, body: { name: 'greeter', priority: 10, permissions: ['channel.create_wave'] },
       })).body.role;
 
-      for (const bad of [{ permissions: 'wave.create' }, { permissions: ['not.a.capability'] },
+      for (const bad of [{ permissions: 'channel.create_wave' }, { permissions: ['not.a.capability'] },
                          { priority: 'high' }, { name: 'x'.repeat(200) }]) {
         const res = await api('PATCH', `/api/communities/${priv.id}/roles/${role.id}`, {
           token: owner.token, body: bad,

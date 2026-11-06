@@ -155,6 +155,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Review from the Wave Itself; Limit a Channel to Roles; Portal Waves Stay Public | v2.135.1–v2.136.0 |
 | Verse-Wide Broadcast vs Conversation (security); Travellers Asked; Blocks Across Servers | v2.136.1–v2.137.0 |
 | Group Waves With Travellers; Remove and Leave Across Servers; Remote Mutes | v2.138.0 |
+| Community Roles Editor (make, edit, give and take roles; powers in plain words) | v2.139.0 |
 
 ---
 
@@ -162,7 +163,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 ### Near-term
 
-- **Community roles editor.** The server has had custom Community roles since v2.96.0 (create, rename, choose capabilities, delete, give to members: `/api/communities/:id/roles`, `/members/:userId/roles/:roleId`), and channel access (v2.136.0) and wave narrowing (v2.134.0) are chosen by role, but the app can only appoint admins and moderators. The only other roles are those "Make it a role" creates in review. Needs: a ROLES editor in Manage Community (new role, name, what it can do, delete), giving and taking roles on each member's ⋮, and the capability list in plain words. The server already refuses a role above your own or with powers you lack.
+- **Community powers that do nothing yet.** `content.moderate` (moderating pings across every channel) and `event.manage` are in the capability vocabulary and held by moderators and admins, but nothing checks them; `audit.view` has a route and no screen. The roles editor (v2.139.0) does not offer them. Either build what they promise or retire them.
 
 - **Mute from the wave view.** Per-wave mute (v2.84.0) is only in the wave-list row menu. It should also be in the ⋮ menu inside an open wave. The server side is done; this is UI only.
 - **Delete profile files with the account.** Account deletion leaves the profile picture and video on disk at their old addresses (nothing links to them). See PRIVACY.md.

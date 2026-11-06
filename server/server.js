@@ -26593,6 +26593,9 @@ app.get('/api/communities/:id/members', authenticateToken, (req, res) => {
   const filters = {
     q: typeof req.query.q === 'string' ? req.query.q.slice(0, 64) : null,
     staffOnly: req.query.staff === '1',
+    // v2.139.0: who holds one role, for the roles editor. Only this
+    // Community's roles match: the query joins on the role's community.
+    roleId: typeof req.query.role === 'string' ? req.query.role.slice(0, 64) : null,
   };
   const rows = db.listCommunityMembers(req.params.id, { limit: pageSize, offset, ...filters });
   const rolesByUser = db.getMemberRolesBulk(req.params.id, rows.map(m => m.user_id));
@@ -26888,9 +26891,43 @@ app.delete('/api/communities/:id/bans/:userId', authenticateToken, (req, res) =>
 // ----- Roles -----
 
 app.get('/api/communities/:id/roles', authenticateToken, (req, res) => {
-  if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_MEMBERS)) return;
-  res.json({ roles: db.listCommunityRoles(req.params.id) });
+  const decision = requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_MEMBERS);
+  if (!decision) return;
+  // v2.139.0: how many hold each role, for the roles editor. What a role is
+  // used for (channels limited to it, waves shown to it) goes only to whoever
+  // may delete it: how many narrowed waves exist is not every member's to know.
+  const usage = db.communityRoleUsage(req.params.id);
+  const canManage = db.getMemberCapabilities(req.params.id, req.user.userId).has(CommunityCaps.MANAGE_ROLES);
+  res.json({
+    roles: db.listCommunityRoles(req.params.id).map(r => ({
+      ...r,
+      holders: usage.holders.get(r.id) || 0,
+      ...(canManage ? { channels: usage.channels.get(r.id) || 0, waves: usage.waves.get(r.id) || 0 } : {}),
+    })),
+  });
 });
+
+/**
+ * Role names are unique per Community whatever their case (v2.139.0). The
+ * table's UNIQUE(community_id, name) is case-sensitive and answered a
+ * duplicate with a 500; "Admin" beside the built-in "admin" would be worse,
+ * a second role that reads as the first.
+ */
+function communityRoleNameTaken(communityId, name, exceptId = null) {
+  const lower = name.trim().toLowerCase();
+  return db.listCommunityRoles(communityId)
+    .some(r => r.id !== exceptId && String(r.name).trim().toLowerCase() === lower);
+}
+
+/** Everyone holding a role, told their capabilities may have changed. */
+function pushRoleHoldersChanged(communityId, roleId) {
+  const holders = db.db.prepare(`
+    SELECT m.user_id FROM community_membership_roles mr
+    JOIN community_memberships m ON m.id = mr.membership_id
+    WHERE mr.role_id = ? AND m.community_id = ? AND m.state = 'active'
+  `).all(roleId, communityId).map(r => r.user_id);
+  if (holders.length) broadcast({ type: 'community_roles_changed', communityId }, holders);
+}
 
 app.post('/api/communities/:id/roles', authenticateToken, apiLimiter, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.MANAGE_ROLES)) return;
@@ -26898,8 +26935,19 @@ app.post('/api/communities/:id/roles', authenticateToken, apiLimiter, (req, res)
   const name = boundedString(req.body.name, COMMUNITY_LIMITS.roleName);
   if (!name) return res.status(400).json({ error: 'Role name is required' });
 
+  // Refused rather than quietly dropped, as PATCH has been since CORTEX-COMM-017.
+  if (req.body.permissions !== undefined && (!Array.isArray(req.body.permissions) ||
+      !req.body.permissions.every(c => typeof c === 'string' && CommunityCapabilityValues.includes(c)))) {
+    return res.status(400).json({ error: 'permissions must be a list of known capabilities' });
+  }
   const permissions = Array.isArray(req.body.permissions) ? req.body.permissions : [];
+  if (req.body.priority !== undefined && !Number.isInteger(req.body.priority)) {
+    return res.status(400).json({ error: 'priority must be a whole number' });
+  }
   const priority = Number.isInteger(req.body.priority) ? req.body.priority : 100;
+  if (communityRoleNameTaken(req.params.id, name)) {
+    return res.status(409).json({ error: 'There is already a role with that name', code: 'ROLE_NAME_TAKEN' });
+  }
 
   // You cannot create a role holding powers you do not hold, or one that would
   // outrank you — the same rule as granting, applied at the point of minting.
@@ -26944,6 +26992,9 @@ app.patch('/api/communities/:id/roles/:roleId', authenticateToken, apiLimiter, (
   if (req.body.priority !== undefined && !Number.isInteger(req.body.priority)) {
     return res.status(400).json({ error: 'priority must be a whole number' });
   }
+  if (nextName && communityRoleNameTaken(req.params.id, nextName, req.params.roleId)) {
+    return res.status(409).json({ error: 'There is already a role with that name', code: 'ROLE_NAME_TAKEN' });
+  }
 
   const next = req.body.permissions !== undefined ? req.body.permissions : null;
   // The proposed priority goes to the evaluator too, or it judges a role that
@@ -26965,6 +27016,7 @@ app.patch('/api/communities/:id/roles/:roleId', authenticateToken, apiLimiter, (
     });
     return updated;
   });
+  pushRoleHoldersChanged(req.params.id, req.params.roleId);
   res.json({ role: updated });
 });
 
@@ -26976,6 +27028,13 @@ app.delete('/api/communities/:id/roles/:roleId', authenticateToken, (req, res) =
   const check = communityAuthz.canEditRole(db, req.user.userId, req.params.id, role, {});
   if (!check.allowed) return res.status(403).json({ error: 'Forbidden', reason: check.reason });
 
+  // Read before the grants cascade away, so they hear about it.
+  const holders = db.db.prepare(`
+    SELECT m.user_id FROM community_membership_roles mr
+    JOIN community_memberships m ON m.id = mr.membership_id
+    WHERE mr.role_id = ? AND m.community_id = ?
+  `).all(req.params.roleId, req.params.id).map(r => r.user_id);
+
   const deleted = inCommunityTransaction(() => {
     if (!db.deleteCommunityRole(req.params.roleId)) return false;
     db.logCommunityAudit(req.params.id, {
@@ -26986,6 +27045,7 @@ app.delete('/api/communities/:id/roles/:roleId', authenticateToken, (req, res) =
   if (!deleted) {
     return res.status(409).json({ error: 'Built-in roles cannot be deleted' });
   }
+  if (holders.length) broadcast({ type: 'community_roles_changed', communityId: req.params.id }, holders);
   res.json({ success: true });
 });
 

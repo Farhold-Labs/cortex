@@ -4,6 +4,7 @@ import { GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { T } from '../../config/terminology.js';
 import { plainText } from '../../utils/plainText.js';
 import WaveReviewActions from '../communities/WaveReviewActions.jsx';
+import { roleTitle } from '../communities/roleWords.js';
 
 /**
  * Who can see a wave in a Community channel (v2.134.0, wave-access phase 4).
@@ -156,7 +157,7 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
               <>
                 Only{' '}
                 {[...(view.users || []).map(u => plainText(u.name || u.handle)),
-                  ...(view.roles || []).map(r => `everyone with the ${plainText(r.name)} role`),
+                  ...(view.roles || []).map(r => `everyone with the ${roleTitle(r)} role`),
                   ...(view.crew ? [`the ${T.crew} ${plainText(view.crew.name || '')}`] : [])].join(', ') || 'nobody named'}
                 , and the community's owners and admins.
               </>
@@ -179,7 +180,7 @@ const WaveAudienceModal = ({ isOpen, onClose, waveId, fetchAPI, showToast, isMob
                     {roles.map(r => (
                       <label key={r.id} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '4px 0', cursor: 'pointer' }}>
                         <input type="checkbox" checked={roleIds.includes(r.id)} onChange={() => toggle(roleIds, setRoleIds, r.id)} />
-                        <span style={{ color: 'var(--text-primary)' }}>{plainText(r.name)}</span>
+                        <span style={{ color: 'var(--text-primary)' }}>{roleTitle(r)}</span>
                       </label>
                     ))}
                   </>
