@@ -232,12 +232,22 @@ async function run({ anyServerRemoves = false, copyCreatorRemoves = false } = {}
       backfill: (await signed('near.example', '/api/federation/wave-backfill', { originWaveId: g.id })).status,
     };
 
-    // People elsewhere only join a conversation kept to its people.
+    // People elsewhere only join a conversation kept to its people. Since
+    // v2.140.0 only server staff open a wave to everyone, so alice is a
+    // moderator for this.
+    const setRole = (role) => {
+      const conn = new (require(path.join(root, 'server/node_modules/better-sqlite3')))(dbPath);
+      conn.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, 'u-alice');
+      conn.close();
+    };
+    setRole('moderator');
     const pub = (await api('POST', '/api/waves', { token: alice, body: { title: 'Open', privacy: 'public' } })).body;
     r.public = {
       invite: (await api('POST', `/api/waves/${pub.id}/invite-federated`, { token: alice, body: { participants: ['@zed@near.example'] } })).body?.code,
       create: (await api('POST', '/api/waves', { token: alice, body: { title: 'Open2', privacy: 'public', participants: ['@zed@near.example'] } })).body?.code,
     };
+    setRole('user');
+    r.public.notStaff = (await api('POST', '/api/waves', { token: alice, body: { title: 'Open3', privacy: 'public' } })).body?.code;
     // A conversation with someone elsewhere becomes a group of its people here.
     const c = (await api('POST', '/api/waves', { token: alice, body: { title: 'Bob and zed', privacy: 'private', participants: ['u-bob', '@zed@near.example'] } })).body;
     await acceptAll(bob);
@@ -300,7 +310,7 @@ test('groups and travellers', { timeout: 120000 }, async (t) => {
   });
 
   await t.test('people elsewhere join only a conversation kept to its people', () => {
-    assert.deepEqual(r.public, { invite: 'PUBLIC_WAVE', create: 'CROSS_SERVER' });
+    assert.deepEqual(r.public, { invite: 'PUBLIC_WAVE', create: 'CROSS_SERVER', notStaff: 'SERVER_PUBLIC_STAFF_ONLY' });
     assert.deepEqual(r.grouped, { before: 'crossServer', status: 200, after: 'group', origin: 'origin' });
   });
 

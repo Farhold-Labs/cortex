@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.140.0] - 2026-11-06
+
+Community powers that did nothing now do something, and only server staff open a wave to everyone on the server. `content.moderate`, `event.manage` and `audit.view` have been held by every Community moderator and admin since v2.94.0 and checked by nothing, or, for the audit log, readable through an API with no screen. No migration.
+
+### Security
+- **[SECURITY] Deleting a channel or closing a Community opened its waves (CORTEX-COMM-028).** A public wave in a channel is public to the people who can see the channel (v2.128.0); a narrowed wave is its named audience's (v2.134.0). Taking a wave out by hand reconciled that (`unfileWave()`). Deleting the channel, or closing the Community (owner or node admin), cleared the wave's channel and Community and nothing else: a members-only wave became readable by every account on the server, and a narrowed wave went back to its participant rows, so the people it was narrowed to lost it unless they had one. Every wave now leaves through `unfileWave()` in the same transaction, before the delete, and the people who lost it are told. `tools/find-detached-channel-waves.mjs` lists, read-only, the waves an earlier delete left behind; dev has none.
+
+### Changed
+- **Everyone on this server is for server moderators and admins.** Creating a wave with `privacy: 'public'` outside a channel, or switching one to public in its settings, is 403 `SERVER_PUBLIC_STAFF_ONLY` for anyone else. The Communities plan always said so (docs/wave-access/01-design.md); it was never enforced. A wave already open to everyone may stay so; a public wave in a Community channel is the channel's and is not affected. The new-wave dialog and wave settings offer *Everyone on this server* only to staff.
+- **A public wave leaving its channel becomes private.** Out of the channel, public would mean the whole server, which nobody chose. Its participant rows keep it, and its creator. Moving it out asks first. So an ordinary member can no longer file a wave into a channel unless it is already public: they start it in the channel instead. Moving their channel waves between channels is unchanged.
+- The moderator's line in ROLES reads "Keeps order: removes pings, removes and bans members, runs events and voice."
+- The role editor offers the three powers: *See the community's activity*, *Remove pings in channel waves they can read, by people ranked below them*, *Run the events in channel waves they can read*. `channel.move_wave` reads *Move their own waves between channels, and out of them*.
+
+### Added
+- **Removing pings (`content.moderate`).** A member holding it in a wave's channel (channel overrides apply) may remove someone else's ping there, if they can read the wave and rank above its author in the Community. A Community power never opens a wave: a narrowed wave stays its audience's. Wave staff (v2.88.0) and server moderators are not ranked, as before. Removals through the Community are written to its log (`ping.remove`). `GET /api/waves/:id` gives `can_remove_pings`, and a ping's ⋮ offers *Remove* on other people's pings when it is true; the thread panel too. **Wave staff could remove pings since v2.88.0 with no way to in the app**: Delete was offered only on your own.
+- **Running events (`event.manage`).** Someone holding it in the channel of the wave an event belongs to may edit it, invite, chase and take the register, like wave staff.
+- **ACTIVITY**, the Community's audit log in Manage Community, for `audit.view` (owners, admins, moderators): "Malcolm Reynolds gave Zoe Washburne Moderator", newest first, 50 at a time up to the 200 the API returns. `GET /api/communities/:id/audit` now names people, roles, channels and waves: a wave's title only if the reader can open it, a channel's name only if they can see it listed, and the removed ping's id not at all. Role create, change and delete record the role's name, so the log still reads after the role is gone.
+
+### Fixed
+- Deleting your own ping asked to "Delete Wave" and warned that "All messages will be permanently deleted". It now says *Delete ping*.
+- Filing a wave only some people can see told members to "Make it public first", which only staff can now do; it says to start a new one in the channel.
+
+### Verified
+- `npm test`: 706/706. New `community-powers.test.cjs`:
+  - deleting a channel: an outsider cannot read its members-only wave before or after, which is now private; its creator can. A narrowed wave stays its named member's; an admin who posted in it, not named, loses it. Closing a Community: the same. The counterfactual skips `unfileChannelWaves()` and sees the outsider read the wave (both cases) and the named member locked out;
+  - a member's public wave outside a channel is 403 `SERVER_PUBLIC_STAFF_ONLY`, a server moderator's 201, a member's in a channel 201; widening a private wave is refused for a member and allowed for staff; a public wave moved out reads private and neither an outsider nor another member can open it;
+  - `can_remove_pings` true for the Community moderator and the wave's creator, false for a member; a member cannot remove a ping (403), the moderator cannot remove the Community admin's (`OUTRANKED`) and can remove a member's; a custom role holding `content.moderate` at 150 is refused under a channel deny and allowed without it; nobody removes in a narrowed wave they cannot read, or from outside the Community;
+  - the moderator edits a channel wave's event; the custom role and an outsider cannot;
+  - the log: a member is 403; the removal names its moderator and the wave, with no ping id; a narrowed wave's title for the owner and not for the moderator; a grant names its person and role; a deleted channel reads as gone.
+- Existing tests that had ordinary accounts create server-wide public waves now start them in a channel, or briefly make the account a moderator (`communities-routes`, `community-portal-access`, `federation-groups`, which also checks the refusal). `communities-routes` also checks that a deleted channel's public wave is private and closed to an outsider.
+- Headless on dev at 390 px and 1280 px: Hoban's new-wave dialog has no *Everyone on this server*, Mal's has it; Zoe as Community moderator opens Hoban's channel wave, ⋮ on his ping offers only *Remove*, the dialog reads "Remove Hoban Washburne's ping? It goes for everyone.", and the ping goes; Mal opens ACTIVITY and reads "Zoe Washburne removed a ping in "Powers check"" and "Malcolm Reynolds deleted a role" for a role deleted before this release. No page wider than the screen, no console errors. Test waves deleted and Zoe's role taken away afterwards.
+
 ## [2.139.0] - 2026-11-06
 
 The Community roles editor. Custom roles have existed on the server since v2.96.0, and limiting a channel (v2.136.0) and narrowing a wave (v2.134.0) are both chosen by role, but the app could only appoint admins and moderators: the only other roles were those "Make it a role" created in review, and nothing could rename, change or delete them. No migration.

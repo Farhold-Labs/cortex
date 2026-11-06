@@ -7,6 +7,7 @@ import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import { ContainerTile } from '../waves/WaveRail.jsx';
 import { uploadFile } from '../../utils/uploads.js';
 import CommunityRolesEditor from './CommunityRolesEditor.jsx';
+import CommunityActivity from './CommunityActivity.jsx';
 import { roleTitle, rolePermissions } from './roleWords.js';
 
 /**
@@ -26,6 +27,8 @@ import { roleTitle, rolePermissions } from './roleWords.js';
  *
  * v2.139.0: the community's own roles are made, edited and deleted under
  * ROLES (CommunityRolesEditor), and given and taken from each member's ⋮.
+ *
+ * v2.140.0: ACTIVITY shows the audit log (CommunityActivity) to `audit.view`.
  */
 
 // What each built-in role is for, in a line. The capability sets themselves
@@ -33,7 +36,7 @@ import { roleTitle, rolePermissions } from './roleWords.js';
 const ROLE_LINES = {
   owner: 'Everything, including handing the community over and closing it.',
   admin: 'Runs the community: details, channels, members, roles below admin.',
-  moderator: 'Keeps order: removes and bans members, and runs voice.',
+  moderator: 'Keeps order: removes pings, removes and bans members, runs events and voice.',
 };
 const STAFF = ['admin', 'moderator'];
 const TITLE = { owner: 'Owner', admin: 'Admin', moderator: 'Moderator', member: 'Member' };
@@ -950,6 +953,13 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
               styles={{ action, danger, hint, label, input, row }}
               onChanged={() => { loadRoles(); refreshPeople(); onChanged && onChanged(); }} />
           </div>
+        </CollapsibleSection>
+      )}
+
+      {/* ACTIVITY — the audit log (v2.140.0). */}
+      {can('audit.view') && (
+        <CollapsibleSection {...section('activity', 'ACTIVITY')}>
+          <CommunityActivity community={community} active={open === 'activity'} fetchAPI={fetchAPI} styles={{ action, hint }} />
         </CollapsibleSection>
       )}
 

@@ -8,18 +8,18 @@ import { plainText } from '../../utils/plainText.js';
  * and mean nothing to the person choosing them, so the roles editor offers each
  * one as what it lets someone do.
  *
- * Only capabilities that do something are offered. `content.moderate` and
- * `event.manage` exist in the vocabulary but nothing checks them yet;
- * `audit.view` has no screen; `community.migrate` has no flow. Closing and
- * handing over a Community stay the owner's (`community.delete`,
- * `community.transfer`). A role that already holds any of these keeps them:
- * the editor sends them back unchanged.
+ * Only capabilities that do something are offered. `content.moderate`,
+ * `event.manage` and `audit.view` do since v2.140.0; `community.migrate` has no
+ * flow. Closing and handing over a Community stay the owner's
+ * (`community.delete`, `community.transfer`). A role that already holds any of
+ * these keeps them: the editor sends them back unchanged.
  */
 export const CAPABILITY_GROUPS = [
   {
     title: 'COMMUNITY',
     caps: [
       ['community.manage', () => `Edit the community's details, and see and narrow every ${T.wave} in its channels`],
+      ['audit.view', () => "See the community's activity: who changed what, and when"],
     ],
   },
   {
@@ -37,8 +37,10 @@ export const CAPABILITY_GROUPS = [
     caps: [
       ['channel.view', () => 'See channels'],
       ['channel.create_wave', () => `Start ${T.waves} in channels`],
-      ['channel.move_wave', () => `File their own ${T.waves} into channels`],
+      ['channel.move_wave', () => `Move their own ${T.waves} between channels, and out of them`],
       ['channel.manage', () => 'Create, rename, arrange and delete channels, and choose who sees them'],
+      ['content.moderate', () => `Remove ${T.pings} in channel ${T.waves} they can read, by people ranked below them`],
+      ['event.manage', () => `Run the events in channel ${T.waves} they can read: edit, cancel, invite and take the register`],
     ],
   },
   {

@@ -34,6 +34,7 @@ const ThreadPanel = ({
   moveSource,
   onStartMove,
   onCompleteMove,
+  canRemovePings = false,
 }) => {
   const e2ee = useE2EE();
 
@@ -540,6 +541,7 @@ const ThreadPanel = ({
               contacts={contacts}
               onShowProfile={onShowProfile}
               isInThreadPanel
+              canRemovePings={canRemovePings}
               wave={wave}
               currentWaveId={wave?.id}
               fetchAPI={fetchAPI}
