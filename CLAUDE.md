@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.138.0**. Last brought current 2026-10-30.
+Current version: **2.139.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2138000 / versionName "2.138.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2138000 / MARKETING_VERSION 2.138.0
+client/android/app/build.gradle                  versionCode 2139000 / versionName "2.139.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2139000 / MARKETING_VERSION 2.139.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -302,6 +302,7 @@ Migrations are applied idempotently at boot from within `database-sqlite.js` rat
 A first-class layer of Community → channel → waves (a channel **contains** waves; it is not itself a wave). Anyone can create one. It is an opt-in instance feature.
 
 - **Authorization:** one evaluator, `server/lib/communities/authorize.js`. Channel overrides pool, and deny wins.
+- **Roles (v2.139.0).** Custom roles are made, edited and given in Manage Community → ROLES (`CommunityRolesEditor.jsx`, capability words in `roleWords.js`). Names are unique per Community in any case. Editing a role checks only the capabilities that change (`canEditRole`); granting one still needs every capability in it. Deleting a role must also clear `wave_audience`, which has no foreign key to roles.
 - **Remote members** join with their home identity. Their standing is re-checked with their home node, so suspending or unpairing reaches them.
 - **Ownership** transfers by offer and accept.
 - **Design docs:** `docs/communities/`. The audit register is in `docs/SECURITY-AUDIT-STATE.md` and the Communities docs.

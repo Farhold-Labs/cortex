@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { T } from '../../config/terminology.js';
-import { plainText } from '../../utils/plainText.js';
+import { roleTitle } from './roleWords.js';
 
 /**
  * Who can see a channel (v2.136.0). The server has had restricted channels
@@ -87,12 +87,12 @@ const ChannelAccessEditor = ({ community, channel, roles, fetchAPI, showToast, o
           {radio(true, 'Only these roles', `Plus the community's owners and admins, who see every channel. Everyone else loses the channel and its ${T.waves}.`)}
           {restricted && (
             <div style={{ paddingLeft: '1.4rem' }}>
-              {choosable.length === 0 && <div style={hint}>No roles to choose yet besides owners and admins.</div>}
+              {choosable.length === 0 && <div style={hint}>No roles to choose yet besides owners and admins. Make one under ROLES.</div>}
               {choosable.map(r => (
                 <label key={r.id} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', padding: '0.2rem 0', cursor: 'pointer', fontSize: '0.8rem' }}>
                   <input type="checkbox" checked={chosen.includes(r.id)}
                     onChange={() => setChosen(c => c.includes(r.id) ? c.filter(x => x !== r.id) : [...c, r.id])} />
-                  <span style={{ color: 'var(--text-primary)' }}>{plainText(r.name)}</span>
+                  <span style={{ color: 'var(--text-primary)' }}>{roleTitle(r)}</span>
                 </label>
               ))}
             </div>

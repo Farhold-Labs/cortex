@@ -4794,6 +4794,18 @@ What Manage Community uses beyond the routes it always had. Role grants and revo
 | GET | `/api/communities/:id` | anyone who may discover it | adds `myRoles`: your own roles there, `[{ id, name, priority }]`, highest first, or `[]` if you are not a member |
 | PUT / DELETE | `/api/communities/:id/members/:userId/roles/:roleId` | `member.roles` | unchanged rules: you grant only roles below your own priority whose capabilities you hold, and revoke only from people below you. So an owner appoints admins, and an admin appoints moderators. Both now push `community_roles_changed` (`{ communityId }`) to the person whose roles changed, so their app re-reads its channel list |
 
+## Community roles editor (v2.139.0)
+
+Custom roles have had routes since v2.96.0; this release gave them an editor (Manage Community → ROLES) and tightened what the routes accept.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/communities/:id/roles` | `member.view` | each role adds `holders` (active members holding it). For callers with `member.roles` also `channels` (channels with a rule for it) and `waves` (waves shown to it); others are not told how many narrowed waves exist |
+| POST | `/api/communities/:id/roles` | `member.roles` | `{ name, priority?, permissions? }`. A name already used in this Community, in any case and including the built-ins, is 409 `ROLE_NAME_TAKEN` (it used to be a 500). An unknown capability or a non-array `permissions` is 400, as is a non-integer `priority`; both used to be dropped silently |
+| PATCH | `/api/communities/:id/roles/:roleId` | `member.roles` | renaming onto a taken name is 409 `ROLE_NAME_TAKEN`. **Only capabilities that change must be held**: a role may keep a power the editor lacks, but they can neither add nor remove one. Pushes `community_roles_changed` to everyone holding the role |
+| DELETE | `/api/communities/:id/roles/:roleId` | `member.roles` | also deletes the role's entries in wave audiences (`wave_audience` has no foreign key to roles); grants and channel rules cascade as before. Pushes `community_roles_changed` to its holders |
+| GET | `/api/communities/:id/members?role=<roleId>` | `member.view` | only the holders of that role. Another Community's role id matches nobody |
+
 ## Community logos (v2.125.0)
 
 | Method | Path | Who | Notes |
