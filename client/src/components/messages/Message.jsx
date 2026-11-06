@@ -85,6 +85,7 @@ const Message = ({
   onTogglePin = null,          // pin/unpin this ping for the whole wave (v2.74.0)
   waveEncrypted = false,
   showToast,
+  canRemovePings = false,      // remove other people's pings (v2.140.0)
 }) => {
   const config = PRIVACY_LEVELS[message.privacy] || PRIVACY_LEVELS.private;
   const isHighlighted = highlightId === message.id;
@@ -97,6 +98,9 @@ const Message = ({
   const isCollapsed = collapsed[message.id];
   const isDeleted = message.deleted;
   const canDelete = !isDeleted && message.author_id === currentUserId;
+  // Someone else's ping, as wave staff or a Community moderator. The server
+  // decides (rank included); this only offers it.
+  const canRemove = !isDeleted && !canDelete && canRemovePings && !!onDelete;
   const isEditing = !isDeleted && editingMessageId === message.id;
 
   const [showReactionPicker, setShowReactionPicker] = useState(false);
@@ -874,6 +878,11 @@ const Message = ({
                         <span>✕</span><span>Delete</span>
                       </MenuItem>
                     )}
+                    {canRemove && (
+                      <MenuItem color="var(--accent-orange)" style={{ borderTop: '1px solid var(--border-subtle)' }} onClick={() => { onDelete(message); setShowMessageMenu(false); }}>
+                        <span>✕</span><span>Remove</span>
+                      </MenuItem>
+                    )}
                     {onReport && message.author_id !== currentUserId && (
                       <MenuItem color="var(--text-muted)" style={{ borderTop: '1px solid var(--border-subtle)' }} onClick={() => { onReport(message); setShowMessageMenu(false); }}>
                         <span>⚑</span><span>Report</span>
@@ -938,6 +947,7 @@ const Message = ({
                 fetchAPI={fetchAPI}
                 onOpenThread={onOpenThread}
                 onTogglePin={onTogglePin}
+                canRemovePings={canRemovePings}
                 isInThreadPanel={isInThreadPanel}
                 currentUser={currentUser}
                 moveSource={moveSource}

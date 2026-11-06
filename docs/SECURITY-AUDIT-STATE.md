@@ -199,6 +199,30 @@ Fix: each member is asked separately. Test: `tests/everyone-mention.test.cjs`,
 whose author now sorts first; a counterfactual shares the memo again and sees
 a member outside the restricted channel notified.
 
+### CORTEX-COMM-028: deleting a channel or closing a Community opened its waves — Medium (introduced v2.128.0, fixed v2.140.0)
+
+Since v2.128.0 a public wave in a Community channel is public to the people
+who can see the channel, not to the server; since v2.134.0 a narrowed wave is
+its named audience's, whatever its participant rows say. Taking a wave out of
+its channel by hand went through `unfileWave()`, which reconciles that. Deleting
+the channel (`db.deleteChannel`) or closing the Community (`db.deleteCommunity`,
+by its owner or a node admin) cleared the wave's two columns and nothing else.
+So a members-only channel wave became readable by every account on the server,
+and a narrowed wave went back to its participant rows: the people it was
+narrowed to lost it unless they had one, and anyone with an old row kept it.
+Its `wave_audience` rows were left behind.
+
+Found while making a public wave that leaves its channel private (v2.140.0:
+only server staff may open a wave to the whole server).
+
+Fix: `unfileChannelWaves()` takes every wave in the channels out through
+`unfileWave()` inside the same transaction, before the delete, and the people
+who lost a wave are told. Test: `tests/community-powers.test.cjs`; a
+counterfactual skips it and sees the wave readable by an account outside the
+Community and the named member locked out, for both a channel delete and a
+Community close. `tools/find-detached-channel-waves.mjs` lists, read-only, the
+waves a delete before v2.140.0 left behind.
+
 ## Prior findings still open in current code
 
 - **002, cross-port browser/request binding:** guest session lookup uses a nonce
