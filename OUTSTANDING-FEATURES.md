@@ -156,14 +156,13 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Verse-Wide Broadcast vs Conversation (security); Travellers Asked; Blocks Across Servers | v2.136.1–v2.137.0 |
 | Group Waves With Travellers; Remove and Leave Across Servers; Remote Mutes | v2.138.0 |
 | Community Roles Editor (make, edit, give and take roles; powers in plain words) | v2.139.0 |
+| Community Moderators Remove Pings and Run Events; ACTIVITY Log; Server-Wide Waves Staff-Only | v2.140.0 |
 
 ---
 
 ## Outstanding Features
 
 ### Near-term
-
-- **Community powers that do nothing yet.** `content.moderate` (moderating pings across every channel) and `event.manage` are in the capability vocabulary and held by moderators and admins, but nothing checks them; `audit.view` has a route and no screen. The roles editor (v2.139.0) does not offer them. Either build what they promise or retire them.
 
 - **Mute from the wave view.** Per-wave mute (v2.84.0) is only in the wave-list row menu. It should also be in the ⋮ menu inside an open wave. The server side is done; this is UI only.
 - **Delete profile files with the account.** Account deletion leaves the profile picture and video on disk at their old addresses (nothing links to them). See PRIVACY.md.

@@ -547,6 +547,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     || !!myWaveRole
     || canAccess(currentUser, 'moderator');
   const repliesAllowed = annWave.allowReplies !== false;
+  // v2.140.0 — wave staff, or a Community member holding content.moderate here.
+  const canRemovePings = !!waveData?.can_remove_pings;
+  const openThreadHere = useCallback((msg) => onOpenThread?.(msg, { canRemovePings }), [onOpenThread, canRemovePings]);
   const reactionsAllowed = annWave.allowReactions !== false;
 
   // ===== Wave gestures (v2.77.0, revised v2.78.0) =====
@@ -2647,7 +2650,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               contentCollapsed={contentCollapsed} onToggleContentCollapse={toggleContentCollapse}
               onReact={reactionsAllowed ? handleReaction : null} onMessageClick={handleMessageClick} participants={participants}
               contacts={contacts} onShowProfile={onShowProfile} onReport={handleReportMessage}
-              onOpenThread={onOpenThread}
+              onOpenThread={openThreadHere} canRemovePings={canRemovePings}
               onShare={handleSharePing} wave={wave || waveData}
               onNavigateToWave={onNavigateToWave} currentWaveId={wave.id}
               autoFocusMessages={currentUser?.preferences?.autoFocusMessages === true}
@@ -2883,6 +2886,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         federationEnabled={federationEnabled}
         currentUserId={currentUser?.id}
         isAdmin={canAccess(currentUser, 'admin')}
+        canOpenToServer={canAccess(currentUser, 'moderator')}
         onFederate={() => { setShowSettings(false); setShowFederateModal(true); }}
         isMobile={isMobile} />
 
@@ -2899,6 +2903,14 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           isOpen={!!messageToDelete}
           onClose={() => setMessageToDelete(null)}
           waveTitle={`message from ${messageToDelete.sender_name}`}
+          warning={null}
+          {...(messageToDelete.author_id !== currentUser?.id ? {
+            title: `Remove ${T.ping}`, confirmLabel: 'Remove',
+            message: `Remove ${plainText(messageToDelete.sender_name || '')}'s ${T.ping}? It goes for everyone.`,
+          } : {
+            title: `Delete ${T.ping}`,
+            message: `Delete your ${T.ping}? It goes for everyone.`,
+          })}
           onConfirm={confirmDeleteMessage}
           isMobile={isMobile}
         />

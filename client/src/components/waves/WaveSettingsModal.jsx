@@ -6,7 +6,7 @@ import { useE2EE } from '../../../e2ee-context.jsx';
 import { T } from '../../config/terminology.js';
 import { PING_TTLS, ttlLabel } from '../../utils/expiry.js';
 
-const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast, onUpdate, participants = [], showParticipants, setShowParticipants, federationEnabled, currentUserId, onFederate, isMobile, isAdmin = false }) => {
+const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast, onUpdate, participants = [], showParticipants, setShowParticipants, federationEnabled, currentUserId, onFederate, isMobile, isAdmin = false, canOpenToServer = false }) => {
   const e2ee = useE2EE();
   const [privacy, setPrivacy] = useState(wave?.privacy || 'private');
   // Announcement settings (v2.82.0)
@@ -638,7 +638,9 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         ) : (
         <div style={{ marginBottom: '16px' }}>
           <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>WHO CAN SEE IT</div>
-          {Object.entries(PRIVACY_LEVELS).filter(([key]) => key !== 'crossServer').map(([key, config]) => (
+          {/* v2.140.0: Everyone is server staff's to choose; a wave already open to everyone can stay so. */}
+          {Object.entries(PRIVACY_LEVELS).filter(([key]) => key !== 'crossServer'
+            && (key !== 'public' || canOpenToServer || wave?.privacy === 'public')).map(([key, config]) => (
             <button key={key} onClick={() => { setPrivacy(key); if (key !== 'group') setSelectedGroup(null); }}
               style={{
                 width: '100%', padding: '12px', marginBottom: '8px', textAlign: 'left',

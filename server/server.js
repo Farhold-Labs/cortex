@@ -671,6 +671,62 @@ function canModerateWave(wave, userId) {
   return hasWaveAuthority(wave, userId, 'moderator');
 }
 
+/**
+ * A Community power inside one of its channel waves (v2.140.0):
+ * `content.moderate` and `event.manage` were held by every moderator and admin
+ * since v2.94.0 and checked by nothing. Held IN the channel, so channel
+ * overrides apply and the evaluator's standing, ban and membership gates with
+ * them; and only in a wave this person can already read. A Community power
+ * never opens a wave: a narrowed wave stays its audience's.
+ */
+function communityPowerInWave(wave, userId, capability) {
+  const channelId = wave?.channelId ?? wave?.channel_id ?? null;
+  if (!channelId || !userId || !isFeatureEnabled('communities')) return false;
+  const channel = db.getChannelById(channelId);
+  if (!channel?.community_id) return false;
+  if (!canAccessWaveFromCache(wave.id, userId)) return false;
+  return communityAuthz.canInChannel(db, { kind: 'user', userId }, channel, capability);
+}
+
+/**
+ * May this person remove pings other people wrote here? Wave staff (v2.88.0),
+ * or a Community member holding `content.moderate` in the wave's channel.
+ */
+function canRemovePingsIn(wave, userId) {
+  return canModerateWave(wave, userId) || communityPowerInWave(wave, userId, CommunityCaps.MODERATE_CONTENT);
+}
+
+/**
+ * Remove THIS ping as someone other than its author: null if allowed, else
+ * the refusal. Through the Community the rank rule applies, as for removing
+ * the person: only a ping by someone ranked below you. Wave staff and server
+ * moderators are not ranked.
+ */
+function pingRemovalRefusal(wave, ping, userId) {
+  if (canModerateWave(wave, userId)) return null;
+  if (!communityPowerInWave(wave, userId, CommunityCaps.MODERATE_CONTENT)) {
+    return { status: 403, body: { error: 'Only the author or wave staff can delete' } };
+  }
+  const communityId = db.getChannelById(wave.channelId).community_id;
+  const authorId = ping.authorId ?? ping.author_id;
+  if (authorId && db.getCommunityMembership(communityId, authorId)
+      && !communityAuthz.canActOnMember(db, userId, authorId, communityId).allowed) {
+    return { status: 403, body: { error: 'They rank at or above you in this community', code: 'OUTRANKED' } };
+  }
+  return null;
+}
+
+/**
+ * Open a wave to everyone on this server (v2.140.0): instance moderators and
+ * admins only, as the Communities plan always said. Anyone could until now, so
+ * a node-wide conversation was one tap away for every account. A public wave
+ * in a Community channel is the channel's, not the server's, and is not this.
+ */
+function canOpenToServer(userId) {
+  return hasRole(db.findUserById(userId), ROLES.MODERATOR);
+}
+const SERVER_PUBLIC_REFUSAL = { error: 'Only server moderators and admins can open a wave to everyone on this server', code: 'SERVER_PUBLIC_STAFF_ONLY' };
+
 function canPostToWave(wave, userId) {
   if (!wave) return false;
   if ((wave.postPolicy || 'all') !== 'staff') return true;
@@ -13243,6 +13299,8 @@ function canManageEvent(event, userId) {
   if (event.scope === 'wave' && event.waveId) {
     const wave = db.getWave(event.waveId);
     if (wave && canModerateWave(wave, userId)) return true;
+    // v2.140.0 — or holds `event.manage` in the Community whose channel it is in.
+    if (wave && communityPowerInWave(wave, userId, CommunityCaps.MANAGE_EVENTS)) return true;
   }
   return hasRole(db.findUserById(userId), ROLES.MODERATOR);
 }
@@ -21060,6 +21118,7 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
       ...wave,
       // v2.84.0 — per-user, so it cannot live in rowToWave
       muted: db.isWaveMuted ? db.isWaveMuted(req.user.userId, waveId) : false,
+      can_remove_pings: canRemovePingsIn(wave, req.user.userId),
       creator_name: creator?.displayName || 'Unknown',
       creator_handle: creator?.handle || 'unknown',
       participants,
@@ -21169,6 +21228,8 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     group_name: group?.name,
     group: groupInfo(wave),
     can_edit: wave.createdBy === req.user.userId,
+    // v2.140.0 — whether to offer Remove on other people's pings.
+    can_remove_pings: canRemovePingsIn(wave, req.user.userId),
   });
 });
 
@@ -22369,6 +22430,10 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     }
   }
 
+  if (privacy === 'public' && !targetChannel && !canOpenToServer(req.user.userId)) {
+    return res.status(403).json(SERVER_PUBLIC_REFUSAL);
+  }
+
   // Validate group access for group waves
   if (privacy === 'group') {
     const groupId = sanitizeInput(req.body.groupId);
@@ -22687,6 +22752,11 @@ app.put('/api/waves/:id', authenticateToken, async (req, res) => {
   // on other servers join a conversation by invitation (invite-federated).
   if (changingToCrossServer && !hasRole(db.findUserById(req.user.userId), ROLES.ADMIN)) {
     return res.status(403).json({ error: 'Only a server admin can broadcast a wave to allied servers', code: 'BROADCAST_ADMIN_ONLY' });
+  }
+
+  // v2.140.0: a wave already open to everyone may stay so; opening one is staff's.
+  if (privacy === 'public' && !inCommunityChannel && wave.privacy !== 'public' && !canOpenToServer(req.user.userId)) {
+    return res.status(403).json(SERVER_PUBLIC_REFUSAL);
   }
 
   if (privacy && !inCommunityChannel && ['private', 'group', 'crossServer', 'public'].includes(privacy)) {
@@ -25592,13 +25662,17 @@ app.delete('/api/pings/:id', authenticateToken, (req, res) => {
   // so nobody could clear an abusive ping from a wave they ran without also
   // running the whole node.
   const isAuthor = ping.authorId === req.user.userId;
-  const asStaff = !isAuthor && canModerateWave(wave, req.user.userId);
-  if (!isAuthor && !asStaff) {
-    return res.status(403).json({ error: 'Only the author or wave staff can delete' });
-  }
+  const refusal = isAuthor ? null : pingRemovalRefusal(wave, ping, req.user.userId);
+  if (refusal) return res.status(refusal.status).json(refusal.body);
+  const asStaff = !isAuthor;
 
   const result = db.deleteMessage(pingId, req.user.userId, { asStaff });
   if (!result.success) return res.status(400).json({ error: result.error });
+  // v2.140.0 — removed through the Community, so its log shows who did it.
+  if (asStaff && !canModerateWave(wave, req.user.userId)) {
+    const communityId = db.getChannelById(wave.channelId)?.community_id;
+    if (communityId) db.logCommunityAudit(communityId, { actorId: req.user.userId, action: 'ping.remove', targetType: 'wave', targetId: waveId, metadata: { pingId } });
+  }
 
   // Broadcast deletion to all participants
   broadcastToWave(result.waveId, {
@@ -26002,10 +26076,9 @@ app.delete('/api/messages/:id', authenticateToken, deprecatedEndpoint, (req, res
   // policy is exactly what the v2.86.0 review found for announcement waves and
   // reactions, so this one moves with its replacement rather than after it.
   const isAuthor = message.authorId === req.user.userId;
-  const asStaff = !isAuthor && canModerateWave(db.getWave(message.waveId), req.user.userId);
-  if (!isAuthor && !asStaff) {
-    return res.status(403).json({ error: 'Only the author or wave staff can delete' });
-  }
+  const refusal = isAuthor ? null : pingRemovalRefusal(db.getWave(message.waveId), message, req.user.userId);
+  if (refusal) return res.status(refusal.status).json(refusal.body);
+  const asStaff = !isAuthor;
 
   const result = db.deleteMessage(messageId, req.user.userId, { asStaff });
   if (!result.success) return res.status(400).json({ error: result.error });
@@ -26569,10 +26642,13 @@ app.delete('/api/communities/:id', authenticateToken, requireStepUp, (req, res) 
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.DELETE_COMMUNITY)) return;
   const closingRooms = voiceChannelIdsOf({ communityId: req.params.id });
   const closingLogo = db.getCommunityById(req.params.id)?.logo_url;
-  inCommunityTransaction(() => {
+  const released = inCommunityTransaction(() => {
+    const out = unfileChannelWaves(db.listChannels(req.params.id).map(c => c.id));
     db.deleteCommunity(req.params.id);
     db.logCommunityAudit(req.params.id, { actorId: req.user.userId, action: 'community.delete' });
+    return out;
   });
+  for (const { wave, lost } of released) announceUnfiled(wave, lost);
   closeVoiceRooms(closingRooms);
   deleteCommunityLogoFile(closingLogo);
   res.json({ success: true });
@@ -26960,6 +27036,7 @@ app.post('/api/communities/:id/roles', authenticateToken, apiLimiter, (req, res)
     const role = db.createCommunityRole(req.params.id, { name, priority, permissions });
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'role.create', targetType: 'role', targetId: role.id,
+      metadata: { role: role.name }, // v2.140.0: the log outlives the role
     });
     return role;
   });
@@ -27013,6 +27090,7 @@ app.patch('/api/communities/:id/roles/:roleId', authenticateToken, apiLimiter, (
     });
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'role.update', targetType: 'role', targetId: req.params.roleId,
+      metadata: { role: updated?.name ?? null },
     });
     return updated;
   });
@@ -27039,6 +27117,7 @@ app.delete('/api/communities/:id/roles/:roleId', authenticateToken, (req, res) =
     if (!db.deleteCommunityRole(req.params.roleId)) return false;
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'role.delete', targetType: 'role', targetId: req.params.roleId,
+      metadata: { role: role.name },
     });
     return true;
   });
@@ -27323,12 +27402,15 @@ app.delete('/api/communities/:id/channels/:channelId', authenticateToken, (req, 
   // Waves inside fall back to uncontained. Deleting a container must never
   // delete the conversations in it. A voice channel's room closes with it.
   const closingRooms = voiceChannelIdsOf({ channelId: req.params.channelId });
-  inCommunityTransaction(() => {
+  const released = inCommunityTransaction(() => {
+    const out = unfileChannelWaves([req.params.channelId]);
     db.deleteChannel(req.params.channelId);
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'channel.delete', targetType: 'channel', targetId: req.params.channelId,
     });
+    return out;
   });
+  for (const { wave, lost } of released) announceUnfiled(wave, lost);
   closeVoiceRooms(closingRooms);
   res.json({ success: true });
 });
@@ -27448,7 +27530,7 @@ app.put('/api/communities/:id/channels/:channelId/waves/:waveId', authenticateTo
   const narrowing = wave.privacy !== 'public' && !isFederatedWave(wave);
   if (narrowing && !db.isCommunityManager(req.params.id, req.user.userId)) {
     return res.status(403).json({
-      error: `Only the community's owners and admins can file a ${T_WAVE()} that only some people can see. Make it public first.`,
+      error: `Only the community's owners and admins can file a ${T_WAVE()} that only some people can see. Start a new one in the channel instead.`,
       code: 'NARROWING_NOT_ALLOWED',
     });
   }
@@ -27528,9 +27610,40 @@ function unfileWave(wave) {
     }
     for (const uid of before) if (!keep.has(uid)) lost.add(uid);
   }
+  // v2.140.0: a public wave was the channel's. Outside it, "public" means
+  // everyone on the server, which only server staff may choose, and which
+  // nobody chose here: it would have widened a members-only conversation to the
+  // whole node. It leaves as a conversation of the people who have been in it.
+  if (wave.privacy === 'public') {
+    db.updateWavePrivacy(wave.id, 'private', null);
+    if (wave.createdBy && db.findUserById(wave.createdBy) && !participation.isParticipant(wave.id, wave.createdBy)) {
+      participation.addParticipant(wave.id, wave.createdBy);
+    }
+  }
   db.clearWaveAudience(wave.id);
   if (wave.reviewState) db.setWaveReviewState(wave.id, null);
   return { updated: db.setWaveChannel(wave.id, null), lost };
+}
+
+/**
+ * [SECURITY] v2.140.0 — every wave in these channels leaves through
+ * unfileWave() before the channels go. Deleting a channel, or closing its
+ * Community, used to clear the two columns and nothing else: a public channel
+ * wave became public to the whole server, and a narrowed wave's leftover
+ * participant rows (anyone who had only looked in) let them back in. Call
+ * inside the transaction, before the delete; returns the waves and who lost
+ * each, for announceUnfiled() after the commit.
+ */
+function unfileChannelWaves(channelIds) {
+  const out = [];
+  for (const channelId of channelIds) {
+    for (const row of db.listWavesInChannel(channelId)) {
+      const wave = db.getWave(row.id);
+      if (!wave) continue;
+      out.push({ wave, lost: unfileWave(wave).lost });
+    }
+  }
+  return out;
 }
 
 /** After the commit: tell the people a moved-out wave left behind. */
@@ -28554,13 +28667,16 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
   // node admin closing a Community must not take conversations with it.
   const closingRooms = voiceChannelIdsOf({ communityId: req.params.id });
   const closingLogo = db.getCommunityById(req.params.id)?.logo_url;
-  inCommunityTransaction(() => {
+  const released = inCommunityTransaction(() => {
     db.logCommunityAudit(req.params.id, {
       actorId: req.user.userId, action: 'community.closed_by_node_admin',
       metadata: { reason: req.body?.reason ? sanitizeInput(req.body.reason).slice(0, 500) : null },
     });
+    const out = unfileChannelWaves(db.listChannels(req.params.id).map(c => c.id));
     db.deleteCommunity(req.params.id);
+    return out;
   });
+  for (const { wave, lost } of released) announceUnfiled(wave, lost);
   closeVoiceRooms(closingRooms);
   deleteCommunityLogoFile(closingLogo);
   db.logActivity(req.user.userId, 'community_deleted', 'community', req.params.id, {});
@@ -28569,11 +28685,60 @@ app.delete('/api/admin/communities/:id', authenticateToken, (req, res, next) => 
 
 // ----- Audit -----
 
+/**
+ * One audit row, with names (v2.140.0, for the ACTIVITY screen). The log keeps
+ * ids; names are looked up now, so a renamed channel reads by its current
+ * name and a deleted one as gone. Nothing the viewer could not see otherwise:
+ * a wave's title only if they can read it, a channel's name only if they can
+ * see it listed.
+ */
+function auditEntryView(e, communityId, viewerId) {
+  let metadata = null;
+  try { metadata = e.metadata ? JSON.parse(e.metadata) : null; } catch { metadata = null; }
+  const person = (id) => {
+    const u = id ? db.findUserById(id) : null;
+    return u ? { id: u.id, name: u.displayName || u.handle, handle: u.handle } : null;
+  };
+  const channelName = (id) => {
+    const ch = id ? db.getChannelById(id) : null;
+    if (!ch || ch.community_id !== communityId) return null;
+    return communityAuthz.canDiscoverChannel(db, { kind: 'user', userId: viewerId }, ch.id).allowed ? ch.name : null;
+  };
+  let target = null;
+  if (e.target_type === 'user') {
+    target = { type: 'user', ...(person(e.target_id) || { id: e.target_id, name: null }) };
+  } else if (e.target_type === 'role') {
+    const role = db.listCommunityRoles(communityId).find(r => r.id === e.target_id);
+    target = { type: 'role', id: e.target_id, name: role?.name ?? metadata?.role ?? null, gone: !role };
+  } else if (e.target_type === 'channel') {
+    const exists = !!db.getChannelById(e.target_id);
+    target = { type: 'channel', id: e.target_id, name: channelName(e.target_id), gone: !exists };
+  } else if (e.target_type === 'wave') {
+    const wave = db.getWave(e.target_id);
+    const readable = wave && canAccessWaveFromCache(wave.id, viewerId);
+    target = { type: 'wave', id: e.target_id, name: readable ? wave.title : null, gone: !wave };
+  } else if (e.target_type === 'address') {
+    target = { type: 'address', name: e.target_id };
+  } else if (e.target_type) {
+    target = { type: e.target_type, id: e.target_id };
+  }
+  // Channel ids in the details read as names, by the same rule.
+  const details = metadata && typeof metadata === 'object' ? { ...metadata } : null;
+  if (details) {
+    for (const key of ['channel', 'from', 'to']) {
+      if (typeof details[key] === 'string') details[key] = channelName(details[key]);
+    }
+    delete details.pingId;
+  }
+  return { id: e.id, action: e.action, createdAt: e.created_at, actor: person(e.actor_id), target, details };
+}
+
 app.get('/api/communities/:id/audit', authenticateToken, (req, res) => {
   if (!requireCommunityCapability(req, res, req.params.id, CommunityCaps.VIEW_AUDIT_LOG)) return;
   // A LISTING limit truncates rather than refuses — limits should degrade, not
   // discard, which is the lesson BROADCAST_PING_LIMIT was added to record.
-  res.json({ entries: db.listCommunityAudit(req.params.id, { limit: communityLimits.CAPS.auditPageSize }) });
+  const entries = db.listCommunityAudit(req.params.id, { limit: communityLimits.CAPS.auditPageSize });
+  res.json({ entries: entries.map(e => auditEntryView(e, req.params.id, req.user.userId)) });
 });
 
 // ============ Health Check ============

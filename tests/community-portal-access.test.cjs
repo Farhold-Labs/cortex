@@ -96,7 +96,13 @@ async function startServer(temp, { stripPortal = false } = {}) {
 // Puts channel waves back as they were before v2.134.0 (no audience, no
 // review state), after `raw` has shaped the old data, and runs the real
 // migration on them.
-async function scenario({ api, makeUser }) {
+async function scenario({ api, makeUser, dbPath }) {
+  // Since v2.140.0 only server staff open a wave to everyone on the server.
+  const setRole = (userId, role) => {
+    const conn = new (require(path.join(root, 'server/node_modules/better-sqlite3')))(dbPath);
+    conn.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, userId);
+    conn.close();
+  };
   const admin = await makeUser('nodeadmin');   // first account: node admin
   const mal = await makeUser('mal');            // owns both Communities
   const zoe = await makeUser('zoe');            // member
@@ -114,7 +120,9 @@ async function scenario({ api, makeUser }) {
   const general = (await api('POST', `/api/communities/${closed.id}/channels`, { token: mal.token, body: { name: 'General', slug: 'general' } })).body.channel;
 
   // 1. A public wave on the portal.
+  setRole(mal.id, 'moderator');
   const notice = (await api('POST', '/api/waves', { token: mal.token, body: { title: 'Notice', privacy: 'public' } })).body;
+  setRole(mal.id, 'user');
   ok(await api('POST', '/api/admin/portal', { token: admin.token, body: { waveId: notice.id } }), 'publish');
   const file = (c, ch, w) => api('PUT', `/api/communities/${c.id}/channels/${ch.id}/waves/${w.id}`, { token: mal.token });
   const intoClosed = await file(closed, general, notice);

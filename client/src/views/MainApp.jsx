@@ -783,6 +783,9 @@ function MainApp({ sharePingId }) {
     const target = channel || communityChannels.find(c => c.id === wave.channelId);
     if (!target) return;
     const path = `/communities/${target.communityId}/channels/${target.id}/waves/${wave.id}`;
+    // v2.140.0: out of its channel a public wave is kept to its people.
+    if (!channel && wave.privacy === 'public' && !window.confirm(
+      `Remove this ${T.wave} from #${target.name}?\n\nOnly the people who have been in it keep it. Everyone else in #${target.name} loses it.`)) return;
     try {
       await fetchAPI(path, { method: channel ? 'PUT' : 'DELETE' });
       showToastMsg(channel
@@ -1702,8 +1705,9 @@ function MainApp({ sharePingId }) {
   }, []);
 
   // Thread panel handlers (v2.38.0)
-  const handleOpenThread = useCallback((waveId, message) => {
-    setActiveThread({ waveId, rootMessage: message });
+  const handleOpenThread = useCallback((waveId, message, extra = {}) => {
+    // canRemovePings comes from the wave the thread was opened in (v2.140.0).
+    setActiveThread({ waveId, rootMessage: message, canRemovePings: !!extra.canRemovePings });
   }, []);
 
   const handleCloseThread = useCallback(() => {
@@ -2590,7 +2594,7 @@ function MainApp({ sharePingId }) {
                       onLeaveWatchParty={handleLeaveWatchParty}
                       onOpenWatchParty={(partyId) => handleOpenWatchParty(selectedWave?.id, partyId)}
                       onWatchPartiesChange={loadActiveWatchParties}
-                      onOpenThread={(msg) => handleOpenThread(selectedWave.id, msg)}
+                      onOpenThread={(msg, extra) => handleOpenThread(selectedWave.id, msg, extra)}
                       moveSource={moveSource}
                       onStartMove={handleStartMove}
                       onCompleteMove={handleCompleteMove} />
@@ -2600,6 +2604,7 @@ function MainApp({ sharePingId }) {
                     <ThreadPanel
                       wave={selectedWave}
                       rootMessage={activeThread.rootMessage}
+                      canRemovePings={!!activeThread.canRemovePings}
                       onClose={handleCloseThread}
                       fetchAPI={fetchAPI}
                       showToast={showToastMsg}
@@ -2733,6 +2738,7 @@ function MainApp({ sharePingId }) {
         inChannel={!!newWaveContainer?.channelId}
         initialGroupId={newWaveGroupId}
         initialTravellers={newWaveTravellers}
+        canOpenToServer={canAccess(user, 'moderator')}
         onCreate={handleCreateWave} contacts={contacts} groups={groups} federationEnabled={federationEnabled} />
 
       {showSearch && (
