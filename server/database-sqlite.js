@@ -15104,12 +15104,12 @@ export class DatabaseSQLite {
     return this.getCommunityMembership(communityId, userId);
   }
 
-  listCommunityMembers(communityId, { state = 'active', limit = null, offset = 0, q = null, staffOnly = false } = {}) {
+  listCommunityMembers(communityId, { state = 'active', limit = null, offset = 0, q = null, staffOnly = false, roleId = null } = {}) {
     // Paged since v2.105.0 (CORTEX-COMM-013). `memberPageSize` was defined in
     // limits.js from the start and never used here, so a Community approaching
     // its 10,000-member cap serialised all of them on every open of the member
     // list — on a synchronous server, where that is everyone else's latency too.
-    const filter = this._communityMemberFilter(q, staffOnly);
+    const filter = this._communityMemberFilter(q, staffOnly, roleId);
     let sql = `
       SELECT m.*, u.handle, u.display_name, u.avatar_url, u.is_cross_port, u.home_node
       FROM community_memberships m
@@ -15125,8 +15125,8 @@ export class DatabaseSQLite {
   }
 
   /** How many members a Community has, without loading any of them. */
-  countCommunityMembers(communityId, { state = 'active', q = null, staffOnly = false } = {}) {
-    const filter = this._communityMemberFilter(q, staffOnly);
+  countCommunityMembers(communityId, { state = 'active', q = null, staffOnly = false, roleId = null } = {}) {
+    const filter = this._communityMemberFilter(q, staffOnly, roleId);
     return this.db.prepare(`
       SELECT COUNT(*) AS c FROM community_memberships m
       JOIN users u ON u.id = m.user_id
@@ -15142,7 +15142,7 @@ export class DatabaseSQLite {
    * people holding a role above `member` (priority 100), which is how ROLES can
    * list every admin and moderator even when the member list is paged.
    */
-  _communityMemberFilter(q, staffOnly) {
+  _communityMemberFilter(q, staffOnly, roleId = null) {
     let sql = '';
     const params = [];
     const needle = typeof q === 'string' ? q.trim().toLowerCase() : '';
@@ -15155,6 +15155,15 @@ export class DatabaseSQLite {
         SELECT 1 FROM community_membership_roles mr
         JOIN community_roles r ON r.id = mr.role_id
         WHERE mr.membership_id = m.id AND r.community_id = m.community_id AND r.priority > 100)`;
+    }
+    // `roleId` (v2.139.0) keeps the holders of one role. The role must be this
+    // Community's, so another Community's role id matches nobody.
+    if (roleId) {
+      sql += ` AND EXISTS (
+        SELECT 1 FROM community_membership_roles mr
+        JOIN community_roles r ON r.id = mr.role_id
+        WHERE mr.membership_id = m.id AND r.id = ? AND r.community_id = m.community_id)`;
+      params.push(roleId);
     }
     return { sql, params };
   }
@@ -15199,6 +15208,34 @@ export class DatabaseSQLite {
     ).all(communityId);
   }
 
+  /**
+   * What each of a Community's roles is used for (v2.139.0): how many active
+   * members hold it, how many channels have a rule for it, and how many waves
+   * are shown to it. The roles editor says so before a role is deleted.
+   */
+  communityRoleUsage(communityId) {
+    const toMap = rows => new Map(rows.map(r => [r.role_id, r.c]));
+    return {
+      holders: toMap(this.db.prepare(`
+        SELECT mr.role_id, COUNT(*) AS c FROM community_membership_roles mr
+        JOIN community_memberships m ON m.id = mr.membership_id
+        JOIN community_roles r ON r.id = mr.role_id
+        WHERE r.community_id = ? AND m.community_id = r.community_id AND m.state = 'active'
+        GROUP BY mr.role_id`).all(communityId)),
+      channels: toMap(this.db.prepare(`
+        SELECT cp.role_id, COUNT(*) AS c FROM channel_permissions cp
+        JOIN community_roles r ON r.id = cp.role_id
+        JOIN channels ch ON ch.id = cp.channel_id
+        WHERE r.community_id = ? AND ch.community_id = r.community_id
+        GROUP BY cp.role_id`).all(communityId)),
+      waves: toMap(this.db.prepare(`
+        SELECT a.ref_id AS role_id, COUNT(*) AS c FROM wave_audience a
+        JOIN community_roles r ON r.id = a.ref_id
+        WHERE a.kind = 'role' AND r.community_id = ?
+        GROUP BY a.ref_id`).all(communityId)),
+    };
+  }
+
   createCommunityRole(communityId, { name, priority = 100, permissions = [] }) {
     const id = uuidv4();
     this.db.prepare(`
@@ -15217,6 +15254,9 @@ export class DatabaseSQLite {
     const role = this.db.prepare('SELECT * FROM community_roles WHERE id = ?').get(roleId);
     if (!role) return false;
     if (role.managed) return false;
+    // wave_audience names roles by id with no foreign key (it also names
+    // people), so its rows for this role would outlive it (v2.139.0).
+    this.db.prepare("DELETE FROM wave_audience WHERE kind = 'role' AND ref_id = ?").run(roleId);
     this.db.prepare('DELETE FROM community_roles WHERE id = ?').run(roleId);
     return true;
   }
