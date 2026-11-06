@@ -6,6 +6,8 @@ import { storage } from '../../utils/storage.js';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import { ContainerTile } from '../waves/WaveRail.jsx';
 import { uploadFile } from '../../utils/uploads.js';
+import CommunityRolesEditor from './CommunityRolesEditor.jsx';
+import { roleTitle, rolePermissions } from './roleWords.js';
 
 /**
  * Manage Community (v2.99.0, Phase 6; redesigned v2.124.0).
@@ -21,6 +23,9 @@ import { uploadFile } from '../../utils/uploads.js';
  * controls the server had supported since v2.94.0 with no way to reach them:
  * editing the Community, appointing admins and moderators, removing and banning
  * members, leaving, and closing it.
+ *
+ * v2.139.0: the community's own roles are made, edited and deleted under
+ * ROLES (CommunityRolesEditor), and given and taken from each member's ⋮.
  */
 
 // What each built-in role is for, in a line. The capability sets themselves
@@ -28,7 +33,7 @@ import { uploadFile } from '../../utils/uploads.js';
 const ROLE_LINES = {
   owner: 'Everything, including handing the community over and closing it.',
   admin: 'Runs the community: details, channels, members, roles below admin.',
-  moderator: 'Keeps order: removes and bans members, moderates content, runs voice.',
+  moderator: 'Keeps order: removes and bans members, and runs voice.',
 };
 const STAFF = ['admin', 'moderator'];
 const TITLE = { owner: 'Owner', admin: 'Admin', moderator: 'Moderator', member: 'Member' };
@@ -126,8 +131,10 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
         setChannels(res.channels || []);
       } catch { /* the rest of the panel is still useful */ }
     }
-    // Also for whoever manages channels: limiting a channel is choosing roles (v2.136.0).
-    if (can('member.roles') || can('channel.manage')) {
+    // Also for whoever manages channels: limiting a channel is choosing roles
+    // (v2.136.0). And for every member who can see the list: ROLES shows the
+    // community's own roles (v2.139.0).
+    if (can('member.view') || can('member.roles') || can('channel.manage')) {
       try {
         const r = await fetchAPI(`/communities/${community.id}/roles`);
         setRoles(r.roles || []);
@@ -164,6 +171,13 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
   }, [memberFilter, loadMembers]);
 
   const refreshPeople = () => { loadMembers(memberFilter); loadStaff(); };
+
+  const loadRoles = async () => {
+    try {
+      const r = await fetchAPI(`/communities/${community.id}/roles`);
+      setRoles(r.roles || []);
+    } catch { /* keep what we had */ }
+  };
 
   /**
    * Find people on this node to add directly.
@@ -276,6 +290,25 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
       showToast(`${m.displayName || m.handle} is now ${level === 'admin' ? 'an admin' : level === 'moderator' ? 'a moderator' : 'a member'}`, 'success');
       setActionsFor(null);
       refreshPeople();
+    } catch (err) {
+      showToast(err?.data?.error || 'Could not change that role', 'error');
+      refreshPeople();
+    }
+  };
+
+  // The community's own roles (v2.139.0). Mirrors the server: you give only a
+  // role ranked below you holding nothing you lack, and take one away only from
+  // someone ranked below you.
+  const customRoles = roles.filter(r => !r.managed);
+  const grantable = (r) => can('member.roles') && Number(r.priority) < myPriority
+    && rolePermissions(r).every(c => can(c));
+
+  const toggleRole = async (m, role, give) => {
+    try {
+      await fetchAPI(`/communities/${community.id}/members/${m.userId}/roles/${role.id}`, { method: give ? 'PUT' : 'DELETE' });
+      showToast(give ? `${m.displayName || m.handle} now has ${roleTitle(role)}` : `${m.displayName || m.handle} no longer has ${roleTitle(role)}`, 'success');
+      refreshPeople();
+      loadRoles();
     } catch (err) {
       showToast(err?.data?.error || 'Could not change that role', 'error');
       refreshPeople();
@@ -506,8 +539,11 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
 
   const memberActions = (m) => {
     const outranks = m.userId !== myId && myPriority > topPriority(m.roles);
+    const has = (r) => m.roles.some(x => x.id === r.id);
     return {
       levels: levelChoices(m),
+      give: m.userId === myId ? [] : customRoles.filter(r => !has(r) && grantable(r)),
+      take: customRoles.filter(r => has(r) && can('member.roles') && outranks),
       remove: can('member.remove') && outranks,
       ban: can('member.ban') && outranks,
       handover: can('community.transfer') && !transfer && m.userId !== myId && levelOf(m) !== 'owner',
@@ -722,13 +758,21 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
           {members.length === 0 && <div style={hint}>{memberFilter ? 'Nobody matches.' : 'No members.'}</div>}
           {members.map(m => {
             const acts = memberActions(m);
-            const hasActions = acts.levels.length || acts.remove || acts.ban || acts.handover;
+            const hasActions = acts.levels.length || acts.give.length || acts.take.length || acts.remove || acts.ban || acts.handover;
+            const ownRoles = m.roles.filter(r => customRoles.some(c => c.id === r.id));
             const level = levelOf(m);
             const isOpenRow = actionsFor === m.userId;
             return (
               <div key={m.userId} style={{ fontSize: '0.78rem', padding: '0.3rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
                 <div style={row}>
-                  {who(m)}
+                  <span style={{ minWidth: 0 }}>
+                    {who(m)}
+                    {ownRoles.length > 0 && (
+                      <span style={{ display: 'block', fontSize: '0.66rem', color: 'var(--text-secondary)', marginTop: '0.1rem', overflowWrap: 'anywhere' }}>
+                        {ownRoles.map(roleTitle).join(' · ')}
+                      </span>
+                    )}
+                  </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
                     {level !== 'member' && (
                       <span style={{ fontSize: '0.65rem', letterSpacing: '0.05em', color: level === 'owner' ? 'var(--accent-amber)' : 'var(--accent-teal)' }}>
@@ -751,6 +795,16 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
                     {acts.levels.map(lv => (
                       <button key={lv} onClick={() => setLevel(m, lv)} style={{ ...action, marginTop: 0 }}>
                         {lv === 'member' ? `Remove ${TITLE[level].toLowerCase()}` : `Make ${TITLE[lv].toLowerCase()}`}
+                      </button>
+                    ))}
+                    {acts.give.map(r => (
+                      <button key={`give-${r.id}`} onClick={() => toggleRole(m, r, true)} style={{ ...action, marginTop: 0 }}>
+                        Give {roleTitle(r)}
+                      </button>
+                    ))}
+                    {acts.take.map(r => (
+                      <button key={`take-${r.id}`} onClick={() => toggleRole(m, r, false)} style={{ ...action, marginTop: 0 }}>
+                        Take away {roleTitle(r)}
                       </button>
                     ))}
                     {acts.handover && (
@@ -890,6 +944,12 @@ const CommunitySettingsPanel = ({ community, capabilities, myRoles = [], fetchAP
               {myPriority >= 400 ? ' As owner you can appoint admins and moderators.' : ' You can appoint roles below your own.'}
             </div>
           ) : null}
+          <div style={sub}>
+            <CommunityRolesEditor community={community} roles={roles} capabilities={capabilities} myPriority={myPriority}
+              voiceEnabled={voiceEnabled} fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile}
+              styles={{ action, danger, hint, label, input, row }}
+              onChanged={() => { loadRoles(); refreshPeople(); onChanged && onChanged(); }} />
+          </div>
         </CollapsibleSection>
       )}
 

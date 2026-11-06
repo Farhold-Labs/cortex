@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.139.0] - 2026-11-06
+
+The Community roles editor. Custom roles have existed on the server since v2.96.0, and limiting a channel (v2.136.0) and narrowing a wave (v2.134.0) are both chosen by role, but the app could only appoint admins and moderators: the only other roles were those "Make it a role" created in review, and nothing could rename, change or delete them. No migration.
+
+### Added
+- **COMMUNITY ROLES, under Manage Community → ROLES.** Lists the community's own roles with how many people hold each, its rank, and what it adds, in words ("Can also add people and make invite codes."). Anyone who can see the member list sees it.
+  - **New role / Edit**: a name, a rank and what it lets them do. Rank is offered as *With members*, *Above members* or *Above moderators* (priority 100, 150, 250), only below your own, and says what it means: removing, banning and taking roles away reach only people ranked below. Capabilities are grouped (Community, People, Channels, Voice when voice channels are on), each marked when every member already has it, and greyed out when you don't hold it.
+  - **People**: who holds a role, with *Take away* for those ranked below you.
+  - **Delete** says what goes with it: how many people hold it, how many channels have rules for it, and how many waves are shown to it.
+- **Each member's ⋮** offers *Give* and *Take away* for the community's own roles, under the same rules as the server: you give only a role ranked below you holding nothing you lack, and take one away only from someone ranked below you. Their roles are listed under their name.
+- Built-in role names read *Owner*, *Admin*, *Moderator*, *Member* wherever roles are chosen (channel access, who can see a wave); the channel access editor's "no roles yet" points to ROLES.
+
+### Changed
+- **Editing a role checks only what changes.** The rule was that every capability in the new list must be one you hold, so an admin could not tick one box on a role the owner had given something admins lack: the list they sent back still contained it. Now adding or removing a power you lack is refused, and keeping one is not. Granting a role still requires holding everything in it.
+- `GET /api/communities/:id/roles` gives each role's `holders`; role managers also get `channels` and `waves` (other members are not told how many narrowed waves exist). `GET /members?role=` lists one role's holders.
+- Editing or deleting a role tells everyone holding it (`community_roles_changed`), so their app re-reads its channels and waves; only granting and revoking did.
+- The moderator's description no longer says it "moderates content": nothing checks that capability yet.
+
+### Fixed
+- **A role name already in use answered 500** (the table's UNIQUE constraint). Names are now unique per Community whatever their case, built-ins included, and a clash is 409 `ROLE_NAME_TAKEN`: "Admin" beside the built-in "admin" would read as the same role.
+- **Creating a role dropped what it could not use**: an unknown capability was silently left out and a non-integer priority became 100. Both are now refused (400), as editing has refused them since CORTEX-COMM-017.
+- **Deleting a role left it in wave audiences.** `wave_audience` names roles without a foreign key (it also names people), so its rows outlived the role. They are deleted with it.
+
+### Verified
+- `npm test`: 697/697. New `community-roles-editor.test.cjs`:
+  - a role is made with no powers; `cast`, `CAST `, `Admin` and `owner` beside it are 409; renaming onto `moderator` is 409; changing a role's own case is allowed;
+  - unknown capabilities, a string for `permissions` and a string priority are 400, and nothing is created;
+  - an admin makes a role at 250 with `voice.moderate`, not one at 300 or one with `community.delete`; a member makes none;
+  - on a role holding `community.transfer`, an admin adds `member.invite` (200) but cannot remove `community.transfer` or add `community.delete` (403), can rename it, cannot raise it to 300, and cannot give it to anyone;
+  - holders, channel rules and wave audiences are counted; a member sees `holders` but not `channels` or `waves`; `?role=` lists the one holder, and another Community's role id lists nobody;
+  - deleting leaves no grants, channel rules or audience rows; built-in roles cannot be deleted.
+- `communities-audit-closure.test.cjs` created its role with `wave.create`, which is not a capability and used to be dropped; it now uses `channel.create_wave`.
+- Headless on dev at 390 px and 1280 px, as the owner: New role → "Cast & crew", Above members, *Add people and make invite codes* → listed as "1 person · above members / Can also add people and make invite codes." after *Give Cast & crew* from Hoban's ⋮, whose row then reads "Cast & crew" with *Take away*; People lists him; Delete says "The 1 person with it loses it."; no page wider than the screen, no console errors.
+
+### Not changed
+- `content.moderate`, `event.manage`, `audit.view` and `community.migrate` are not offered: nothing checks the first two yet, the audit log has no screen, and migration has no flow. A role holding them keeps them. Closing and handing over the community stay the owner's.
+- Built-in roles still cannot be edited or deleted.
+
 ## [2.138.0] - 2026-11-02
 
 Groups and travellers: the last part of wave-access phase 6. A group wave keeps its group when people on other servers join, and the wave's owner can see and remove them. Migrating (adds `wave_remote_members` and `remote_mutes`).

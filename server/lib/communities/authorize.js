@@ -375,8 +375,17 @@ export function canEditRole(db, actorUserId, communityId, role, changes = {}) {
     if (nextPriority >= actorPriority) return deny(REASON.OUTRANKED, 'proposed role priority');
   }
 
+  // Only what CHANGES has to be yours (v2.139.0). Requiring every capability in
+  // the new list to be held meant that renaming nothing but one checkbox on a
+  // role the owner had given something you lack was refused, because the list
+  // you sent back still contained it. Adding a power you lack is still
+  // refused, and so is taking one away: neither is yours to decide.
   if (changes.permissions) {
-    const unheld = parsePermissions(changes.permissions).filter(cap => !held.has(cap));
+    const before = new Set(parsePermissions(role.permissions));
+    const after = new Set(parsePermissions(changes.permissions));
+    const changed = [...after].filter(cap => !before.has(cap))
+      .concat([...before].filter(cap => !after.has(cap)));
+    const unheld = changed.filter(cap => !held.has(cap));
     if (unheld.length) return deny(REASON.CANNOT_GRANT_UNHELD, unheld.join(','));
   }
   return allow();
