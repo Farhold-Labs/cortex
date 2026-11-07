@@ -26,7 +26,7 @@ const password = 'Review123!';
 const jwtSecret = 'isolated-attachment-test-signing-key';
 
 /** Stand up a throwaway Cortex with three users, a private wave and a public one. */
-async function startServer(temp, { disableGate = false, breakBinding = false, disableTombstones = false } = {}) {
+async function startServer(temp, { disableGate = false, breakBinding = false, disableTombstones = false, keepProfileFiles = false, seed } = {}) {
   const serverDir = path.join(temp, 'server');
   fs.mkdirSync(serverDir, { recursive: true });
   for (const name of fs.readdirSync(path.join(root, 'server'))) {
@@ -46,7 +46,17 @@ async function startServer(temp, { disableGate = false, breakBinding = false, di
   }
   const privateWave = db.createWave({ title: 'Private', createdBy: 'owner', participants: ['member'], privacy: 'private' });
   const publicWave = db.createWave({ title: 'Public', createdBy: 'owner', privacy: 'public' });
+  seed?.(db, serverDir);
   db.db.close();
+
+  if (keepProfileFiles) {
+    // v2.141.0 counterfactual: account deletion as it was, leaving the files.
+    const file = path.join(serverDir, 'database-sqlite.js');
+    const dbSource = fs.readFileSync(file, 'utf8');
+    const call = '      this.forgetProfileFiles(user);';
+    assert.ok(dbSource.includes(call), 'could not find the profile file cleanup to disable');
+    fs.writeFileSync(file, dbSource.replace(call, ''));
+  }
 
   let source = fs.readFileSync(path.join(serverDir, 'server.js'), 'utf8');
   if (disableGate) {
@@ -350,4 +360,82 @@ test('without tombstones, the same deletion publishes the file — the fix is wh
   const r = await deleteWaveScenario({ disableTombstones: true });
   assert.equal(r.anonymous, 200, 'the pre-fix server served the deleted wave\'s file to anyone');
   assert.equal(r.fileRemains, true);
+});
+
+// v2.141.0 — deleting an account left its profile picture and profile videos
+// at their old addresses. They are unbound uploads, public to anyone with the
+// link, so nothing the deletion cascaded ever reached them.
+const PROFILE_VIDEO = 'outsider-1700000000000.mp4';
+async function deleteAccountScenario(options = {}) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-attach-delacct-'));
+  let srv;
+  try {
+    srv = await startServer(temp, {
+      ...options,
+      seed: (db, serverDir) => {
+        // A profile video as /api/profile/wave/videos leaves it: an unbound
+        // upload owned by them, in a ping in their profile wave. (Seeded here
+        // because the real upload needs ffmpeg.)
+        fs.mkdirSync(path.join(serverDir, 'uploads/media'), { recursive: true });
+        fs.writeFileSync(path.join(serverDir, 'uploads/media', PROFILE_VIDEO), 'not really a video');
+        db.bindAttachment({ path: `media/${PROFILE_VIDEO}`, waveId: null, uploadedBy: 'outsider' });
+        const wave = db.getOrCreateProfileWave('outsider');
+        db.createPing({ waveId: wave.id, authorId: 'outsider', content: '', mediaType: 'video', mediaUrl: `/api/media/${PROFILE_VIDEO}` });
+        // Someone else's ping in it must not keep it alive.
+        db.createPing({ waveId: wave.id, authorId: 'owner', content: 'nice' });
+      },
+    });
+    const { base, tokens, get, serverDir } = srv;
+
+    // Every boot binds recordings to the wave their ping is in (v2.116.2), so
+    // a profile video is unbound only until the next restart. Undo that here:
+    // a video posted since the last boot is the one the deletion used to leave.
+    const raw = new (serverRequire('better-sqlite3'))(path.join(serverDir, 'data/farhold.db'));
+    raw.prepare('UPDATE attachments SET wave_id = NULL, bound_at = NULL WHERE path = ?').run(`media/${PROFILE_VIDEO}`);
+    raw.close();
+
+    const png = await serverRequire('sharp')({
+      create: { width: 8, height: 8, channels: 3, background: { r: 200, g: 40, b: 40 } },
+    }).png().toBuffer();
+    const form = new FormData();
+    form.append('avatar', new Blob([png], { type: 'image/png' }), 'me.png');
+    const up = await fetch(`${base}/api/profile/avatar`, { method: 'POST', headers: { Authorization: `Bearer ${tokens.outsider}` }, body: form });
+    const { avatarUrl } = await up.json();
+    assert.equal(up.status, 200);
+    assert.equal((await get(avatarUrl)).status, 200, 'a profile picture is public while the account exists');
+    const video = () => fetch(`${base}/api/media/${PROFILE_VIDEO}`, { headers: { Authorization: `Bearer ${tokens.owner}` } });
+    assert.equal((await video()).status, 200, 'and so is a profile video');
+
+    const del = await fetch(`${base}/api/account/delete`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.outsider}` },
+      body: JSON.stringify({ password }),
+    });
+    assert.equal(del.status, 200, await del.text());
+
+    const files = [path.join(serverDir, 'uploads', avatarUrl.replace(/^\/uploads\//, '')), path.join(serverDir, 'uploads/media', PROFILE_VIDEO)];
+    const deadline = Date.now() + 5000;
+    while (files.some(f => fs.existsSync(f)) && Date.now() < deadline) await new Promise(r => setTimeout(r, 100));
+    return {
+      avatar: (await get(avatarUrl)).status,
+      video: (await video()).status,
+      filesLeft: files.filter(f => fs.existsSync(f)).length,
+    };
+  } finally {
+    srv?.child.kill('SIGKILL');
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+test('a deleted account takes its profile picture and videos with it', { timeout: 90000 }, async () => {
+  const r = await deleteAccountScenario();
+  assert.equal(r.avatar, 404, 'the profile picture is no longer served');
+  assert.equal(r.video, 404, 'nor the profile video');
+  assert.equal(r.filesLeft, 0, 'and both files are removed from storage');
+});
+
+test('without the cleanup, the same deletion leaves both files served — the fix is what removes them', { timeout: 90000 }, async () => {
+  const r = await deleteAccountScenario({ keepProfileFiles: true });
+  assert.equal(r.avatar, 200);
+  assert.equal(r.video, 200);
+  assert.equal(r.filesLeft, 2);
 });

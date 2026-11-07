@@ -6512,6 +6512,8 @@ app.post('/api/account/delete', authenticateToken, accountLimiter, async (req, r
     }
 
     console.log(`🗑️ Account deleted: ${result.handle} (${result.deletedUserId})`);
+    // The profile picture and videos were tombstoned in the deletion (v2.141.0).
+    removeTombstonedAttachments().catch(err => console.error('[attachments] sweep failed:', err.message));
 
     // Revoke current session if tracking is enabled
     if (req.token) {
@@ -17553,6 +17555,7 @@ app.post('/api/admin/users/:id/delete', authenticateToken, (req, res) => {
     if (db.logModerationAction) db.logModerationAction(admin.id, 'delete_account', 'user', targetUserId, `Deleted account @${targetUser.handle}`);
     if (db.logActivity) db.logActivity(admin.id, 'admin_delete_account', 'user', targetUserId, getRequestMeta(req));
 
+    removeTombstonedAttachments().catch(err => console.error('[attachments] sweep failed:', err.message));
     console.log(`Admin ${admin.handle} deleted account: ${targetUser.handle}`);
     res.json({ success: true, message: `Account @${targetUser.handle} deleted` });
   } catch (err) {

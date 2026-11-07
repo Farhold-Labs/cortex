@@ -45,7 +45,7 @@ import LiveBroadcastBar from '../broadcast/LiveBroadcastBar.jsx';
 import { withGroupScope } from '../../utils/groupScope.jsx';
 const GoLiveModal = lazyComponent(() => import('../broadcast/GoLiveModal.jsx'));
 
-const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove, onNewWaveWithPeople }) => {
+const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove, onNewWaveWithPeople, onToggleMute }) => {
   // E2EE context
   const e2ee = useE2EE();
 
@@ -1912,6 +1912,30 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     >
                       <span>✓</span>
                       <span>Mark All Read</span>
+                    </div>
+                  )}
+
+                  {/* Mute (v2.141.0): the same per-wave mute as the wave list's row menu */}
+                  {onToggleMute && (
+                    <div
+                      onClick={async () => {
+                        setShowWaveMenu(false);
+                        const next = !waveData.muted;
+                        setWaveData(prev => (prev ? { ...prev, muted: next } : prev));
+                        if (!(await onToggleMute(waveData.id, next))) {
+                          setWaveData(prev => (prev ? { ...prev, muted: !next } : prev));
+                        }
+                      }}
+                      style={{
+                        padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem',
+                        color: waveData.muted ? 'var(--accent-amber)' : 'var(--text-primary)', background: 'transparent',
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>{waveData.muted ? '🔔' : '🔕'}</span>
+                      <span>{waveData.muted ? 'Unmute' : 'Mute notifications'}</span>
                     </div>
                   )}
 

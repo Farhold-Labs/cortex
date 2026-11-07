@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.141.0] - 2026-11-07
+
+Mute from inside a wave, and a deleted account takes its profile picture and videos with it. No migration.
+
+### Added
+- **Mute in the open wave's ⋮ menu.** Per-wave mute (v2.84.0) was only in the wave list's row menu, so muting the wave you were reading meant leaving it. The open wave's ⋮ now has *Mute notifications* / *Unmute*, the same call and the same toast as the list, and the list follows. Server side unchanged.
+
+### Fixed
+- **Deleting an account left its profile picture and profile videos at their old addresses.** Both are unbound uploads, readable by anyone with the link, so nothing the deletion cascaded reached them; PRIVACY.md listed it as a known gap. Since v2.116.2 each boot binds a profile video to its profile wave, and deleting that wave tombstoned it, but only when the account was alone in the wave, and only for videos posted before the server last restarted. Now the deletion (`forgetProfileFiles()`, inside its transaction) deletes the profile wave whoever else is in it, and tombstones the avatar and the media of the person's own pings in it. Tombstoned files are refused by `/uploads` and `/api/media` at once, and both deletion routes (your own, and an admin's) start the attachment sweep, which removes them from disk or the bucket. Only files that are theirs: an attachment row naming someone else as uploader is left alone, and a URL that is not a Cortex upload, or could climb out of the uploads directory, is ignored. Profile pictures and videos of accounts deleted before this release are not found by this; nothing records which they were.
+
+### Verified
+- `npm test`: 709/709.
+  - `attachment-access`: an account with a profile picture uploaded through the API and a profile video posted since the last boot deletes itself; both URLs then answer 404 and both files are gone from disk. The counterfactual removes the `forgetProfileFiles()` call from a copy of the server and sees both still served (200) and on disk.
+  - `account-deletion`: the profile wave is deleted although someone else is in it; the avatar and the person's own video are tombstoned and the video's unbound row removed; a ping pointing at someone else's upload and one pointing at `/uploads/../server.js` tombstone nothing; foreign keys hold.
+- Headless on dev at 390 px: Zoe opens Crew Discussion, ⋮ lists *Mute notifications* between *Mark All Read* and *Archive Wave*; tapping it shows "Muted — notifications off for this wave" and the menu then reads *Unmute*; unmuting turns it back. No page wider than the screen, no console errors.
+
 ## [2.140.0] - 2026-11-06
 
 Community powers that did nothing now do something, and only server staff open a wave to everyone on the server. `content.moderate`, `event.manage` and `audit.view` have been held by every Community moderator and admin since v2.94.0 and checked by nothing, or, for the audit log, readable through an API with no screen. No migration.

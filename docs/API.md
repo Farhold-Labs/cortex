@@ -532,7 +532,7 @@ Download all personal data as JSON (GDPR data export).
 
 #### POST /api/account/delete
 
-Permanently delete account (GDPR right to erasure).
+Permanently delete account (GDPR right to erasure). Since v2.141.0 this also deletes the account's profile wave and removes its profile picture and profile video files; an admin's `POST /api/admin/users/:id/delete` does the same.
 
 **Authentication:** Required
 
