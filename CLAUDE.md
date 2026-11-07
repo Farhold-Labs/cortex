@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.140.0**. Last brought current 2026-10-30.
+Current version: **2.141.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2140000 / versionName "2.140.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2140000 / MARKETING_VERSION 2.140.0
+client/android/app/build.gradle                  versionCode 2141000 / versionName "2.141.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2141000 / MARKETING_VERSION 2.141.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -179,6 +179,7 @@ Jellyfin/Plex playback requires an item-specific, **wave-scoped grant** (`media_
 - **Uploads.** Every upload goes through `uploadFile()` (`client/src/utils/uploads.js`, which gives progress, the refresh guard and cancel) and sends `waveId`. Binding fails closed: if it can't be written, the file is deleted.
 - **Encrypted waves.** The client binds after decrypting, via `/api/attachments/bind`. Only the uploader may bind, because binding restricts the file.
 - **Deleted waves** cascade their `attachments` rows away. A trigger writes `attachment_tombstones`, `/uploads` refuses tombstoned paths, and a sweep deletes the files.
+- **Deleted accounts** tombstone their profile picture and profile videos and lose their profile wave (`forgetProfileFiles()`, v2.141.0).
 - **Never treat "a file with no row" as orphaned:** that also describes every legitimate legacy upload. Act only on what a trigger recorded, the same pattern as `recording_deletions`.
 
 ### Security checklist for new features

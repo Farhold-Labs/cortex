@@ -11666,6 +11666,15 @@ export class DatabaseSQLite {
         this.db.prepare('DELETE FROM alert_dismissals WHERE user_id = ?').run(userId);
       } catch { /* Tables may not exist */ }
 
+      // 6b. Profile picture and profile videos (v2.141.0). They are unbound
+      //     uploads, readable by anyone with the link, so the cascades below
+      //     never reached them and they stayed at their old addresses. The
+      //     profile wave goes whoever else is in it: it is this person's
+      //     profile, not a conversation. Each file is tombstoned, which makes
+      //     /uploads and /api/media refuse it at once and queues it for the
+      //     attachment sweep, the same as a deleted wave's files.
+      this.forgetProfileFiles(user);
+
       // 7. Handle waves - delete empty ones, transfer ownership for others
       const wavesCreated = this.db.prepare(`
         SELECT w.id FROM waves w WHERE w.created_by = ?
@@ -11768,8 +11777,7 @@ export class DatabaseSQLite {
         this.db.prepare('UPDATE reports SET reporter_id = NULL WHERE reporter_id = ?').run(userId);
       } catch { /* Table may not exist */ }
 
-      // 19. Delete user avatar file (if exists)
-      // Note: This should be handled separately by the server if avatarUrl exists
+      // 19. The avatar and profile video files: step 6b.
 
       // 20. Clear every remaining reference the database will not clear itself.
       //
@@ -11855,6 +11863,67 @@ export class DatabaseSQLite {
       console.error('Account deletion error:', err);
       return { success: false, error: err.message };
     }
+  }
+
+  /**
+   * The storage key behind a Cortex file URL, or null (v2.141.0). Uploads are
+   * handed out as /uploads/<key> or /api/media/<file> (storage.getLocalUrl),
+   * possibly absolute; anything else, or a key that could climb out of the
+   * uploads directory, is not ours to delete.
+   */
+  storageKeyForUrl(url) {
+    const m = /(?:^|\/)(uploads|api\/media)\/([^?#]+)$/.exec(String(url || ''));
+    if (!m) return null;
+    const key = m[1] === 'uploads' ? m[2] : `media/${m[2]}`;
+    if (!/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(key) || key.split('/').includes('..')) return null;
+    return key;
+  }
+
+  /**
+   * Delete a person's profile wave and tombstone their profile picture and
+   * profile videos (v2.141.0). Runs inside deleteUserAccount's transaction.
+   *
+   * Only files that are theirs: the avatar URL on their own row, and the media
+   * of pings they wrote in their own profile wave. An attachment row naming
+   * someone else as uploader is left alone. The row of each file is removed,
+   * because a tombstone is consulted only when a path has no row (an unbound
+   * row would otherwise keep serving it as public).
+   */
+  forgetProfileFiles(user) {
+    const keys = new Set();
+    const avatar = this.storageKeyForUrl(user.avatarUrl);
+    if (avatar) keys.add(avatar);
+
+    const profileWaves = this.db.prepare(
+      'SELECT id FROM waves WHERE is_profile_wave = 1 AND profile_owner_id = ?'
+    ).all(user.id);
+    const mediaOf = this.db.prepare(
+      'SELECT media_url FROM pings WHERE wave_id = ? AND author_id = ? AND media_url IS NOT NULL'
+    );
+    for (const { id } of profileWaves) {
+      for (const { media_url } of mediaOf.all(id, user.id)) {
+        const key = this.storageKeyForUrl(media_url);
+        if (key) keys.add(key);
+      }
+    }
+
+    const ownerOf = this.db.prepare('SELECT uploaded_by FROM attachments WHERE path = ?');
+    const dropRow = this.db.prepare('DELETE FROM attachments WHERE path = ?');
+    const tombstone = this.db.prepare(`INSERT OR IGNORE INTO attachment_tombstones (path, queued_at) VALUES (?, datetime('now'))`);
+    let files = 0;
+    for (const key of keys) {
+      const row = ownerOf.get(key);
+      if (row && row.uploaded_by && row.uploaded_by !== user.id) continue;
+      if (row) dropRow.run(key);
+      tombstone.run(key);
+      files++;
+    }
+
+    for (const { id } of profileWaves) {
+      this.db.prepare('DELETE FROM pings WHERE wave_id = ?').run(id);
+      this.db.prepare('DELETE FROM waves WHERE id = ?').run(id);
+    }
+    return { files, waves: profileWaves.length };
   }
 
   /**
