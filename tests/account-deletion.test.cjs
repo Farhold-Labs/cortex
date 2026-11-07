@@ -157,6 +157,33 @@ test('deleting an account leaves nothing behind that names them', async (t) => {
       db.db.close();
     });
 
+    await t.test('their profile wave goes and its files are queued for removal (v2.141.0)', async () => {
+      const { db } = await populated(temp);
+      const now = new Date().toISOString();
+      db.updateUser('victim', { avatarUrl: '/uploads/avatars/victim-1700000000000.webp' });
+      const profile = db.getOrCreateProfileWave('victim');
+      // Someone else in it does not make it theirs to keep.
+      db.db.prepare('INSERT INTO wave_participants (wave_id, user_id, joined_at) VALUES (?, ?, ?)').run(profile.id, 'friend', now);
+      db.createPing({ waveId: profile.id, authorId: 'victim', content: '', mediaType: 'video', mediaUrl: '/api/media/victim-1700000000001.mp4' });
+      db.bindAttachment({ path: 'media/victim-1700000000001.mp4', waveId: null, uploadedBy: 'victim' });
+      // A URL pointing at a file someone else uploaded is not theirs to delete.
+      db.createPing({ waveId: profile.id, authorId: 'victim', content: '', mediaType: 'video', mediaUrl: '/api/media/friend-1700000000002.mp4' });
+      db.bindAttachment({ path: 'media/friend-1700000000002.mp4', waveId: null, uploadedBy: 'friend' });
+      // Nor is anything outside the uploads directory.
+      db.createPing({ waveId: profile.id, authorId: 'victim', content: '', mediaType: 'video', mediaUrl: '/uploads/../server.js' });
+
+      assert.equal(db.deleteUserAccount('victim').success, true);
+      assert.equal(db.getWave(profile.id), null, 'the profile wave is gone');
+      const tombstoned = db.db.prepare('SELECT path FROM attachment_tombstones ORDER BY path').all().map(r => r.path);
+      assert.ok(tombstoned.includes('avatars/victim-1700000000000.webp'));
+      assert.ok(tombstoned.includes('media/victim-1700000000001.mp4'));
+      assert.ok(!tombstoned.includes('media/friend-1700000000002.mp4'), "someone else's file is left alone");
+      assert.ok(!tombstoned.some(p => p.includes('..')));
+      assert.equal(db.getAttachmentByPath('media/victim-1700000000001.mp4'), null, 'an unbound row would keep serving it');
+      assert.ok(db.getAttachmentByPath('media/friend-1700000000002.mp4'));
+      db.db.close();
+    });
+
     await t.test('residue from past deletions is cleared, and the repair is idempotent', async () => {
       const { db } = await populated(temp);
 

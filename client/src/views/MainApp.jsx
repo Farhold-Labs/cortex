@@ -905,9 +905,11 @@ function MainApp({ sharePingId }) {
     try {
       await fetchAPI(`/waves/${waveId}/mute`, { method: muted ? 'POST' : 'DELETE' });
       showToastMsg(muted ? `Muted — notifications off for this ${T.wave}` : `Unmuted`, 'success');
+      return true;
     } catch (err) {
       setWaves(prev => prev.map(w => (w.id === waveId ? { ...w, muted: !muted } : w)));
       showToastMsg(formatError(`Failed to ${muted ? 'mute' : 'unmute'} ${T.wave}`), 'error');
+      return false;
     }
   }, [fetchAPI, showToastMsg]);
 
@@ -2597,7 +2599,8 @@ function MainApp({ sharePingId }) {
                       onOpenThread={(msg, extra) => handleOpenThread(selectedWave.id, msg, extra)}
                       moveSource={moveSource}
                       onStartMove={handleStartMove}
-                      onCompleteMove={handleCompleteMove} />
+                      onCompleteMove={handleCompleteMove}
+                      onToggleMute={handleWaveMute} />
                   </ErrorBoundary>
                   )}
                   {activeThread && activeThread.waveId === selectedWave.id && (

@@ -157,6 +157,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Group Waves With Travellers; Remove and Leave Across Servers; Remote Mutes | v2.138.0 |
 | Community Roles Editor (make, edit, give and take roles; powers in plain words) | v2.139.0 |
 | Community Moderators Remove Pings and Run Events; ACTIVITY Log; Server-Wide Waves Staff-Only | v2.140.0 |
+| Mute From Inside a Wave; Account Deletion Removes Profile Picture and Videos | v2.141.0 |
 
 ---
 
@@ -164,8 +165,6 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 ### Near-term
 
-- **Mute from the wave view.** Per-wave mute (v2.84.0) is only in the wave-list row menu. It should also be in the ⋮ menu inside an open wave. The server side is done; this is UI only.
-- **Delete profile files with the account.** Account deletion leaves the profile picture and video on disk at their old addresses (nothing links to them). See PRIVACY.md.
 - **Broadcasts from OBS / RTMP** (LiveKit Ingress), for streaming from a camera rig rather than a phone.
 - **A persistent floating video player** that survives navigating away from a wave. Browser picture-in-picture dies when the embed unmounts.
 - **Watch-party UI.** The server side is protected and tested; the UI has not been certified.
