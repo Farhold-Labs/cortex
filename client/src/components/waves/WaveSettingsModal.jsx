@@ -425,6 +425,10 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
     }
   };
 
+  // v2.142.0: the server refuses to encrypt a wave with people on other servers.
+  const hasTravellers = wave?.privacy === 'crossServer' || wave?.privacy === 'cross-server'
+    || wave?.federationState === 'origin' || wave?.federationState === 'participant';
+
   const handleEncryptWave = async () => {
     if (wave.encrypted) {
       showToast(`${T.Wave} is already encrypted`, 'error');
@@ -700,7 +704,13 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         {federationEnabled && (wave?.createdBy === currentUserId || isAdmin) && wave?.federationState !== 'participant' && !(wave?.channelId && wave?.communityId) && (
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>{FEDERATION.verseSection}</div>
-            {wave?.createdBy === currentUserId && (
+            {/* v2.142.0: people on other servers can't read an encrypted wave yet. */}
+            {wave?.createdBy === currentUserId && wave?.encrypted && wave?.federationState !== 'origin' && (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', lineHeight: 1.5 }}>
+                This {T.wave} is end-to-end encrypted. People on other servers can't read encrypted {T.waves} yet, so they can't be invited to it.
+              </div>
+            )}
+            {wave?.createdBy === currentUserId && !(wave?.encrypted && wave?.federationState !== 'origin') && (
             <button
               onClick={onFederate}
               style={{
@@ -773,7 +783,11 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>ENCRYPTION</div>
 
-            {!wave.encrypted ? (
+            {!wave.encrypted && hasTravellers ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', lineHeight: 1.5 }}>
+                People on other servers can't read an encrypted {T.wave} yet, so this one can't be encrypted while they're in it or invited to it.
+              </div>
+            ) : !wave.encrypted ? (
               <button
                 onClick={handleEncryptWave}
                 disabled={encrypting}

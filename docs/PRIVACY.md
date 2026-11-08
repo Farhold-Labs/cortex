@@ -158,7 +158,7 @@ When federation is enabled and your instance connects to other Cortex instances 
 **What is shared with federated instances:**
 - Your handle, display name, and avatar (when you participate in cross-instance waves)
 - Wave titles for federated waves
-- Message ciphertext (still encrypted — remote servers can't read it either)
+- Messages, as text the other server can read. End-to-end encryption does not yet work across servers: since v2.142.0 an encrypted wave cannot include people on other servers, and a wave that includes them cannot be encrypted. Before v2.142.0 the two could be combined; the people elsewhere then received ciphertext they could not read, and their own messages were stored as plain text inside the encrypted wave.
 
 **Who can read a federated wave (v2.136.1):** a conversation with people on other servers is readable only by its people, on every server, and is sent only to the servers they are on. Only an instance admin can *broadcast* a wave to every allied server; a broadcast is readable by every account on every allied server, and on its own. Before v2.136.1 a server receiving a conversation let all its accounts read it.
 
