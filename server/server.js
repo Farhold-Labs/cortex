@@ -20340,6 +20340,13 @@ app.post('/api/federation/wave-invitations/answer', federationInboxLimiter, auth
     return res.json({ ok: true, accepted: false });
   }
 
+  // v2.142.0: asked before the wave was encrypted. Answered as withdrawn,
+  // which every server since v2.137.0 understands.
+  if (db.isWaveEncrypted(wave.id)) {
+    console.log(`📭 ${sourceNode.nodeName} accepted an invitation into ${wave.id}, which is now encrypted: refused`);
+    return res.status(404).json({ error: 'No such invitation', code: 'INVITATION_GONE' });
+  }
+
   db.addWaveFederationNode(wave.id, sourceNode.nodeName);
   // v2.138.0: listed as one of the wave's people elsewhere.
   const who = req.body.user || {};
@@ -22494,6 +22501,9 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   // E2EE: Check if wave should be encrypted
   // FORCE_WAVE_ENCRYPTION overrides client — still requires keyDistribution from client
   const encrypted = FORCE_WAVE_ENCRYPTION || !!req.body.encrypted;
+  if (encrypted && hasFederatedParticipants) {
+    return res.status(409).json(encryptedTravellersRefusal());
+  }
   const keyDistribution = req.body.keyDistribution;
 
   const wave = db.createWave({
@@ -23074,6 +23084,9 @@ app.post('/api/waves/:id/invite-federated', authenticateToken, async (req, res) 
   // from everyone else here.
   if (wave.privacy === 'public') {
     return res.status(409).json({ error: `Everyone here can read this ${T_WAVE()}. People on other servers can only join one kept to its people.`, code: 'PUBLIC_WAVE' });
+  }
+  if (db.isWaveEncrypted(waveId)) {
+    return res.status(409).json(encryptedTravellersRefusal());
   }
   if (!isGroupWave(wave) && wave.privacy !== 'crossServer' && wave.privacy !== 'cross-server') {
     db.updateWavePrivacy(waveId, 'crossServer', null);
@@ -24139,6 +24152,14 @@ function isGroupWave(wave) {
  * or since v2.138.0 a group wave its server has sent elsewhere: its group is
  * its people here, and its travellers are listed in wave_remote_members.
  */
+// v2.142.0 — people on other servers cannot read an end-to-end encrypted
+// wave: federation carries no wave key, nonce or key version, and their own
+// pings would arrive in plain text. Until it does, the two don't mix.
+const encryptedTravellersRefusal = () => ({
+  error: `People on other servers can't read an end-to-end encrypted ${T_WAVE()} yet, so it can't include them`,
+  code: 'ENCRYPTED_NO_TRAVELLERS',
+});
+
 function isFederatedWave(wave) {
   return !!wave && (wave.privacy === 'crossServer' || wave.privacy === 'cross-server'
     || wave.federationState === 'origin' || wave.federationState === 'participant');
@@ -25206,6 +25227,11 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
     // Check if already encrypted
     if (db.isWaveEncrypted(waveId)) {
       return res.status(400).json({ error: 'Wave is already encrypted' });
+    }
+
+    // v2.142.0: not while people on other servers are in it, or asked to be.
+    if (isFederatedWave(wave) || db.listRemoteWaveInvitations?.(waveId)?.length) {
+      return res.status(409).json(encryptedTravellersRefusal());
     }
 
     // Create wave key metadata
