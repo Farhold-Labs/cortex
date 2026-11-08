@@ -205,6 +205,7 @@ Extend E2EE to federated messages between servers.
 - Handle key rotation for multi-server participants
 - **Current status:** Local E2EE works (v2.1.0). Across servers it never did: federation sends no wave key, nonce or key version, and travellers' own pings arrived in plain text. Since v2.142.0 encrypted waves and people on other servers are refused together.
 - **Decided 2026-11-07:** a person's public key comes from their home server over signed federation, and members can see and compare key fingerprints, with a change flagged.
+- **Design proposed 2026-11-08:** `docs/federated-e2ee/01-design.md`, in four phases. Phase 0 fixes two security gaps in encryption on a single server first: a device gives the wave key to any public key the server names, and keys are never rotated when someone leaves.
 
 ---
 
