@@ -52,8 +52,12 @@ jobs:
         run: npm ci
         working-directory: server
 
+      # --ignore-scripts: nothing here needs a client install script. canvas (a
+      # dev dependency, used only to regenerate icons) has no prebuilt binary for
+      # ubuntu-26.04, which ubuntu-latest became in November 2026, and cannot
+      # compile there without cairo and pixman. jsdom and DOMPurify are plain JS.
       - name: Install client dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
         working-directory: client
 
       # server/schema.sql is GENERATED. This proves a fresh install and a
@@ -80,8 +84,10 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      # --ignore-scripts for the same reason as above; Vite's esbuild and
+      # Rollup binaries come in as optional packages, not install scripts.
       - name: Install client dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
         working-directory: client
 
       # The client is a single-file-ish React app with no type checking, so the

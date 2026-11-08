@@ -19,6 +19,9 @@ End-to-end encrypted waves and people on other servers are kept apart until encr
   An invitation sent before the wave was encrypted and accepted after is answered as withdrawn (404 `INVITATION_GONE`, which servers since v2.137.0 understand), so their server makes no copy. Wave settings say why in place of the invite and encrypt buttons. Admin broadcast already refused encrypted waves.
 - `tools/find-encrypted-federated-waves.mjs` lists, read-only, encrypted waves that people on other servers were already in, with how many of their pings are stored in plain text. Dev has none.
 
+### CI
+- The test job's client install began failing when GitHub's `ubuntu-latest` became ubuntu-26.04: `canvas`, a dev dependency used only to regenerate icons, has no prebuilt binary there and cannot compile without cairo and pixman. Both client installs now use `npm ci --ignore-scripts`; the tests need only plain-JS jsdom and DOMPurify, and the build's esbuild and Rollup binaries arrive as optional packages. A clean install that way builds and stamps `cortex-v2.142.0`. Pinning the old image was rejected: production runs 26.04.
+
 ### Decided
 - The full feature (docs: OUTSTANDING-FEATURES, "End-to-End Encryption for Federation"): a person's public key comes from their home server over signed federation, and members can see and compare key fingerprints, with a change flagged. Jared, 2026-11-07.
 
