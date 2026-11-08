@@ -87,7 +87,7 @@ async function fakePeer() {
   return peer;
 }
 
-async function run({ noInvitationCheck = false, noHomeBlockCheck = false } = {}) {
+async function run({ noInvitationCheck = false, noHomeBlockCheck = false, noEncryptedCheck = false } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-fedconsent-'));
   const peer = await fakePeer();   // invites people here
   const near = await fakePeer();   // people here invite someone there
@@ -115,6 +115,19 @@ async function run({ noInvitationCheck = false, noHomeBlockCheck = false } = {})
       const check = "// Blocked: declined, and the inviter is not told why.\n        if (";
       assert.ok(src.includes(check), 'counterfactual: could not find the block check');
       src = src.replace(check, '// Blocked check removed\n        if (false) if (');
+    }
+    if (noEncryptedCheck) {
+      // v2.142.0 counterfactual: the four places an encrypted wave meets
+      // people on other servers, as they were.
+      for (const check of [
+        'if (encrypted && hasFederatedParticipants) {',
+        '  if (db.isWaveEncrypted(waveId)) {\n    return res.status(409)',
+        'if (isFederatedWave(wave) || db.listRemoteWaveInvitations?.(waveId)?.length) {',
+        '  if (db.isWaveEncrypted(wave.id)) {\n    console.log(`📭',
+      ]) {
+        assert.ok(src.includes(check), `counterfactual: could not find ${check.slice(0, 50)}`);
+        src = src.replace(check, check.replace(/if \((.*?)\) \{/, 'if (false && ($1)) {'));
+      }
     }
     fs.writeFileSync(f, src + "\nserver.on('listening', () => console.log('FEDCONSENT_PORT=' + server.address().port));\n");
 
@@ -298,6 +311,33 @@ async function run({ noInvitationCheck = false, noHomeBlockCheck = false } = {})
     const again = (await api('POST', '/api/waves', { token: alice, body: { title: 'Again', privacy: 'private', participants: ['@zed@near.example'] } })).body;
     await settle();
     r.aliceBlocked = { refused: again.refused, sent: near.of('wave_invite').length };
+
+    // ---- v2.142.0: encrypted waves and people on other servers ----
+    // Their server gets no wave key, nonce or key version, and their pings
+    // would arrive in plain text, so the two are kept apart for now.
+    const key = [{ userId: null, encryptedWaveKey: 'wrapped', senderPublicKey: 'spki' }];
+    near.got.length = 0;
+    const sealedNew = await api('POST', '/api/waves', { token: alice, body: { title: 'Sealed', privacy: 'private', participants: ['@uma@near.example'], encrypted: true, keyDistribution: key } });
+    await settle();
+    const sealed = (await api('POST', '/api/waves', { token: alice, body: { title: 'Sealed here', privacy: 'private', participants: ['u-bob'], encrypted: true, keyDistribution: key } })).body;
+    const sealedInvite = await api('POST', `/api/waves/${sealed.id}/invite-federated`, { token: alice, body: { participants: ['@uma@near.example'] } });
+    await settle();
+    const open = (await api('POST', '/api/waves', { token: alice, body: { title: 'Open', privacy: 'private', participants: ['@vic@near.example'] } })).body;
+    const encryptOpen = await api('POST', `/api/waves/${open.id}/encrypt`, { token: alice, body: { keyDistribution: key } });
+    // An invitation sent before the wave was encrypted, answered after.
+    const later = (await api('POST', '/api/waves', { token: alice, body: { title: 'Later', privacy: 'private', participants: ['@wil@near.example'] } })).body;
+    const rw = new (require(path.join(root, 'server/node_modules/better-sqlite3')))(dbPath);
+    rw.prepare('UPDATE waves SET encrypted = 1 WHERE id = ?').run(later.id);
+    rw.close();
+    const lateAnswer = await signed('near.example', '/api/federation/wave-invitations/answer', { originWaveId: later.id, handle: 'wil', accepted: true });
+    r.encrypted = {
+      create: `${sealedNew.status} ${sealedNew.body?.code}`,
+      invite: `${sealedInvite.status} ${sealedInvite.body?.code}`,
+      asked: near.of('wave_invite').map(p => p.invitedUserHandle).filter(h => h === 'uma'),
+      encrypt: `${encryptOpen.status} ${encryptOpen.body?.code}`,
+      lateAnswer: `${lateAnswer.status} ${lateAnswer.body?.code}`,
+      lateBackfill: (await signed('near.example', '/api/federation/wave-backfill', { originWaveId: later.id })).status,
+    };
     return r;
   } finally {
     if (child) child.kill();
@@ -349,6 +389,17 @@ test('people on other servers are asked', { timeout: 120000 }, async (t) => {
   await t.test('someone the inviter blocked on another server is not asked', () => {
     assert.deepEqual(r.aliceBlocked, { refused: ['@zed@near.example'], sent: 0 });
   });
+
+  await t.test('an encrypted wave and people on other servers are kept apart (v2.142.0)', () => {
+    assert.deepEqual(r.encrypted, {
+      create: '409 ENCRYPTED_NO_TRAVELLERS',
+      invite: '409 ENCRYPTED_NO_TRAVELLERS',
+      asked: [],
+      encrypt: '409 ENCRYPTED_NO_TRAVELLERS',
+      lateAnswer: '404 INVITATION_GONE',
+      lateBackfill: 403,
+    });
+  });
 });
 
 test('counterfactual: without the invitation check, a paired server joins and reads the history', { timeout: 120000 }, async () => {
@@ -359,4 +410,14 @@ test('counterfactual: without the invitation check, a paired server joins and re
 test('counterfactual: without the block check, someone who blocked the inviter is still asked', { timeout: 120000 }, async () => {
   const r = await run({ noHomeBlockCheck: true });
   assert.equal(r.blocked.bobAsked, 1);
+});
+
+test('counterfactual: without the v2.142.0 checks, encrypted waves take people on other servers', { timeout: 120000 }, async () => {
+  const r = await run({ noEncryptedCheck: true });
+  assert.notEqual(r.encrypted.create.split(' ')[0], '409');
+  assert.notEqual(r.encrypted.invite.split(' ')[0], '409');
+  assert.deepEqual(r.encrypted.asked, ['uma', 'uma']);
+  assert.notEqual(r.encrypted.encrypt.split(' ')[0], '409');
+  assert.equal(r.encrypted.lateAnswer.split(' ')[0], '200');
+  assert.equal(r.encrypted.lateBackfill, 200);
 });

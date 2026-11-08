@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.142.0] - 2026-11-07
+
+End-to-end encrypted waves and people on other servers are kept apart until encryption works across servers. No migration.
+
+### Fixed
+- **An encrypted wave could include people on other servers, who could not read it, and whose own messages were stored as plain text in it.** Federation sends a ping's content but no nonce, key version or encrypted flag, and no wave key ever reaches another server, so they saw ciphertext; their server did not know the wave was encrypted, so their pings came back unencrypted and were kept that way inside a wave that showed as encrypted. Nothing refused it. Now each way of combining the two answers 409 `ENCRYPTED_NO_TRAVELLERS` ("People on other servers can't read an end-to-end encrypted wave yet, so it can't include them"):
+  - starting an encrypted wave with `@handle@server` people (so a server with `FORCE_WAVE_ENCRYPTION` cannot start a wave with people elsewhere at all; no server has it on);
+  - inviting people on other servers into an encrypted wave;
+  - encrypting a Verse-Wide wave, a copy of one, or a wave with invitations still open elsewhere.
+  An invitation sent before the wave was encrypted and accepted after is answered as withdrawn (404 `INVITATION_GONE`, which servers since v2.137.0 understand), so their server makes no copy. Wave settings say why in place of the invite and encrypt buttons. Admin broadcast already refused encrypted waves.
+- `tools/find-encrypted-federated-waves.mjs` lists, read-only, encrypted waves that people on other servers were already in, with how many of their pings are stored in plain text. Dev has none.
+
+### CI
+- The test job's client install began failing when GitHub's `ubuntu-latest` became ubuntu-26.04: `canvas`, a dev dependency used only to regenerate icons, has no prebuilt binary there and cannot compile without cairo and pixman. Both client installs now use `npm ci --ignore-scripts`; the tests need only plain-JS jsdom and DOMPurify, and the build's esbuild and Rollup binaries arrive as optional packages. A clean install that way builds and stamps `cortex-v2.142.0`. Pinning the old image was rejected: production runs 26.04.
+
+### Decided
+- The full feature (docs: OUTSTANDING-FEATURES, "End-to-End Encryption for Federation"): a person's public key comes from their home server over signed federation, and members can see and compare key fingerprints, with a change flagged. Jared, 2026-11-07.
+
+### Verified
+- `npm test`: 711/711. `federation-consent`: starting an encrypted wave with someone elsewhere, inviting someone elsewhere into an encrypted wave and encrypting a wave with an open invitation elsewhere are each 409 `ENCRYPTED_NO_TRAVELLERS`, and their server is never asked; an invitation answered after its wave was encrypted is 404 `INVITATION_GONE` and the wave's history stays closed to that server (403). The counterfactual takes the four checks out of a copy of the server and sees the wave made (201), the invitation sent twice, encryption accepted, and the late answer joining (200) with the history served (200).
+- The finder on a scratch copy of the dev database with one Verse-Wide wave marked encrypted lists it with its server, person and open invitation.
+- Headless on dev at 390 px: Mal's wave settings on "Travellers check" (Verse-Wide) show the note in place of the encrypt button; no overflow, no console errors.
+
 ## [2.141.0] - 2026-11-07
 
 Mute from inside a wave, and a deleted account takes its profile picture and videos with it. No migration.
