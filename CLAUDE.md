@@ -463,6 +463,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/DEPLOYMENT.md** — hardened VPS deployment, hardware sizing, broadcasts/recording setup, release backups
 - **docs/HIGH-AVAILABILITY.md** — proposed warm-standby failover (DNS health checks, Litestream, lease + boot guard); not built yet
 - **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0, phase 5 folders and audience labels in v2.135.0, phase 6 federated audience v2.136.1, invitations v2.137.0, groups and travellers v2.138.0)
+- **docs/federated-e2ee/** — encryption across servers (proposed 2026-11-08, not built; phase 0 = local [SECURITY] fixes)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy
