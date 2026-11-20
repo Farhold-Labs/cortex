@@ -4026,6 +4026,30 @@ export class DatabaseSQLite {
       }
     }
 
+    // v2.143.0 — the public keys a person's devices have seen for other
+    // people, so a changed key can be flagged. Encrypted on the device under
+    // that person's own key: the server can neither read the record nor forge
+    // an entry in it. `version` makes concurrent saves from two devices merge
+    // instead of overwriting each other.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_key_records (
+        user_id        TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        encrypted_data TEXT NOT NULL,
+        nonce          TEXT NOT NULL,
+        version        INTEGER NOT NULL DEFAULT 1,
+        updated_at     TEXT NOT NULL
+      );
+    `);
+    // v2.143.0 — set when someone who held a wave's current key can no longer
+    // be seen to (their account was deleted, which cascades their key rows
+    // away). Other departures are worked out from the key rows themselves.
+    {
+      const cols = this.db.prepare('PRAGMA table_info(wave_key_metadata)').all().map(c => c.name);
+      if (cols.length && !cols.includes('rekey_needed_at')) {
+        this.db.exec('ALTER TABLE wave_key_metadata ADD COLUMN rekey_needed_at TEXT');
+      }
+    }
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -6997,7 +7021,8 @@ export class DatabaseSQLite {
       // The list keeps its own order since v2.121.0, and an unplaced wave is
       // placed by when it was made, so the low-bandwidth list needs this too.
       createdAt: r.created_at,
-      encrypted: r.encrypted === 1,
+      // 2 = encrypted, older pings still being migrated: still encrypted (v2.143.0).
+      encrypted: r.encrypted === 1 || r.encrypted === 2,
       ping_count: r.ping_count,
       unread_count: unreadMap.get(r.id) || 0,
       pinned: pinned === 1,
@@ -7028,8 +7053,9 @@ export class DatabaseSQLite {
       federationState: row.federation_state || 'local',
       originNode: row.origin_node || null,
       originWaveId: row.origin_wave_id || null,
-      // E2EE fields
-      encrypted: row.encrypted === 1,
+      // E2EE fields. 2 = encrypted with older pings still being migrated;
+      // reading it as unencrypted had clients send plain text (v2.143.0).
+      encrypted: row.encrypted === 1 || row.encrypted === 2,
       // Profile wave fields (v2.9.0)
       isProfileWave: row.is_profile_wave === 1,
       profileOwnerId: row.profile_owner_id || null,
@@ -11675,6 +11701,14 @@ export class DatabaseSQLite {
       //     attachment sweep, the same as a deleted wave's files.
       this.forgetProfileFiles(user);
 
+      // 6c. Encrypted waves whose key they held (v2.143.0). Their key rows go
+      //     with the account, but their devices still hold the keys, so each
+      //     wave needs a new one. Marked here, before the cascade hides it.
+      for (const { wave_id } of this.db.prepare(`
+        SELECT DISTINCT wek.wave_id FROM wave_encryption_keys wek JOIN waves w ON w.id = wek.wave_id
+         WHERE wek.user_id = ? AND w.encrypted != 0
+      `).all(userId)) this.markWaveRekeyNeeded(wave_id);
+
       // 7. Handle waves - delete empty ones, transfer ownership for others
       const wavesCreated = this.db.prepare(`
         SELECT w.id FROM waves w WHERE w.created_by = ?
@@ -12295,7 +12329,7 @@ export class DatabaseSQLite {
       if (existing) {
         this.db.prepare(`
           UPDATE wave_key_metadata
-          SET current_key_version = ?, last_rotated_at = ?
+          SET current_key_version = ?, last_rotated_at = ?, rekey_needed_at = NULL
           WHERE wave_id = ?
         `).run(newVersion, now, waveId);
       } else {
@@ -12391,6 +12425,68 @@ export class DatabaseSQLite {
     }));
   }
 
+  // ============ Key rotation and key records (v2.143.0) ============
+
+  /** 0 = not encrypted, 1 = encrypted, 2 = encrypted, older pings still being migrated. */
+  waveEncryptionState(waveId) {
+    return this.db.prepare('SELECT encrypted FROM waves WHERE id = ?').get(waveId)?.encrypted || 0;
+  }
+
+  /** Everyone given the wave's current key. */
+  currentWaveKeyHolders(waveId) {
+    const version = this.getWaveKeyVersion(waveId);
+    return this.db.prepare('SELECT DISTINCT user_id FROM wave_encryption_keys WHERE wave_id = ? AND key_version = ?')
+      .all(waveId, version).map(r => r.user_id);
+  }
+
+  waveRekeyNeededAt(waveId) {
+    return this.db.prepare('SELECT rekey_needed_at FROM wave_key_metadata WHERE wave_id = ?').get(waveId)?.rekey_needed_at || null;
+  }
+
+  markWaveRekeyNeeded(waveId) {
+    const now = new Date().toISOString();
+    this.db.prepare('INSERT OR IGNORE INTO wave_key_metadata (wave_id, current_key_version, created_at) VALUES (?, 1, ?)').run(waveId, now);
+    this.db.prepare('UPDATE wave_key_metadata SET rekey_needed_at = COALESCE(rekey_needed_at, ?) WHERE wave_id = ?').run(now, waveId);
+  }
+
+  /** Encrypted waves this person holds a key for, or started: where they might rotate. */
+  encryptedWavesFor(userId) {
+    return this.db.prepare(`
+      SELECT DISTINCT wek.wave_id AS id FROM wave_encryption_keys wek
+        JOIN waves w ON w.id = wek.wave_id
+       WHERE wek.user_id = ? AND w.encrypted != 0
+      UNION
+      SELECT id FROM waves WHERE created_by = ? AND encrypted != 0
+    `).all(userId, userId).map(r => r.id);
+  }
+
+  hasWaveKeyRow(waveId, userId, keyVersion) {
+    return !!this.db.prepare('SELECT 1 FROM wave_encryption_keys WHERE wave_id = ? AND user_id = ? AND key_version = ?')
+      .get(waveId, userId, keyVersion);
+  }
+
+  getUserKeyRecords(userId) {
+    const row = this.db.prepare('SELECT encrypted_data, nonce, version, updated_at FROM user_key_records WHERE user_id = ?').get(userId);
+    return row ? { encryptedData: row.encrypted_data, nonce: row.nonce, version: row.version, updatedAt: row.updated_at } : null;
+  }
+
+  /** Saves only over the version the device read; returns the new version, or null if it changed meanwhile. */
+  saveUserKeyRecords(userId, encryptedData, nonce, expectedVersion) {
+    const now = new Date().toISOString();
+    return this.db.transaction(() => {
+      const current = this.db.prepare('SELECT version FROM user_key_records WHERE user_id = ?').get(userId)?.version || 0;
+      if (current !== expectedVersion) return null;
+      if (current === 0) {
+        this.db.prepare('INSERT INTO user_key_records (user_id, encrypted_data, nonce, version, updated_at) VALUES (?, ?, ?, 1, ?)')
+          .run(userId, encryptedData, nonce, now);
+        return 1;
+      }
+      this.db.prepare('UPDATE user_key_records SET encrypted_data = ?, nonce = ?, version = version + 1, updated_at = ? WHERE user_id = ?')
+        .run(encryptedData, nonce, now, userId);
+      return current + 1;
+    })();
+  }
+
   // ============ Wave Key Redistribution (v2.47.3) ============
 
   upsertWaveKeyRequest(waveId, requesterId, requesterPublicKey) {
@@ -12429,7 +12525,7 @@ export class DatabaseSQLite {
   // Check if a wave is encrypted
   isWaveEncrypted(waveId) {
     const row = this.db.prepare('SELECT encrypted FROM waves WHERE id = ?').get(waveId);
-    return row?.encrypted === 1;
+    return row?.encrypted === 1 || row?.encrypted === 2;
   }
 
   // Set wave as encrypted
@@ -12503,14 +12599,17 @@ export class DatabaseSQLite {
   getUnencryptedDroplets(waveId, limit = 50) { return this.getUnencryptedPings(waveId, limit); }
 
   // Update a ping with encrypted content
-  encryptPingContent(pingId, encryptedContent, nonce, keyVersion) {
-    this.db.prepare(`
+  // v2.143.0 [SECURITY]: only a plain ping of this wave. The update matched on
+  // the ping id alone, so a wave's creator could overwrite any ping anywhere,
+  // encrypted or not, by naming its id to /encrypt-pings.
+  encryptPingContent(pingId, encryptedContent, nonce, keyVersion, waveId) {
+    return this.db.prepare(`
       UPDATE pings
       SET content = ?, nonce = ?, key_version = ?, encrypted = 1
-      WHERE id = ?
-    `).run(encryptedContent, nonce, keyVersion, pingId);
+      WHERE id = ? AND wave_id = ? AND COALESCE(encrypted, 0) = 0
+    `).run(encryptedContent, nonce, keyVersion, pingId, waveId).changes;
   }
-  encryptDropletContent(id, enc, nonce, kv) { return this.encryptPingContent(id, enc, nonce, kv); }
+  encryptDropletContent(id, enc, nonce, kv, waveId) { return this.encryptPingContent(id, enc, nonce, kv, waveId); }
 
   // ============ Bot Management (v2.1.0) ============
 

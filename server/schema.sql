@@ -461,7 +461,7 @@ CREATE TABLE IF NOT EXISTS wave_key_metadata (
     current_key_version INTEGER DEFAULT 1,
     created_at TEXT NOT NULL,
     last_rotated_at TEXT
-);
+, rekey_needed_at TEXT);
 
 CREATE TABLE IF NOT EXISTS wave_key_requests (
     id TEXT PRIMARY KEY,
@@ -1610,6 +1610,14 @@ CREATE TABLE IF NOT EXISTS remote_mutes (
         UNIQUE (user_id, node_name, handle)
       );
 CREATE INDEX IF NOT EXISTS idx_remote_mutes_user ON remote_mutes(user_id);
+
+CREATE TABLE IF NOT EXISTS user_key_records (
+        user_id        TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        encrypted_data TEXT NOT NULL,
+        nonce          TEXT NOT NULL,
+        version        INTEGER NOT NULL DEFAULT 1,
+        updated_at     TEXT NOT NULL
+      );
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN

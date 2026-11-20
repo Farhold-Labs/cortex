@@ -4902,10 +4902,12 @@ const participation = {
     return db.addWaveParticipant(waveId, userId);
   },
   removeParticipant: (waveId, userId) => {
-    if (USE_SQLITE) {
-      return waveParticipationCrypto.removeParticipant(waveId, userId);
-    }
-    return db.removeWaveParticipant(waveId, userId);
+    const result = USE_SQLITE
+      ? waveParticipationCrypto.removeParticipant(waveId, userId)
+      : db.removeWaveParticipant(waveId, userId);
+    // v2.143.0 — someone who held the key has gone: ask for a new one.
+    if (db.waveEncryptionState?.(waveId)) notifyRekeyNeeded([waveId]);
+    return result;
   },
   syncWaveFromDb: (waveId) => {
     if (USE_SQLITE) {
@@ -4986,9 +4988,15 @@ const crewMembership = {
   addMember: (crewId, userId, role) => USE_SQLITE
     ? crewMembershipCrypto.addMember(crewId, userId, role)
     : db.addGroupMember(crewId, userId, role),
-  removeMember: (crewId, userId) => USE_SQLITE
-    ? crewMembershipCrypto.removeMember(crewId, userId)
-    : db.removeGroupMember(crewId, userId),
+  removeMember: (crewId, userId) => {
+    const result = USE_SQLITE
+      ? crewMembershipCrypto.removeMember(crewId, userId)
+      : db.removeGroupMember(crewId, userId);
+    // v2.143.0 — leaving a crew is leaving its waves.
+    const encryptedCrewWaves = db.db?.prepare?.('SELECT id FROM waves WHERE crew_id = ? AND encrypted != 0').all(crewId).map(r => r.id) || [];
+    if (encryptedCrewWaves.length) notifyRekeyNeeded(encryptedCrewWaves);
+    return result;
+  },
   getCrewMembers: (crewId) => USE_SQLITE
     ? crewMembershipCrypto.getCrewMembers(crewId)
     : new Set(db.getGroupMembers(crewId).map(m => m.id)),
@@ -7354,6 +7362,44 @@ app.get('/api/e2ee/status', authenticateToken, (req, res) => {
   } catch (err) {
     console.error('E2EE status check error:', err);
     res.status(500).json({ error: 'Failed to check E2EE status' });
+  }
+});
+
+// ============ Key records and pending rotations (v2.143.0) ============
+
+// The keys this person's devices have seen for others, encrypted on the device.
+app.get('/api/e2ee/key-records', authenticateToken, (req, res) => {
+  const rec = db.getUserKeyRecords(req.user.userId);
+  res.json(rec || { encryptedData: null, nonce: null, version: 0 });
+});
+
+app.put('/api/e2ee/key-records', authenticateToken, (req, res) => {
+  const { encryptedData, nonce, expectedVersion } = req.body || {};
+  if (typeof encryptedData !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(encryptedData) || encryptedData.length > 512 * 1024) {
+    return res.status(400).json({ error: 'Invalid key records' });
+  }
+  if (typeof nonce !== 'string' || !/^[A-Za-z0-9+/]{16}$/.test(nonce) || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+    return res.status(400).json({ error: 'Invalid key records' });
+  }
+  const version = db.saveUserKeyRecords(req.user.userId, encryptedData, nonce, expectedVersion);
+  if (version === null) {
+    return res.status(409).json({ error: 'Saved from another device meanwhile', code: 'KEY_RECORDS_STALE', ...db.getUserKeyRecords(req.user.userId) });
+  }
+  res.json({ version });
+});
+
+// Encrypted waves this person should give a new key to.
+app.get('/api/e2ee/rekey-needed', authenticateToken, (req, res) => {
+  try {
+    const waves = [];
+    for (const waveId of db.encryptedWavesFor(req.user.userId)) {
+      const wave = db.getWave(waveId);
+      if (wave && canRotateWaveKey(wave, req.user.userId) && waveNeedsRekey(wave)) waves.push({ id: waveId });
+    }
+    res.json({ waves });
+  } catch (err) {
+    console.error('Rekey list error:', err);
+    res.status(500).json({ error: 'Failed to list waves needing a new key' });
   }
 });
 
@@ -21240,6 +21286,9 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     can_edit: wave.createdBy === req.user.userId,
     // v2.140.0 — whether to offer Remove on other people's pings.
     can_remove_pings: canRemovePingsIn(wave, req.user.userId),
+    // v2.143.0 — someone who left still holds the key until it is renewed.
+    rekeyNeeded: waveNeedsRekey(wave),
+    canRotateKey: wave.encrypted ? canRotateWaveKey(wave, req.user.userId) : false,
   });
 });
 
@@ -24907,6 +24956,72 @@ app.delete('/api/waves/:id/participants/:userId', authenticateToken, async (req,
 
 // ============ Wave E2EE Key Routes (v1.19.0) ============
 
+// v2.143.0 — what a ping sent or edited in an encrypted wave must look like.
+// The server cannot read it, but it can insist that it is ciphertext: the
+// focus view and the thread panel sent plain text into encrypted waves for
+// years and nothing refused it. Bots and the server's own pings are not
+// user-authored and do not come through these routes.
+function encryptedPingRefusal(waveId, body) {
+  if (!db.waveEncryptionState?.(waveId)) return null;
+  const fail = (error) => ({ error, code: 'ENCRYPTION_REQUIRED' });
+  if (body.encrypted !== true) return fail(`This ${T_WAVE()} is end-to-end encrypted, so messages must be encrypted on your device. Unlock encryption and try again.`);
+  const nonce = body.nonce;
+  if (typeof nonce !== 'string' || !/^[A-Za-z0-9+/]{16}$/.test(nonce)) return fail('Encrypted messages need a 12-byte nonce');
+  if (typeof body.content !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.content) || body.content.length < 24) return fail('Encrypted content must be ciphertext');
+  const version = Number(body.keyVersion);
+  if (!Number.isInteger(version) || version < 1 || version > db.getWaveKeyVersion(waveId)) return fail('Unknown key version');
+  return null;
+}
+
+// v2.143.0 — a wave needs a new key when anyone holding the current one is
+// no longer in it, whatever took them out (leaving, removal, a crew, a
+// Community role), or when a holder's account was deleted. Worked out from
+// the key rows on each read, so no path that removes people can forget it.
+function waveNeedsRekey(wave) {
+  if (!wave || !db.waveEncryptionState?.(wave.id)) return false;
+  if (db.waveRekeyNeededAt(wave.id)) return true;
+  const members = waveMemberIds(wave);
+  // People invited when the wave was made are given its key then; until they
+  // answer they are expected to hold it. Declining makes them a former holder.
+  const invited = new Set(db.db.prepare('SELECT invited_user_id FROM wave_invitations WHERE wave_id = ?').all(wave.id).map(r => r.invited_user_id));
+  return db.currentWaveKeyHolders(wave.id).some(uid => !members.has(uid) && !invited.has(uid));
+}
+
+/** Decision 3 (2026-11-20): the wave's owner, admins or moderators, who can read it. */
+function canRotateWaveKey(wave, userId) {
+  return waveRoles.atLeast(getWaveRole(wave, userId), 'moderator') && canAccessWaveFromCache(wave.id, userId);
+}
+
+/** Members of the wave who have encryption set up: who a new key must reach. */
+function waveKeyRecipients(wave) {
+  return [...waveMemberIds(wave)].filter(uid => !!db.getUserPublicKey(uid));
+}
+
+// Tell the people who can rotate that they should. Best effort: their device
+// also checks on every unlock.
+function notifyRekeyNeeded(waveIds) {
+  setImmediate(() => {
+    for (const waveId of waveIds) {
+      try {
+        const wave = db.getWave(waveId);
+        if (!waveNeedsRekey(wave)) continue;
+        for (const uid of new Set([...waveMemberIds(wave), wave.createdBy])) {
+          if (uid && canRotateWaveKey(wave, uid)) broadcastToUser(uid, { type: 'wave_rekey_needed', waveId });
+        }
+      } catch (err) {
+        console.error('Rekey notice error:', err.message);
+      }
+    }
+  });
+}
+
+// The wave key may only be wrapped by its sender's own registered key, so a
+// recipient can trust the sender key stored beside it as much as the server.
+function wrapsWithOwnKey(userId, senderPublicKey) {
+  const own = db.getUserPublicKey(userId);
+  return !!own && own === senderPublicKey;
+}
+
 // Get wave key for current user
 app.get('/api/waves/:id/key', authenticateToken, (req, res) => {
   try {
@@ -24999,8 +25114,21 @@ app.post('/api/waves/:id/key/distribute', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // v2.143.0: only to someone in the wave, only once per key version, and
+    // only wrapped with the sender's own key. It used to overwrite whatever
+    // the person already held, so any member could lock another out.
+    if (!canAccessWaveFromCache(waveId, userId)) {
+      return res.status(403).json({ error: `They are not in this ${T_WAVE()}`, code: 'NOT_A_MEMBER' });
+    }
+    if (!wrapsWithOwnKey(req.user.userId, senderPublicKey)) {
+      return res.status(400).json({ error: 'The key must be wrapped with your own key', code: 'SENDER_KEY_MISMATCH' });
+    }
+
     // Get current key version
     const currentVersion = db.getWaveKeyVersion(waveId);
+    if (db.hasWaveKeyRow(waveId, userId, currentVersion)) {
+      return res.status(409).json({ error: 'They already have this key', code: 'KEY_EXISTS' });
+    }
 
     // Store the encrypted key for the new participant
     db.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, currentVersion);
@@ -25102,6 +25230,9 @@ app.post('/api/waves/:id/key-grant', authenticateToken, (req, res) => {
     if (request.requester_id === granterId) {
       return res.status(400).json({ error: 'Cannot grant your own request' });
     }
+    if (!wrapsWithOwnKey(granterId, senderPublicKey)) {
+      return res.status(400).json({ error: 'The key must be wrapped with your own key', code: 'SENDER_KEY_MISMATCH' });
+    }
 
     // Store the wave key for the requester at the current key version
     const currentVersion = db.getWaveKeyVersion(waveId);
@@ -25139,19 +25270,35 @@ app.post('/api/waves/:id/key/rotate', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'Wave not found' });
     }
 
-    // Only wave creator or admin can rotate keys
-    if (wave.createdBy !== req.user.userId) {
-      const user = db.findUserById(req.user.userId);
-      if (!hasRole(user, ROLES.ADMIN)) {
-        return res.status(403).json({ error: 'Only wave creator can rotate keys' });
-      }
+    // v2.143.0 (decision 3): the wave's owner, admins and moderators. It was
+    // the creator or any instance admin, and nothing ever called it.
+    if (!canRotateWaveKey(wave, req.user.userId)) {
+      return res.status(403).json({ error: `Only the ${T_WAVE()}'s owner, admins and moderators can renew its key`, code: 'NOT_WAVE_STAFF' });
+    }
+    if (!db.waveEncryptionState(waveId)) {
+      return res.status(400).json({ error: 'Wave is not encrypted' });
     }
 
-    // Validate distribution data
-    for (const { userId, encryptedWaveKey, senderPublicKey } of keyDistribution) {
-      if (!userId || !encryptedWaveKey || !senderPublicKey) {
+    // Validate distribution data. A null userId is the rotator themselves.
+    const seen = new Set();
+    for (const entry of keyDistribution) {
+      if (!entry || typeof entry !== 'object') return res.status(400).json({ error: 'Invalid key distribution data' });
+      if (entry.userId == null) entry.userId = req.user.userId;
+      const { userId, encryptedWaveKey, senderPublicKey } = entry;
+      if (typeof userId !== 'string' || typeof encryptedWaveKey !== 'string' || !encryptedWaveKey || encryptedWaveKey.length > 1000) {
         return res.status(400).json({ error: 'Invalid key distribution data' });
       }
+      if (!wrapsWithOwnKey(req.user.userId, senderPublicKey)) {
+        return res.status(400).json({ error: 'The key must be wrapped with your own key', code: 'SENDER_KEY_MISMATCH' });
+      }
+      if (seen.has(userId)) return res.status(400).json({ error: 'Invalid key distribution data' });
+      seen.add(userId);
+    }
+    // Exactly the people in the wave who can hold a key: nobody who has left,
+    // nobody missing. Anything else and the device starts again.
+    const expected = new Set(waveKeyRecipients(wave));
+    if (seen.size !== expected.size || [...seen].some(uid => !expected.has(uid))) {
+      return res.status(409).json({ error: `The people in this ${T_WAVE()} changed; try again`, code: 'KEY_MEMBERS_CHANGED' });
     }
 
     // Rotate the wave key
@@ -25193,7 +25340,10 @@ app.get('/api/waves/:id/participants/keys', authenticateToken, (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const participantKeys = db.getWaveParticipantPublicKeys(waveId);
+    // v2.143.0: everyone in the wave (a crew wave's crew, a narrowed
+    // wave's audience), not only participant rows.
+    const wave = db.getWave(waveId);
+    const participantKeys = [...waveMemberIds(wave)].map(userId => ({ userId, publicKey: db.getUserPublicKey(userId) || null }));
 
     res.json({
       participants: participantKeys
@@ -25383,8 +25533,7 @@ app.post('/api/waves/:id/encrypt-pings', authenticateToken, (req, res) => {
     let encryptedCount = 0;
     for (const { id, content, nonce } of encryptBatch) {
       try {
-        db.encryptPingContent(id, content, nonce, keyVersion);
-        encryptedCount++;
+        if (db.encryptPingContent(id, content, nonce, keyVersion, waveId)) encryptedCount++;
       } catch (err) {
         console.error(`Failed to encrypt ping ${id}:`, err);
       }
@@ -25511,6 +25660,8 @@ app.post('/api/pings', authenticateToken, (req, res) => {
   // E2EE: encrypted content is base64 and may be longer than plaintext
   const maxLength = req.body.encrypted ? 20000 : 10000;
   if (content && content.length > maxLength) return res.status(400).json({ error: 'Message too long' });
+  const plainRefusal = encryptedPingRefusal(waveId, req.body);
+  if (plainRefusal) return res.status(400).json(plainRefusal);
 
   // For burst waves, default parent to root ping if no parent specified
   let parentId = req.body.parent_id ? sanitizeInput(req.body.parent_id) : null;
@@ -25645,6 +25796,8 @@ app.put('/api/pings/:id', authenticateToken, (req, res) => {
   if (encrypted && (!nonce || !keyVersion)) {
     return res.status(400).json({ error: 'Encrypted edits require nonce and keyVersion' });
   }
+  const plainRefusal = encryptedPingRefusal(ping.waveId, req.body);
+  if (plainRefusal) return res.status(400).json(plainRefusal);
 
   const updated = db.updateMessage(pingId, content, { encrypted, nonce, keyVersion });
   // A file added in an edit expires with the ping too.

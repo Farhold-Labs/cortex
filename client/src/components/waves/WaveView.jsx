@@ -6,7 +6,7 @@ import { useSystemBack } from '../../hooks/useSystemBack.js';
 import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL } from '../../../messages.js';
 import { waveAudience, BASE_URL, canAccess } from '../../config/constants.js';
 import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComponents.jsx';
-import { LegacyWaveNotice, PartialEncryptionBanner } from '../../../e2ee-components.jsx';
+import { LegacyWaveNotice, PartialEncryptionBanner, KeyChangeNotice, RekeyPendingNotice } from '../../../e2ee-components.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
 import Message from '../messages/Message.jsx';
 import DeleteConfirmModal from './DeleteConfirmModal.jsx';
@@ -27,6 +27,7 @@ import { effectiveTtl, nextExpiry, expireDue, ttlLabel } from '../../utils/expir
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
+import { sealPing } from '../../utils/sealPing.js';
 import { useIsCongested } from '../../hooks/useNetworkStatus.js';
 import { lazyComponent } from '../../utils/lazyComponent.jsx';
 
@@ -962,6 +963,16 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     }
   }, [waveData?.id, waveData?.encrypted, e2ee.isE2EEEnabled, loadEncryptionStatus]);
 
+  // v2.143.0 — people here whose encryption key changed since this person's
+  // devices last saw it, and renewing the key when someone who held it left.
+  const keyChangedPeople = (waveData?.participants || []).filter(p =>
+    p.id !== currentUser?.id && (e2ee.keyChanges || []).some(c => c.personId === p.id));
+  useEffect(() => {
+    if (waveData?.encrypted && waveData?.rekeyNeeded && waveData?.canRotateKey && e2ee.isUnlocked) {
+      e2ee.runPendingRotations();
+    }
+  }, [waveData?.id, waveData?.rekeyNeeded, waveData?.canRotateKey, e2ee.isUnlocked]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // E2EE: Enable encryption for a legacy wave
   const handleEnableEncryption = async () => {
     if (!e2ee.isUnlocked) {
@@ -1127,20 +1138,15 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         if (paths.length) messageBody.attachments = paths;
       }
 
-      if (waveData?.encrypted && e2ee.isUnlocked) {
+      // v2.143.0: through sealPing, which also refuses to send while
+      // encryption is locked (this used to fall through and send plain text),
+      // and labels the ping with the key version it was really sealed with.
+      if (waveData?.encrypted) {
         try {
-          const { ciphertext, nonce } = await e2ee.encryptPing(content, wave.id);
-          const waveKeyVersion = await fetchAPI(`/waves/${wave.id}/key`).then(r => r.keyVersion).catch(() => 1);
-          messageBody = {
-            ...messageBody,
-            content: ciphertext,
-            encrypted: true,
-            nonce,
-            keyVersion: waveKeyVersion || 1
-          };
+          messageBody = { ...messageBody, ...(await sealPing(e2ee, waveData, content)) };
         } catch (encryptErr) {
           console.error('Failed to encrypt message:', encryptErr);
-          showToast(formatError('Failed to encrypt message'), 'error');
+          showToast(formatError(e2ee.isUnlocked ? 'Failed to encrypt message' : encryptErr.message), 'error');
           userActionInProgressRef.current = false;
           return;
         }
@@ -1328,23 +1334,18 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
       // Handle E2EE - for now, just mark media as not encrypted
       // TODO: Implement media encryption in Phase 5
-      if (waveData?.encrypted && e2ee.isUnlocked) {
+      if (waveData?.encrypted) {
         try {
           // For encrypted waves, we'll encrypt the content (empty for media pings)
           // The media file itself is stored unencrypted for now
-          const { ciphertext, nonce } = await e2ee.encryptPing('', wave.id);
-          const waveKeyVersion = await fetchAPI(`/waves/${wave.id}/key`).then(r => r.keyVersion).catch(() => 1);
           messageBody = {
             ...messageBody,
-            content: ciphertext,
-            encrypted: true,
-            nonce,
-            keyVersion: waveKeyVersion || 1,
+            ...(await sealPing(e2ee, waveData, '')),
             mediaEncrypted: false, // Media not encrypted yet
           };
         } catch (encryptErr) {
           console.error('Failed to encrypt message:', encryptErr);
-          showToast(formatError('Failed to encrypt message'), 'error');
+          showToast(formatError(e2ee.isUnlocked ? 'Failed to encrypt message' : encryptErr.message), 'error');
           setUploadingMedia(false);
           setMediaUploadStatus('');
           return;
@@ -1514,14 +1515,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     try {
       let body = { content: editContent };
 
-      if (waveData?.encrypted && e2ee.isUnlocked) {
+      if (waveData?.encrypted) {
         try {
-          const { ciphertext, nonce } = await e2ee.encryptPing(editContent, wave.id);
-          const keyVersion = await fetchAPI(`/waves/${wave.id}/key`).then(r => r.keyVersion).catch(() => 1);
-          body = { content: ciphertext, encrypted: true, nonce, keyVersion: keyVersion || 1 };
+          body = await sealPing(e2ee, waveData, editContent);
         } catch (encryptErr) {
           console.error('Failed to encrypt edited message:', encryptErr);
-          showToast('Failed to encrypt message', 'error');
+          showToast(e2ee.isUnlocked ? 'Failed to encrypt message' : encryptErr.message, 'error');
           userActionInProgressRef.current = false;
           return;
         }
@@ -2599,6 +2598,17 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         onUnpin={() => loadWave(true)}
         showToast={showToast}
       />
+
+      {/* Key notices (v2.143.0), outside the scroller so they can't be lost above old pings. */}
+      {waveData?.encrypted && keyChangedPeople.length > 0 && (
+        <KeyChangeNotice
+          people={keyChangedPeople}
+          onAcknowledge={() => keyChangedPeople.forEach(p => e2ee.acknowledgeKeyChange(p.id))}
+        />
+      )}
+      {waveData?.encrypted && waveData?.rekeyNeeded && (
+        <RekeyPendingNotice canRotate={!!waveData?.canRotateKey && e2ee.isUnlocked} />
+      )}
 
       {/* Messages */}
       <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '12px' : '20px' }}>
