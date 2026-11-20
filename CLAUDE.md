@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.142.0**. Last brought current 2026-10-30.
+Current version: **2.143.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2142000 / versionName "2.142.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2142000 / MARKETING_VERSION 2.142.0
+client/android/app/build.gradle                  versionCode 2143000 / versionName "2.143.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2143000 / MARKETING_VERSION 2.143.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -163,6 +163,11 @@ The message allow-list is `img, a, br, p, strong, em, code, pre, video` (`server
 ### E2EE
 
 Encrypted pings never reach server-side processing — the server cannot read them by design. Anything that needs message content must happen pre-encryption on the client or post-decryption at render. Features that need server knowledge must be modelled as **explicit metadata**, not inferred from message text.
+
+**Phase 0 of `docs/federated-e2ee/` (v2.143.0):**
+- **Every ping send and edit goes through `sealPing()`** (`client/src/utils/sealPing.js`). The server refuses plain text in an encrypted wave (`ENCRYPTION_REQUIRED`). The focus view and thread panel sent plain text for years, and a view handed the open tab doesn't know `encrypted`: take it from the server.
+- **A device wraps a wave key only for a key from `lookUpKey(userId)`**, never one carried in a request. Keys seen are kept in `user_key_records`, encrypted on the device, and a change is flagged.
+- **A wave needs a new key when any holder of the current one is no longer in it** (`waveNeedsRekey()`, from the key rows). Its owner, admins or moderators renew it (`runPendingRotations`).
 
 The unlocked key lives in `E2EEProvider`, above the routes; the unlock gate (`E2EEAuthenticatedApp`) unmounts on full-page routes such as `/about` and `/watch`. So the gate's re-check must keep a key already in memory, and **any sign-out must clear it**. The provider clears it whenever the token goes null, not only when the gate's logout button is used (v2.114.1).
 

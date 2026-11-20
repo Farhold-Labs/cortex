@@ -766,3 +766,31 @@ export async function decryptContactList(encryptedDataBase64, nonceBase64, priva
   const jsonString = decoder.decode(decrypted);
   return JSON.parse(jsonString);
 }
+
+// ============ Key Records (v2.143.0) ============
+
+// The public keys this person's devices have seen for other people, so a
+// changed key can be flagged. Encrypted under the same self-derived key as the
+// contact list, with associated data so neither can be passed off as the other.
+const KEY_RECORDS_AAD = new TextEncoder().encode('cortex-key-records-v1');
+
+export async function encryptKeyRecords(records, privateKey, publicKey) {
+  const key = await deriveContactsKey(privateKey, publicKey);
+  const nonce = generateNonce();
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce, additionalData: KEY_RECORDS_AAD },
+    key,
+    new TextEncoder().encode(JSON.stringify(records))
+  );
+  return { encryptedData: base64Encode(ciphertext), nonce: base64Encode(nonce) };
+}
+
+export async function decryptKeyRecords(encryptedDataBase64, nonceBase64, privateKey, publicKey) {
+  const key = await deriveContactsKey(privateKey, publicKey);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64Decode(nonceBase64), additionalData: KEY_RECORDS_AAD },
+    key,
+    base64Decode(encryptedDataBase64)
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}

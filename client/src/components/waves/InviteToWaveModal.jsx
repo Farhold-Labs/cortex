@@ -85,8 +85,10 @@ const InviteToWaveModal = ({ isOpen, onClose, wave, contacts, participants, fetc
         }, { action: 'add', who: userName });
         if (outcome?.invited) invitedCount++;
 
-        // If wave is encrypted, distribute wave key to new participant
-        if (wave.encrypted && e2ee.isUnlocked) {
+        // If wave is encrypted, distribute wave key to new participant. Only
+        // someone added outright: an invited person isn't in the wave yet, and
+        // asks for the key when they first open it (v2.143.0).
+        if (wave.encrypted && e2ee.isUnlocked && !outcome?.invited) {
           try {
             await e2ee.distributeKeyToParticipant(wave.id, userId);
             console.log(`E2EE: Successfully distributed key to ${userName}`);

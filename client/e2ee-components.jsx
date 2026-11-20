@@ -754,3 +754,56 @@ export default {
   LegacyWaveNotice,
   PartialEncryptionBanner
 };
+
+// ============ Key notices (v2.143.0) ============
+
+const noticeStyle = (accent, overlay) => ({
+  backgroundColor: `var(${overlay})`,
+  border: `1px solid var(${accent})`,
+  borderRadius: '4px',
+  padding: '8px 12px',
+  margin: '8px 12px 0',
+  fontSize: '12px',
+  color: `var(${accent})`,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '10px',
+  flexWrap: 'wrap',
+});
+
+/**
+ * Someone in this wave has a different encryption key from the one this
+ * person's devices saw before. Their device was still given the wave key
+ * (Jared, 2026-11-20); this is the flag that makes a substituted key visible.
+ */
+export function KeyChangeNotice({ people, onAcknowledge }) {
+  if (!people?.length) return null;
+  const names = people.map(p => p.name).join(', ');
+  return (
+    <div role="status" style={noticeStyle('--accent-amber', '--overlay-amber')}>
+      <span>
+        🔑 {people.length === 1 ? `${names}'s encryption key has changed` : `Encryption keys changed for ${names}`}.
+        {' '}This happens when someone resets their encryption. If you didn't expect it, check with them another way.
+      </span>
+      <button
+        onClick={onAcknowledge}
+        style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--accent-amber)', color: 'var(--accent-amber)', borderRadius: '3px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '11px' }}
+      >
+        OK
+      </button>
+    </div>
+  );
+}
+
+/** Someone who has left still holds the wave key until its owner or a moderator renews it. */
+export function RekeyPendingNotice({ canRotate }) {
+  return (
+    <div role="status" style={noticeStyle('--accent-teal', '--overlay-teal')}>
+      <span>
+        🔒 Someone who left this {T.wave} still has its key.
+        {' '}{canRotate ? 'Renewing it now…' : 'It is renewed when the owner or a moderator is next online.'}
+      </span>
+    </div>
+  );
+}

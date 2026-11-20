@@ -1,6 +1,6 @@
 # Encryption across servers — design
 
-Status: **decided** (2026-11-20). Jared's decisions of 2026-11-07 (a person's
+Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0.** Jared's decisions of 2026-11-07 (a person's
 public key comes from their home server over signed federation; members can
 see and compare key fingerprints, with a change flagged) and 2026-11-20 (the
 five questions) are recorded at the end and folded into the text. Not built.

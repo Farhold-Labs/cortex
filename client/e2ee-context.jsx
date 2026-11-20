@@ -12,6 +12,7 @@
 
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import * as crypto from './crypto.js';
+import { emptyKeyRecords, noteKey, acknowledgeKeyChange as ackKeyChange, unacknowledgedChanges, mergeKeyRecords } from './src/utils/keyRecords.js';
 
 // ============ Constants ============
 const WAVE_KEY_CACHE_MAX = 100;  // Max cached wave keys
@@ -111,6 +112,12 @@ export function E2EEProvider({ children, token, API_URL }) {
   // must not ask for the passphrase again (v2.114.1).
   const privateKeyRef = useRef(null);
   useEffect(() => { privateKeyRef.current = privateKey; }, [privateKey]);
+
+  // Keys seen for other people (v2.143.0): { records, version, ready: Promise }.
+  const keyRecordsRef = useRef(null);
+  const keyRecordsSaveRef = useRef(Promise.resolve());
+  const [keyChanges, setKeyChanges] = useState([]);  // [{ personId, changedAt }]
+  const rotationRunRef = useRef(null);
 
   // Always-current token. saveToSessionCache reads this so the 'auto' duration
   // computes against the live JWT — the provider mounts on the login screen with
@@ -641,9 +648,104 @@ export function E2EEProvider({ children, token, API_URL }) {
     return work;
   }, [fetchAPI, privateKey]);
 
-  // Grant a pending wave key request from another participant (v2.47.4)
-  const grantWaveKey = useCallback(async (waveId, requestId, requesterPublicKey) => {
-    if (!privateKey || !publicKeyBase64) return;
+  // ============ Keys seen (v2.143.0) ============
+
+  const loadKeyRecords = useCallback(() => {
+    if (!privateKey || !publicKey) return Promise.resolve(null);
+    if (keyRecordsRef.current?.ready) return keyRecordsRef.current.ready;
+    const state = { records: emptyKeyRecords(), version: 0, ready: null };
+    keyRecordsRef.current = state;
+    state.ready = (async () => {
+      try {
+        const res = await fetchAPI('/e2ee/key-records');
+        if (res.ok) {
+          const data = await res.json();
+          state.version = data.version || 0;
+          if (data.encryptedData && data.nonce) {
+            try {
+              state.records = await crypto.decryptKeyRecords(data.encryptedData, data.nonce, privateKey, publicKey);
+            } catch {
+              // Made under an earlier keypair (an E2EE reset): start again over it.
+              state.records = emptyKeyRecords();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('E2EE: key records unavailable:', err.message);
+      }
+      if (keyRecordsRef.current === state) setKeyChanges(unacknowledgedChanges(state.records));
+      return state;
+    })();
+    return state.ready;
+  }, [privateKey, publicKey, fetchAPI]);
+
+  // Saves one at a time; another device saving meanwhile is merged, not lost.
+  const saveKeyRecords = useCallback((state) => {
+    const run = keyRecordsSaveRef.current.then(async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const { encryptedData, nonce } = await crypto.encryptKeyRecords(state.records, privateKey, publicKey);
+        const res = await fetchAPI('/e2ee/key-records', {
+          method: 'PUT',
+          body: JSON.stringify({ encryptedData, nonce, expectedVersion: state.version }),
+        });
+        if (res.ok) { state.version = (await res.json()).version; return; }
+        if (res.status !== 409) throw new Error(`key records save failed (${res.status})`);
+        const theirs = await res.json();
+        state.version = theirs.version || 0;
+        try {
+          state.records = mergeKeyRecords(state.records, await crypto.decryptKeyRecords(theirs.encryptedData, theirs.nonce, privateKey, publicKey));
+        } catch { /* theirs is unreadable to this key; ours replaces it */ }
+      }
+    }).catch(err => console.warn('E2EE:', err.message));
+    keyRecordsSaveRef.current = run;
+    return run;
+  }, [privateKey, publicKey, fetchAPI]);
+
+  /**
+   * The public key to give someone a wave key with: looked up here, never
+   * taken from a request (v2.143.0 [SECURITY]), and compared with the key
+   * seen for them before. A changed key is still used (Jared, 2026-11-20)
+   * and flagged.
+   * @returns {Promise<string|null>} base64 SPKI, or null if they have no key
+   */
+  const lookUpKey = useCallback(async (userId) => {
+    const res = await fetchAPI(`/e2ee/keys/user/${encodeURIComponent(userId)}`);
+    if (!res.ok) return null;
+    const { publicKey: theirKey } = await res.json();
+    if (!theirKey) return null;
+    const state = await loadKeyRecords();
+    if (state) {
+      const { status, records } = noteKey(state.records, userId, theirKey);
+      if (status !== 'same') {
+        state.records = records;
+        saveKeyRecords(state);
+        if (status === 'changed') {
+          console.warn(`E2EE: the key for ${userId} has changed`);
+          setKeyChanges(unacknowledgedChanges(records));
+        }
+      }
+    }
+    return theirKey;
+  }, [fetchAPI, loadKeyRecords, saveKeyRecords]);
+
+  const acknowledgeKeyChange = useCallback(async (personId) => {
+    const state = await loadKeyRecords();
+    if (!state) return;
+    state.records = ackKeyChange(state.records, personId);
+    setKeyChanges(unacknowledgedChanges(state.records));
+    await saveKeyRecords(state);
+  }, [loadKeyRecords, saveKeyRecords]);
+
+  useEffect(() => {
+    if (privateKey && publicKey) loadKeyRecords();
+  }, [privateKey, publicKey, loadKeyRecords]);
+
+  // Grant a pending wave key request from another participant (v2.47.4).
+  // v2.143.0 [SECURITY]: the key comes from lookUpKey(requesterId). The public
+  // key carried in the push is ignored: it used to be used as given, so the
+  // server could get any wave's key from every online member by sending one.
+  const grantWaveKey = useCallback(async (waveId, requestId, requesterId) => {
+    if (!privateKey || !publicKeyBase64 || !requesterId) return;
     try {
       // Fetch our copy of the wave key (from cache or server)
       const waveKey = await getWaveKey(waveId);
@@ -652,7 +754,12 @@ export function E2EEProvider({ children, token, API_URL }) {
         return;
       }
 
-      // Re-encrypt the wave key for the requester using their new public key
+      const requesterPublicKey = await lookUpKey(requesterId);
+      if (!requesterPublicKey) {
+        console.warn(`E2EE: Cannot grant wave key for ${waveId} — they have no key`);
+        return;
+      }
+
       const { encryptedWaveKey, nonce, senderPublicKey } = await crypto.addParticipantToWave(
         waveKey,
         requesterPublicKey,
@@ -678,7 +785,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     } catch (err) {
       console.warn('Wave key grant error:', err);
     }
-  }, [privateKey, publicKeyBase64, fetchAPI, getWaveKey]);
+  }, [privateKey, publicKeyBase64, fetchAPI, getWaveKey, lookUpKey]);
 
   const createWaveWithEncryption = useCallback(async (participants) => {
     if (!privateKey || !publicKeyBase64) {
@@ -688,14 +795,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     try {
       // Get participant public keys
       const participantKeys = await Promise.all(
-        participants.map(async (userId) => {
-          const res = await fetchAPI(`/e2ee/keys/user/${userId}`);
-          if (res.ok) {
-            const { publicKey } = await res.json();
-            return { userId, publicKey };
-          }
-          return { userId, publicKey: null };
-        })
+        participants.map(async (userId) => ({ userId, publicKey: await lookUpKey(userId) }))
       );
 
       // Add self
@@ -722,17 +822,26 @@ export function E2EEProvider({ children, token, API_URL }) {
       console.error('Create encrypted wave error:', err);
       throw err;
     }
-  }, [privateKey, publicKeyBase64, fetchAPI]);
+  }, [privateKey, publicKeyBase64, lookUpKey]);
 
   // ============ Encrypt/Decrypt Pings ============
+  // Returns the version of the key it actually used (v2.143.0). Callers used
+  // to ask the server for the current version separately, which, once keys
+  // rotate, labels a ping with a version its ciphertext wasn't made with.
   const encryptPing = useCallback(async (content, waveId) => {
-    const waveKey = await getWaveKey(waveId);
-    if (!waveKey) {
+    let waveKey = await getWaveKey(waveId);
+    let version = waveKeyCacheRef.current.get(waveId)?.version;
+    if (waveKey && !version) {
+      // Dropped from the cache in between (a rotation): fetch it again.
+      waveKey = await getWaveKey(waveId);
+      version = waveKeyCacheRef.current.get(waveId)?.version;
+    }
+    if (!waveKey || !version) {
       throw new Error('Your encryption key is being redistributed — please try again in a moment');
     }
 
     const { ciphertext, nonce } = await crypto.encryptPing(content, waveKey);
-    return { ciphertext, nonce };
+    return { ciphertext, nonce, keyVersion: version };
   }, [getWaveKey]);
 
   const decryptPing = useCallback(async (ciphertext, nonce, waveId, keyVersion = null) => {
@@ -868,14 +977,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     try {
       // Get participant public keys
       const participantKeys = await Promise.all(
-        participantIds.map(async (userId) => {
-          const res = await fetchAPI(`/e2ee/keys/user/${userId}`);
-          if (res.ok) {
-            const { publicKey } = await res.json();
-            return { userId, publicKey };
-          }
-          return { userId, publicKey: null };
-        })
+        participantIds.map(async (userId) => ({ userId, publicKey: await lookUpKey(userId) }))
       );
 
       // Add self
@@ -920,7 +1022,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       console.error('Enable wave encryption error:', err);
       throw err;
     }
-  }, [privateKey, publicKeyBase64, fetchAPI]);
+  }, [privateKey, publicKeyBase64, fetchAPI, lookUpKey]);
 
   // Encrypt a batch of pings from a legacy wave
   const encryptLegacyWaveBatch = useCallback(async (waveId, batchSize = 50) => {
@@ -995,35 +1097,32 @@ export function E2EEProvider({ children, token, API_URL }) {
   }, [privateKey, getWaveKey, fetchAPI]);
 
   // ============ Key Rotation ============
-  const rotateWaveKey = useCallback(async (waveId, remainingParticipantIds) => {
+  // v2.143.0: a new key whenever someone who held the current one has left.
+  // Only the wave's owner, admins and moderators may (Jared, 2026-11-20); the
+  // server says which waves, and checks the new key reaches exactly the
+  // people still in the wave.
+  const rotateWaveKey = useCallback(async (waveId) => {
     if (!privateKey || !publicKeyBase64) {
       throw new Error('E2EE not unlocked');
     }
 
-    try {
-      // Get public keys for remaining participants
-      const participantKeys = await Promise.all(
-        remainingParticipantIds.map(async (userId) => {
-          const res = await fetchAPI(`/e2ee/keys/user/${userId}`);
-          if (res.ok) {
-            const { publicKey } = await res.json();
-            return { userId, publicKey };
-          }
-          return { userId, publicKey: null };
-        })
-      );
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const membersRes = await fetchAPI(`/waves/${waveId}/participants/keys`);
+      if (!membersRes.ok) throw new Error('Failed to list the people in this wave');
+      const { participants = [] } = await membersRes.json();
+      const me = participants.find(p => p.publicKey === publicKeyBase64)?.userId;
 
-      // Add self
-      participantKeys.push({ userId: 'self', publicKey: publicKeyBase64 });
+      // Everyone else's key looked up and checked here, not taken from the list.
+      const others = await Promise.all(participants
+        .filter(p => p.publicKey && p.userId !== me)
+        .map(async (p) => ({ userId: p.userId, publicKey: await lookUpKey(p.userId) })));
+      others.push({ userId: 'self', publicKey: publicKeyBase64 });
 
-      // Generate new wave key and distribute
       const { waveKey, keyDistribution } = await crypto.setupWaveEncryption(
-        participantKeys.filter(p => p.publicKey),
+        others.filter(p => p.publicKey),
         privateKey,
         publicKeyBase64
       );
-
-      // Format for API
       const formattedDistribution = keyDistribution
         .filter(k => !k.error)
         .map(({ userId, encryptedWaveKey, nonce, senderPublicKey }) => ({
@@ -1032,29 +1131,56 @@ export function E2EEProvider({ children, token, API_URL }) {
           senderPublicKey
         }));
 
-      // Call rotation endpoint
       const res = await fetchAPI(`/waves/${waveId}/key/rotate`, {
         method: 'POST',
         body: JSON.stringify({ keyDistribution: formattedDistribution })
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to rotate wave key');
+      if (res.ok) {
+        const { newKeyVersion } = await res.json();
+        keyGenerationRef.current++;
+        waveKeyCacheRef.current.delete(waveId);
+        waveKeyInFlightRef.current.delete(waveId);
+        keyListInFlightRef.current.delete(waveId);
+        waveKeyCacheRef.current.set(waveId, { waveKey, version: newKeyVersion });
+        return { success: true, newKeyVersion };
       }
-
-      const { newKeyVersion } = await res.json();
-
-      // Invalidate cached key so new one is fetched
-      keyGenerationRef.current++;
-      waveKeyCacheRef.current.delete(waveId);
-
-      return { success: true, newKeyVersion };
-    } catch (err) {
-      console.error('Wave key rotation error:', err);
-      throw err;
+      const err = await res.json().catch(() => ({}));
+      if (err.code !== 'KEY_MEMBERS_CHANGED') throw new Error(err.error || 'Failed to rotate wave key');
     }
-  }, [privateKey, publicKeyBase64, fetchAPI]);
+    throw new Error('The people in this wave kept changing; the key will be renewed later');
+  }, [privateKey, publicKeyBase64, fetchAPI, lookUpKey]);
+
+  // Renew every wave this person should: on unlock, when told, and every ten minutes.
+  const runPendingRotations = useCallback(() => {
+    if (!privateKey || !publicKeyBase64) return Promise.resolve();
+    if (rotationRunRef.current) return rotationRunRef.current;
+    const run = (async () => {
+      try {
+        const res = await fetchAPI('/e2ee/rekey-needed');
+        if (!res.ok) return;
+        const { waves = [] } = await res.json();
+        for (const { id } of waves) {
+          try {
+            await rotateWaveKey(id);
+            console.log(`E2EE: renewed the key for wave ${id}`);
+          } catch (err) {
+            console.warn(`E2EE: could not renew the key for wave ${id}:`, err.message);
+          }
+        }
+      } catch (err) {
+        console.warn('E2EE: pending rotations unavailable:', err.message);
+      }
+    })().finally(() => { rotationRunRef.current = null; });
+    rotationRunRef.current = run;
+    return run;
+  }, [privateKey, publicKeyBase64, fetchAPI, rotateWaveKey]);
+
+  useEffect(() => {
+    if (!privateKey || !publicKeyBase64) return undefined;
+    runPendingRotations();
+    const timer = setInterval(runPendingRotations, 10 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [privateKey, publicKeyBase64, runPendingRotations]);
 
   // ============ Self-Service Key Reset ============
   // Called when the user's E2EE keys can't be unlocked (e.g. after a password reset).
@@ -1085,6 +1211,8 @@ export function E2EEProvider({ children, token, API_URL }) {
     waveKeyInFlightRef.current.clear();
     versionKeyInFlightRef.current.clear();
     keyListInFlightRef.current.clear();
+    keyRecordsRef.current = null;
+    setKeyChanges([]);
     clearSessionCache();
     sessionRestoreAttempted.current = false;
   }, [clearSessionCache]);
@@ -1119,19 +1247,16 @@ export function E2EEProvider({ children, token, API_URL }) {
       throw new Error('E2EE not unlocked');
     }
 
-    // Get the cached wave key
-    const waveKey = waveKeyCacheRef.current.get(waveId);
+    // v2.143.0: this passed the cache entry ({ waveKey, version }) as the key
+    // and sent an unserialised body, so it never worked; newcomers got the key
+    // through a key request instead, which is still the usual way.
+    const waveKey = await getWaveKey(waveId);
     if (!waveKey) {
-      throw new Error('Wave key not found in cache - reload the wave first');
+      throw new Error('Wave key not found - reload the wave first');
     }
 
     try {
-      // Get the new participant's public key
-      const res = await fetchAPI(`/e2ee/keys/user/${userId}`);
-      if (!res.ok) {
-        throw new Error('Failed to get participant public key - they may not have E2EE set up');
-      }
-      const { publicKey: participantPublicKey } = await res.json();
+      const participantPublicKey = await lookUpKey(userId);
       if (!participantPublicKey) {
         throw new Error('Participant does not have E2EE set up');
       }
@@ -1147,11 +1272,11 @@ export function E2EEProvider({ children, token, API_URL }) {
       // Call the distribute endpoint
       const distributeRes = await fetchAPI(`/waves/${waveId}/key/distribute`, {
         method: 'POST',
-        body: {
+        body: JSON.stringify({
           userId,
           encryptedWaveKey: `${encryptedWaveKey}:${nonce}`,
           senderPublicKey
-        }
+        })
       });
 
       if (!distributeRes.ok) {
@@ -1164,7 +1289,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       console.error('Distribute key to participant error:', err);
       throw err;
     }
-  }, [privateKey, publicKeyBase64, fetchAPI]);
+  }, [privateKey, publicKeyBase64, fetchAPI, getWaveKey, lookUpKey]);
 
   // ============ Encrypted Contacts (v2.18.0) ============
 
@@ -1319,7 +1444,13 @@ export function E2EEProvider({ children, token, API_URL }) {
     createWaveWithEncryption,
     invalidateWaveKey,
     rotateWaveKey,
+    runPendingRotations,
     distributeKeyToParticipant,
+
+    // Keys seen (v2.143.0)
+    lookUpKey,
+    keyChanges,
+    acknowledgeKeyChange,
 
     // Legacy wave migration
     getWaveEncryptionStatus,
