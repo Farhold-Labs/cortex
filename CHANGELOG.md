@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- `docs/federated-e2ee/01-design.md`: proposed design for end-to-end encrypted waves with people on other servers. Writing it found two **[SECURITY]** gaps in encryption on a single server, not yet fixed:
+  - A device gives the wave key to whatever public key a `wave_key_request` push carries, so a server can obtain any wave's key by sending one message.
+  - Nothing ever calls `rotateWaveKey`, so removing someone doesn't change the key they hold.
+  Both are phase 0 of the design.
+- Design decided (Jared, 2026-11-20):
+  - a changed key still gets the wave key, and the change is flagged;
+  - keys come only from servers allied with yours;
+  - the wave's owner, admins and moderators rotate;
+  - phase 0 ships first;
+  - fingerprints are 128-bit hex.
+
 ## [2.142.0] - 2026-11-07
 
 End-to-end encrypted waves and people on other servers are kept apart until encryption works across servers. No migration.
