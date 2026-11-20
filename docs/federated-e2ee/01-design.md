@@ -1,9 +1,9 @@
 # Encryption across servers — design
 
-Status: **proposed** (2026-11-08), for review. The two decisions already made
-(Jared, 2026-11-07) are folded in: a person's public key comes from their home
-server over signed federation, and members can see and compare key
-fingerprints, with a change flagged. Questions still open are at the end.
+Status: **decided** (2026-11-20). Jared's decisions of 2026-11-07 (a person's
+public key comes from their home server over signed federation; members can
+see and compare key fingerprints, with a change flagged) and 2026-11-20 (the
+five questions) are recorded at the end and folded into the text. Not built.
 
 ## Why
 
@@ -68,15 +68,14 @@ and federated encryption is built on top of them. They are fixed first
   ciphertext only; it holds wrapped keys it cannot open.
 - Anyone with a copy of any server's database, or its backups.
 - A server quietly changing someone's key: members see the change (fingerprints
-  and the flag), and a device will not give the wave key to a changed key for
-  someone it has verified without asking (see open question 1).
+  and the flag). Devices still give the changed key the wave key, so this is
+  detection, not prevention (decision 1).
 
 **Depends on (the decided trust model):**
 
 - **Your own server**, which serves you the app.
 - **Each member's home server**, which vouches for that member's public key.
-- **The wave's server**, for members on servers yours is not allied with (see
-  "Keys of people on a third server").
+  Only a server allied with theirs asks it (decision 2).
 
 Any of these could substitute a key. The protection is that the substitution is
 visible: everyone in the wave can compare fingerprints, and a change is
@@ -126,16 +125,21 @@ the origin is authoritative, copies mirror it.
 ### Keys of people on a third server
 
 Servers in a wave are allied with the wave's server, not necessarily with each
-other. If you are on B, the wave is on A, and Zoe is on C, B may not be able to
-ask C. Then B asks A, and A answers from what C told it. So for people on a
-third server, the wave's server also vouches for their key. Fingerprints catch
-a substitution the same way. (Open question 2.)
+other. If you are on B, the wave is on A, and Zoe is on C, and B is not allied
+with C, **B does not get Zoe's key and its people cannot give her the wave key**
+(decision 2). No server relays another server's people's keys. This costs
+nothing in practice: the wave's server is allied with every server in the
+wave, so its members (and its owner, who rotates) can always give everyone the
+key, and members on C can give it to Zoe. A device that cannot look someone up
+simply doesn't answer their key request; someone else does.
 
 ### Fingerprints
 
-- **What:** SHA-256 over `"cortex-fp-v1" ‖ SPKI public key`, shown as **12
-  groups of 5 digits** (each group is 5 bytes taken mod 100000, as Signal
-  does). Easy to read aloud and compare. A QR code to scan can come later.
+- **What:** the first 16 bytes (128 bits) of SHA-256 over `"cortex-fp-v1" ‖
+  SPKI public key`, shown as **8 groups of 4 hex characters**, upper case
+  (`3F9A 0C71 …`) (decision 5). 128 bits cannot be matched by trial, so it is as
+  safe in practice as Signal's 60 digits, shorter to compare, and the simplest
+  to make. A QR code to scan can come later.
 - **Where:**
   - Settings → Encryption: "Your key", your own fingerprint.
   - A wave's member list (wave settings): each member's fingerprint, with
@@ -162,9 +166,9 @@ The rule a device follows, everywhere:
 > with the key it has seen for that person before.
 
 - Same key as before, or first time seen: give the key.
-- Changed key, person not verified: give the key and flag the change.
-- Changed key, person verified: **ask first** ("Zoe's key changed since you
-  verified it. Give her the key to this wave?").
+- Changed key: give the key and flag the change, whether or not the person
+  was verified (decision 1: seamless until this is finished; asking first can
+  come later).
 
 This closes gap 1 on a single server too.
 
@@ -192,10 +196,18 @@ The same path covers someone who is already in the wave and resets their key.
 
 - **When:** whenever someone leaves or is removed, on any server. The wave's
   server marks the wave `rekey_needed` and tells the other servers.
-- **Who:** the next member device that sends a ping in that wave rotates first,
-  then sends with the new key. Any member's device may rotate (open
-  question 3). Until someone sends, nothing new needs protecting, so there is
-  no gap.
+- **Who:** the wave's **owner, or one of its admins or moderators** (wave roles,
+  v2.88.0, including those that come from a crew), on the wave's own server
+  (decision 3). Wave roles don't federate, so travellers never rotate. Their
+  device rotates as soon as it is unlocked and sees `rekey_needed`: on unlock,
+  on the `wave_rekey_needed` push, or on opening the wave. The server refuses
+  a rotation from anyone else (403).
+- **Until then** the others keep sending with the old key, which the person who
+  left still holds. The gap lasts until the owner or a moderator is next
+  online. The wave shows "Waiting for the owner to renew the key" so members
+  know. A wave whose owner has deleted their account and has no admins or
+  moderators can never rotate; it says so, and the owner role passes as it does
+  today.
 - **How:**
   1. The device makes a new key, version n+1, and wraps it for every member
      still in the wave. It gets the member list and their keys from its own
@@ -258,7 +270,7 @@ to set it up, and their key request follows when they do.
 | Message text | ciphertext | ciphertext | nothing |
 | Wave key | wrapped copies for its people | wrapped copies for its people | nothing |
 | Members and their addresses | yes | yes, as today | nothing |
-| Public keys | of everyone in the wave | its people's, and others' when its people need them | its people's |
+| Public keys | of everyone in the wave | its people's, and those of people on servers it is allied with | its people's |
 | Who verified whom | no (stored encrypted) | no | no |
 
 ## Tables and messages (summary)
@@ -288,13 +300,13 @@ New signed federation traffic:
 0. **Local fixes (security release, ships alone).**
    - The grant uses a key the device looked up, not the one in the push.
    - `/key/distribute` cannot overwrite another person's row.
-   - The next sender rotates after anyone leaves or is removed.
+   - The owner, an admin or a moderator rotates after anyone leaves or is
+     removed.
    - Plain text is refused in encrypted waves.
    - PRIVACY.md is corrected.
    - Each fix gets a counterfactual test.
 1. **Fingerprints and the record of keys seen, on one server.** Settings, member
-   lists, profile cards, the change flag, and asking before giving a verified
-   person's changed key the wave key. Devices learn to read format 2.
+   lists, profile cards and the change flag. Devices learn to read format 2.
 2. **Federation plumbing, still refused at the door.**
    - The key lookup endpoint, its cache and the change push.
    - `protocol_version` 3.
@@ -305,22 +317,27 @@ New signed federation traffic:
    - Requests and grants through the wave's server.
    - Rotation across servers.
    - Devices write format 2.
-   - Tested with real browsers on two servers (dev and QA), and a third for
-     the "third server" path (port1).
+   - Tested with real browsers on two servers (dev and QA), and a third
+     (port1) not allied with one of them, to prove its people get no key
+     from there.
 
 Each phase is its own release. 1 and 2 can be built in either order.
 
-## Open questions (Jared)
+## Decisions (Jared)
 
-1. **A verified person's key changes.** Ask before giving them the wave key
-   (recommended), or give it and flag it as for anyone else?
-2. **People on a third server.** Accept that the wave's server vouches for keys
-   of people on servers yours isn't allied with (recommended; fingerprints
-   cover it), or refuse to give the key until your server can ask theirs
-   directly?
-3. **Who may rotate.** Any member's device (recommended: whoever sends next, so
-   it happens), or only the owner's (today's rule, which in practice never
-   happens)?
-4. **Phase 0 first, as its own security release** (recommended), or fold it into
-   phase 1?
-5. **Fingerprint format.** 12 groups of 5 digits (recommended), or hex?
+2026-11-07:
+
+- A person's public key comes from their home server over signed federation.
+- Members can see and compare key fingerprints, and a change is flagged.
+
+2026-11-20:
+
+1. **A verified person's key changes:** give them the wave key and flag the
+   change, the same as for anyone. Seamless until this is finished.
+2. **People on a server yours isn't allied with:** nothing until the servers
+   are allied. No server relays another's people's keys.
+3. **Who rotates:** the wave's owner, or a moderator if it has one (admins
+   too, since they rank above moderators).
+4. **Phase 0 ships first,** as its own security release.
+5. **Fingerprints:** whichever is more secure or easiest to make. Hex, 128
+   bits: as secure in practice as digits, shorter and simplest.
