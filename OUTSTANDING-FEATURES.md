@@ -158,6 +158,8 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Community Roles Editor (make, edit, give and take roles; powers in plain words) | v2.139.0 |
 | Community Moderators Remove Pings and Run Events; ACTIVITY Log; Server-Wide Waves Staff-Only | v2.140.0 |
 | Mute From Inside a Wave; Account Deletion Removes Profile Picture and Videos | v2.141.0 |
+| Encrypted Waves Kept to One Server Until Encryption Works Across Servers | v2.142.0 |
+| Encryption on One Server, Phase 0: Every Reply Encrypted, Keys Renewed When People Leave, Key Changes Flagged | v2.143.0 |
 
 ---
 
@@ -203,8 +205,9 @@ Extend E2EE to federated messages between servers.
 - Key exchange between federated users across different servers
 - Secure key distribution via federation protocol
 - Handle key rotation for multi-server participants
-- **Current status:** Local E2EE works (v2.1.0). Across servers it never did: federation sends no wave key, nonce or key version, and travellers' own pings arrived in plain text. Since v2.142.0 encrypted waves and people on other servers are refused together.
+- **Current status:** Local E2EE works (v2.1.0), and since v2.143.0 (phase 0) it encrypts thread and focus-view replies, renews keys when people leave and flags key changes. Across servers it never did: federation sends no wave key, nonce or key version, and travellers' own pings arrived in plain text. Since v2.142.0 encrypted waves and people on other servers are refused together.
 - **Decided 2026-11-07:** a person's public key comes from their home server over signed federation, and members can see and compare key fingerprints, with a change flagged.
+- **Design decided 2026-11-20:** `docs/federated-e2ee/01-design.md`, in four phases. A changed key still gets the wave key and is flagged, keys come only from allied servers, the wave's owner, admins or moderators rotate, fingerprints are 128-bit hex. Phase 0 fixes two security gaps in encryption on a single server first: a device gives the wave key to any public key the server names, and keys are never rotated when someone leaves.
 
 ---
 

@@ -10,6 +10,7 @@ import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
 import { lazyComponent } from '../../utils/lazyComponent.jsx';
+import { sealPing } from '../../utils/sealPing.js';
 
 // Loaded when the GIF picker first opens (v2.107.0).
 const GifSearchModal = lazyComponent(() => import('../search/GifSearchModal.jsx'));
@@ -37,6 +38,11 @@ const ThreadPanel = ({
   canRemovePings = false,
 }) => {
   const e2ee = useE2EE();
+  // Whether the wave is encrypted, from the server (v2.143.0). The `wave` this
+  // view is handed is the open tab, which carries only id, title and privacy,
+  // so `wave.encrypted` was undefined here and replies went out as plain text.
+  const [waveEncrypted, setWaveEncrypted] = useState(null);
+  const sealTarget = { id: wave?.id, encrypted: waveEncrypted ?? wave?.encrypted };
 
   const [replyingTo, setReplyingTo] = useState(null);
   const [collapsed, setCollapsed] = useState({});
@@ -117,6 +123,7 @@ const ThreadPanel = ({
     if (!wave?.id || !rootMessage?.id) return;
     try {
       const data = await fetchAPI(`/waves/${wave.id}`);
+      setWaveEncrypted(!!data.encrypted);
       if (data.messages) {
         const findPing = (messages, targetId) => {
           for (const msg of messages) {
@@ -147,6 +154,13 @@ const ThreadPanel = ({
   const wasAtBottomRef = useRef(true);
 
   // Refresh when reloadTrigger changes
+  // Load on open too (v2.143.0): until something triggered a reload this
+  // showed only what it was handed, which carries no replies, and never
+  // learned whether the wave is encrypted.
+  useEffect(() => {
+    fetchFreshData();
+  }, [wave?.id, rootMessage?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (reloadTrigger > 0) {
       const container = messagesRef.current;
@@ -220,9 +234,12 @@ const ThreadPanel = ({
         parentId = replyingTo._threadParentId || focusedRoot?.id;
       }
 
+      // v2.143.0 [SECURITY]: encrypted in an encrypted wave. Sent as typed
+      // until now, so thread replies were stored as plain text.
+      const sealed = await sealPing(e2ee, sealTarget, content);
       await fetchAPI('/pings', {
         method: 'POST',
-        body: { wave_id: wave.id, parent_id: parentId, content, isThreadReply: true }
+        body: { wave_id: wave.id, parent_id: parentId, ...sealed, isThreadReply: true }
       });
       // See WaveView: the client is the only party that can attribute an
       // attachment in an encrypted wave to its conversation.
@@ -344,7 +361,7 @@ const ThreadPanel = ({
     try {
       await fetchAPI(`/pings/${messageId}`, {
         method: 'PUT',
-        body: { content: editContent }
+        body: await sealPing(e2ee, sealTarget, editContent)  // v2.143.0, as above
       });
       setEditingMessageId(null);
       setEditContent('');
