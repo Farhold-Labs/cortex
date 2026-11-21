@@ -160,6 +160,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Mute From Inside a Wave; Account Deletion Removes Profile Picture and Videos | v2.141.0 |
 | Encrypted Waves Kept to One Server Until Encryption Works Across Servers | v2.142.0 |
 | Encryption on One Server, Phase 0: Every Reply Encrypted, Keys Renewed When People Leave, Key Changes Flagged | v2.143.0 |
+| Waves Left Part-Way Through Encrypting Can Be Finished | v2.143.1 |
 
 ---
 

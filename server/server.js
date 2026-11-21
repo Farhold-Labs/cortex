@@ -21289,6 +21289,9 @@ app.get('/api/waves/:id', authenticateToken, (req, res) => {
     // v2.143.0 — someone who left still holds the key until it is renewed.
     rekeyNeeded: waveNeedsRekey(wave),
     canRotateKey: wave.encrypted ? canRotateWaveKey(wave, req.user.userId) : false,
+    // v2.143.1 — `encrypted` is a boolean, so a client can't tell a wave still
+    // encrypting its older pings (2) from a finished one (1) without this.
+    encryptionState: wave.encrypted ? db.waveEncryptionState(wave.id) : 0,
   });
 });
 
@@ -25455,6 +25458,7 @@ app.get('/api/waves/:id/encryption-status', authenticateToken, (req, res) => {
       encryptedPings: status.encryptedPings,
       totalDroplets: status.totalPings, // Legacy
       encryptedDroplets: status.encryptedPings, // Legacy
+      remaining: status.remaining,
       progress: status.progress,
       participants: participants,
       allParticipantsReady: allHaveE2EE,
@@ -25490,7 +25494,7 @@ app.get('/api/waves/:id/unencrypted-pings', authenticateToken, (req, res) => {
     res.json({
       pings: unencryptedPings,
       droplets: unencryptedPings, // Legacy
-      remaining: status.totalPings - status.encryptedPings,
+      remaining: status.remaining,
       progress: status.progress
     });
   } catch (err) {
@@ -25542,7 +25546,7 @@ app.post('/api/waves/:id/encrypt-pings', authenticateToken, (req, res) => {
     // Check if all pings are now encrypted
     const updatedStatus = db.getWaveEncryptionStatus(waveId);
     let newState = status.state;
-    if (updatedStatus.encryptedPings === updatedStatus.totalPings) {
+    if (updatedStatus.remaining === 0) {
       // All done - mark as fully encrypted
       db.setWaveEncryptionState(waveId, 1);
       newState = 1;
@@ -25552,7 +25556,7 @@ app.post('/api/waves/:id/encrypt-pings', authenticateToken, (req, res) => {
       newState = 2;
     }
 
-    const remaining = updatedStatus.totalPings - updatedStatus.encryptedPings;
+    const remaining = updatedStatus.remaining;
     res.json({
       success: true,
       encryptedCount,

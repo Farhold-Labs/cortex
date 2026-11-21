@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.143.1] - 2026-11-21
+
+A wave left part-way through encrypting its older messages can be finished. No migration.
+
+### Fixed
+- **Encrypting a wave's older messages could never be finished once interrupted.** Encrypting an existing wave sets it to state 2 and encrypts the older pings in batches; the last batch sets state 1. If that stopped early, nothing offered to carry on:
+  - The wave view's "Continue encrypting" banner (and the "enable encryption" notice) compared `encrypted` with 2 and 0, but the server has sent a boolean since v2.8.0. So neither has ever shown.
+  - Progress was all pings minus encrypted ones, while the batches are handed only pings that haven't expired. An expired ping, kept as an erased row, therefore kept a wave at state 2 however many times it was finished. Wave settings' own loop could also repeat forever on a batch that changed nothing, and then report "fully encrypted".
+
+  Until v2.143.0 state 2 also read as unencrypted, so everyone kept writing plain text into such a wave. Farhold had one, with 1,012 plain messages from March to November (`tools/find-plaintext-in-encrypted-waves.mjs`). Now:
+  - `GET /api/waves/:id` carries `encryptionState`.
+  - `remaining` counts exactly what the batches are handed.
+  - A banner above the messages (it was inside the scroller, above a thousand of them) tells its creator how many older pings aren't encrypted, with ENCRYPT, and tells everyone else who can finish it.
+  - Both loops stop on a batch that changes nothing, and settings says when some were left.
+  - The "enable encryption" notice was removed rather than shown on every unencrypted wave; encryption is enabled from wave settings.
+
+### Verified
+- `npm test`: 718/718. `e2ee-migration-state`: a plain wave with four pings, one expired, is encrypted. It reads `encrypted: true, encryptionState: 2` with `remaining` 3. The three pings handed out are encrypted in one batch, which ends with state 1. The counterfactual puts the old count back and sees the wave stay at 2.
+- Headless on dev at 390 and 1280 px: 60 plain pings (with "&"), encryption enabled, and only 10 encrypted, as an interrupted run would leave it.
+  - Zoe sees "50 older pings in this wave aren't encrypted yet. The person who started this wave can finish encrypting them."
+  - Mal sees the same count with ENCRYPT; one tap leaves state 1 and no plain pings.
+  - Both read every message afterwards ("&" shown as typed), and the banner is gone.
+  - No console errors, no overflow.
+
 ## [2.143.0] - 2026-11-20
 
 End-to-end encryption on one server, made to do what it says (phase 0 of `docs/federated-e2ee/01-design.md`). One migration: `user_key_records`, and `wave_key_metadata.rekey_needed_at`.
