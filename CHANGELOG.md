@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.143.0] - 2026-11-20
+
+End-to-end encryption on one server, made to do what it says (phase 0 of `docs/federated-e2ee/01-design.md`). One migration: `user_key_records`, and `wave_key_metadata.rekey_needed_at`.
+
+### Security
+- **[SECURITY] Replies and edits made in the focus view and the thread panel were stored as plain text in encrypted waves**, since those views were written (v2.6.0, v2.38.0). Each had its own send and edit, and neither encrypted. Worse, the `wave` they are given is the open tab (`id`, `title`, `privacy`), so they couldn't tell the wave was encrypted. Every send and edit now goes through one helper, `sealPing()`. The two views take `encrypted` from the wave they load from the server, and now load it when they open; before, they waited for a reload, which is also why a thread opened fresh showed "No replies yet". The main view also sent plain text while encryption was locked; it now refuses and says why. `tools/find-plaintext-in-encrypted-waves.mjs` (read-only) counts what was stored before this, including earlier versions kept by edits (`ping_history`). On dev: none.
+- **[SECURITY] The server now refuses plain text in an encrypted wave**: 400 `ENCRYPTION_REQUIRED` on `POST /api/pings` and `PUT /api/pings/:id` unless the body is `encrypted`, carries a 12-byte nonce and base64 content, and names a key version that exists. The server can't read the content, but it can insist on the form. Bots and the server's own pings don't use these routes. A wave part-way through encrypting its older messages (state 2) now counts as encrypted everywhere; the wave mappers read it as unencrypted, so clients sent plain text into it.
+- **[SECURITY] A device gave the wave key to whatever public key the server named.** On a `wave_key_request` push, the client wrapped the key for the `requesterPublicKey` inside the push. So a server could get any wave's key from every online member with one message, no change to the app, nothing visible. Now:
+  - the device looks the requester's key up itself (`lookUpKey`) and ignores the one in the push;
+  - each person keeps a record of the keys their devices have seen, stored on the server encrypted under their own key, with associated data (`user_key_records`; `GET/PUT /api/e2ee/key-records`, which saves only over the version it read, 409 `KEY_RECORDS_STALE`, and the devices merge);
+  - a changed key still gets the wave key (Jared, 2026-11-20), and is flagged in every encrypted wave shared with that person until dismissed ("Zoe's encryption key has changed…").
+  Wave creation, enabling encryption, rotation and adding someone go through the same lookup. A server can still substitute a key; it can no longer do it without everyone who knew the old key seeing it. Fingerprints to compare are phase 1.
+- **[SECURITY] Wave keys were never renewed.** `rotateWaveKey` existed and nothing called it, so someone removed from an encrypted wave kept a key that opens everything sent after. Now:
+  - A wave needs a new key when anyone holding the current one is no longer in it, however they left (left, removed, left the crew, lost the Community role), or when a holder's account is deleted (`rekey_needed_at`, set before the cascade removes their rows). This is worked out from the key rows on every read (`waveNeedsRekey()`), so no removal path can forget it. People with a pending invitation are expected holders.
+  - The wave's owner, admins and moderators renew it (Jared, 2026-11-20; it was the creator or any instance admin). Their device does this when it unlocks, when told (`wave_rekey_needed`), every ten minutes, and on opening the wave (`GET /api/e2ee/rekey-needed`).
+  - The new key must reach exactly the people still in the wave who have keys (409 `KEY_MEMBERS_CHANGED`, and the device retries), wrapped with the rotator's own registered key.
+  - Until then, members see "Someone who left this wave still has its key. It is renewed when the owner or a moderator is next online."
+  - Each ping is labelled with the key version it was actually sealed with. It used to ask the server for the current version separately, which after a rotation labels old-key ciphertext with the new version.
+- **[SECURITY] `/api/waves/:id/encrypt-pings` could overwrite any ping anywhere.** `encryptPingContent` matched on the ping id alone, so a wave's creator could replace the content of pings in other waves, encrypted or not, by naming their ids. It now changes only plain pings of that wave.
+- `/key/distribute` gives the key only to someone in the wave (403 `NOT_A_MEMBER`), only once per key version (409 `KEY_EXISTS`; it overwrote, so any member could lock another out), and only wrapped with the sender's own key (400 `SENDER_KEY_MISMATCH`, also on `/key-grant`). `distributeKeyToParticipant` never worked: it passed the cache entry as the key and an unserialised body. It now works, for people added outright; invited people get the key through a request when they first open the wave, as they always did. `/participants/keys` lists everyone in the wave (a crew wave's crew, a narrowed wave's audience), not only participant rows.
+
+### Docs
+- PRIVACY.md no longer says the operator cannot read encrypted conversations without qualification: the app comes from the server, which could serve a different one, and before v2.143.0 the server could obtain wave keys without that.
+- `docs/federated-e2ee/01-design.md`: proposed design for end-to-end encrypted waves with people on other servers. Writing it found two **[SECURITY]** gaps in encryption on a single server, fixed in v2.143.0:
+  - A device gives the wave key to whatever public key a `wave_key_request` push carries, so a server can obtain any wave's key by sending one message.
+  - Nothing ever calls `rotateWaveKey`, so removing someone doesn't change the key they hold.
+  Both are phase 0 of the design.
+- Design decided (Jared, 2026-11-20):
+  - a changed key still gets the wave key, and the change is flagged;
+  - keys come only from servers allied with yours;
+  - the wave's owner, admins and moderators rotate;
+  - phase 0 ships first;
+  - fingerprints are 128-bit hex.
+
+### Verified
+- `npm test`: 716/716. `e2ee-phase0` exercises each rule against a real server, and its counterfactual takes the fixes out of a copy of it and sees:
+  - plain text accepted (send, thread reply, edit);
+  - one member overwriting another's key, and the key given to an outsider;
+  - a new key given to someone who left;
+  - another wave's ping overwritten.
+  `e2ee-key-records` covers new, same, changed, merged and dismissed records, and `sealPing`.
+- Headless on dev, at 390 and 1280 px, with real keys (the test unwraps them with `client/crypto.js` itself):
+  - zoe's reply from the thread panel of an encrypted wave is stored `encrypted=1` and opens with the wave key;
+  - wash leaves, and mal's open device renews the key by itself (version 1 → 2; mal and zoe hold it, wash doesn't); zoe's next ping is sealed with version 2 and mal reads it in the thread;
+  - zoe resets her encryption and asks for the key; mal's device gives it to her new key (it opens with her new private key) and shows the change flag, which OK dismisses;
+  - with the owner signed out, a member sees the waiting notice, and the key is renewed as soon as the owner signs in.
+  No console errors, no horizontal overflow.
+
 ## [2.142.0] - 2026-11-07
 
 End-to-end encrypted waves and people on other servers are kept apart until encryption works across servers. No migration.

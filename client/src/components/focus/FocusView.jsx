@@ -11,6 +11,7 @@ import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
 import { lazyComponent } from '../../utils/lazyComponent.jsx';
+import { sealPing } from '../../utils/sealPing.js';
 
 // Loaded when the GIF picker first opens (v2.107.0).
 const GifSearchModal = lazyComponent(() => import('../search/GifSearchModal.jsx'));
@@ -35,6 +36,11 @@ const FocusView = ({
   onWaveUpdate
 }) => {
   const e2ee = useE2EE();
+  // Whether the wave is encrypted, from the server (v2.143.0). The `wave` this
+  // view is handed is the open tab, which carries only id, title and privacy,
+  // so `wave.encrypted` was undefined here and replies went out as plain text.
+  const [waveEncrypted, setWaveEncrypted] = useState(null);
+  const sealTarget = { id: wave?.id, encrypted: waveEncrypted ?? wave?.encrypted };
   const currentFocus = focusStack[focusStack.length - 1];
   const initialPing = currentFocus?.ping;
 
@@ -105,6 +111,7 @@ const FocusView = ({
     try {
       // Fetch all messages for the wave and find our focused ping with updated children
       const data = await fetchAPI(`/waves/${wave.id}`);
+      setWaveEncrypted(!!data.encrypted);
       if (data.messages) {
         // Build tree and find our ping
         const findPing = (messages, targetId) => {
@@ -134,6 +141,13 @@ const FocusView = ({
   }, [wave?.id, initialPing?.id, fetchAPI, e2ee, decryptPingTree]);
 
   // Fetch fresh ping data when reloadTrigger changes
+  // Load on open too (v2.143.0): until something triggered a reload this
+  // showed only what it was handed, which carries no replies, and never
+  // learned whether the wave is encrypted.
+  useEffect(() => {
+    fetchFreshData();
+  }, [wave?.id, initialPing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (reloadTrigger > 0) {
       fetchFreshData();
@@ -192,9 +206,12 @@ const FocusView = ({
 
     try {
       const parentId = replyingTo?.id || focusedPing?.id;
+      // v2.143.0 [SECURITY]: encrypted in an encrypted wave. Sent as typed
+      // until now, so replies here were stored as plain text.
+      const sealed = await sealPing(e2ee, sealTarget, content);
       await fetchAPI('/pings', {
         method: 'POST',
-        body: { wave_id: wave.id, parent_id: parentId, content }
+        body: { wave_id: wave.id, parent_id: parentId, ...sealed }
       });
       // See WaveView: the client is the only party that can attribute an
       // attachment in an encrypted wave to its conversation.
@@ -321,7 +338,7 @@ const FocusView = ({
     try {
       await fetchAPI(`/pings/${messageId}`, {
         method: 'PUT',
-        body: { content: editContent }
+        body: await sealPing(e2ee, sealTarget, editContent)  // v2.143.0, as above
       });
       setEditingMessageId(null);
       setEditContent('');
