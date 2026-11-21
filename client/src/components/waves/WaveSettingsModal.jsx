@@ -457,17 +457,25 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       let totalEncrypted = 0;
       let knownTotal = null;
       let hasMore = true;
+      let left = 0;
       while (hasMore) {
         const batch = await e2ee.encryptLegacyWaveBatch(wave.id, 50);
+        left = batch.remaining ?? 0;
         totalEncrypted += batch.encrypted;
         if (knownTotal === null) {
           knownTotal = totalEncrypted + (batch.remaining ?? 0);
         }
-        hasMore = batch.hasMore;
+        // A batch that changed nothing would repeat forever; the wave's
+        // banner offers the rest (v2.143.1).
+        hasMore = batch.hasMore && batch.encrypted > 0;
         setEncryptProgress({ phase: 'encrypting', encrypted: totalEncrypted, total: knownTotal });
       }
 
-      showToast(`${T.Wave} fully encrypted. All messages are now end-to-end encrypted.`, 'success');
+      if (left > 0) {
+        showToast(`${T.Wave} encrypted, but ${left} older ${left === 1 ? T.ping : T.pings} could not be. The ${T.wave} offers to try again.`, 'error');
+      } else {
+        showToast(`${T.Wave} fully encrypted. All messages are now end-to-end encrypted.`, 'success');
+      }
       onUpdate();
       onClose();
     } catch (err) {

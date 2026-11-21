@@ -646,102 +646,41 @@ export function LegacyWaveNotice({ isCreator, onEnableEncryption, isEnabling }) 
 }
 
 // ============ Partial Encryption Banner ============
-// Shown when wave is being migrated to E2EE
-export function PartialEncryptionBanner({ progress, participantsWithE2EE, totalParticipants, onContinue, isContinuing }) {
-  const allHaveE2EE = participantsWithE2EE === totalParticipants;
-
-  const containerStyle = {
-    backgroundColor: 'var(--overlay-teal)',
-    border: '1px solid var(--accent-teal)',
-    borderRadius: '4px',
-    padding: '10px 12px',
-    marginBottom: '12px',
-    fontSize: '12px',
-    color: 'var(--accent-teal)'
-  };
-
-  const contentStyle = {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px'
-  };
-
-  const headerStyle = {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: '12px',
-    flexWrap: 'wrap'
-  };
-
-  const progressBarContainerStyle = {
-    width: '100%',
-    height: '6px',
-    backgroundColor: 'var(--bg-base)',
-    borderRadius: '3px',
-    overflow: 'hidden'
-  };
-
-  const progressBarStyle = {
-    height: '100%',
-    width: `${progress}%`,
-    backgroundColor: 'var(--accent-teal)',
-    borderRadius: '3px',
-    transition: 'width 0.3s ease'
-  };
-
-  const buttonStyle = {
-    padding: '6px 12px',
-    backgroundColor: 'var(--accent-teal)',
-    border: 'none',
-    borderRadius: '4px',
-    color: 'var(--bg-base)',
-    fontSize: '11px',
-    fontWeight: 'bold',
-    cursor: isContinuing ? 'wait' : 'pointer',
-    opacity: isContinuing ? 0.7 : 1,
-    whiteSpace: 'nowrap'
-  };
-
-  const statusStyle = {
-    fontSize: '11px',
-    color: 'var(--text-secondary)'
-  };
-
+// A wave whose older pings are still being encrypted (state 2). Never shown
+// before v2.143.1: WaveView compared a boolean with 2.
+export function PartialEncryptionBanner({ remaining, progress, participantsWithE2EE, totalParticipants, onContinue, isContinuing }) {
+  if (!remaining) return null;
+  const notReady = totalParticipants - participantsWithE2EE;
+  const n = remaining.toLocaleString();
   return (
-    <div style={containerStyle}>
-      <div style={contentStyle}>
-        <div style={headerStyle}>
-          <span>
-            {progress < 100 ? (
-              <>Encrypting wave... {Math.round(progress)}% complete</>
-            ) : !allHaveE2EE ? (
-              <>Wave encrypted. Waiting for {totalParticipants - participantsWithE2EE} participant{totalParticipants - participantsWithE2EE > 1 ? 's' : ''} to enable E2EE.</>
-            ) : (
-              <>Wave fully encrypted!</>
-            )}
-          </span>
-          {progress < 100 && onContinue && (
-            <button
-              style={buttonStyle}
-              onClick={onContinue}
-              disabled={isContinuing}
-            >
-              {isContinuing ? 'Encrypting...' : 'Continue Encrypting'}
-            </button>
-          )}
-        </div>
-        {progress < 100 && (
-          <div style={progressBarContainerStyle}>
-            <div style={progressBarStyle} />
-          </div>
-        )}
-        {!allHaveE2EE && (
-          <div style={statusStyle}>
-            {participantsWithE2EE}/{totalParticipants} participants have E2EE enabled
-          </div>
+    <div role="status" style={{ ...noticeStyle('--accent-teal', '--overlay-teal'), flexDirection: 'column', alignItems: 'stretch' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+        <span>
+          🔓 {n} older {remaining === 1 ? T.ping : T.pings} in this {T.wave} {remaining === 1 ? "isn't" : "aren't"} encrypted yet.
+          {' '}{onContinue
+            ? 'Encrypt them now; keep this open until it finishes.'
+            : `The person who started this ${T.wave} can finish encrypting them.`}
+        </span>
+        {onContinue && (
+          <button
+            onClick={onContinue}
+            disabled={isContinuing}
+            style={{ padding: '4px 10px', background: 'var(--accent-teal)', border: 'none', color: 'var(--bg-base)', borderRadius: '3px', cursor: isContinuing ? 'wait' : 'pointer', fontFamily: 'inherit', fontSize: '11px', fontWeight: 'bold', whiteSpace: 'nowrap' }}
+          >
+            {isContinuing ? `ENCRYPTING… ${Math.floor(progress)}%` : 'ENCRYPT'}
+          </button>
         )}
       </div>
+      {isContinuing && (
+        <div style={{ height: '4px', background: 'var(--bg-base)', borderRadius: '2px', overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${progress}%`, background: 'var(--accent-teal)', transition: 'width 0.3s ease' }} />
+        </div>
+      )}
+      {notReady > 0 && (
+        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+          {notReady} of {totalParticipants} people here {notReady === 1 ? "hasn't" : "haven't"} set up encryption, so they can't read encrypted {T.pings} yet.
+        </span>
+      )}
     </div>
   );
 }
