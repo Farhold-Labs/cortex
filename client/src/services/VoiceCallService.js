@@ -4,6 +4,24 @@
 
 import { BASE_URL } from '../config/constants.js';
 
+// A direct call that has finished (v2.145.0).
+const FINAL_CALL_STATES = new Set(['declined', 'missed', 'cancelled', 'busy', 'ended']);
+
+/** What to tell this device when a direct call stops. */
+function endedNotice(call) {
+  const name = call.other?.displayName || 'They';
+  if (call.direction === 'outgoing') {
+    if (call.state === 'declined') return `${name} declined`;
+    if (call.state === 'missed') return `${name} didn't answer`;
+    if (call.state === 'busy') return `${name} is on another call`;
+  }
+  if (call.state === 'ended' && call.durationSeconds != null) {
+    const m = Math.floor(call.durationSeconds / 60), sec = call.durationSeconds % 60;
+    return `Call ended · ${m}:${String(sec).padStart(2, '0')}`;
+  }
+  return 'Call ended';
+}
+
 // A wave call has no per-person publishing rules.
 const ALL_ALLOWED = Object.freeze({ speak: true, video: true, screen: true, moderate: false });
 
@@ -41,6 +59,21 @@ class VoiceCallService {
     this.isDeafened = false;
     // Why the last voice connection ended, if the server ended it.
     this.endedBy = null; // 'removed' | 'closed' | null
+
+    // Direct calls (v2.145.0): one person rang another, outside waves.
+    // `directCall` is the call this device is in or placing; `incomingCall`
+    // one ringing here, not yet answered. Both are the server's view of the
+    // call ({ id, kind, state, direction, other, ... }); the server decides.
+    this.directCall = null;
+    this.incomingCall = null;
+    // Something to tell the person once a direct call stops: "No answer".
+    this.directCallNotice = null;
+    // Which camera a phone is using; flip swaps it.
+    this.facingMode = 'user'; // 'user' | 'environment'
+    // A call this device was in when the page went away (a reload): offered back.
+    this.interruptedCall = null;
+    // The call this device answered, so "answered on another device" isn't said here.
+    this.answeredHere = null;
 
     // Server call status
     this.callActive = false;
@@ -125,6 +158,11 @@ class VoiceCallService {
       e2ee: this.e2ee,
       isDeafened: this.isDeafened,
       endedBy: this.endedBy,
+      directCall: this.directCall,
+      incomingCall: this.incomingCall,
+      directCallNotice: this.directCallNotice,
+      facingMode: this.facingMode,
+      interruptedCall: this.interruptedCall,
     };
   }
 
@@ -442,6 +480,13 @@ class VoiceCallService {
   }
 
   async leaveCall() {
+    // Leaving a direct call hangs it up for both (v2.145.0).
+    const direct = this.directCall;
+    this.directCall = null;
+    if (direct && !FINAL_CALL_STATES.has(direct.state)) {
+      this.callApi(`/api/calls/${encodeURIComponent(direct.id)}/end`, 'POST').catch(() => {});
+    }
+    this.facingMode = 'user';
     if (this.room) {
       await this.room.disconnect();
       this.room = null;
@@ -474,6 +519,197 @@ class VoiceCallService {
     console.log('🎤 [Service] Left call');
   }
 
+  // ============ DIRECT CALLS (v2.145.0) ============
+  async callApi(path, method = 'GET', body) {
+    const response = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers: { 'Authorization': `Bearer ${this.authToken}`, 'Content-Type': 'application/json' },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const err = new Error(data.error || 'That did not work');
+      err.code = data.code;
+      err.call = data.call;
+      throw err;
+    }
+    return data;
+  }
+
+  /** Join the room of a direct call this device is part of. */
+  async joinDirectRoom(call, withVideo) {
+    if (this.connectionState !== 'disconnected' || this.livekitToken) {
+      // Into a direct call from a wave call or voice channel: leave that first,
+      // without hanging up the call being joined.
+      const keep = this.directCall;
+      this.directCall = null;
+      await this.leaveCall();
+      this.directCall = keep;
+    }
+    this.connectionState = 'connecting';
+    this.voiceChannel = null;
+    this.can = { ...ALL_ALLOWED };
+    this.rights = { ...ALL_ALLOWED };
+    this.stage = false;
+    this.onStage = true;
+    this.e2ee = null;
+    this.endedBy = null;
+    this.error = null;
+    this.isMuted = false;
+    this.isCameraOff = !withVideo;
+    this.facingMode = 'user';
+    this.notifySubscribers();
+    let data;
+    try {
+      data = await this.callApi(`/api/calls/${encodeURIComponent(call.id)}/token`, 'POST');
+    } catch (err) {
+      this.directCall = null;
+      this.connectionState = 'disconnected';
+      this.directCallNotice = err.message;
+      this.notifySubscribers();
+      return false;
+    }
+    // Hung up while the token was coming.
+    if (this.directCall?.id !== call.id) {
+      this.connectionState = 'disconnected';
+      this.notifySubscribers();
+      return false;
+    }
+    this.currentWaveId = data.roomName;
+    this.isDocked = true;
+    this.dockMinimized = false;
+    this.livekitToken = data.token;
+    this.livekitUrl = data.url;
+    this.notifySubscribers();
+    return true;
+  }
+
+  /**
+   * Ring a contact. Joins the call's room straight away, so the caller sees
+   * their own picture while it rings, as on a phone.
+   * Returns { ok } or { error }.
+   */
+  async placeCall(person, kind = 'video') {
+    if (!this.authToken) return { error: 'Not signed in' };
+    if (this.directCall) return { error: 'You are already in a call' };
+    let data;
+    try {
+      data = await this.callApi('/api/calls', 'POST', { to: person.id, kind });
+    } catch (err) {
+      return { error: err.code === 'BUSY' ? `${person.name || person.displayName || 'They'} is on another call` : err.message };
+    }
+    this.directCall = data.call;
+    this.directCallNotice = null;
+    this.notifySubscribers();
+    await this.joinDirectRoom(data.call, kind === 'video');
+    return { ok: true };
+  }
+
+  /** Answer the call ringing here. */
+  async answerCall(withVideo) {
+    const call = this.incomingCall;
+    if (!call) return;
+    this.incomingCall = null;
+    this.notifySubscribers();
+    let data;
+    try {
+      data = await this.callApi(`/api/calls/${encodeURIComponent(call.id)}/answer`, 'POST');
+    } catch (err) {
+      this.directCallNotice = err.code === 'NOT_RINGING' ? 'That call has ended' : err.message;
+      this.notifySubscribers();
+      return;
+    }
+    this.directCall = data.call;
+    this.answeredHere = data.call.id;
+    this.notifySubscribers();
+    await this.joinDirectRoom(data.call, withVideo);
+  }
+
+  async declineCall() {
+    const call = this.incomingCall;
+    if (!call) return;
+    this.incomingCall = null;
+    this.notifySubscribers();
+    this.callApi(`/api/calls/${encodeURIComponent(call.id)}/decline`, 'POST').catch(() => {});
+  }
+
+  clearDirectCallNotice() {
+    if (!this.directCallNotice) return;
+    this.directCallNotice = null;
+    this.notifySubscribers();
+  }
+
+  /**
+   * The server says a call changed (WebSocket `direct_call`). Every device of
+   * both people hears every change; each works out what it means here.
+   */
+  handleDirectCallUpdate(call) {
+    if (!call?.id) return;
+    // Ringing for us: ring, unless this device is already in that call.
+    if (call.direction === 'incoming' && call.state === 'ringing') {
+      if (this.directCall?.id !== call.id) {
+        this.incomingCall = call;
+        this.notifySubscribers();
+      }
+      return;
+    }
+    // It stopped ringing here: answered elsewhere, declined, or given up.
+    if (this.incomingCall?.id === call.id) {
+      this.incomingCall = null;
+      if (call.state === 'answered' && this.answeredHere !== call.id) this.directCallNotice = 'Answered on another device';
+      this.notifySubscribers();
+    }
+    if (this.directCall?.id !== call.id) return;
+    this.directCall = call;
+    if (FINAL_CALL_STATES.has(call.state)) {
+      this.directCallNotice = endedNotice(call);
+      this.directCall = null; // over: leaving must not hang it up again
+      this.leaveCall();
+    }
+    this.notifySubscribers();
+  }
+
+  /** On start-up and reconnect: a call ringing for us now, or one we were in. */
+  async loadLiveCall() {
+    if (!this.authToken) return;
+    try {
+      const { live } = await this.callApi('/api/calls');
+      if (!live) {
+        if (this.incomingCall) { this.incomingCall = null; this.notifySubscribers(); }
+        return;
+      }
+      if (live.direction === 'incoming' && live.state === 'ringing') {
+        if (this.directCall?.id !== live.id) { this.incomingCall = live; this.notifySubscribers(); }
+      } else if (!this.directCall && live.state === 'answered') {
+        this.interruptedCall = live;
+        this.notifySubscribers();
+      }
+    } catch { /* not this time */ }
+  }
+
+  /** Back into a call this device dropped out of (a reload). */
+  async rejoinCall() {
+    const call = this.interruptedCall;
+    this.interruptedCall = null;
+    if (!call) return;
+    this.directCall = call;
+    this.notifySubscribers();
+    await this.joinDirectRoom(call, call.kind === 'video');
+  }
+
+  dismissInterruptedCall(hangUp) {
+    const call = this.interruptedCall;
+    this.interruptedCall = null;
+    this.notifySubscribers();
+    if (hangUp && call) this.callApi(`/api/calls/${encodeURIComponent(call.id)}/end`, 'POST').catch(() => {});
+  }
+
+  /** Front camera to back, or back to front (phones). */
+  flipCamera() {
+    this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+    this.notifySubscribers();
+  }
+
   // ============ AUDIO/VIDEO CONTROLS ============
   toggleMute() {
     if (this.isMuted && !this.can.speak) return;
@@ -488,6 +724,8 @@ class VoiceCallService {
   toggleCamera() {
     if (this.isCameraOff && !this.can.video) return;
     this.isCameraOff = !this.isCameraOff;
+    // A camera turned back on starts with the front one again.
+    if (this.isCameraOff) this.facingMode = 'user';
     this.notifySubscribers();
     console.log(`🎥 [Service] Camera toggled: ${this.isCameraOff ? 'OFF' : 'ON'}`);
     // Note: Actual camera on/off happens in LiveKitCallRoom component via LiveKit API

@@ -5,11 +5,12 @@ import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 import ContactRequestsPanel from './ContactRequestsPanel.jsx';
 import SentRequestsPanel from './SentRequestsPanel.jsx';
 import SendContactRequestModal from './SendContactRequestModal.jsx';
+import { callButtonStyle } from '../calls/DirectCallUI.jsx';
 
 const ContactsView = ({
   contacts, fetchAPI, showToast, onContactsChange,
   contactRequests, sentContactRequests, onRequestsChange,
-  onShowProfile
+  onShowProfile, onCall
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -165,6 +166,13 @@ const ContactsView = ({
                     )}
                   </div>
                 </div>
+                {/* Ring them (v2.145.0): only when they have you as a contact too. */}
+                {onCall && contact.mutual && (
+                  <div style={{ display: 'flex', gap: '6px', marginRight: '8px', flexShrink: 0 }}>
+                    <button onClick={() => onCall(contact, 'audio')} title={`Voice call ${contact.name}`} aria-label={`Voice call ${contact.name}`} style={callButtonStyle(isMobile)}>📞</button>
+                    <button onClick={() => onCall(contact, 'video')} title={`Video call ${contact.name}`} aria-label={`Video call ${contact.name}`} style={callButtonStyle(isMobile)}>🎥</button>
+                  </div>
+                )}
                 <button onClick={() => handleRemoveContact(contact.id)} style={{
                   padding: isMobile ? '10px' : '6px 10px',
                   minHeight: isMobile ? '44px' : 'auto',

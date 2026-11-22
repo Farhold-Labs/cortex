@@ -164,6 +164,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Video Calls Fill the Screen: Other Person Large, You as a Preview; Upright Video on Phones | v2.144.0 |
 | Video Calls: Your Own Camera Fitted, Not Zoomed; Phones Capture 3:4 | v2.144.1 |
 | Video Calls: Phones Held Upright Send Upright Video | v2.144.2 |
+| Direct Calls: Ring a Contact, Answer or Decline, Missed Calls, Call History; Flip Camera; Wave Calls Announced | v2.145.0 |
 
 ---
 

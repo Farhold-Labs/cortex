@@ -36,6 +36,9 @@ import FocusView from '../components/focus/FocusView.jsx';
 import ThreadPanel from '../components/focus/ThreadPanel.jsx';
 import CalendarReminderAlert from '../components/calendar/CalendarReminderAlert.jsx';
 import { useVoiceCall } from '../hooks/useVoiceCall.js';
+import { voiceCallService } from '../services/VoiceCallService.js';
+// Eager, not lazy: a call has to be able to ring the moment it arrives.
+import { IncomingCallScreen, InterruptedCallBar, RingbackTone, isMissedCall } from '../components/calls/DirectCallUI.jsx';
 import { initializeCustomTheme, applyCustomTheme, removeCustomTheme, getCurrentCustomTheme } from '../hooks/useTheme.js';
 import { T } from '../config/terminology.js';
 import HolidayEffectsOverlay from '../components/effects/HolidayEffectsOverlay.jsx';
@@ -139,6 +142,11 @@ function MainApp({ sharePingId }) {
   const [notificationRefreshTrigger, setNotificationRefreshTrigger] = useState(0); // Increment to refresh notifications
   const [waveNotifications, setWaveNotifications] = useState({}); // Notification counts/types by wave ID
   const [activeCalls, setActiveCalls] = useState({}); // Active calls by wave ID: { waveId: { participantCount, participants } }
+  // Direct calls (v2.145.0): bumped when one changes, so the history reloads.
+  const [callsVersion, setCallsVersion] = useState(0);
+  const [missedCalls, setMissedCalls] = useState(0);
+  // The tab People opens on: CALLS after a missed call (/?calls=1).
+  const [peopleTab, setPeopleTab] = useState(null);
   const [selectedAlert, setSelectedAlert] = useState(null); // Alert to show in detail modal
   const [footerTagline, setFooterTagline] = useState(getRandomTagline()); // Rotating Firefly tagline
   const [waveCategories, setWaveCategories] = useState([]); // User's wave categories (v2.2.0)
@@ -1332,6 +1340,10 @@ function MainApp({ sharePingId }) {
         vc.joinVoiceChannel({ communityId: data.communityId, channelId: data.channelId, name: data.name })
           .then(r => showToastMsg(r?.error || `A moderator moved you to 🔊 ${data.name}`, r?.error ? 'error' : 'info'));
       }
+    } else if (data.type === 'direct_call') {
+      // A direct call changed (v2.145.0): ringing here, answered, over.
+      voiceCallService.handleDirectCallUpdate(data.call);
+      setCallsVersion(v => v + 1);
     } else if (data.type === 'call_presence') {
       // Someone joined or left a wave call (v2.118.0).
       setActiveCalls(prev => {
@@ -1832,6 +1844,63 @@ function MainApp({ sharePingId }) {
   useEffect(() => {
     if (wsConnected) loadVoicePresence();
   }, [wsConnected, loadVoicePresence]);
+  // A call that rang while the socket was down, or the page was closed: the
+  // push for it opens the app, and here it rings (v2.145.0).
+  useEffect(() => {
+    if (wsConnected) voiceCallService.loadLiveCall();
+  }, [wsConnected]);
+
+  // Missed calls since the CALLS tab was last opened, for its badge.
+  const CALLS_SEEN_KEY = 'cortex_calls_seen_at';
+  useEffect(() => {
+    if (!wsConnected) return;
+    let cancelled = false;
+    fetchAPI('/calls').then(({ calls = [] }) => {
+      if (cancelled) return;
+      let seen = 0;
+      try { seen = Date.parse(localStorage.getItem(CALLS_SEEN_KEY) || '') || 0; } catch { /* private mode */ }
+      setMissedCalls(calls.filter(c => isMissedCall(c) && Date.parse(c.createdAt) > seen).length);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [wsConnected, callsVersion, fetchAPI]);
+  const markCallsSeen = useCallback(() => {
+    try { localStorage.setItem(CALLS_SEEN_KEY, new Date().toISOString()); } catch { /* private mode */ }
+    setMissedCalls(0);
+  }, []);
+  // Opening the CALLS tab from a missed call; a counter so it reopens it
+  // even when People is already showing.
+  const [peopleOpenCount, setPeopleOpenCount] = useState(0);
+  const showCalls = useCallback(() => {
+    setPeopleTab('calls');
+    setPeopleOpenCount(n => n + 1);
+    setActiveView('people');
+    markCallsSeen();
+  }, [markCallsSeen]);
+  // Opened any other way, People starts on CONTACTS as before.
+  useEffect(() => {
+    if (activeView !== 'people') setPeopleTab(null);
+  }, [activeView]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('calls') !== '1') return;
+    showCalls();
+    params.delete('calls');
+    const rest = params.toString();
+    window.history.replaceState(window.history.state, '', window.location.pathname + (rest ? `?${rest}` : ''));
+  }, [showCalls]);
+
+  const placeCall = useCallback(async (person, kind) => {
+    const r = await voiceCallService.placeCall(person, kind);
+    if (r?.error) showToastMsg(r.error, 'error');
+  }, [showToastMsg]);
+
+  // What a direct call has to say when it stops ("Zoe declined").
+  const directCallNotice = globalVoiceCall.directCallNotice;
+  useEffect(() => {
+    if (!directCallNotice) return;
+    showToastMsg(directCallNotice, 'info');
+    voiceCallService.clearDirectCallNotice();
+  }, [directCallNotice, showToastMsg]);
   // A reconnect, not the first connect: the flags were just fetched at start.
   const wsConnectedBefore = useRef(false);
   useEffect(() => {
@@ -2172,6 +2241,7 @@ function MainApp({ sharePingId }) {
                 fetchAPI={fetchAPI}
                 onNavigateToWave={handleNavigateToWaveById}
                 onShowInvitations={showInvitations}
+                onShowCalls={showCalls}
                 isMobile={true}
                 refreshTrigger={notificationRefreshTrigger}
                 onAllRead={() => { loadWaves(); loadWaveNotifications(); }}
@@ -2263,6 +2333,7 @@ function MainApp({ sharePingId }) {
               fetchAPI={fetchAPI}
               onNavigateToWave={handleNavigateToWaveById}
               onShowInvitations={showInvitations}
+                onShowCalls={showCalls}
               isMobile={false}
               refreshTrigger={notificationRefreshTrigger}
               onAllRead={() => { loadWaves(); loadWaveNotifications(); }}
@@ -2596,6 +2667,7 @@ function MainApp({ sharePingId }) {
                       onScrollToMessageComplete={() => setScrollToMessageId(null)}
                       federationEnabled={federationEnabled}
                       activeWatchParty={activeWatchParties[selectedWave?.id]}
+                      activeCall={activeCalls[selectedWave?.id]}
                       onJoinWatchParty={(partyId) => handleJoinWatchParty(selectedWave?.id, partyId)}
                       onLeaveWatchParty={handleLeaveWatchParty}
                       onOpenWatchParty={(partyId) => handleOpenWatchParty(selectedWave?.id, partyId)}
@@ -2660,6 +2732,13 @@ function MainApp({ sharePingId }) {
 
         {activeView === 'people' && (
           <PeopleView
+            key={`people-${peopleOpenCount}`}
+            initialTab={peopleTab || 'contacts'}
+            onCall={placeCall}
+            missedCalls={missedCalls}
+            onCallsSeen={markCallsSeen}
+            callsVersion={callsVersion}
+            isMobile={isMobile}
             onNewWaveWithGroup={(groupId) => { setNewWaveContainer(null); setNewWaveGroupId(groupId); setShowNewWave(true); }}
             contacts={contacts}
             groups={groups}
@@ -2796,6 +2875,7 @@ function MainApp({ sharePingId }) {
         contacts={contacts}
         blockedUsers={blockedUsers}
         mutedUsers={mutedUsers}
+        onCall={placeCall}
         onAddContact={async (userId, name) => {
           try {
             await fetchAPI('/contacts/request', { method: 'POST', body: { toUserId: userId } });
@@ -2890,6 +2970,21 @@ function MainApp({ sharePingId }) {
       <VersionMismatchBanner serverVersion={serverVersion} clientVersion={VERSION} />
       <InstallPrompt isMobile={isMobile} />
       <UploadProgress />
+
+      {/* Direct calls (v2.145.0): the ring, the ringback, and back into a call after a reload. */}
+      <IncomingCallScreen
+        call={globalVoiceCall.incomingCall}
+        onAnswer={(withVideo) => voiceCallService.answerCall(withVideo)}
+        onDecline={() => voiceCallService.declineCall()}
+      />
+      <RingbackTone active={globalVoiceCall.directCall?.state === 'ringing' && globalVoiceCall.directCall?.direction === 'outgoing'} />
+      {!globalVoiceCall.directCall && (
+        <InterruptedCallBar
+          call={globalVoiceCall.interruptedCall}
+          onRejoin={() => voiceCallService.rejoinCall()}
+          onEnd={() => voiceCallService.dismissInterruptedCall(true)}
+        />
+      )}
 
       {/* Docked Call Window - persists across navigation (v2.6.1) */}
       {globalVoiceCall.connectionState !== 'disconnected' && (

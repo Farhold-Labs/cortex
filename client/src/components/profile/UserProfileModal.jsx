@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { LOADING, FEDERATION, formatError } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 
-const UserProfileModal = ({ isOpen, onClose, userId, currentUser, fetchAPI, showToast, contacts, blockedUsers, mutedUsers, onAddContact, onBlock, onMute, onFollow, onUnfollow, onNavigateToWave, isMobile }) => {
+const UserProfileModal = ({ isOpen, onClose, userId, currentUser, fetchAPI, showToast, contacts, blockedUsers, mutedUsers, onAddContact, onBlock, onMute, onFollow, onUnfollow, onNavigateToWave, onCall, isMobile }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [videos, setVideos] = useState([]);
@@ -181,6 +181,20 @@ const UserProfileModal = ({ isOpen, onClose, userId, currentUser, fetchAPI, show
                   <div style={{ color: 'var(--accent-green)', fontSize: '0.8rem', padding: '8px 14px', background: 'var(--accent-green)10', border: '1px solid var(--accent-green)40' }}>
                     ✓ Contact
                   </div>
+                )}
+                {/* Ring them (v2.145.0): only a contact who has you back. */}
+                {onCall && !isBlocked && contacts?.some(c => c.id === userId && c.mutual) && (
+                  <>
+                    {['audio', 'video'].map(kind => (
+                      <button key={kind} onClick={() => { onCall({ id: userId, name: profile.displayName, displayName: profile.displayName }, kind); onClose(); }} style={{
+                        padding: isMobile ? '10px 16px' : '8px 14px',
+                        minHeight: isMobile ? '44px' : 'auto',
+                        background: 'transparent', border: '1px solid var(--accent-green)',
+                        color: 'var(--accent-green)', cursor: 'pointer', fontFamily: 'monospace',
+                        fontSize: isMobile ? '0.85rem' : '0.8rem',
+                      }}>{kind === 'video' ? '🎥 VIDEO CALL' : '📞 CALL'}</button>
+                    ))}
+                  </>
                 )}
                 {!isBlocked && onBlock && (
                   <button onClick={() => { onBlock(userId, profile.displayName); onClose(); }} style={{
