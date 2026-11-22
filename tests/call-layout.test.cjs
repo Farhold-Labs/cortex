@@ -74,12 +74,14 @@ test('fit: crop only when the video is the same way round as the window; never a
   assert.equal(fitFor(null, { w: 1, h: 1 }, false), 'contain');
   assert.equal(fitFor({ w: 1280, h: 720 }, { w: 390, h: 700 }, false, { fill: true }), 'cover', 'a phone fills the screen');
   assert.equal(fitFor({ w: 1280, h: 720 }, { w: 390, h: 700 }, true, { fill: true }), 'contain', 'a screen never crops');
+  assert.equal(fitFor({ w: 720, h: 960 }, { w: 390, h: 700 }, false, { fill: true, self: true }), 'contain', 'your own camera filling the screen is never cropped');
 });
 
 test('phones capture upright; every call sends only the sizes people watch', async () => {
   const { callRoomOptions } = await load();
   const phone = callRoomOptions({ isMobile: true, cameraId: 'default' });
   assert.ok(phone.videoCaptureDefaults.resolution.height > phone.videoCaptureDefaults.resolution.width);
+  assert.equal(phone.videoCaptureDefaults.resolution.aspectRatio, 3 / 4, 'the sensor is 4:3; 9:16 crops it');
   assert.equal(phone.videoCaptureDefaults.deviceId, undefined);
   const desk = callRoomOptions({ isMobile: false, micId: 'mic1' });
   assert.ok(desk.videoCaptureDefaults.resolution.width > desk.videoCaptureDefaults.resolution.height);
