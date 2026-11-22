@@ -162,6 +162,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Encryption on One Server, Phase 0: Every Reply Encrypted, Keys Renewed When People Leave, Key Changes Flagged | v2.143.0 |
 | Waves Left Part-Way Through Encrypting Can Be Finished | v2.143.1 |
 | Video Calls Fill the Screen: Other Person Large, You as a Preview; Upright Video on Phones | v2.144.0 |
+| Video Calls: Your Own Camera Fitted, Not Zoomed; Phones Capture 3:4 | v2.144.1 |
 
 ---
 

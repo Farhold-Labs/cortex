@@ -43,7 +43,7 @@ function useBoxSize(ref) {
   return size;
 }
 
-function StageVideo({ trackRef, box, fit, mirror, fill }) {
+function StageVideo({ trackRef, box, fit, mirror, fill, self }) {
   const ref = useRef(null);
   const [dims, setDims] = useState(null);
   const sid = trackRef.publication?.trackSid;
@@ -68,7 +68,7 @@ function StageVideo({ trackRef, box, fit, mirror, fill }) {
         width: '100%', height: '100%', display: 'block', background: '#000',
         // A variable, because index.html forces LiveKit videos to `contain`
         // with !important; [data-call-stage] [data-call-video] applies it.
-        '--call-fit': fit || fitFor(dims, box, isScreen, { fill }),
+        '--call-fit': fit || fitFor(dims, box, isScreen, { fill, self }),
         transform: mirror ? 'scaleX(-1)' : undefined,
       }}
     />
@@ -126,7 +126,7 @@ export default function CallStage({ isMobile }) {
           onClick={pin ? () => setPinnedId(null) : undefined}
           title={pin ? 'Tap to go back' : undefined}
         >
-          <StageVideo trackRef={mainRef} box={box} fill={isMobile} mirror={main.isLocal && !main.isScreen} />
+          <StageVideo trackRef={mainRef} box={box} fill={isMobile} self={main.isLocal && !main.isScreen} mirror={main.isLocal && !main.isScreen} />
           <div style={labelStyle}>
             {main.isScreen ? '🖥️ ' : ''}{main.isLocal ? 'You' : nameOf(mainRef.participant)}{main.isScreen ? '’s screen' : ''}
           </div>

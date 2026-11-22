@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.144.1] - 2026-11-22
+
+Your own camera is no longer zoomed in. No migration.
+
+### Fixed
+- **Your own picture looked zoomed in on a phone.** Tried on a real phone, alone in a call: the orientation was right, but the picture was cropped instead of fitted. Two crops added up:
+  - **Filling the screen.** On a phone a camera fills the screen by cropping, and that included your own camera when it fills the screen (alone, or after tapping your preview). Your own camera there is now fitted whole (`fitFor(…, { self })`); you are checking your framing. Other people still fill the screen.
+  - **The sensor.** v2.144.0 asked phones for 9:16 (720×1280). A phone camera's sensor is 4:3, so the browser cropped the sensor to make 9:16. Phones now ask for 3:4 upright (720×960), which the sensor gives whole. That also matches the preview's 3:4 corner box.
+
+### Verified
+- `call-layout` tests cover both: your own camera is never cropped when it fills the screen, and phones ask for 3:4.
+- **Not verified on a phone yet;** the zoom was only seen on a real one.
+
 ## [2.144.0] - 2026-11-21
 
 Video calls look like video calls: the other person fills the screen, and you are a small preview in the lower right. No migration.
