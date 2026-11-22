@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.145.2] - 2026-11-22
+
+The contacts fix of v2.145.1, released for real. No migration.
+
+### Fixed
+- **v2.145.1 was never released.** Its merge to master stopped on a failed test run, but the release steps carried on: the `v2.145.1` tag and GitHub release point at v2.145.0's code, the servers were redeployed with v2.145.0, and the announcement went out. A published release can't be retagged or deleted, so the same fix ships as v2.145.2. The release steps now stop on any failure: the merge check's output was piped through `tail`, which hid its exit code.
+- **A direct-call test was timing-sensitive.** It let an answered call stand empty for only 0.8 s, and on a slow CI machine the sweep ended the call before the test's fake joins arrived. That test now allows 5 s, and the test ring 4 s. The app is unchanged: in real use an answered call has 30 s.
+
+### Verified
+- `direct-calls`: 6/6, twice, and four copies at once on one machine. `npm test`: 733/733.
+
 ## [2.145.1] - 2026-11-22
 
-Contacts fit a phone again. No migration.
+Contacts fit a phone again. No migration. **Not released: see v2.145.2.** Its tag points at v2.145.0's code.
 
 ### Fixed
 - **The contacts list ran off a phone's screen.** v2.145.0 put 📞 and 🎥 on each contact row, beside ✕. Each row is a grid item, and a grid item doesn't shrink below its content unless told to, so the row stayed 418 px wide on a 360 or 390 px screen and the buttons and ✕ went past the edge. Calling now lives on the profile a tap on a contact opens (CALL and VIDEO CALL, there since v2.145.0), and rows are back to the name and ✕. Rows can now also shrink (`minWidth: 0`), so a long name shortens with "…" instead.
