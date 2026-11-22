@@ -12543,18 +12543,25 @@ export class DatabaseSQLite {
     const wave = this.db.prepare('SELECT encrypted FROM waves WHERE id = ?').get(waveId);
     if (!wave) return null;
 
+    // `remaining` counts exactly what getUnencryptedPings hands out. It used
+    // to be total minus encrypted, which also counted pings the migration is
+    // never given (expired ones), so a wave could never finish (v2.143.1).
     const stats = this.db.prepare(`
       SELECT
         COUNT(*) as total,
-        SUM(CASE WHEN encrypted = 1 THEN 1 ELSE 0 END) as encrypted_count
+        SUM(CASE WHEN encrypted = 1 THEN 1 ELSE 0 END) as encrypted_count,
+        SUM(CASE WHEN COALESCE(encrypted, 0) = 0 AND (expires_at IS NULL OR expires_at > ?) THEN 1 ELSE 0 END) as remaining
       FROM pings WHERE wave_id = ?
-    `).get(waveId);
+    `).get(new Date().toISOString(), waveId);
+    const total = stats.total || 0;
+    const remaining = stats.remaining || 0;
 
     return {
-      state: wave.encrypted, // 0=legacy, 1=encrypted, 2=partial
-      totalPings: stats.total || 0,
+      state: wave.encrypted || 0, // 0=legacy, 1=encrypted, 2=partial
+      totalPings: total,
       encryptedPings: stats.encrypted_count || 0,
-      progress: stats.total > 0 ? Math.round((stats.encrypted_count / stats.total) * 100) : 100
+      remaining,
+      progress: total > 0 ? Math.floor(((total - remaining) / total) * 100) : 100
     };
   }
 
@@ -12585,7 +12592,7 @@ export class DatabaseSQLite {
     return this.db.prepare(`
       SELECT id, content, author_id, created_at
       FROM pings
-      WHERE wave_id = ? AND encrypted = 0
+      WHERE wave_id = ? AND COALESCE(encrypted, 0) = 0
         AND (expires_at IS NULL OR expires_at > ?)
       ORDER BY created_at ASC
       LIMIT ?

@@ -6,7 +6,7 @@ import { useSystemBack } from '../../hooks/useSystemBack.js';
 import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL } from '../../../messages.js';
 import { waveAudience, BASE_URL, canAccess } from '../../config/constants.js';
 import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComponents.jsx';
-import { LegacyWaveNotice, PartialEncryptionBanner, KeyChangeNotice, RekeyPendingNotice } from '../../../e2ee-components.jsx';
+import { PartialEncryptionBanner, KeyChangeNotice, RekeyPendingNotice } from '../../../e2ee-components.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
 import Message from '../messages/Message.jsx';
 import DeleteConfirmModal from './DeleteConfirmModal.jsx';
@@ -153,7 +153,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   // E2EE Migration state
   const [encryptionStatus, setEncryptionStatus] = useState(null); // { state, progress, participantsWithE2EE, totalParticipants }
-  const [isEnablingEncryption, setIsEnablingEncryption] = useState(false);
   const [isEncryptingBatch, setIsEncryptingBatch] = useState(false);
 
   // Auto-open call modal if URL has call parameter (for pop-out windows)
@@ -938,12 +937,13 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     }
   };
 
-  // E2EE: Load encryption status for legacy/partial waves
+  // E2EE: progress of a wave still encrypting its older pings (state 2).
+  // `encrypted` is a boolean, so this checked `=== 1` / `=== 2` against it
+  // and never ran: a wave left part-way stayed that way (v2.143.1).
   const loadEncryptionStatus = useCallback(async () => {
     if (!e2ee.isE2EEEnabled || !waveData) return;
 
-    // Only check for legacy (0) or partial (2) waves
-    if (waveData.encrypted === 1) {
+    if (waveData.encryptionState !== 2) {
       setEncryptionStatus(null);
       return;
     }
@@ -958,10 +958,10 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   // Load encryption status when wave data changes
   useEffect(() => {
-    if (waveData && e2ee.isE2EEEnabled && waveData.encrypted !== 1) {
+    if (waveData && e2ee.isE2EEEnabled) {
       loadEncryptionStatus();
     }
-  }, [waveData?.id, waveData?.encrypted, e2ee.isE2EEEnabled, loadEncryptionStatus]);
+  }, [waveData?.id, waveData?.encryptionState, e2ee.isE2EEEnabled, loadEncryptionStatus]);
 
   // v2.143.0 — people here whose encryption key changed since this person's
   // devices last saw it, and renewing the key when someone who held it left.
@@ -972,36 +972,6 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       e2ee.runPendingRotations();
     }
   }, [waveData?.id, waveData?.rekeyNeeded, waveData?.canRotateKey, e2ee.isUnlocked]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // E2EE: Enable encryption for a legacy wave
-  const handleEnableEncryption = async () => {
-    if (!e2ee.isUnlocked) {
-      showToast('Please unlock E2EE first', 'error');
-      return;
-    }
-
-    setIsEnablingEncryption(true);
-    try {
-      const participantIds = waveData.participants
-        .filter(p => p.id !== currentUser.id)
-        .map(p => p.id);
-
-      const result = await e2ee.enableWaveEncryption(wave.id, participantIds);
-
-      if (result.success) {
-        showToast('Encryption enabled! Starting migration...', 'success');
-        // Refresh encryption status
-        await loadEncryptionStatus();
-        // Start encrypting first batch
-        await handleContinueEncryption();
-      }
-    } catch (err) {
-      console.error('Failed to enable encryption:', err);
-      showToast(err.message || formatError('Failed to enable encryption'), 'error');
-    } finally {
-      setIsEnablingEncryption(false);
-    }
-  };
 
   // E2EE: Continue encrypting pings in batches
   const handleContinueEncryption = async () => {
@@ -1016,12 +986,14 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       while (hasMore) {
         const result = await e2ee.encryptLegacyWaveBatch(wave.id, 50);
         totalEncrypted += result.encrypted;
-        hasMore = result.hasMore;
+        // A batch that changed nothing would repeat forever.
+        hasMore = result.hasMore && result.encrypted > 0;
 
         // Update progress
         setEncryptionStatus(prev => ({
           ...prev,
           progress: result.progress,
+          remaining: result.remaining,
           encryptionState: result.encryptionState
         }));
 
@@ -2610,25 +2582,23 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         <RekeyPendingNotice canRotate={!!waveData?.canRotateKey && e2ee.isUnlocked} />
       )}
 
+      {/* E2EE: a wave still encrypting its older pings. Encryption is
+          enabled from wave settings; the old in-wave notice for that never
+          showed (v2.8.0–v2.143.0) and was removed rather than revived on
+          every unencrypted wave. Outside the scroller, like the key notices. */}
+      {e2ee.isE2EEEnabled && waveData?.encryptionState === 2 && encryptionStatus?.encryptionState === 2 && (
+        <PartialEncryptionBanner
+          remaining={encryptionStatus.remaining || 0}
+          progress={encryptionStatus.progress || 0}
+          participantsWithE2EE={encryptionStatus.readyCount || 0}
+          totalParticipants={encryptionStatus.totalParticipants || 0}
+          onContinue={waveData?.createdBy === currentUser?.id && e2ee.isUnlocked ? handleContinueEncryption : undefined}
+          isContinuing={isEncryptingBatch}
+        />
+      )}
+
       {/* Messages */}
       <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '12px' : '20px' }}>
-        {/* E2EE: Show encryption status banners */}
-        {e2ee.isE2EEEnabled && waveData?.encrypted === 0 && (
-          <LegacyWaveNotice
-            isCreator={waveData?.createdBy === currentUser?.id}
-            onEnableEncryption={e2ee.isUnlocked ? handleEnableEncryption : undefined}
-            isEnabling={isEnablingEncryption}
-          />
-        )}
-        {e2ee.isE2EEEnabled && waveData?.encrypted === 2 && encryptionStatus && (
-          <PartialEncryptionBanner
-            progress={encryptionStatus.progress || 0}
-            participantsWithE2EE={encryptionStatus.readyCount || 0}
-            totalParticipants={encryptionStatus.totalParticipants || 0}
-            onContinue={waveData?.createdBy === currentUser?.id && e2ee.isUnlocked ? handleContinueEncryption : undefined}
-            isContinuing={isEncryptingBatch}
-          />
-        )}
 
         {/* Watch Party Banner (v2.14.0) */}
         {activeWatchParty && (
