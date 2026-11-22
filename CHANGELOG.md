@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.145.1] - 2026-11-22
+
+Contacts fit a phone again. No migration.
+
+### Fixed
+- **The contacts list ran off a phone's screen.** v2.145.0 put 📞 and 🎥 on each contact row, beside ✕. Each row is a grid item, and a grid item doesn't shrink below its content unless told to, so the row stayed 418 px wide on a 360 or 390 px screen and the buttons and ✕ went past the edge. Calling now lives on the profile a tap on a contact opens (CALL and VIDEO CALL, there since v2.145.0), and rows are back to the name and ✕. Rows can now also shrink (`minWidth: 0`), so a long name shortens with "…" instead.
+- The empty call history now says how to call: tap a contact, then CALL or VIDEO CALL.
+
+### Verified
+- Headless on dev as Mal at 320, 360 and 390 px: every contact row ends 16 px inside the screen; tapping Zoe opens her profile with 📞 CALL and 🎥 VIDEO CALL, wrapping inside the screen.
+- Seen while checking, and not changed: at 320 px the header's 🔍 button sticks out 13 px, on every page. It predates calls.
+
 ## [2.145.0] - 2026-11-22
 
 Ring a contact, like a phone call. Phase 1 of `docs/direct-calls/`. **Migrates:** adds the `direct_calls` table.

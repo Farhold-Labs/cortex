@@ -76,7 +76,6 @@ const PeopleView = (props) => {
           sentContactRequests={props.sentContactRequests}
           onRequestsChange={props.onRequestsChange}
           onShowProfile={props.onShowProfile}
-          onCall={props.onCall}
         />
       </div>
       <div style={{ flex: 1, minHeight: 0, display: tab === 'crews' ? 'flex' : 'none', flexDirection: 'column' }}>
