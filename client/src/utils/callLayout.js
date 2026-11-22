@@ -48,10 +48,12 @@ export function chooseCallLayout(tracks, { pinnedId = null, speakerId = null, ot
  * Fill the box (cropping) when the video is the same way round as the box;
  * fit it inside (bars) when it isn't, so a phone held upright isn't cut down
  * to a sliver of face in a landscape window. On a phone a camera always
- * fills the screen, as phone calls do (`fill`). A screen is never cropped.
+ * fills the screen, as phone calls do (`fill`). A screen is never cropped,
+ * and neither is your own camera when it fills the screen (alone, or tapped):
+ * you are checking your framing, and a crop looks zoomed in (v2.144.1).
  */
-export function fitFor(video, box, isScreen, { fill = false } = {}) {
-  if (isScreen) return 'contain';
+export function fitFor(video, box, isScreen, { fill = false, self = false } = {}) {
+  if (isScreen || self) return 'contain';
   if (fill) return 'cover';
   if (!video?.w || !video?.h || !box?.w || !box?.h) return 'contain';
   return (video.w >= video.h) === (box.w >= box.h) ? 'cover' : 'contain';
@@ -60,6 +62,8 @@ export function fitFor(video, box, isScreen, { fill = false } = {}) {
 /**
  * LiveKit room options for calls. Upright video on a phone (v2.144.0): a call
  * on a phone is held upright, and 1280x720 asked for a landscape picture.
+ * 3:4, not 9:16 (v2.144.1): a phone camera's sensor is 4:3, so asking for
+ * 9:16 makes the browser crop the sensor, which looks zoomed in.
  * adaptiveStream sends each viewer only the size they show; dynacast stops
  * sending layers nobody is watching.
  */
@@ -75,7 +79,7 @@ export function callRoomOptions({ isMobile = false, micId, cameraId } = {}) {
     },
     videoCaptureDefaults: {
       resolution: isMobile
-        ? { width: 720, height: 1280, frameRate: 30, aspectRatio: 9 / 16 }
+        ? { width: 720, height: 960, frameRate: 30, aspectRatio: 3 / 4 }
         : { width: 1280, height: 720, frameRate: 30 },
       deviceId: cameraId && cameraId !== 'default' ? cameraId : undefined,
     },
