@@ -1,14 +1,15 @@
 import React, { useRef, useCallback, useState, useEffect } from 'react';
-import { LiveKitRoom, useParticipants, useLocalParticipant, useRoomContext, RoomAudioRenderer, ParticipantTile, useTracks } from '@livekit/components-react';
+import { LiveKitRoom, useParticipants, useLocalParticipant, useRoomContext, RoomAudioRenderer } from '@livekit/components-react';
 import { Track, Room, ExternalE2EEKeyProvider, isE2EESupported } from 'livekit-client';
 // The media encryption worker (v2.119.0), bundled as its own file by Vite.
 import E2EEWorker from 'livekit-client/e2ee-worker?worker';
 import { useDraggable } from '../../hooks/useDraggable.js';
-import { Avatar } from '../ui/SimpleComponents.jsx';
+import CallStage, { VideoPresence } from './CallStage.jsx';
+import { callRoomOptions } from '../../utils/callLayout.js';
 
 // Reuse LiveKitCallRoom from CallModal
 // Use refs to prevent callback recreation and avoid unnecessary LiveKit reconnection attempts
-const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children }) => {
+const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, isMobile, children }) => {
   // Store voiceCall in ref to avoid recreating callbacks
   const voiceCallRef = useRef(voiceCall);
   voiceCallRef.current = voiceCall;
@@ -30,20 +31,8 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
     voiceCallRef.current.setConnectionState('disconnected');
   }, []);
 
-  const audioDeviceId = voiceCall.selectedMic !== 'default' ? voiceCall.selectedMic : undefined;
-  const videoDeviceId = voiceCall.selectedCamera !== 'default' ? voiceCall.selectedCamera : undefined;
-  const roomOptions = {
-    audioCaptureDefaults: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-      deviceId: audioDeviceId
-    },
-    videoCaptureDefaults: {
-      resolution: { width: 1280, height: 720, frameRate: 30 },
-      deviceId: videoDeviceId
-    }
-  };
+  // Upright video on a phone, and only the sizes people watch (v2.144.0).
+  const roomOptions = callRoomOptions({ isMobile, micId: voiceCall.selectedMic, cameraId: voiceCall.selectedCamera });
 
   // Voice channels encrypt their media end to end against LiveKit (v2.119.0).
   // The key comes with the join token; the Room is built with it before it
@@ -305,6 +294,18 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
     setIsFullscreen(prev => !prev);
   }, []);
 
+  // A wave call fills the window as soon as there is video in it (v2.144.0);
+  // it started as a one-line bar. Once per call, so leaving full screen
+  // sticks. A voice channel is a room people sit in, and stays in the dock.
+  const filledForRef = useRef(null);
+  const isWaveCall = !voiceCall.voiceChannel;
+  const roomName = voiceCall.roomName;
+  const handleVideoPresence = useCallback((hasVideo) => {
+    if (!hasVideo || !isWaveCall || filledForRef.current === roomName) return;
+    filledForRef.current = roomName;
+    setIsFullscreen(true);
+  }, [isWaveCall, roomName]);
+
   const handleToggleMute = useCallback(() => {
     voiceCall.toggleMute();
   }, [voiceCall]);
@@ -338,12 +339,12 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
   // Fullscreen style
   const fullscreenStyle = {
     position: 'fixed',
+    // inset, not 100vw/100vh: on a phone 100vh is taller than what shows,
+    // which put the controls under the browser's toolbar.
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    width: '100vw',
-    height: '100vh',
     zIndex: 2000,
     background: 'var(--bg-base)',
     border: 'none',
@@ -432,7 +433,9 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
       url={voiceCall.livekitUrl}
       roomName={voiceCall.roomName}
       voiceCall={voiceCall}
+      isMobile={isMobile}
     >
+      <VideoPresence onChange={handleVideoPresence} />
       {/* Dock window UI */}
       <div ref={windowRef} style={containerStyle}>
         {/* Header */}
@@ -456,7 +459,8 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
             )}
           </div>
           <div style={{ display: 'flex', gap: voiceCall.dockMinimized ? (isMobile ? '4px' : '6px') : '4px', alignItems: 'center', flexShrink: 0 }}>
-            {voiceCall.dockMinimized && (
+            {/* The bar's own buttons; full screen has the row below. */}
+            {voiceCall.dockMinimized && !isFullscreen && (
               <>
                 {voiceCall.can.speak && (
                   <button
@@ -552,22 +556,15 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
         {/* Video tiles area - only shown when maximized or fullscreen */}
         {(isFullscreen || !voiceCall.dockMinimized) && (
           <>
-            <div style={{
-              flex: 1,
-              overflow: 'auto',
-              background: 'var(--bg-primary)',
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '8px',
-              padding: '8px',
-              alignContent: 'flex-start',
-            }}>
-              <VideoTiles />
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <CallStage isMobile={isMobile} />
             </div>
 
             {/* Controls footer */}
             <div style={{
               padding: isMobile ? '12px' : '10px',
+              // Clear of a phone's home indicator.
+              paddingBottom: `calc(${isMobile ? '12px' : '10px'} + env(safe-area-inset-bottom, 0px))`,
               background: 'var(--bg-hover)',
               borderTop: '1px solid var(--accent-teal)',
               display: 'flex',
@@ -658,197 +655,6 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
         )}
       </div>
     </LiveKitCallRoom>
-  );
-};
-
-// Video tiles component with focus capability
-const VideoTiles = () => {
-  const [focusedTrackId, setFocusedTrackId] = useState(null);
-
-  const tracks = useTracks([
-    { source: Track.Source.Camera, withPlaceholder: false },
-    { source: Track.Source.ScreenShare, withPlaceholder: false },
-  ]);
-
-  // Filter for tracks that are actually enabled and publishing
-  const activeTracks = tracks.filter(trackRef => {
-    const track = trackRef.publication?.track;
-    return track && !track.isMuted && trackRef.publication?.isSubscribed;
-  });
-
-  // Handle click to focus/unfocus
-  const handleTrackClick = (trackId) => {
-    setFocusedTrackId(prev => prev === trackId ? null : trackId);
-  };
-
-  if (activeTracks.length === 0) {
-    return (
-      <div style={{ padding: '20px', color: 'var(--text-dim)', textAlign: 'center', width: '100%' }}>
-        No video tracks yet
-      </div>
-    );
-  }
-
-  // Find focused track
-  const focusedTrack = focusedTrackId
-    ? activeTracks.find(t => t.publication.trackSid === focusedTrackId)
-    : null;
-  const otherTracks = focusedTrack
-    ? activeTracks.filter(t => t.publication.trackSid !== focusedTrackId)
-    : activeTracks;
-
-  // If there's a focused track, show it large with thumbnails
-  if (focusedTrack) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '8px' }}>
-        {/* Focused video - main area */}
-        <div
-          style={{
-            flex: 1,
-            position: 'relative',
-            background: 'var(--bg-base)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            border: '2px solid var(--accent-teal)',
-            borderRadius: '4px',
-            overflow: 'hidden',
-          }}
-          onClick={() => handleTrackClick(focusedTrackId)}
-          title="Click to unfocus"
-        >
-          <ParticipantTile
-            trackRef={focusedTrack}
-            style={{
-              width: '100%',
-              height: '100%',
-              background: 'transparent',
-            }}
-          />
-          {/* Unfocus hint */}
-          <div style={{
-            position: 'absolute',
-            top: '8px',
-            right: '8px',
-            background: 'rgba(0,0,0,0.6)',
-            color: 'var(--accent-teal)',
-            padding: '4px 8px',
-            borderRadius: '4px',
-            fontSize: '0.7rem',
-            fontFamily: 'monospace',
-          }}>
-            Click to unfocus
-          </div>
-        </div>
-
-        {/* Thumbnail strip */}
-        {otherTracks.length > 0 && (
-          <div style={{
-            display: 'flex',
-            gap: '8px',
-            height: '100px',
-            flexShrink: 0,
-          }}>
-            {otherTracks.map((trackRef) => (
-              <div
-                key={trackRef.publication.trackSid}
-                style={{
-                  width: '140px',
-                  height: '100%',
-                  position: 'relative',
-                  cursor: 'pointer',
-                  border: '1px solid var(--border-primary)',
-                  borderRadius: '4px',
-                  overflow: 'hidden',
-                  background: 'var(--bg-surface)',
-                }}
-                onClick={() => handleTrackClick(trackRef.publication.trackSid)}
-                title="Click to focus"
-              >
-                <ParticipantTile
-                  trackRef={trackRef}
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    background: 'transparent',
-                  }}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // No focused track - show grid layout
-  // Calculate grid based on number of tracks
-  const getGridStyle = (count) => {
-    if (count === 1) {
-      return { gridTemplateColumns: '1fr' };
-    } else if (count === 2) {
-      return { gridTemplateColumns: '1fr 1fr' };
-    } else if (count <= 4) {
-      return { gridTemplateColumns: '1fr 1fr' };
-    } else {
-      return { gridTemplateColumns: 'repeat(3, 1fr)' };
-    }
-  };
-
-  return (
-    <div style={{
-      display: 'grid',
-      ...getGridStyle(activeTracks.length),
-      gap: '8px',
-      height: '100%',
-      alignContent: 'center',
-    }}>
-      {activeTracks.map((trackRef) => {
-        const isScreenShare = trackRef.source === Track.Source.ScreenShare;
-        return (
-          <div
-            key={trackRef.publication.trackSid}
-            style={{
-              position: 'relative',
-              aspectRatio: isScreenShare ? '16/9' : '4/3',
-              minHeight: '120px',
-              maxHeight: activeTracks.length === 1 ? '100%' : '300px',
-              cursor: 'pointer',
-              border: '1px solid var(--border-primary)',
-              borderRadius: '4px',
-              overflow: 'hidden',
-              background: 'var(--bg-surface)',
-            }}
-            onClick={() => handleTrackClick(trackRef.publication.trackSid)}
-            title="Click to focus"
-          >
-            <ParticipantTile
-              trackRef={trackRef}
-              style={{
-                width: '100%',
-                height: '100%',
-                background: 'transparent',
-              }}
-            />
-            {/* Source label */}
-            <div style={{
-              position: 'absolute',
-              bottom: '4px',
-              left: '4px',
-              background: 'rgba(0,0,0,0.6)',
-              color: 'var(--text-secondary)',
-              padding: '2px 6px',
-              borderRadius: '3px',
-              fontSize: '0.65rem',
-              fontFamily: 'monospace',
-            }}>
-              {isScreenShare ? '🖥️ Screen' : '📷 Camera'} • {trackRef.participant?.name || trackRef.participant?.identity || 'Unknown'}
-            </div>
-          </div>
-        );
-      })}
-    </div>
   );
 };
 
