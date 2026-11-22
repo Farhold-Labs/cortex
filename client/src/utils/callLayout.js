@@ -60,12 +60,16 @@ export function fitFor(video, box, isScreen, { fill = false, self = false } = {}
 }
 
 /**
- * LiveKit room options for calls. Upright video on a phone (v2.144.0): a call
- * on a phone is held upright, and 1280x720 asked for a landscape picture.
- * 3:4, not 9:16 (v2.144.1): a phone camera's sensor is 4:3, so asking for
- * 9:16 makes the browser crop the sensor, which looks zoomed in.
- * adaptiveStream sends each viewer only the size they show; dynacast stops
- * sending layers nobody is watching.
+ * LiveKit room options for calls. adaptiveStream sends each viewer only the
+ * size they show; dynacast stops sending layers nobody is watching.
+ *
+ * A phone asks for 960x720, landscape-shaped, with no aspect ratio (v2.144.2).
+ * Phone browsers read camera sizes in the sensor's own landscape terms and
+ * turn the picture to match how the phone is held, so a phone held upright
+ * sends upright video. Asking for an upright size (v2.144.0's 720x1280,
+ * v2.144.1's 720x960) came out sideways on real phones. 4:3 is the sensor's
+ * shape, so it isn't cropped. `uprightRetry()` covers a browser that does not
+ * turn the picture.
  */
 export function callRoomOptions({ isMobile = false, micId, cameraId } = {}) {
   return {
@@ -79,9 +83,21 @@ export function callRoomOptions({ isMobile = false, micId, cameraId } = {}) {
     },
     videoCaptureDefaults: {
       resolution: isMobile
-        ? { width: 720, height: 960, frameRate: 30, aspectRatio: 3 / 4 }
+        ? { width: 960, height: 720, frameRate: 30 }
         : { width: 1280, height: 720, frameRate: 30 },
       deviceId: cameraId && cameraId !== 'default' ? cameraId : undefined,
     },
   };
+}
+
+/**
+ * The camera size to ask for again when a phone held upright is sending a
+ * sideways picture, or null when it isn't (v2.144.2). Asked once per track.
+ * @param {{w:number,h:number}|null} frame  the picture actually arriving
+ * @param {boolean} upright                 the screen is taller than wide
+ * @param {{width:number,height:number}} asked the size first asked for
+ */
+export function uprightRetry(frame, upright, asked) {
+  if (!upright || !frame?.w || !frame?.h || frame.h >= frame.w) return null;
+  return { width: asked.height, height: asked.width, frameRate: asked.frameRate };
 }

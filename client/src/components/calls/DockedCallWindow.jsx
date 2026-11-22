@@ -4,7 +4,7 @@ import { Track, Room, ExternalE2EEKeyProvider, isE2EESupported } from 'livekit-c
 // The media encryption worker (v2.119.0), bundled as its own file by Vite.
 import E2EEWorker from 'livekit-client/e2ee-worker?worker';
 import { useDraggable } from '../../hooks/useDraggable.js';
-import CallStage, { VideoPresence } from './CallStage.jsx';
+import CallStage, { VideoPresence, UprightCamera } from './CallStage.jsx';
 import { callRoomOptions } from '../../utils/callLayout.js';
 
 // Reuse LiveKitCallRoom from CallModal
@@ -436,6 +436,7 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
       isMobile={isMobile}
     >
       <VideoPresence onChange={handleVideoPresence} />
+      <UprightCamera isMobile={isMobile} />
       {/* Dock window UI */}
       <div ref={windowRef} style={containerStyle}>
         {/* Header */}
