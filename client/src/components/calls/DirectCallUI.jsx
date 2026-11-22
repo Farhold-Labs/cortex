@@ -147,7 +147,7 @@ export function CallHistory({ fetchAPI, onCall, contacts = [], isMobile, refresh
       <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 12 }}>RECENT CALLS</div>
       {calls.length === 0 && (
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-          No calls yet. Call a contact from CONTACTS with 📞 or 🎥.
+          No calls yet. Tap a contact in CONTACTS, then CALL or VIDEO CALL.
         </div>
       )}
       {calls.map(c => {

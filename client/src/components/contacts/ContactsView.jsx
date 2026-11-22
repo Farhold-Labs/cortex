@@ -5,12 +5,11 @@ import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 import ContactRequestsPanel from './ContactRequestsPanel.jsx';
 import SentRequestsPanel from './SentRequestsPanel.jsx';
 import SendContactRequestModal from './SendContactRequestModal.jsx';
-import { callButtonStyle } from '../calls/DirectCallUI.jsx';
 
 const ContactsView = ({
   contacts, fetchAPI, showToast, onContactsChange,
   contactRequests, sentContactRequests, onRequestsChange,
-  onShowProfile, onCall
+  onShowProfile
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -142,9 +141,14 @@ const ContactsView = ({
                 padding: '16px', background: 'linear-gradient(135deg, var(--bg-surface), var(--bg-hover))',
                 border: `1px solid ${contact.isRemote ? 'var(--accent-purple)30' : 'var(--border-subtle)'}`,
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                // A grid item never shrinks below its content unless told to:
+                // a long name ran the card off a phone. Calls are on the
+                // profile a tap opens, not here (v2.145.1).
+                minWidth: 0, gap: '8px',
+                ...(isMobile ? { padding: '12px' } : {}),
               }}>
                 <div
-                  style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, cursor: onShowProfile ? 'pointer' : 'default', flex: 1 }}
+                  style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '10px' : '12px', minWidth: 0, cursor: onShowProfile ? 'pointer' : 'default', flex: 1 }}
                   onClick={onShowProfile ? () => onShowProfile(contact.id) : undefined}
                   title={onShowProfile ? 'View profile' : undefined}
                 >
@@ -166,13 +170,6 @@ const ContactsView = ({
                     )}
                   </div>
                 </div>
-                {/* Ring them (v2.145.0): only when they have you as a contact too. */}
-                {onCall && contact.mutual && (
-                  <div style={{ display: 'flex', gap: '6px', marginRight: '8px', flexShrink: 0 }}>
-                    <button onClick={() => onCall(contact, 'audio')} title={`Voice call ${contact.name}`} aria-label={`Voice call ${contact.name}`} style={callButtonStyle(isMobile)}>📞</button>
-                    <button onClick={() => onCall(contact, 'video')} title={`Video call ${contact.name}`} aria-label={`Video call ${contact.name}`} style={callButtonStyle(isMobile)}>🎥</button>
-                  </div>
-                )}
                 <button onClick={() => handleRemoveContact(contact.id)} style={{
                   padding: isMobile ? '10px' : '6px 10px',
                   minHeight: isMobile ? '44px' : 'auto',
