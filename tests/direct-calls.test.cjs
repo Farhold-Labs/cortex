@@ -198,7 +198,8 @@ async function startServer(livekitUrl, { env = {}, mutate } = {}) {
 }
 
 const joined = (room, identity) => ({ event: 'participant_joined', room: { name: room }, participant: { identity, name: identity } });
-const RING_ENV = { DIRECT_CALL_RING_MS: '1500', DIRECT_CALL_SWEEP_MS: '300', DIRECT_CALL_EMPTY_MS: '800', RATE_LIMIT_CALL_MAX: '1000' };
+// Short enough to test a missed call, long enough for a slow CI machine.
+const RING_ENV = { DIRECT_CALL_RING_MS: '4000', DIRECT_CALL_SWEEP_MS: '300', DIRECT_CALL_EMPTY_MS: '800', RATE_LIMIT_CALL_MAX: '1000' };
 
 /** Contacts both ways: what lets two people ring each other. */
 async function befriend(s, a, b) {
@@ -342,7 +343,7 @@ test('declined, cancelled, unanswered and busy calls end the ring; the callee is
     const gone = await waitFor(async () => {
       const c = (await s.api('GET', `/api/calls/${id}`, { token: mal.token })).body.call;
       return c.state === 'missed' && c;
-    });
+    }, 12000);
     assert.equal(gone.state, 'missed');
     assert.equal((await missed()).length, 2);
     assert.match((await missed())[0].title, /Missed video call/);
@@ -372,7 +373,9 @@ test('declined, cancelled, unanswered and busy calls end the ring; the callee is
 
 test('an answered call ends when its room empties, or when both just closed the app', { timeout: 90000 }, async () => {
   const lk = await fakeLiveKit();
-  const s = await startServer(lk.url, { env: RING_ENV });
+  // A slow machine took longer than 0.8 s between the answer and the joins,
+  // and the sweep ended the call first (CI, v2.145.1). Room enough here.
+  const s = await startServer(lk.url, { env: { ...RING_ENV, DIRECT_CALL_EMPTY_MS: '5000' } });
   try {
     const mal = await s.makeUser('mal'), zoe = await s.makeUser('zoe');
     await befriend(s, mal, zoe);
@@ -398,7 +401,7 @@ test('an answered call ends when its room empties, or when both just closed the 
     const swept = await waitFor(async () => {
       const c = (await s.api('GET', `/api/calls/${id}`, { token: zoe.token })).body.call;
       return c.state === 'ended' && c;
-    });
+    }, 15000);
     assert.equal(swept.state, 'ended');
     // And they can ring each other again.
     assert.equal((await ring(s, zoe, mal)).status, 201);
