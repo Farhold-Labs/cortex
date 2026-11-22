@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import ContactsView from '../components/contacts/ContactsView.jsx';
 import GroupsView from '../components/groups/GroupsView.jsx';
 import { T } from '../config/terminology.js';
+import { CallHistory } from '../components/calls/DirectCallUI.jsx';
 
 const PeopleView = (props) => {
-  const [tab, setTab] = useState('contacts');
+  const [tab, setTab] = useState(props.initialTab || 'contacts');
 
   const tabStyle = (active) => ({
     flex: 1,
@@ -44,7 +45,26 @@ const PeopleView = (props) => {
             </span>
           )}
         </button>
+        {props.onCall && (
+          <button style={tabStyle(tab === 'calls')} onClick={() => { setTab('calls'); props.onCallsSeen?.(); }}>
+            ☎ CALLS
+            {props.missedCalls > 0 && (
+              <span style={{
+                marginLeft: '6px', background: 'var(--accent-orange)', color: '#fff',
+                fontSize: '0.6rem', padding: '1px 5px', borderRadius: '8px',
+              }}>
+                {props.missedCalls}
+              </span>
+            )}
+          </button>
+        )}
       </div>
+
+      {tab === 'calls' && props.onCall && (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <CallHistory fetchAPI={props.fetchAPI} onCall={props.onCall} contacts={props.contacts} isMobile={props.isMobile} refreshKey={props.callsVersion} />
+        </div>
+      )}
 
       <div style={{ flex: 1, minHeight: 0, display: tab === 'contacts' ? 'flex' : 'none', flexDirection: 'column' }}>
         <ContactsView
@@ -56,6 +76,7 @@ const PeopleView = (props) => {
           sentContactRequests={props.sentContactRequests}
           onRequestsChange={props.onRequestsChange}
           onShowProfile={props.onShowProfile}
+          onCall={props.onCall}
         />
       </div>
       <div style={{ flex: 1, minHeight: 0, display: tab === 'crews' ? 'flex' : 'none', flexDirection: 'column' }}>

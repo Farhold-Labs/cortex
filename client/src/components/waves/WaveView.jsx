@@ -46,7 +46,7 @@ import LiveBroadcastBar from '../broadcast/LiveBroadcastBar.jsx';
 import { withGroupScope } from '../../utils/groupScope.jsx';
 const GoLiveModal = lazyComponent(() => import('../broadcast/GoLiveModal.jsx'));
 
-const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove, onNewWaveWithPeople, onToggleMute }) => {
+const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove, onNewWaveWithPeople, onToggleMute, activeCall }) => {
   // E2EE context
   const e2ee = useE2EE();
 
@@ -2580,6 +2580,26 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       )}
       {waveData?.encrypted && waveData?.rekeyNeeded && (
         <RekeyPendingNotice canRotate={!!waveData?.canRotateKey && e2ee.isUnlocked} />
+      )}
+
+      {/* A call going on in this wave (v2.145.0). The header's small 📞 count
+          was all there was, and it was easy to miss. Follows call_presence. */}
+      {activeCall?.participantCount > 0 && !(voiceCall.roomName === wave.id && voiceCall.connectionState !== 'disconnected') && (
+        <div data-wave-call-banner="" style={{
+          display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+          padding: '8px 12px', margin: isMobile ? '6px 8px 0' : '8px 12px 0',
+          background: 'var(--accent-green-bg)', border: '1px solid var(--accent-green)',
+          color: 'var(--accent-green)', fontFamily: 'monospace', fontSize: '0.85rem',
+        }}>
+          <span style={{ flex: 1, minWidth: '160px' }}>
+            📞 A call is going on here · {activeCall.participantCount} {activeCall.participantCount === 1 ? 'person' : 'people'} in it
+          </span>
+          <button onClick={openCallModal} style={{
+            padding: isMobile ? '8px 16px' : '6px 14px', minHeight: isMobile ? '40px' : 'auto',
+            background: 'var(--accent-green)', border: 'none', color: 'var(--bg-base)',
+            cursor: 'pointer', fontFamily: 'monospace', fontWeight: 'bold',
+          }}>JOIN</button>
+        </div>
       )}
 
       {/* E2EE: a wave still encrypting its older pings. Encryption is

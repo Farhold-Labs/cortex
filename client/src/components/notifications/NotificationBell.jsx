@@ -10,6 +10,8 @@ const NOTIFICATION_TYPES = {
   burst: { icon: '◈', color: 'var(--accent-purple)', label: 'Burst' },
   // v2.130.0 — asked to join a wave; the invitation waits at the top of the list.
   wave_invitation: { icon: '✉', color: 'var(--accent-amber)', label: 'Invitation' },
+  // v2.145.0 — a direct call nobody answered; opens the call history.
+  missed_call: { icon: '☎', color: 'var(--accent-orange)', label: 'Missed call' },
   system: { icon: '⚡', color: 'var(--accent-orange)', label: 'System' },
 };
 
@@ -249,7 +251,7 @@ const NotificationDropdown = ({ notifications, unreadCount, onRead, onDismiss, o
   );
 };
 
-const NotificationBell = ({ fetchAPI, onNavigateToWave, onShowInvitations, isMobile, refreshTrigger, onAllRead, e2ee }) => {
+const NotificationBell = ({ fetchAPI, onNavigateToWave, onShowInvitations, onShowCalls, isMobile, refreshTrigger, onAllRead, e2ee }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -384,6 +386,8 @@ const NotificationBell = ({ fetchAPI, onNavigateToWave, onShowInvitations, isMob
     // Navigate to the relevant content
     if (notification.type === 'wave_invitation') {
       onShowInvitations?.();
+    } else if (notification.type === 'missed_call') {
+      onShowCalls?.();
     } else if (notification.waveId) {
       onNavigateToWave(notification.waveId, notification.pingId);
     }

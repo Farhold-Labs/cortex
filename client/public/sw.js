@@ -288,9 +288,13 @@ self.addEventListener('push', (event) => {
 
   // Use unique tag per message to prevent notification replacement
   // Fall back to timestamp if no messageId provided
-  const uniqueTag = data.messageId
-    ? `farhold-msg-${data.messageId}`
-    : `farhold-${Date.now()}`;
+  // A call's ring and its missed-call notice share a tag, so the notice
+  // replaces the ring (v2.145.0).
+  const uniqueTag = data.tag
+    ? String(data.tag)
+    : data.messageId
+      ? `farhold-msg-${data.messageId}`
+      : `farhold-${Date.now()}`;
 
   const options = {
     body: data.body || 'New message received',
@@ -298,14 +302,17 @@ self.addEventListener('push', (event) => {
     badge: '/icons/icon-96x96.png',
     tag: uniqueTag,
     renotify: true,
-    requireInteraction: false, // Auto-dismiss after a while on mobile
-    silent: false, // Ensure notification makes sound
+    // A ringing call stays until it is dealt with (v2.145.0); a call started
+    // in a wave is a quiet heads-up.
+    requireInteraction: data.ring === true,
+    silent: data.silent === true,
     data: {
       url: data.url || '/',
       waveId: data.waveId,
-      messageId: data.messageId
+      messageId: data.messageId,
+      callId: data.callId
     },
-    vibrate: [100, 50, 100],
+    vibrate: data.ring ? [600, 300, 600, 300, 600, 300, 600] : data.silent ? undefined : [100, 50, 100],
     actions: [
       { action: 'open', title: 'Open' },
       { action: 'dismiss', title: 'Dismiss' }

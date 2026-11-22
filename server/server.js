@@ -8,7 +8,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { AccessToken, RoomServiceClient, WebhookReceiver, TrackSource } from 'livekit-server-sdk';
-import { VoiceRoster, voiceRoomName, classifyRoom } from './lib/voice-roster.js';
+import { VoiceRoster, voiceRoomName, classifyRoom, directCallRoomName } from './lib/voice-roster.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import fs from 'fs';
@@ -21958,6 +21958,7 @@ const voiceRoster = new VoiceRoster({
   roomService: livekitRoomService,
   onChange: (room) => {
     try { publishRoomPresence(room); } catch (err) { console.error('[voice] presence push failed:', err.message); }
+    try { directCallRoomChanged(room); } catch (err) { console.error('[calls] room change failed:', err.message); }
     // Who is in the room decides what each of them may publish (the camera
     // limit, the stage), so every change re-applies it.
     queueVoicePermissions(room);
@@ -21989,11 +21990,40 @@ function presenceView(room) {
   });
 }
 
+// A call starting in a wave is announced to its people (v2.145.0): before,
+// nothing said so, and in a private wave nobody knew to join.
+const waveCallCounts = new Map();
+const waveCallAnnouncedAt = new Map();
+const WAVE_CALL_ANNOUNCE_GAP_MS = 10 * 60_000;
+function announceWaveCall(waveId, room, participants) {
+  const before = waveCallCounts.get(room) || 0;
+  if (participants.length) waveCallCounts.set(room, participants.length); else waveCallCounts.delete(room);
+  if (before > 0 || participants.length === 0) return;
+  // Only a call someone just started: after a restart the roster rebuilds,
+  // and a call found running then was announced when it began.
+  if (Date.now() - (callTokenIssuedAt.get(waveId) || 0) > 120_000) return;
+  // A call dropped and restarted within minutes is the same conversation.
+  if (Date.now() - (waveCallAnnouncedAt.get(waveId) || 0) < WAVE_CALL_ANNOUNCE_GAP_MS) return;
+  const wave = db.getWave(waveId);
+  if (!wave) return;
+  waveCallAnnouncedAt.set(waveId, Date.now());
+  const starterId = participants[0];
+  const starter = db.findUserById(starterId);
+  broadcastToWaveWithPush(waveId, { type: 'wave_call_started', waveId, startedBy: starterId }, {
+    type: 'wave_call', waveId,
+    title: `📞 ${starter?.displayName || starter?.handle || 'Someone'} started a call`,
+    body: `in ${wave.title || 'a wave'}. Open it to join.`,
+    url: '/',
+    silent: true,
+  }, null, starterId);
+}
+
 function publishRoomPresence(room) {
   const kind = classifyRoom(room);
   if (kind?.kind === 'wave') {
     const participants = voiceRoster.participants(room).map(p => p.identity);
     broadcastToWave(kind.waveId, { type: 'call_presence', waveId: kind.waveId, participantCount: participants.length, participants });
+    announceWaveCall(kind.waveId, room, participants);
   } else if (kind?.kind === 'voice') {
     const channel = db.getChannelById(kind.channelId);
     if (!channel || !channel.community_id) return;
@@ -22437,6 +22467,273 @@ app.get('/api/waves/:waveId/call/status', authenticateToken, (req, res) => {
     participants,
   });
 });
+
+// ============ DIRECT CALLS (v2.145.0) ============
+//
+// One person rings another, outside waves (docs/direct-calls/). The server
+// holds each call's state, and that state decides who may join its LiveKit
+// room: a token is issued only to the two people, and only while the call is
+// ringing (the caller, waiting) or answered (both).
+//
+//   ringing ─ answer ──► answered ─ hang up / room empties ──► ended
+//      ├─ decline ──► declined        (the callee said no)
+//      ├─ caller hangs up ──► cancelled (a missed call for the callee)
+//      └─ nobody answers ──► missed
+//   busy: the callee was already ringing or in a call when it was placed.
+
+const DIRECT_CALL_RING_MS = Math.max(500, Number(process.env.DIRECT_CALL_RING_MS) || 45_000);
+// An answered call whose room has stayed empty this long has ended: both
+// closed the app without hanging up.
+const DIRECT_CALL_EMPTY_MS = Math.max(500, Number(process.env.DIRECT_CALL_EMPTY_MS) || 30_000);
+const DIRECT_CALL_SWEEP_MS = Math.max(200, Number(process.env.DIRECT_CALL_SWEEP_MS) || 15_000);
+const DIRECT_CALL_KEEP_MS = 90 * 24 * 60 * 60 * 1000;
+const RATE_LIMIT_CALL_MAX = parseInt(process.env.RATE_LIMIT_CALL_MAX) || 10;
+const callLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: RATE_LIMIT_CALL_MAX,
+  message: { error: 'Too many calls. Please wait a minute.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+function callPerson(userId) {
+  const u = db.findUserById(userId);
+  if (!u) return { id: userId, handle: null, displayName: 'Deleted account', avatar: null, avatarUrl: null };
+  return { id: u.id, handle: u.handle, displayName: u.displayName || u.handle, avatar: u.avatar || null, avatarUrl: u.avatarUrl || null };
+}
+
+/** A call as one of its two people sees it. */
+function directCallView(call, userId) {
+  const outgoing = call.caller_id === userId;
+  const seconds = call.answered_at && call.ended_at
+    ? Math.max(0, Math.round((Date.parse(call.ended_at) - Date.parse(call.answered_at)) / 1000))
+    : null;
+  return {
+    id: call.id,
+    kind: call.kind,
+    state: call.state,
+    direction: outgoing ? 'outgoing' : 'incoming',
+    other: callPerson(outgoing ? call.callee_id : call.caller_id),
+    createdAt: call.created_at,
+    answeredAt: call.answered_at,
+    endedAt: call.ended_at,
+    durationSeconds: seconds,
+  };
+}
+
+/** Every device of both people learns the call's new state. */
+function tellCallParties(call) {
+  for (const uid of [call.caller_id, call.callee_id]) {
+    broadcastToUser(uid, { type: 'direct_call', call: directCallView(call, uid) });
+  }
+}
+
+const directCallRingTimers = new Map();
+function stopRingTimer(callId) {
+  clearTimeout(directCallRingTimers.get(callId));
+  directCallRingTimers.delete(callId);
+}
+
+const callerName = (call) => {
+  const u = db.findUserById(call.caller_id);
+  return u?.displayName || u?.handle || 'Someone';
+};
+
+/** The callee missed it: a notice in the app and a push, replacing the ring's. */
+function notifyMissedCall(call) {
+  try {
+    if (!shouldCreateNotification(call.callee_id, 'missed_call', null)) return;
+    const title = `Missed ${call.kind === 'video' ? 'video ' : ''}call from ${callerName(call)}`;
+    const notification = db.createNotification({ userId: call.callee_id, type: 'missed_call', actorId: call.caller_id, title, body: '' });
+    if (notification) {
+      broadcastToUser(call.callee_id, { type: 'notification', notification });
+      db.markNotificationPushSent(notification.id);
+    }
+    sendPushNotification(call.callee_id, { type: 'missed_call', title, body: 'Open Cortex to call back', url: '/?calls=1', tag: `call-${call.id}`, callId: call.id });
+  } catch (err) {
+    console.error('[calls] missed-call notice failed:', err.message);
+  }
+}
+
+/** Move a call on, and tell both people. Returns the moved call or null. */
+function moveCall(callId, from, to) {
+  const moved = db.moveDirectCall(callId, from, to);
+  if (!moved) return null;
+  if (to !== 'ringing') stopRingTimer(callId);
+  tellCallParties(moved);
+  // Ringing stopped without an answer the callee gave: they missed it.
+  if (to === 'missed' || to === 'cancelled') notifyMissedCall(moved);
+  // Nobody may stay in the room of a call that is over.
+  if (to !== 'answered' && livekitRoomService) {
+    livekitRoomService.deleteRoom(directCallRoomName(callId)).catch(() => {});
+  }
+  return moved;
+}
+
+function directCallsConfigured(res) {
+  if (LIVEKIT_URL && LIVEKIT_API_KEY && LIVEKIT_API_SECRET) return true;
+  res.status(503).json({ error: 'Calling is not set up on this server' });
+  return false;
+}
+
+/**
+ * Ring someone. POST /api/calls { to, kind: 'audio' | 'video' }
+ *
+ * Only a contact who has you as a contact too: anyone can add anyone as a
+ * contact without asking, so one-sided contact would let a stranger ring.
+ * Blocks either way refuse it the same way, so a block isn't revealed.
+ */
+app.post('/api/calls', authenticateToken, callLimiter, (req, res) => {
+  if (!directCallsConfigured(res)) return;
+  const callerId = req.user.userId;
+  const calleeId = typeof req.body?.to === 'string' ? req.body.to : '';
+  const kind = req.body?.kind === 'video' ? 'video' : req.body?.kind === 'audio' ? 'audio' : null;
+  if (!calleeId || !kind) return res.status(400).json({ error: 'to and kind (audio or video) are required' });
+  if (calleeId === callerId) return res.status(400).json({ error: 'You cannot call yourself' });
+  if (!db.findUserById(calleeId) || !db.isMutualContact(callerId, calleeId) || db.isBlocked(callerId, calleeId)) {
+    return res.status(403).json({ error: 'You can only call people who have you as a contact too', code: 'NOT_CONTACTS' });
+  }
+  if (db.liveDirectCallFor(callerId)) {
+    return res.status(409).json({ error: 'You are already in a call', code: 'IN_CALL' });
+  }
+  const id = `dcall-${uuidv4()}`;
+  if (db.liveDirectCallFor(calleeId)) {
+    const busy = db.createDirectCall({ id, callerId, calleeId, kind, state: 'busy', endedAt: true });
+    notifyMissedCall(busy);
+    return res.status(409).json({ error: 'They are on another call', code: 'BUSY', call: directCallView(busy, callerId) });
+  }
+  const call = db.createDirectCall({ id, callerId, calleeId, kind });
+  tellCallParties(call);
+  sendPushNotification(calleeId, {
+    type: 'incoming_call',
+    title: `${callerName(call)} is calling`,
+    body: kind === 'video' ? 'Video call' : 'Voice call',
+    // The app finds the ringing call itself on opening (GET /api/calls).
+    url: '/',
+    tag: `call-${id}`,
+    callId: id,
+    ring: true,
+  });
+  directCallRingTimers.set(id, setTimeout(() => {
+    directCallRingTimers.delete(id);
+    moveCall(id, ['ringing'], 'missed');
+  }, DIRECT_CALL_RING_MS).unref());
+  res.status(201).json({ call: directCallView(call, callerId) });
+});
+
+/** Calls a person is part of; the one checks for each action. */
+function partyCall(req, res) {
+  const call = db.getDirectCall(String(req.params.id || ''));
+  const userId = req.user.userId;
+  if (!call || (call.caller_id !== userId && call.callee_id !== userId)) {
+    res.status(404).json({ error: 'Call not found' });
+    return null;
+  }
+  return call;
+}
+
+// GET /api/calls — history, and any call ringing for you or live with you now
+// (a page opened from the ring's push finds the call here).
+app.get('/api/calls', authenticateToken, (req, res) => {
+  const userId = req.user.userId;
+  const calls = db.listDirectCalls(userId, 50).map(c => directCallView(c, userId));
+  const live = db.liveDirectCallFor(userId);
+  res.json({ calls, live: live ? directCallView(live, userId) : null });
+});
+
+app.get('/api/calls/:id', authenticateToken, (req, res) => {
+  const call = partyCall(req, res);
+  if (call) res.json({ call: directCallView(call, req.user.userId) });
+});
+
+// The callee answers. Of two devices answering together, one wins.
+app.post('/api/calls/:id/answer', authenticateToken, (req, res) => {
+  const call = partyCall(req, res);
+  if (!call) return;
+  if (call.callee_id !== req.user.userId) return res.status(403).json({ error: 'Only the person called can answer' });
+  const moved = moveCall(call.id, ['ringing'], 'answered');
+  if (!moved) return res.status(409).json({ error: 'This call is no longer ringing', code: 'NOT_RINGING', call: directCallView(db.getDirectCall(call.id), req.user.userId) });
+  res.json({ call: directCallView(moved, req.user.userId) });
+});
+
+app.post('/api/calls/:id/decline', authenticateToken, (req, res) => {
+  const call = partyCall(req, res);
+  if (!call) return;
+  if (call.callee_id !== req.user.userId) return res.status(403).json({ error: 'Only the person called can decline' });
+  const moved = moveCall(call.id, ['ringing'], 'declined');
+  res.json({ call: directCallView(moved || db.getDirectCall(call.id), req.user.userId) });
+});
+
+// Hang up: the caller giving up on the ring, or either person ending the call.
+// Over already is not an error.
+app.post('/api/calls/:id/end', authenticateToken, (req, res) => {
+  const call = partyCall(req, res);
+  if (!call) return;
+  const userId = req.user.userId;
+  let moved = null;
+  if (call.state === 'ringing') moved = moveCall(call.id, ['ringing'], call.caller_id === userId ? 'cancelled' : 'declined');
+  else if (call.state === 'answered') moved = moveCall(call.id, ['answered'], 'ended');
+  res.json({ call: directCallView(moved || db.getDirectCall(call.id), userId) });
+});
+
+// A LiveKit token for the call's room: the caller while it rings or once
+// answered, the callee only once answered.
+app.post('/api/calls/:id/token', authenticateToken, async (req, res) => {
+  if (!directCallsConfigured(res)) return;
+  const call = partyCall(req, res);
+  if (!call) return;
+  const userId = req.user.userId;
+  const allowed = call.state === 'answered' || (call.state === 'ringing' && call.caller_id === userId);
+  if (!allowed) return res.status(409).json({ error: 'This call is not open to join', code: 'NOT_JOINABLE', state: call.state });
+  const user = db.findUserById(userId);
+  const roomName = directCallRoomName(call.id);
+  try {
+    const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
+      identity: userId,
+      name: user?.displayName || user?.handle || 'Unknown',
+      ttl: '6h',
+    });
+    at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true, canPublishData: false });
+    res.json({ token: await livekitJwt(at), url: LIVEKIT_URL, roomName });
+  } catch (err) {
+    console.error('[calls] token failed:', err.message);
+    res.status(500).json({ error: 'Could not join the call' });
+  }
+});
+
+/**
+ * The room of an answered call emptied: both have gone, so it has ended. Also
+ * covers a call answered and then abandoned (the sweep below).
+ */
+function directCallRoomChanged(room) {
+  const kind = classifyRoom(room);
+  if (kind?.kind !== 'direct' || voiceRoster.count(room) > 0) return;
+  const call = db.getDirectCall(kind.callId);
+  if (call?.state === 'answered') moveCall(call.id, ['answered'], 'ended');
+}
+
+let directCallSweeps = 0;
+function sweepDirectCalls() {
+  try {
+    const now = Date.now();
+    for (const call of db.liveDirectCalls()) {
+      // A ring outlived by a restart (its timer was in the old process).
+      if (call.state === 'ringing' && now - Date.parse(call.created_at) > DIRECT_CALL_RING_MS + 5_000) {
+        moveCall(call.id, ['ringing'], 'missed');
+      } else if (call.state === 'answered' && now - Date.parse(call.answered_at) > DIRECT_CALL_EMPTY_MS
+                 && voiceRoster.count(directCallRoomName(call.id)) === 0) {
+        moveCall(call.id, ['answered'], 'ended');
+      }
+    }
+    // Call history is kept 90 days. Hourly is plenty.
+    if (directCallSweeps++ % Math.max(1, Math.round(3_600_000 / DIRECT_CALL_SWEEP_MS)) === 0) {
+      db.pruneDirectCalls(new Date(now - DIRECT_CALL_KEEP_MS).toISOString());
+    }
+  } catch (err) {
+    console.error('[calls] sweep failed:', err.message);
+  }
+}
+setInterval(sweepDirectCalls, DIRECT_CALL_SWEEP_MS).unref();
 
 app.post('/api/waves', authenticateToken, async (req, res) => {
   const title = sanitizeInput(req.body.title);
@@ -30324,12 +30621,16 @@ async function sendPushNotification(userId, payload) {
             messageId: String(payload.messageId || ''),
             senderId: String(payload.senderId || ''),
             senderHandle: String(payload.senderHandle || ''),
+            callId: String(payload.callId || ''),
           },
           android: {
             priority: 'high',
             notification: {
               channelId: 'cortex_messages',
               color: '#0ead69',
+              // A call's ring and its missed-call notice share a tag, so the
+              // notice replaces the ring (v2.145.0).
+              ...(payload.tag ? { tag: String(payload.tag) } : {}),
             },
           },
           apns: {

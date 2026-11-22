@@ -70,6 +70,8 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, isMobile,
         onMutedByRoom={voiceCall.setMutedByRoom}
         isMuted={voiceCall.isMuted}
         isCameraOff={voiceCall.isCameraOff}
+        facingMode={voiceCall.facingMode}
+        isMobile={isMobile}
         isScreenSharing={voiceCall.isScreenSharing}
         setParticipants={voiceCall.setParticipants}
         setAudioLevel={voiceCall.setAudioLevel}
@@ -122,7 +124,7 @@ function useEncryptedRoom(token, e2ee, roomOptions, voiceCallRef) {
 const PERMISSION_SOURCE = { camera: 1, microphone: 2, screen: 3 };
 
 // Call controls that sync with LiveKit
-const CallControls = ({ canSpeak = true, isVoiceChannel = false, expectedRoomSid = null, onWrongRoom, onPermissions, onCameraFailed, onMutedByRoom, isMuted, isCameraOff, isScreenSharing, setParticipants, setAudioLevel, setRoom, setScreenSharing }) => {
+const CallControls = ({ canSpeak = true, isVoiceChannel = false, expectedRoomSid = null, onWrongRoom, onPermissions, onCameraFailed, onMutedByRoom, isMuted, isCameraOff, facingMode = 'user', isMobile = false, isScreenSharing, setParticipants, setAudioLevel, setRoom, setScreenSharing }) => {
   const participants = useParticipants();
   const { localParticipant } = useLocalParticipant();
   const room = useRoomContext();
@@ -233,6 +235,18 @@ const CallControls = ({ canSpeak = true, isVoiceChannel = false, expectedRoomSid
     updateCamera();
   }, [isCameraOff, localParticipant, onCameraFailed]);
 
+  // Flip between a phone's front and back cameras (v2.145.0), as the
+  // broadcast studio does: the same track, restarted on the other camera.
+  const facingRef = useRef('user');
+  React.useEffect(() => {
+    if (!localParticipant || facingRef.current === facingMode) return;
+    facingRef.current = facingMode;
+    const track = localParticipant.getTrackPublication(Track.Source.Camera)?.track;
+    if (!track) return;
+    const resolution = callRoomOptions({ isMobile }).videoCaptureDefaults.resolution;
+    track.restartTrack({ facingMode, resolution }).catch(err => console.error('🎥 Camera flip failed:', err));
+  }, [facingMode, localParticipant, isMobile]);
+
   // Sync screen share state with LiveKit
   React.useEffect(() => {
     if (!localParticipant) return;
@@ -305,6 +319,14 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
     filledForRef.current = roomName;
     setIsFullscreen(true);
   }, [isWaveCall, roomName]);
+  // A direct call (v2.145.0) is the whole screen from the start, video or
+  // not, as a phone call is.
+  const directCall = voiceCall.directCall;
+  useEffect(() => {
+    if (!directCall?.id || filledForRef.current === directCall.id) return;
+    filledForRef.current = directCall.id;
+    setIsFullscreen(true);
+  }, [directCall?.id]);
 
   const handleToggleMute = useCallback(() => {
     voiceCall.toggleMute();
@@ -424,6 +446,10 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
   const inAudience = Boolean(voiceCall.voiceChannel && voiceCall.stage && !voiceCall.onStage);
   // Allowed a camera, but the room's camera places are taken.
   const camerasFull = Boolean(voiceCall.voiceChannel && voiceCall.onStage && voiceCall.rights?.video && !voiceCall.can.video);
+  // A direct call says what it is waiting for (v2.145.0).
+  const callStatus = !directCall ? null
+    : directCall.state === 'ringing' ? `Calling ${directCall.other?.displayName || ''}…`
+    : (voiceCall.participants.length < 2 ? 'Connecting…' : null);
 
   // Single LiveKitRoom instance that persists across minimize/maximize/hide states
   // Wrap everything in LiveKitRoom so we have ONE connection only
@@ -436,7 +462,7 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
       isMobile={isMobile}
     >
       <VideoPresence onChange={handleVideoPresence} />
-      <UprightCamera isMobile={isMobile} />
+      <UprightCamera isMobile={isMobile} facing={voiceCall.facingMode} />
       {/* Dock window UI */}
       <div ref={windowRef} style={containerStyle}>
         {/* Header */}
@@ -453,7 +479,9 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
             }}>
               {voiceCall.voiceChannel
                 ? <>{!voiceCall.dockMinimized && voiceCall.e2ee ? <span title="Encrypted end to end: LiveKit cannot hear or see it">🔒 </span> : null}{voiceCall.stage ? '🎤' : '🔊'} {voiceCall.voiceChannel.name}</>
-                : <>{voiceCall.dockMinimized ? '🎤 In Call' : '📞 Call'}</>} • {voiceCall.participants.length || 0}{voiceCall.voiceChannel ? '' : ` participant${voiceCall.participants.length !== 1 ? 's' : ''}`}
+                : directCall
+                  ? <>📞 {directCall.other?.displayName || 'Call'}</>
+                  : <>{voiceCall.dockMinimized ? '🎤 In Call' : '📞 Call'}</>}{directCall ? '' : <> • {voiceCall.participants.length || 0}{voiceCall.voiceChannel ? '' : ` participant${voiceCall.participants.length !== 1 ? 's' : ''}`}</>}
             </span>
             {voiceCall.audioLevel > 0.3 && (
               <span style={{ color: 'var(--accent-green)', fontSize: '0.7rem' }}>●</span>
@@ -541,7 +569,7 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
             {/* A wave call hands its connection to the wave's call screen when the
                 dock closes. A voice channel has no such screen, so closing the
                 dock would silently drop you from the room: it minimises instead. */}
-            {(isFullscreen || !voiceCall.voiceChannel) && (
+            {(isFullscreen || (!voiceCall.voiceChannel && !directCall)) && (
               <button
                 style={buttonStyle}
                 onClick={isFullscreen ? handleToggleFullscreen : handleClose}
@@ -558,7 +586,7 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
         {(isFullscreen || !voiceCall.dockMinimized) && (
           <>
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <CallStage isMobile={isMobile} />
+              <CallStage isMobile={isMobile} status={callStatus} mirrorSelf={voiceCall.facingMode !== 'environment'} />
             </div>
 
             {/* Controls footer */}
@@ -623,6 +651,11 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
               >
                 {voiceCall.isCameraOff ? '📹 Camera Off' : '📷 Camera On'}
               </button>}
+              {isMobile && voiceCall.can.video && !voiceCall.isCameraOff && (
+                <button style={controlButtonStyle} onClick={voiceCall.flipCamera} title="Switch between the front and back cameras">
+                  🔄 Flip
+                </button>
+              )}
               {camerasFull && (
                 <button style={{ ...controlButtonStyle, opacity: 0.5, cursor: 'default' }} disabled
                   title={`This channel allows ${voiceCall.cameraLimit || 'a few'} cameras at once`}>
@@ -649,7 +682,7 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
                 }}
                 onClick={handleLeaveCall}
               >
-                📞 Leave
+                {directCall ? '📞 Hang up' : '📞 Leave'}
               </button>
             </div>
           </>
