@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LiveKitRoom, useParticipants, useLocalParticipant, RoomAudioRenderer, ParticipantTile, useTracks } from '@livekit/components-react';
+import { LiveKitRoom, useParticipants, useLocalParticipant, RoomAudioRenderer } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import { BASE_URL, isNativeApp } from '../../config/constants.js';
+import CallStage, { VideoPresence } from './CallStage.jsx';
+import { callRoomOptions } from '../../utils/callLayout.js';
 
 // Nested component: LiveKitCallRoom
 // Use refs to prevent callback recreation and avoid unnecessary LiveKit reconnection attempts
-const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children }) => {
+const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, isMobile, children }) => {
   // Store voiceCall in ref to avoid recreating callbacks
   const voiceCallRef = useRef(voiceCall);
   voiceCallRef.current = voiceCall;
@@ -28,10 +30,6 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
 
   if (!token || !url) return null;
 
-  // Build device constraints
-  const audioDeviceId = voiceCall.selectedMic !== 'default' ? voiceCall.selectedMic : undefined;
-  const videoDeviceId = voiceCall.selectedCamera !== 'default' ? voiceCall.selectedCamera : undefined;
-
   return (
     <LiveKitRoom
       key={token} // Only remount when token changes, not on every voiceCall state update
@@ -43,22 +41,7 @@ const LiveKitCallRoom = React.memo(({ token, url, roomName, voiceCall, children 
       onConnected={handleConnected}
       onDisconnected={handleDisconnected}
       onError={handleError}
-      options={{
-        audioCaptureDefaults: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          deviceId: audioDeviceId
-        },
-        videoCaptureDefaults: {
-          resolution: {
-            width: 1280,
-            height: 720,
-            frameRate: 30
-          },
-          deviceId: videoDeviceId
-        }
-      }}
+      options={callRoomOptions({ isMobile, micId: voiceCall.selectedMic, cameraId: voiceCall.selectedCamera })}
     >
       <RoomAudioRenderer />
       <CallControls
@@ -238,102 +221,6 @@ const CallModal = ({ isOpen, onClose, wave, voiceCall, user, isMobile }) => {
     }
   }, [wave, onClose]);
 
-  // Video Tiles and Audio Level Component (must be inside LiveKitRoom)
-  const CallContent = () => {
-    const tracks = useTracks([
-      { source: Track.Source.Camera, withPlaceholder: false },
-      { source: Track.Source.ScreenShare, withPlaceholder: false },
-    ]);
-
-    // Filter for tracks that are actually enabled and publishing
-    const activeTracks = tracks.filter(trackRef => {
-      const track = trackRef.publication?.track;
-      return track && !track.isMuted && trackRef.publication?.isSubscribed;
-    });
-
-    const hasVideoTracks = activeTracks.length > 0;
-
-    // Update parent state when video tracks change
-    useEffect(() => {
-      setHasAnyVideo(hasVideoTracks);
-    }, [hasVideoTracks]);
-
-    // Calculate grid layout based on participant count
-    const getGridLayout = (count) => {
-      if (count === 1) return { columns: '1fr', minSize: '400px' };
-      if (count === 2) return { columns: 'repeat(2, 1fr)', minSize: '300px' };
-      if (count <= 4) return { columns: 'repeat(2, 1fr)', minSize: '250px' };
-      if (count <= 6) return { columns: 'repeat(3, 1fr)', minSize: '200px' };
-      return { columns: 'repeat(auto-fit, minmax(200px, 1fr))', minSize: '200px' };
-    };
-
-    const layout = getGridLayout(activeTracks.length);
-
-    return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        {/* Video Tiles */}
-        {hasVideoTracks ? (
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: layout.columns,
-            gap: '8px',
-            padding: '12px',
-            flex: 1,
-            overflow: 'auto',
-            minHeight: 0,
-            alignContent: 'start'
-          }}>
-            {activeTracks.map((trackRef) => (
-              <ParticipantTile
-                key={trackRef.publication.trackSid}
-                trackRef={trackRef}
-                style={{
-                  borderRadius: '8px',
-                  overflow: 'hidden',
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border-primary)',
-                  minHeight: layout.minSize,
-                  aspectRatio: '16/9'
-                }}
-              />
-            ))}
-          </div>
-        ) : (
-          /* Audio level indicator (when no video) */
-          <div style={{
-            padding: '20px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '12px',
-            flex: 1
-          }}>
-            <div style={{ fontSize: '3rem' }}>🎤</div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Voice Only</div>
-            {audioLevel > 0 && !isMuted && (
-              <div style={{ width: '200px' }}>
-                <div style={{
-                  height: '4px',
-                  background: 'var(--bg-secondary)',
-                  borderRadius: '2px',
-                  overflow: 'hidden'
-                }}>
-                  <div style={{
-                    height: '100%',
-                    background: 'var(--accent-green)',
-                    width: `${audioLevel * 100}%`,
-                    transition: 'width 0.1s ease-out'
-                  }} />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div style={{
       position: 'fixed',
@@ -343,17 +230,18 @@ const CallModal = ({ isOpen, onClose, wave, voiceCall, user, isMobile }) => {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      padding: isMobile ? '0' : '20px'
+      // A video call fills the window (v2.144.0).
+      padding: isMobile || hasAnyVideo ? '0' : '20px'
     }}
       onClick={onClose}
     >
       <div style={{
         background: 'var(--bg-primary)',
-        border: isMobile ? 'none' : '1px solid var(--border-primary)',
-        borderRadius: isMobile ? '0' : '8px',
-        width: isMobile ? '100%' : (hasAnyVideo ? 'min(900px, 90vw)' : '400px'),
-        height: isMobile ? '100%' : (hasAnyVideo ? 'min(700px, 85vh)' : 'auto'),
-        maxHeight: isMobile ? '100%' : '85vh',
+        border: isMobile || hasAnyVideo ? 'none' : '1px solid var(--border-primary)',
+        borderRadius: isMobile || hasAnyVideo ? '0' : '8px',
+        width: isMobile || hasAnyVideo ? '100%' : '400px',
+        height: isMobile || hasAnyVideo ? '100%' : 'auto',
+        maxHeight: isMobile || hasAnyVideo ? '100%' : '85vh',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -592,8 +480,15 @@ const CallModal = ({ isOpen, onClose, wave, voiceCall, user, isMobile }) => {
                   url={livekitUrl}
                   roomName={wave.id}
                   voiceCall={voiceCall}
+                  isMobile={isMobile}
                 >
-                  <CallContent />
+                  {/* The same stage as the dock (v2.144.0). It was a component
+                      defined inside this one, so every re-render (each change
+                      of call state) unmounted and remounted every video. */}
+                  <VideoPresence onChange={setHasAnyVideo} />
+                  <div style={{ flex: 1, minHeight: hasAnyVideo ? 0 : '240px', display: 'flex', flexDirection: 'column' }}>
+                    <CallStage isMobile={isMobile} />
+                  </div>
                 </LiveKitCallRoom>
               )}
               {voiceCall.isDocked && (
