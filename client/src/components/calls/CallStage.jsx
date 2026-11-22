@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useTracks, useParticipants, useSpeakingParticipants, VideoTrack } from '@livekit/components-react';
+import { useTracks, useParticipants, useSpeakingParticipants, useLocalParticipant, VideoTrack } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import { Avatar } from '../ui/SimpleComponents.jsx';
-import { chooseCallLayout, fitFor } from '../../utils/callLayout.js';
+import { chooseCallLayout, fitFor, callRoomOptions, uprightRetry } from '../../utils/callLayout.js';
 
 // The call's video (v2.144.0): the other person fills the space, you are a
 // small preview in the lower right, anyone else is a strip of thumbnails.
@@ -25,6 +25,47 @@ export function VideoPresence({ onChange }) {
   const tracks = useTracks(SOURCES);
   const has = tracks.some(isLive);
   useEffect(() => { onChange?.(has); }, [has, onChange]);
+  return null;
+}
+
+/** The size of the picture a track is actually sending, from a hidden video. */
+function frameSize(mediaStreamTrack) {
+  return new Promise((resolve) => {
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true;
+    v.srcObject = new MediaStream([mediaStreamTrack]);
+    const done = (size) => { clearTimeout(t); v.srcObject = null; resolve(size); };
+    const t = setTimeout(() => done(null), 4000);
+    v.onloadedmetadata = () => done(v.videoWidth ? { w: v.videoWidth, h: v.videoHeight } : null);
+    v.play?.().catch(() => {});
+  });
+}
+
+/**
+ * On a phone held upright, a camera sending a sideways picture is asked once
+ * more with the size turned (v2.144.2, rule in uprightRetry()). Renders
+ * nothing; must be inside a LiveKitRoom.
+ */
+export function UprightCamera({ isMobile }) {
+  const { cameraTrack } = useLocalParticipant();
+  const track = cameraTrack?.track;
+  const tried = useRef(new Set());
+  useEffect(() => {
+    const sid = cameraTrack?.trackSid;
+    if (!isMobile || !track?.mediaStreamTrack || !sid || tried.current.has(sid)) return undefined;
+    let cancelled = false;
+    frameSize(track.mediaStreamTrack).then((frame) => {
+      if (cancelled || tried.current.has(sid)) return;
+      const upright = window.matchMedia?.('(orientation: portrait)').matches;
+      const asked = callRoomOptions({ isMobile: true }).videoCaptureDefaults.resolution;
+      const turned = uprightRetry(frame, upright, asked);
+      tried.current.add(sid);
+      if (!turned) return;
+      const deviceId = track.mediaStreamTrack.getSettings?.().deviceId;
+      track.restartTrack({ resolution: turned, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }).catch(() => {});
+    });
+    return () => { cancelled = true; };
+  }, [isMobile, track, cameraTrack?.trackSid]);
   return null;
 }
 

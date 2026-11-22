@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { LiveKitRoom, useParticipants, useLocalParticipant, RoomAudioRenderer } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import { BASE_URL, isNativeApp } from '../../config/constants.js';
-import CallStage, { VideoPresence } from './CallStage.jsx';
+import CallStage, { VideoPresence, UprightCamera } from './CallStage.jsx';
 import { callRoomOptions } from '../../utils/callLayout.js';
 
 // Nested component: LiveKitCallRoom
@@ -486,6 +486,7 @@ const CallModal = ({ isOpen, onClose, wave, voiceCall, user, isMobile }) => {
                       defined inside this one, so every re-render (each change
                       of call state) unmounted and remounted every video. */}
                   <VideoPresence onChange={setHasAnyVideo} />
+                  <UprightCamera isMobile={isMobile} />
                   <div style={{ flex: 1, minHeight: hasAnyVideo ? 0 : '240px', display: 'flex', flexDirection: 'column' }}>
                     <CallStage isMobile={isMobile} />
                   </div>

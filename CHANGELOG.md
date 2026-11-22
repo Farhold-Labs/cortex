@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.144.2] - 2026-11-22
+
+Phones held upright send upright video. No migration.
+
+### Fixed
+- **A phone's camera was sideways in calls, in the Android app and the web.** Tried on a real phone: with v2.144.1 fitting your own picture whole, it showed as a landscape picture on an upright phone (v2.144.0 had hidden this by cropping it to fill the screen). Phone browsers read camera sizes in the sensor's own landscape terms and turn the picture to match how the phone is held. v2.144.0 and v2.144.1 asked for an upright size (720×1280, then 720×960), which comes out sideways. Phones now ask for 960×720 with no aspect ratio, as the broadcast studio has since v2.113.0 (1280×720) with upright broadcasts on real phones. 4:3 is the sensor's shape, so nothing is cropped.
+- **A guard for a browser that does not turn the picture** (`UprightCamera` in `CallStage.jsx`, rule `uprightRetry()`): on a phone held upright, if the camera's actual picture is wider than tall, it is asked once more with the size turned, keeping the same camera. It measures the frames arriving, not `getSettings()`, which can report the sensor's unturned size.
+
+### Verified
+- `call-layout` tests (9): phones ask 960×720 with no aspect ratio; the retry turns a sideways picture on an upright screen only, once, and leaves a sideways phone alone.
+- Headless at 390×844 on dev with a fake camera, which never turns its picture: the first picture was sideways, the guard asked again, and the call showed 720×960 upright, fitted and mirrored. No console errors.
+- **Not verified on a phone yet.**
+
 ## [2.144.1] - 2026-11-22
 
 Your own camera is no longer zoomed in. No migration.
