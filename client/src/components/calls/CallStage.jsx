@@ -46,26 +46,36 @@ function frameSize(mediaStreamTrack) {
  * more with the size turned (v2.144.2, rule in uprightRetry()). Renders
  * nothing; must be inside a LiveKitRoom.
  */
-export function UprightCamera({ isMobile }) {
+export function UprightCamera({ isMobile, facing = 'user' }) {
   const { cameraTrack } = useLocalParticipant();
   const track = cameraTrack?.track;
-  const tried = useRef(new Set());
+  // One retry per camera (front, back) per published track, so a browser
+  // that ignores it isn't asked forever. The check itself runs whenever the
+  // camera starts or restarts: a flip restarts it, and must be measured after.
+  const retried = useRef(new Set());
   useEffect(() => {
     const sid = cameraTrack?.trackSid;
-    if (!isMobile || !track?.mediaStreamTrack || !sid || tried.current.has(sid)) return undefined;
+    if (!isMobile || !track || !sid) return undefined;
     let cancelled = false;
-    frameSize(track.mediaStreamTrack).then((frame) => {
-      if (cancelled || tried.current.has(sid)) return;
-      const upright = window.matchMedia?.('(orientation: portrait)').matches;
-      const asked = callRoomOptions({ isMobile: true }).videoCaptureDefaults.resolution;
-      const turned = uprightRetry(frame, upright, asked);
-      tried.current.add(sid);
-      if (!turned) return;
-      const deviceId = track.mediaStreamTrack.getSettings?.().deviceId;
-      track.restartTrack({ resolution: turned, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }).catch(() => {});
-    });
-    return () => { cancelled = true; };
-  }, [isMobile, track, cameraTrack?.trackSid]);
+    const check = () => {
+      const mst = track.mediaStreamTrack;
+      const key = `${sid}:${facing}`;
+      if (!mst || retried.current.has(key)) return;
+      frameSize(mst).then((frame) => {
+        if (cancelled || retried.current.has(key) || track.mediaStreamTrack !== mst) return;
+        const upright = window.matchMedia?.('(orientation: portrait)').matches;
+        const asked = callRoomOptions({ isMobile: true }).videoCaptureDefaults.resolution;
+        const turned = uprightRetry(frame, upright, asked);
+        if (!turned) return;
+        retried.current.add(key);
+        const deviceId = mst.getSettings?.().deviceId;
+        track.restartTrack({ resolution: turned, ...(facing === 'environment' ? { facingMode: 'environment' } : deviceId ? { deviceId: { exact: deviceId } } : {}) }).catch(() => {});
+      });
+    };
+    check();
+    track.on?.('restarted', check);
+    return () => { cancelled = true; track.off?.('restarted', check); };
+  }, [isMobile, track, cameraTrack?.trackSid, facing]);
   return null;
 }
 
@@ -125,7 +135,13 @@ const labelStyle = {
   pointerEvents: 'none',
 };
 
-export default function CallStage({ isMobile }) {
+/**
+ * @param {boolean} isMobile
+ * @param {string}  [status]     shown over the picture, e.g. "Calling Zoe…" (v2.145.0)
+ * @param {boolean} [mirrorSelf] mirror your own camera: yes for the front one,
+ *                               no for the back one, which films the world
+ */
+export default function CallStage({ isMobile, status = null, mirrorSelf = true }) {
   const boxRef = useRef(null);
   const box = useBoxSize(boxRef);
   const refs = useTracks(SOURCES).filter(isLive);
@@ -167,7 +183,7 @@ export default function CallStage({ isMobile }) {
           onClick={pin ? () => setPinnedId(null) : undefined}
           title={pin ? 'Tap to go back' : undefined}
         >
-          <StageVideo trackRef={mainRef} box={box} fill={isMobile} self={main.isLocal && !main.isScreen} mirror={main.isLocal && !main.isScreen} />
+          <StageVideo trackRef={mainRef} box={box} fill={isMobile} self={main.isLocal && !main.isScreen} mirror={mirrorSelf && main.isLocal && !main.isScreen} />
           <div style={labelStyle}>
             {main.isScreen ? '🖥️ ' : ''}{main.isLocal ? 'You' : nameOf(mainRef.participant)}{main.isScreen ? '’s screen' : ''}
           </div>
@@ -182,7 +198,17 @@ export default function CallStage({ isMobile }) {
         </div>
       ) : (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', padding: 16, textAlign: 'center' }}>
-          Waiting for others to join…
+          {status ? '' : 'Waiting for others to join…'}
+        </div>
+      )}
+
+      {status && (
+        <div data-call-status="" style={{
+          position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', maxWidth: 'calc(100% - 32px)',
+          background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '8px 16px', borderRadius: 18,
+          fontFamily: 'monospace', fontSize: '0.95rem', textAlign: 'center', pointerEvents: 'none',
+        }}>
+          {status}
         </div>
       )}
 
@@ -200,7 +226,7 @@ export default function CallStage({ isMobile }) {
                 title={`${t.isLocal ? 'You' : nameOf(r.participant)}${t.isScreen ? ' (screen)' : ''} — tap to fill the screen`}
                 style={{ position: 'relative', flexShrink: 0, width: thumb.w, height: thumb.h, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.35)', cursor: 'pointer', background: '#000' }}
               >
-                <StageVideo trackRef={r} fit={t.isScreen ? 'contain' : 'cover'} mirror={t.isLocal && !t.isScreen} />
+                <StageVideo trackRef={r} fit={t.isScreen ? 'contain' : 'cover'} mirror={mirrorSelf && t.isLocal && !t.isScreen} />
                 <div style={{ ...labelStyle, top: 'auto', bottom: 2, left: 2, fontSize: '0.6rem', padding: '1px 4px' }}>
                   {t.isScreen ? '🖥️ ' : ''}{t.isLocal ? 'You' : nameOf(r.participant)}
                 </div>
@@ -221,7 +247,7 @@ export default function CallStage({ isMobile }) {
             border: '1px solid rgba(255,255,255,0.5)', boxShadow: '0 2px 10px rgba(0,0,0,0.6)',
           }}
         >
-          <StageVideo trackRef={pipRef} fit="cover" mirror />
+          <StageVideo trackRef={pipRef} fit="cover" mirror={mirrorSelf} />
         </div>
       )}
     </div>

@@ -4050,6 +4050,25 @@ export class DatabaseSQLite {
       }
     }
 
+    // v2.145.0 — direct calls: one person rings another (docs/direct-calls/).
+    // The server is the only judge of a call's state, and so of who may join
+    // its room. Kept as call history for the two people; pruned after 90 days.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS direct_calls (
+        id          TEXT PRIMARY KEY,
+        caller_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        callee_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL CHECK (kind IN ('audio', 'video')),
+        state       TEXT NOT NULL CHECK (state IN ('ringing', 'answered', 'declined', 'missed', 'cancelled', 'busy', 'ended')),
+        created_at  TEXT NOT NULL,
+        answered_at TEXT,
+        ended_at    TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_direct_calls_caller ON direct_calls(caller_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_direct_calls_callee ON direct_calls(callee_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_direct_calls_live ON direct_calls(state) WHERE state IN ('ringing', 'answered');
+    `);
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -5465,8 +5484,11 @@ export class DatabaseSQLite {
   // === Contact Methods ===
   getContactsForUser(userId) {
     // Get local user contacts
+    // `mutual`: they have you as a contact too, which is what lets either of
+    // you ring the other (v2.145.0).
     const localRows = this.db.prepare(`
-      SELECT u.id, u.handle, u.display_name, u.avatar, u.avatar_url, u.status, NULL as node_name
+      SELECT u.id, u.handle, u.display_name, u.avatar, u.avatar_url, u.status, NULL as node_name,
+             EXISTS (SELECT 1 FROM contacts back WHERE back.user_id = c.contact_id AND back.contact_id = c.user_id) AS mutual
       FROM contacts c
       JOIN users u ON c.contact_id = u.id
       WHERE c.user_id = ?
@@ -5491,6 +5513,7 @@ export class DatabaseSQLite {
       status: r.status,
       nodeName: r.node_name || null,
       isRemote: !!r.node_name,
+      mutual: r.mutual === 1,
     }));
   }
 
@@ -6190,6 +6213,75 @@ export class DatabaseSQLite {
       LIMIT 1
     `).get(userId, otherUserId, otherUserId, userId, userId, otherUserId, otherUserId, userId);
     return !!row;
+  }
+
+  // ============ Direct calls (v2.145.0) ============
+
+  /** Each has the other as a contact: the only people who may ring each other. */
+  isMutualContact(a, b) {
+    const n = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM contacts
+      WHERE (user_id = ? AND contact_id = ?) OR (user_id = ? AND contact_id = ?)
+    `).get(a, b, b, a).n;
+    return n === 2;
+  }
+
+  createDirectCall({ id, callerId, calleeId, kind, state = 'ringing', endedAt = null }) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO direct_calls (id, caller_id, callee_id, kind, state, created_at, ended_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, callerId, calleeId, kind, state, now, endedAt ? now : null);
+    return this.getDirectCall(id);
+  }
+
+  getDirectCall(id) {
+    return this.db.prepare('SELECT * FROM direct_calls WHERE id = ?').get(id) || null;
+  }
+
+  /**
+   * Move a call from one of `from` to `to`, or do nothing. The WHERE is the
+   * lock: of two answers arriving together, exactly one changes the row.
+   * Returns the call as it now is when this call moved it, else null.
+   */
+  moveDirectCall(id, from, to) {
+    const now = new Date().toISOString();
+    const placeholders = from.map(() => '?').join(', ');
+    const result = this.db.prepare(`
+      UPDATE direct_calls SET state = ?,
+        answered_at = CASE WHEN ? = 'answered' THEN ? ELSE answered_at END,
+        ended_at = CASE WHEN ? = 'answered' THEN ended_at ELSE ? END
+      WHERE id = ? AND state IN (${placeholders})
+    `).run(to, to, now, to, now, id, ...from);
+    return result.changes ? this.getDirectCall(id) : null;
+  }
+
+  /** The call someone is ringing or talking in, if any. */
+  liveDirectCallFor(userId) {
+    return this.db.prepare(`
+      SELECT * FROM direct_calls
+      WHERE state IN ('ringing', 'answered') AND (caller_id = ? OR callee_id = ?)
+      ORDER BY created_at DESC LIMIT 1
+    `).get(userId, userId) || null;
+  }
+
+  /** Every live call: for the sweep. */
+  liveDirectCalls() {
+    return this.db.prepare(`SELECT * FROM direct_calls WHERE state IN ('ringing', 'answered')`).all();
+  }
+
+  /** Someone's calls, newest first. */
+  listDirectCalls(userId, limit = 50) {
+    return this.db.prepare(`
+      SELECT * FROM direct_calls WHERE caller_id = ? OR callee_id = ?
+      ORDER BY created_at DESC LIMIT ?
+    `).all(userId, userId, limit);
+  }
+
+  pruneDirectCalls(beforeIso) {
+    return this.db.prepare(`
+      DELETE FROM direct_calls WHERE created_at < ? AND state NOT IN ('ringing', 'answered')
+    `).run(beforeIso).changes;
   }
 
   muteUser(userId, mutedUserId) {

@@ -1,6 +1,6 @@
 # Direct calls: ring a contact
 
-Decided 2026-11-22. Not built.
+Decided 2026-11-22. **Phase 1 built in v2.145.0**; phases 2 and 3 not built.
 
 ## Why
 
@@ -42,7 +42,7 @@ caller taps CALL ──► server checks contacts + blocks ──► call row: r
 ## Building it, in phases
 
 ### Phase 1: ringing in the app and by push (server deploy only)
-- `direct_calls` table and the state machine above, with tests: contacts-only, blocks both ways, only the two people get a token, timeout, busy, one answer wins, a cancelled call can't be answered.
+- **Built in v2.145.0.** `direct_calls` table and the state machine above, with tests: contacts-only, blocks both ways, only the two people get a token, timeout, busy, one answer wins, a cancelled call can't be answered.
 - CALL and VIDEO CALL on a contact (and on a person's profile).
 - The incoming call screen with a ringtone, ANSWER and DECLINE, over every page of the app.
 - Push for an incoming call: web push, and the existing native push for the Android app as an ordinary notification ("Mal is calling"). Tapping it opens the call.

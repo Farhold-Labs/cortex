@@ -31,6 +31,13 @@
 
 export const VOICE_ROOM_PREFIX = 'vc-';
 const BROADCAST_ROOM_PREFIX = 'broadcast-';
+// A direct call (v2.145.0): one person rang another. Wave ids are `wave-…`
+// UUIDs, so a call room can't be mistaken for a wave either.
+export const DIRECT_CALL_ROOM_PREFIX = 'call-';
+
+export function directCallRoomName(callId) {
+  return `${DIRECT_CALL_ROOM_PREFIX}${callId}`;
+}
 
 export function voiceRoomName(channelId) {
   return `${VOICE_ROOM_PREFIX}${channelId}`;
@@ -45,6 +52,7 @@ export function classifyRoom(name) {
   if (typeof name !== 'string' || !name) return null;
   if (name.startsWith(VOICE_ROOM_PREFIX)) return { kind: 'voice', channelId: name.slice(VOICE_ROOM_PREFIX.length) };
   if (name.startsWith(BROADCAST_ROOM_PREFIX)) return { kind: 'broadcast' };
+  if (name.startsWith(DIRECT_CALL_ROOM_PREFIX)) return { kind: 'direct', callId: name.slice(DIRECT_CALL_ROOM_PREFIX.length) };
   return { kind: 'wave', waveId: name };
 }
 

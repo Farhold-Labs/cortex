@@ -4707,6 +4707,29 @@ A ping can carry an expiry, fixed when it is sent. At that time it is erased: co
 
 See [Scoped Jellyfin/Plex media sharing](MEDIA-SECURITY.md) for the grant API, item authorization, proxied playback/HLS, revocation, and legacy-link migration.
 
+## Direct calls (v2.145.0)
+
+One person rings another, outside waves. Design: `docs/direct-calls/`. Needs LiveKit (503 without it). The server holds each call's state, and only the state decides who gets a token for the call's room, `call-<callId>`.
+
+States: `ringing` → `answered` → `ended`; or `declined` (the callee said no), `cancelled` (the caller hung up first), `missed` (no answer in 45 s), `busy` (the callee was already ringing or in a call). A call as returned: `{ id, kind: 'audio'|'video', state, direction: 'outgoing'|'incoming', other: { id, handle, displayName, avatar, avatarUrl }, createdAt, answeredAt, endedAt, durationSeconds }`, always from the asker's side.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| POST | `/api/calls` | anyone | `{ to: userId, kind }`. 201 `{ call }`. 403 `NOT_CONTACTS` unless each has the other as a contact; a block either way gives the same answer. 409 `IN_CALL` if you are already ringing or in one; 409 `BUSY` (with the `busy` call) if they are. 400 for yourself or a bad `kind`. Rate limited (`RATE_LIMIT_CALL_MAX`, 10/min) |
+| GET | `/api/calls` | anyone | `{ calls, live }`: your last 50 calls, newest first, and the call ringing for you or live with you now, if any. Kept 90 days |
+| GET | `/api/calls/:id` | the two people | `{ call }`; 404 for anyone else |
+| POST | `/api/calls/:id/answer` | the callee | `ringing` → `answered`. Of two devices answering at once, one gets 200, the other 409 `NOT_RINGING` |
+| POST | `/api/calls/:id/decline` | the callee | `ringing` → `declined`; does nothing otherwise |
+| POST | `/api/calls/:id/end` | either | hang up: a ringing call becomes `cancelled` (caller) or `declined` (callee), an answered one `ended`. Already over is not an error |
+| POST | `/api/calls/:id/token` | either | `{ token, url, roomName }`. The caller while it rings or once answered; the callee only once answered; 409 `NOT_JOINABLE` otherwise |
+
+- **WebSocket `direct_call`** `{ call }` goes to every device of both people on every change. A device that answered knows it; the others stop ringing.
+- **Push.** The callee gets `incoming_call` (`tag: call-<id>`, `ring: true`), and on `missed`, `cancelled` or `busy` a `missed_call` notification with the same tag, which replaces it. The missed call is also a notification of type `missed_call`.
+- **Ending without a hang-up.** An answered call ends when its room empties (LiveKit webhooks, or the 10 s roster reconcile), or after 30 s with nobody in it. A ring outlived by a restart is marked missed by a 15 s sweep. Every ending closes the room.
+- **Contacts** from `GET /api/contacts` carry `mutual`: they have you as a contact too, so either of you can ring the other.
+
+**Wave calls are announced (v2.145.0).** When a wave's call room goes from empty to someone, within two minutes of a call token being issued for it, the wave's people get WebSocket `wave_call_started` `{ waveId, startedBy }` and, by their wave-activity push preference, a quiet push. At most once per wave every 10 minutes. The app shows a JOIN banner in the wave from `call_presence`.
+
 ## Voice channels (v2.118.0)
 
 A Community channel of type `voice` is a LiveKit room that always exists, named `vc-<channelId>`. It holds no waves. Opt-in instance feature `voiceChannels` (403 `FEATURE_DISABLED` when off), on top of `communities`; it needs LiveKit. Design: `docs/communities/03-voice-channels.md`.

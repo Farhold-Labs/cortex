@@ -91,6 +91,10 @@ These are **not end-to-end encrypted, even in an encrypted wave.** The encryptio
   - **Encrypted so LiveKit cannot hear or see it** (since v2.119.0). Your device encrypts its audio, video and screen before they leave it, and decrypts what others send; LiveKit relays packets it cannot read. The key is made by the Cortex server that hosts the Community and handed to each person it lets in, so that server could derive it — it is not secret from the node, only from the media service. A browser that cannot do this encryption is not let in. Wave calls are not encrypted this way: there, LiveKit's servers could technically access the media. Voice channels are never recorded.
   - **What Cortex keeps:** nothing about who was in a voice channel or for how long. The server tracks who is in a room only while they are in it, in memory. On a stage, a raised hand and being brought up to speak are kept the same way, by LiveKit, only while you are in the room. Moderator mutes, disconnects, moves and stage changes are written to the Community's audit log.
   - **Idle disconnect:** you are disconnected after a while alone in a channel, and a channel where nobody has had a microphone, camera or screen on for a while is emptied. Listening while others talk does not count as idle. The operator sets both limits.
+- **Direct calls** (v2.145.0): ringing a contact, outside waves. Only someone who has you as a contact, and whom you have as a contact, can ring you.
+  - **Media** goes through LiveKit, like wave calls, and is not encrypted against it yet.
+  - **What Cortex keeps:** a call history for the two people: who rang whom, audio or video, when, whether it was answered, and how long it lasted. Never what was said. Only the two people can see it. It is deleted after 90 days, or with either account.
+  - **Notifications:** a ring and a missed call reach your devices as push notifications naming the caller.
 - **Recordings** are made only when the performer chooses to record.
   - **Where they're stored:** in the operator's S3-compatible bucket (for example Backblaze B2), written there by LiveKit.
   - **Who can watch:** members of the wave, through Cortex, which checks membership on every request. The bucket itself is private.
@@ -149,6 +153,7 @@ Cortex supports PIN-protected hidden waves (Ghost Protocol). These waves:
 - **Attachments** — retained until their wave is deleted. A replaced profile picture is deleted. Deleting an account deletes its profile picture and profile videos (since v2.141.0; for accounts deleted earlier, the operator has to remove them).
 - **Broadcast recordings** — retained until deleted by the performer or wave staff, or until the wave is deleted
 - **Unconfirmed email follow sign-ups** — deleted after 7 days
+- **Direct call history** — deleted after 90 days (v2.145.0)
 - **Account data** — retained until you delete your account
 
 ---
@@ -195,6 +200,7 @@ The instance operator (whoever runs the server) can see:
   list (see the guest RSVP section above)
 - **Messages in waves that are not end-to-end encrypted**
 - **Attached files and broadcast recordings**, in any wave (see above)
+- **Direct call history**: who called whom, when and for how long (see above)
 
 ---
 

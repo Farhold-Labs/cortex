@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.145.0] - 2026-11-22
+
+Ring a contact, like a phone call. Phase 1 of `docs/direct-calls/`. **Migrates:** adds the `direct_calls` table.
+
+### Added
+- **Direct calls.** A wave call is a room people can join; nothing rings, and nobody is told. Now you can call a contact: 📞 or 🎥 beside them in People → CONTACTS, or CALL / VIDEO CALL on their profile.
+  - **Who can ring whom:** only people who have each other as contacts. Anyone can add anyone as a contact without asking, so one-sided contact would let a stranger ring. A block either way is refused with the same answer, so it isn't revealed.
+  - **It rings** on every device the callee is signed in on: a full-screen incoming call with a ringtone (made in the browser, no audio file), DECLINE, VOICE (answer without your camera) and ANSWER. Answering on one device stops the others ringing. With the app closed, a push says "Mal is calling" and stays until it is dealt with; opening the app shows the ring if it is still ringing.
+  - **The caller** sees their own camera and "Calling Zoe…" while it rings, and hears a ringback. They are told when it is declined, unanswered after 45 seconds, or the other person is on another call.
+  - **In the call** the other person fills the screen (the v2.144 layout), from the start, video or not. The header names them; HANG UP ends it for both, with its length ("Call ended · 4:12").
+  - **Missed calls** (unanswered, or the caller hung up first) become a notification and a push that replaces the ring's. Tapping it opens the call history.
+  - **Call history:** People → CALLS, with missed calls in orange and a count on the tab. Who, which way, audio or video, how long, when; 📞 and 🎥 to call back. Kept 90 days.
+  - **After a reload in the middle of a call:** a bar offers REJOIN or HANG UP.
+  - **The server decides everything** (`direct_calls`, routes under `/api/calls`, docs/API.md): a call's state is the only judge of who gets a token for its LiveKit room, and only the two people ever can. State changes are a single conditional update, so of two devices answering at once one wins. An answered call ends when its room empties, or after 30 s with nobody in it; a ring outlived by a restart is marked missed by a sweep. Every ending closes the room.
+- **Flip camera** on phones (🔄 Flip), in any call: the same camera track restarted on the other camera, as the broadcast studio does. The back camera isn't mirrored.
+- **Wave calls are announced.** A call starting in a wave now sends its people a `wave_call_started` message and a quiet push (by their wave-activity push setting), at most once every 10 minutes per wave, and the wave shows a "A call is going on here · JOIN" banner. Before, a small 📞 count in the header was all there was, and in a private wave nobody knew to join.
+
+### Fixed
+- **The upright-camera check (v2.144.2) ran before a restarted camera was ready,** so after a flip it measured the old picture. It now measures again whenever the camera restarts, still retrying at most once per camera.
+
+### Verified
+- `tests/direct-calls.test.cjs` (6 tests, real server, fake LiveKit): contacts both ways (one-sided and strangers refused, blocks either way refused the same as strangers, `mutual` on contacts); a ring reaches two of the callee's devices; the caller's token while ringing, the callee's only once answered, nobody else's ever (404); two answers at once, one wins; hang-up ends it for both and closes the room; declined, cancelled, unanswered and busy, with the missed-call notifications; one call at a time; each person's history from their side; an answered call ending when its room empties and when nobody ever joined; wave call announced once, not to outsiders. Counterfactual: with the contacts check removed, a stranger gets through.
+- `npm test`: 733/733. Schema regenerated.
+- Headless on dev, real calls through LiveKit with fake cameras: Mal at 390 px rings Zoe at 1280 px from CONTACTS. Mal sees his own upright camera and "Calling Zoe Washburne…"; Zoe gets the full-screen ring. She answers: on Mal's phone Zoe fills the screen with Mal's 107×143 preview in the corner, the header reads "📞 Zoe Washburne", and the buttons are Mute, Camera, Flip, Share, Hang up. Flip keeps the picture upright and unmirrored. Hang up ends it on both ("Call ended · 0:16"). Zoe rings Mal, Mal declines, the ring goes away. CALLS lists all of it. No console errors, no overflow.
+- Headless wave call on dev: Mal starts a video call in a wave; Zoe, in the same wave, sees "📞 A call is going on here · 1 person in it · JOIN"; Mal, in the call, doesn't. It clears after Mal leaves (within one 10 s roster tick on dev, which has no LiveKit webhook).
+- **Not verified:** real phones (ringtone with the screen locked, the push ringing a closed app, flip on a real back camera), and two people on real networks.
+
 ## [2.144.2] - 2026-11-22
 
 Phones held upright send upright video. No migration.
