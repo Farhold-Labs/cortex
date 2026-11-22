@@ -373,6 +373,11 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
     boxShadow: 'none',
     display: 'flex',
     flexDirection: 'column',
+    // Clear of the phone's status bar and notch (v2.145.3): in the Android
+    // app the call's header sat under the clock and notification icons.
+    paddingTop: 'env(safe-area-inset-top, 0px)',
+    paddingLeft: 'env(safe-area-inset-left, 0px)',
+    paddingRight: 'env(safe-area-inset-right, 0px)',
   };
 
   // Mobile: fixed bottom position
