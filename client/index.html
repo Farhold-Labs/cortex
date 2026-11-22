@@ -522,6 +522,13 @@
         background: var(--bg-base) !important;
       }
 
+      /* The call stage (v2.144.0) chooses per video whether to fill or fit,
+         in --call-fit. The rule above forced every LiveKit video to fit, so a
+         call could never fill a phone screen. More specific, so it wins. */
+      [data-call-stage] [data-call-video] {
+        object-fit: var(--call-fit, contain) !important;
+      }
+
       /* Override any inline styles LiveKit might apply */
       .lk-participant-tile > div,
       [data-lk-participant-tile] > div {

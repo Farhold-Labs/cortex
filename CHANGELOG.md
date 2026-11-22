@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.144.0] - 2026-11-21
+
+Video calls look like video calls: the other person fills the screen, and you are a small preview in the lower right. No migration.
+
+### Changed
+- **Layout.** People testing calls said they worked but didn't feel right: the call didn't fill the screen, and everyone, yourself included, was an equal tile, like a Teams meeting. A call now (`CallStage.jsx`, rules in `utils/callLayout.js`):
+  - **fills the window** as soon as there is video in a wave call. It started as a one-line bar at the bottom, which had to be enlarged twice. Once per call, so leaving full screen sticks; Community voice channels keep the dock.
+  - shows **the other person filling the space**, and **you as a mirrored preview in the lower right**.
+  - **With three or more,** the last person to speak who has a camera fills the space, and silence doesn't hand it back and forth. The others are thumbnails along the bottom.
+  - **A shared screen fills the space,** fitted rather than cropped. Your own shared screen is a thumbnail.
+  - **Tap a thumbnail, or your preview, to make it fill the space;** tap again to go back.
+  - **When their camera is off,** their name and initial fill the space.
+- **Phones send upright video.** A phone asks its camera for 720×1280 instead of 1280×720.
+- **On a phone, a camera always fills the screen,** cropping the sides of a landscape picture, as phone calls do. Elsewhere a picture the other way round from the window is fitted with bars, so an upright phone in a landscape window isn't cut to a strip of face.
+- **Calls send each viewer only the size they show** (LiveKit `adaptiveStream`), and stop sending layers nobody watches (`dynacast`).
+
+### Fixed
+- **Every call video was forced to "fit inside" since v2.7.0.** An `object-fit: contain !important` rule in `index.html` covers every LiveKit video, so no call could fill a screen. The call stage now sets its own fit, through a more specific rule.
+- **The call screen's videos were rebuilt on every change of call state.** Its layout was a component defined inside `CallModal`, so each change unmounted and remounted every video. It now uses the same stage as the dock.
+- **Full screen was taller than a phone's visible screen.** It was sized `100vh`, which put the controls under the browser's toolbar; it now uses `inset: 0`, and the controls clear the home indicator.
+- **Full screen no longer repeats the bar's buttons in its header.**
+
+### Verified
+- `npm test`: 726/726. `call-layout` covers two people, a camera off, being alone, three people, screen shares, taps, fit rules and the phone camera settings.
+- Real calls through LiveKit on dev, in headless Chrome with a fake camera:
+  - **Two people.** Mal at 390 px starts a video call, which fills his screen; his own picture is 720×1280. Zoe joins at 1280 px and turns her camera on. On Mal's phone, Zoe fills the screen and Mal is a 107×143 preview in the lower right, mirrored. On Zoe's desktop, Mal's upright video fills the window, fitted, with Zoe's preview in the corner. Tapping the preview swaps, and tapping again goes back. Received video ramps 320×180 → 640×360 → 1280×720 over 20 s.
+  - **Three people (Wash joins).** The speaker fills the space, the third person is a thumbnail at the lower left, and the preview stays at the lower right. Computed `object-fit` is `cover` where intended.
+  - No console errors, no overflow.
+- **Not tested:** real phones, including rotation and iOS Safari's camera.
+
 ## [2.143.1] - 2026-11-21
 
 A wave left part-way through encrypting its older messages can be finished. No migration.
