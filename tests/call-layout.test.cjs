@@ -77,15 +77,24 @@ test('fit: crop only when the video is the same way round as the window; never a
   assert.equal(fitFor({ w: 720, h: 960 }, { w: 390, h: 700 }, false, { fill: true, self: true }), 'contain', 'your own camera filling the screen is never cropped');
 });
 
-test('phones capture upright; every call sends only the sizes people watch', async () => {
+test('phones ask in the sensor\'s terms; every call sends only the sizes people watch', async () => {
   const { callRoomOptions } = await load();
   const phone = callRoomOptions({ isMobile: true, cameraId: 'default' });
-  assert.ok(phone.videoCaptureDefaults.resolution.height > phone.videoCaptureDefaults.resolution.width);
-  assert.equal(phone.videoCaptureDefaults.resolution.aspectRatio, 3 / 4, 'the sensor is 4:3; 9:16 crops it');
+  // Phones turn the picture themselves; an upright request came out sideways.
+  assert.deepEqual(phone.videoCaptureDefaults.resolution, { width: 960, height: 720, frameRate: 30 }, '4:3 in the sensor\'s terms, no aspect ratio');
   assert.equal(phone.videoCaptureDefaults.deviceId, undefined);
   const desk = callRoomOptions({ isMobile: false, micId: 'mic1' });
   assert.ok(desk.videoCaptureDefaults.resolution.width > desk.videoCaptureDefaults.resolution.height);
   assert.equal(desk.audioCaptureDefaults.deviceId, 'mic1');
   assert.equal(desk.adaptiveStream, true);
   assert.equal(desk.dynacast, true);
+});
+
+test('a phone held upright sending a sideways picture asks once more, turned', async () => {
+  const { uprightRetry } = await load();
+  const asked = { width: 960, height: 720, frameRate: 30 };
+  assert.deepEqual(uprightRetry({ w: 960, h: 720 }, true, asked), { width: 720, height: 960, frameRate: 30 });
+  assert.equal(uprightRetry({ w: 720, h: 960 }, true, asked), null, 'already upright');
+  assert.equal(uprightRetry({ w: 960, h: 720 }, false, asked), null, 'held sideways: sideways is right');
+  assert.equal(uprightRetry(null, true, asked), null, 'no picture yet');
 });
