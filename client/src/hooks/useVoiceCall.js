@@ -131,6 +131,12 @@ export function useVoiceCall(waveId) {
     e2ee: state.e2ee,
     isDeafened: state.isDeafened,
     endedBy: state.endedBy,
+    // Direct calls (v2.145.0)
+    directCall: state.directCall,
+    incomingCall: state.incomingCall,
+    directCallNotice: state.directCallNotice,
+    interruptedCall: state.interruptedCall,
+    facingMode: state.facingMode,
 
     // Actions
     startCall,
@@ -157,6 +163,14 @@ export function useVoiceCall(waveId) {
     cameraFailed: voiceCallService.cameraFailed.bind(voiceCallService),
     setHandRaised: voiceCallService.setHandRaised.bind(voiceCallService),
     failVoice: voiceCallService.failVoice.bind(voiceCallService),
+    // Direct calls (v2.145.0)
+    placeCall: voiceCallService.placeCall.bind(voiceCallService),
+    answerCall: voiceCallService.answerCall.bind(voiceCallService),
+    declineCall: voiceCallService.declineCall.bind(voiceCallService),
+    rejoinCall: voiceCallService.rejoinCall.bind(voiceCallService),
+    dismissInterruptedCall: voiceCallService.dismissInterruptedCall.bind(voiceCallService),
+    clearDirectCallNotice: voiceCallService.clearDirectCallNotice.bind(voiceCallService),
+    flipCamera: voiceCallService.flipCamera.bind(voiceCallService),
     rejoinVoiceChannel: voiceCallService.rejoinVoiceChannel.bind(voiceCallService),
     handleRoomDisconnected: voiceCallService.handleRoomDisconnected.bind(voiceCallService),
     setMutedByRoom: voiceCallService.setMutedByRoom.bind(voiceCallService),

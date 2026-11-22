@@ -1619,6 +1619,20 @@ CREATE TABLE IF NOT EXISTS user_key_records (
         updated_at     TEXT NOT NULL
       );
 
+CREATE TABLE IF NOT EXISTS direct_calls (
+        id          TEXT PRIMARY KEY,
+        caller_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        callee_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL CHECK (kind IN ('audio', 'video')),
+        state       TEXT NOT NULL CHECK (state IN ('ringing', 'answered', 'declined', 'missed', 'cancelled', 'busy', 'ended')),
+        created_at  TEXT NOT NULL,
+        answered_at TEXT,
+        ended_at    TEXT
+      );
+CREATE INDEX IF NOT EXISTS idx_direct_calls_caller ON direct_calls(caller_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_direct_calls_callee ON direct_calls(callee_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_direct_calls_live ON direct_calls(state) WHERE state IN ('ringing', 'answered');
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
