@@ -158,6 +158,35 @@ export const CONFIRM_DIALOG = {
 
 // ============ FEDERATION / THE VERSE ============
 export const FEDERATION = {
+  // Signing key handover (v2.147.0)
+  signingKey: "Signing key",
+  keyLabel: "Key",
+  nextKey: "New key",
+  nextKeyAnnounced: "new key announced",
+  replaceKey: "REPLACE KEY",
+  keyWasExposed: "KEY WAS EXPOSED",
+  replaceKeyHint: "REPLACE KEY gives every allied port the new key first; the old one keeps working until each has confirmed it. Use KEY WAS EXPOSED only if the private key has leaked.",
+  replaceKeyConfirm: "Replace this port's signing key?\n\nEvery allied port is sent the new key. The current key keeps working until each one confirms it has received the new one, so nothing stops working in the meantime.",
+  replaceKeyStarted: "New key sent. The old key stays in use until every allied port confirms it.",
+  replaceKeyDone: "Key replaced. Every allied port confirmed the new key.",
+  keyHandoverInProgress: "Key replacement in progress. The current key stays in use until every allied port below has confirmed the new one.",
+  allyConfirmed: "confirmed",
+  allyWaiting: (attempts, at) => attempts
+    ? `waiting · tried ${attempts}× · last ${at ? new Date(at).toLocaleString() : ''}`
+    : 'not yet told',
+  suspendedNotWaited: "suspended, not waited for",
+  tellAgainNow: "TELL AGAIN NOW",
+  cancelKeyChange: "CANCEL",
+  cancelKeyConfirm: "Cancel the key replacement? The new key is deleted and allied ports are told to forget it.",
+  cancelKeyDone: "Key replacement cancelled.",
+  withdrawalsOwed: (names) => `Still telling ${names.join(', ')} to forget a cancelled key.`,
+  exposedKeyPrompt: (name, count) => `ONLY IF THE PRIVATE KEY HAS LEAKED.\n\nThe key is replaced at once and nobody is told: whoever has the old key could forge the announcement. All ${count} allied port(s) will refuse this port until their admins press FETCH KEY AGAIN and compare the new fingerprint with you.\n\nType this port's name (${name}) to confirm:`,
+  exposedKeyDone: (fp, cutOff) => `Key replaced: ${fp}. ${cutOff.length ? `Ask the admins of ${cutOff.join(', ')} to press FETCH KEY AGAIN and check this fingerprint.` : ''}`,
+  keyStepUpReason: "Confirm your password to change this port's signing key",
+  keyActionFailed: "The key change failed",
+  fetchKeyAgain: "FETCH KEY AGAIN",
+  fetchKeyAgainHint: "Read this port's key from its address again. Only needed if its admin replaced an exposed key; compare the fingerprint with them.",
+  nameChangeHint: "⚠ The name can't change while this port has allies: each one knows it by this name. Unpair them first. The key is kept.",
   // Panel headings & section labels
   panelHeading: "THE VERSE",
   portIdentity: "Port Identity",
