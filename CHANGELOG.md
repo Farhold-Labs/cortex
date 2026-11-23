@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.147.1] - 2026-11-23
+
+**A key replacement straight after another is confirmed at once.** Found replacing QA's key for real. The first replacement went through: dev and port1 confirmed within a second and switched on first use. A second one, started a few minutes later with no traffic in between, was refused by both allies ("Announcement must be signed with the current key"). Server only, no migration.
+
+### Fixed
+- **Cause:** the second announcement was the first request each ally saw signed with QA's new key. Verifying it switched the ally to that key, but the announcement route accepted only the key that was current *before* the request.
+- **Effect:** each ally confirmed on the resend 10 minutes later, so nothing broke; the change just waited.
+- **Fix:** the route now refuses only the key that was replaced.
+
+### Verified
+- **QA, for real:** QA replaced its key with fred's REPLACE KEY at 18:07 EST. The second change was then cancelled, and both allies dropped the cancelled key within 15 seconds.
+  - dev and port1 each checked the new key against QA's identity page, stored it and confirmed.
+  - QA deleted the old private key 3 seconds after the press.
+  - Both allies switched to the new key on first use, keeping the old one only for the 5-minute grace.
+- **Test:** `federation-key-handshake` adds two replacements back to back with no traffic between. Before the fix it fails with the same 401 seen on QA.
+
 ## [2.147.0] - 2026-11-23
 
 **A server's federation key is replaced by handshake.** Replacing the key took effect at once and told no one. Every allied server went on checking our signatures against the key it had saved, so it refused everything: posts, edits, invitations, history, people signed in from another server. The queue then dropped each message after five refusals. This applies v2.146.1's rule to the last credential it left out: nothing is retired until its replacement is known to have arrived. Design: `docs/federation-keys/README.md`. **Migrates** (three columns on `server_identity`, four on `federation_nodes`, table `federation_key_handovers`). Every ally needs v2.147.0 before anyone changes a key.
