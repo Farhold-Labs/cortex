@@ -13,6 +13,9 @@
 //
 // Counterfactual: with the old request rule (any key at all ends it), the
 // newcomer cannot even ask.
+//
+// v2.145.5: a request waits on the server, and a member's device that was
+// away answers it when it next unlocks or reconnects (/api/e2ee/key-requests).
 // in e2ee-key-records.test.cjs and checked in a browser.
 
 const { test } = require('node:test');
@@ -153,6 +156,13 @@ async function scenario({ fixed }) {
     r.outsiderAsks = (await api('POST', `/api/waves/${waveId}/key-request`, { token: outsider.token })).status;
     if (asked.status === 200) {
       const requestId = asked.body.requestId;
+      // v2.145.5: a member who was away finds it waiting.
+      const pending = async (u) => (await api('GET', '/api/e2ee/key-requests', { token: u.token })).body?.requests || [];
+      r.pendingFor = {
+        member: (await pending(member)).map(q => ({ waveId: q.waveId === waveId, requester: q.requesterId === newcomer.id, versions: q.versions })),
+        outsider: (await pending(outsider)).length,
+        newcomer: (await pending(newcomer)).length,
+      };
       const v2Before = held(newcomer.id).find(k => k.v === 2)?.k;
       // Wrapped with a key that isn't the giver's own: refused.
       r.wrongSender = (await api('POST', `/api/waves/${waveId}/key-grant`, {
@@ -168,6 +178,7 @@ async function scenario({ fixed }) {
       r.newcomerAfter = held(newcomer.id).map(k => k.v);
       r.v2Kept = held(newcomer.id).find(k => k.v === 2)?.k === v2Before;
       r.askAgain = (await api('POST', `/api/waves/${waveId}/key-request`, { token: newcomer.token })).status;
+      r.pendingAfter = (await pending(member)).length;
       r.allKeys = (await api('GET', `/api/waves/${waveId}/keys/all`, { token: newcomer.token })).body?.keys?.map(k => k.keyVersion);
 
       // A request outlives a removal: a grant for someone gone is refused.
@@ -181,6 +192,7 @@ async function scenario({ fixed }) {
         token: member.token, body: { requestId: thirdAsk.body?.requestId, senderPublicKey: member.publicKey, keys: [{ keyVersion: 1, encryptedWaveKey: wrapped() }] },
       })).body?.code;
       r.removedHolds = held(third.id).map(k => k.v);
+      r.pendingFromRemoved = (await pending(member)).filter(q => q.requesterId === third.id).length;
     }
     return r;
   } finally {
@@ -202,6 +214,11 @@ test('a newcomer is given the older versions of the key, safely', { timeout: 120
   assert.deepEqual(r.allKeys, [1, 2], 'the device can now unwrap both');
   assert.equal(r.grantToRemoved, 'NOT_A_MEMBER');
   assert.deepEqual(r.removedHolds, [2], 'removed before the grant: given nothing more');
+  assert.deepEqual(r.pendingFor.member, [{ waveId: true, requester: true, versions: [1] }], 'a member who was away finds the request, and what it can give');
+  assert.equal(r.pendingFor.outsider, 0, 'not shown to someone outside the wave');
+  assert.equal(r.pendingFor.newcomer, 0, 'not your own');
+  assert.equal(r.pendingAfter, 0, 'gone once granted');
+  assert.equal(r.pendingFromRemoved, 0, 'not for someone who has left');
 });
 
 test('counterfactual: with the old request rule the newcomer cannot even ask', { timeout: 120000 }, async () => {

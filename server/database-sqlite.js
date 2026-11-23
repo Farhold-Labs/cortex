@@ -12542,6 +12542,19 @@ export class DatabaseSQLite {
   }
 
   /** Encrypted waves this person holds a key for, or started: where they might rotate. */
+  /**
+   * Key requests still open in waves where this person holds a key
+   * (v2.145.5), so their device can answer the ones made while it was away.
+   */
+  pendingWaveKeyRequestsFor(userId, limit = 100) {
+    return this.db.prepare(`
+      SELECT r.id, r.wave_id, r.requester_id FROM wave_key_requests r
+       WHERE r.status = 'pending' AND r.requester_id != ?
+         AND EXISTS (SELECT 1 FROM wave_encryption_keys k WHERE k.wave_id = r.wave_id AND k.user_id = ?)
+       ORDER BY r.created_at DESC LIMIT ?
+    `).all(userId, userId, limit);
+  }
+
   encryptedWavesFor(userId) {
     return this.db.prepare(`
       SELECT DISTINCT wek.wave_id AS id FROM wave_encryption_keys wek

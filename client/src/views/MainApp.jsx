@@ -1849,6 +1849,10 @@ function MainApp({ sharePingId }) {
   useEffect(() => {
     if (wsConnected) voiceCallService.loadLiveCall();
   }, [wsConnected]);
+  // Back online: key requests and renewals that came while away (v2.145.5).
+  useEffect(() => {
+    if (wsConnected && e2eeRef.current?.isUnlocked) e2eeRef.current.runPendingRotations();
+  }, [wsConnected]);
 
   // Missed calls since the CALLS tab was last opened, for its badge.
   const CALLS_SEEN_KEY = 'cortex_calls_seen_at';
