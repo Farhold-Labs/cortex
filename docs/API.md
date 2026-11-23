@@ -315,9 +315,39 @@ Log out the current user (updates status to offline, revokes session).
 
 ---
 
+#### Credential handovers (v2.146.1)
+
+Nothing the server hands out in place of something else is retired until the
+holder shows the replacement arrived. A lost answer never locks anyone out.
+
+**Refresh tokens.** `POST /api/auth/token/refresh` with `{ refreshToken }` answers
+`{ token, refreshToken, sessionExpiresAt, user }`. The new refresh token is
+*pending* until the client confirms it, by:
+
+- using the access token from the same answer on any request (it carries `rt`,
+  the new refresh token's id), or `POST /api/auth/token/confirm` with it, which
+  the web client calls right after storing the tokens; or
+- presenting the new refresh token.
+
+If the old token is presented while the new one is pending, the **same** new
+token is sent again. Once the new one is confirmed, presenting the old one is
+reuse: that login's refresh tokens, access sessions and sockets end with
+`401 SESSION_REVOKED`. Other logins (other devices) are not touched. A token
+from a login already ended gets `401 SESSION_REVOKED` and ends nothing further.
+
+| Secret | Regenerate | The old one stops working when |
+|---|---|---|
+| MFA recovery codes | `POST /api/auth/mfa/recovery/regenerate` (`pendingConfirm`) | `POST /api/auth/mfa/recovery/confirm`, or a new code is used to sign in |
+| E2EE recovery key | `POST /api/e2ee/recovery/regenerate` or `/setup` over an existing key (`pendingConfirm`) | `POST /api/e2ee/recovery/confirm`. `GET /api/e2ee/recovery` returns the waiting key as `pending` beside the current one |
+| E2EE keypair | `POST /api/e2ee/keys/rotate` (`pendingConfirm`) | `POST /api/e2ee/keys/rotate/confirm` (until then nothing changes) |
+| Bot API key | `POST /api/admin/bots/:id/regenerate` (`oldKeyActive`) | the bot first uses the new key, or `POST /api/admin/bots/:id/regenerate/confirm` |
+| Calendar feed link | `POST /api/user/calendar-feed/regenerate` (`oldLinkActive`) | the new link is first fetched, or `POST /api/user/calendar-feed/confirm` |
+| Guest cancel link | sent with each event reminder | never: every link a guest was sent works until the RSVP goes |
+| Session (`/api/auth/renew`, `/api/auth/refresh`) | — | the new token is first used |
+
 #### POST /api/auth/refresh
 
-Refresh the current session by issuing a new JWT token. Requires a valid (non-expired) token and the user's password. Revokes the old session and creates a new one. Rate-limited.
+Refresh the current session by issuing a new JWT token. Requires a valid (non-expired) token and the user's password. Creates a new session; the old one is retired when the new token is first used (v2.146.1), not before. Rate-limited.
 
 **Authentication:** Required (token must not be expired)
 
@@ -441,7 +471,7 @@ Revoke all sessions except the current one.
 
 #### POST /api/auth/renew
 
-Silently renew a session token without requiring a password. Used for auto-renewal when a session is approaching expiry. Preserves the original session duration.
+Silently renew a session token without requiring a password. Used for auto-renewal when a session is approaching expiry. Preserves the original session duration. The old token keeps working until the new one is first used (v2.146.1).
 
 **Authentication:** Required (valid, non-expired token)
 

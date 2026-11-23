@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.146.1] - 2026-11-23
+
+**Nothing is retired until its replacement is known to have arrived.** A person on farhold was signed out mid-sentence: their browser traded its refresh token for a new one, the answer never reached the tab, and 55 minutes later the tab presented the token it still had. The server took that for theft and ended every session the account had, including their phone's. **Migrates** (two columns on `refresh_tokens`, one on `user_sessions`, tables `credential_handovers` and `guest_cancel_tokens`).
+
+### Fixed
+- **[SECURITY] Refresh-token swaps are a handshake.** A swap is complete only when the client shows it has the new token: by presenting it, or by using the access token sent with it (`rt` claim), which the web client does at once through `POST /api/auth/token/confirm`. Until then the old token still works and gets the **same** new token again, kept sealed (AES-256-GCM, key derived from `JWT_SECRET`) and deleted on confirmation. Two tabs presenting one token at once get the same answer. A replay after confirmation is still treated as theft, and a thief who redeems first is still caught when the person comes back.
+- **[SECURITY] Theft ends one login, not every device.** Reuse revokes that login's refresh tokens, its access sessions (new `user_sessions.family_id`) and its sockets. Before, it also ran `revokeAllUserSessions`, so a problem in one browser signed the person out of their phone. A token from a login already ended no longer re-runs the teardown, which could end a login made since.
+- **Renewed sessions** (`/api/auth/renew`, `/api/auth/refresh`) retire the old session when the new token is first used (`rep` claim), not when it is sent. `/api/auth/refresh` revoked the old one before even issuing the new one.
+- **Regenerated secrets wait for their receipt** (`credential_handovers`): MFA recovery codes and the E2EE recovery key until "I'VE SAVED THEM/IT" (or a new code or key is used), bot API keys until the bot first uses the new key or an admin presses RETIRE OLD KEY NOW, calendar links until the new link is fetched. The unused `/api/e2ee/keys/rotate` changes nothing until `/rotate/confirm`. Account deletion removes waiting handovers (they have no foreign key).
+- **Guest cancel links:** each reminder carried a new link and killed the earlier ones, so a reminder that never arrived left the guest without a working link. Every link sent now works until the RSVP goes.
+- **The web client** queues refreshes across tabs with a browser lock (a tab that waited uses what the other stored), and on a 401 retries with a token another request already stored before refreshing again. The tab on farhold made two swaps 1.6 seconds apart; the second answer was the one lost.
+- **The personal calendar feed never answered:** `/api/events/:id` was registered before `/api/events/feed.ics` and refused it for want of a login. No client links to it yet.
+- The bot-key confirmation dialog showed the text for E2EE keys.
+
+### Verified
+- `token-handshake` (new, 18 tests): the lost answer resent unchanged with the other device untouched; two simultaneous presentations; confirmation by the confirm call, by any request and by presenting the new token; reuse after confirmation ending only that login; thief-first still caught; a dead login's replay not ending a new one; the pending token stored sealed and gone after confirmation; renew and password refresh; recovery codes (old works, new use retires old, explicit confirm); E2EE recovery key and keypair; bot keys (first use, admin retire); calendar links; guest cancel links; handovers removed with the account. **Counterfactual:** with the resend removed from a copy of `server.js`, the lost answer signs the person out (`SESSION_REVOKED`). Full suite 757/757.
+- Headless Chrome on dev (360 px), two tabs sharing one stored token with a broken access token: one swap, the receipt sent straight after it, both tabs still signed in, no errors.
+- Read on farhold (read-only) to find the cause: family `fam-42aa0b7b…` (Chrome/Windows) swapped at 12:59:52 and 12:59:53, the second token never used, reuse at 13:55:02.
+- **Not covered:** federation node keys. Regenerating them (`regenerateKeys` on the identity route) still switches at once; peers must acknowledge a new key, which needs a protocol and is left for its own change.
+
 ## [2.146.0] - 2026-11-22
 
 Direct calls phase 2: the Android app rings like a phone, over the lock screen and with the app closed. And admins can see which versions of the app are in use. **Migrates** (one new table, `client_versions`). **Needs the v2.146.0 APK** for the ring; older apps keep the v2.145 notification.

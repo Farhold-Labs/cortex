@@ -422,13 +422,14 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     last_active TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     revoked INTEGER DEFAULT 0,
-    revoked_at TEXT,
+    revoked_at TEXT, family_id TEXT,
     UNIQUE(token_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON user_sessions(revoked);
+CREATE INDEX IF NOT EXISTS idx_sessions_family ON user_sessions(family_id);
 
 CREATE TABLE IF NOT EXISTS user_encryption_keys (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -1139,11 +1140,12 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
           used_at             TEXT,
           revoked_at          TEXT,
           revoked_reason      TEXT
-        );
+        , confirmed_at TEXT, pending_secret TEXT);
 CREATE INDEX IF NOT EXISTS idx_refresh_hash ON refresh_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_refresh_family ON refresh_tokens(family_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_expires ON refresh_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_refresh_parent ON refresh_tokens(parent_id);
 
 CREATE TABLE IF NOT EXISTS known_devices (
           id           TEXT PRIMARY KEY,
@@ -1642,6 +1644,21 @@ CREATE TABLE IF NOT EXISTS client_versions (
         last_seen   TEXT NOT NULL
       );
 CREATE INDEX IF NOT EXISTS idx_client_versions_seen ON client_versions(last_seen);
+
+CREATE TABLE IF NOT EXISTS credential_handovers (
+        kind       TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        payload    TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (kind, subject_id)
+      );
+
+CREATE TABLE IF NOT EXISTS guest_cancel_tokens (
+        token_hash    TEXT PRIMARY KEY,
+        guest_rsvp_id TEXT NOT NULL REFERENCES event_rsvp_guest(id) ON DELETE CASCADE,
+        created_at    TEXT NOT NULL
+      );
+CREATE INDEX IF NOT EXISTS idx_guest_cancel_tokens_guest ON guest_cancel_tokens(guest_rsvp_id);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
