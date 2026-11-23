@@ -8824,11 +8824,64 @@ app.get('/api/push/status', authenticateToken, (req, res) => {
   res.json({ subscribed: subs.length > 0, webPush: hasWebPush, fcm: hasFcm, count: subs.length });
 });
 
+// ============ Client versions (v2.146.0) ============
+//
+// Each install of the app reports the builds it runs, so an admin can see
+// which versions are in use: the web build (what the server sent it) and, in
+// the Android, iOS or desktop app, the installed app's own version. Recorded by
+// a random install id and never with the account.
+
+const CLIENT_PLATFORMS = new Set(['web', 'pwa', 'android', 'ios', 'desktop']);
+const CLIENT_VERSION_WINDOW_DAYS = 30;
+
+/** "2.146.0" and the like, or null. */
+function cleanVersion(v) {
+  return typeof v === 'string' && /^\d{1,4}(\.\d{1,6}){0,3}$/.test(v) ? v : null;
+}
+
+app.post('/api/clients/report', authenticateToken, (req, res) => {
+  const installId = typeof req.body?.installId === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(req.body.installId)
+    ? req.body.installId : null;
+  const platform = CLIENT_PLATFORMS.has(req.body?.platform) ? req.body.platform : null;
+  if (!installId || !platform) return res.status(400).json({ error: 'installId and platform are required' });
+  if (!db.recordClientVersion) return res.json({ success: false });  // JSON storage keeps no record
+  try {
+    db.recordClientVersion({
+      installId,
+      platform,
+      webVersion: cleanVersion(req.body.webVersion),
+      appVersion: platform === 'web' || platform === 'pwa' ? null : cleanVersion(req.body.appVersion),
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[clients] report failed:', err.message);
+    res.status(500).json({ error: 'Could not record' });
+  }
+});
+
+// GET /api/admin/client-versions — installs seen in the last 30 days, by
+// platform and version. Counts only.
+app.get('/api/admin/client-versions', authenticateToken, (req, res) => {
+  const actor = db.findUserById(req.user.userId);
+  if (!requireRole(actor, ROLES.ADMIN, res)) return;
+  const since = new Date(Date.now() - CLIENT_VERSION_WINDOW_DAYS * 86400000).toISOString();
+  res.json({ since, days: CLIENT_VERSION_WINDOW_DAYS, serverVersion: VERSION, versions: db.clientVersionCounts ? db.clientVersionCounts(since) : [] });
+});
+
+setInterval(() => {
+  try { db.pruneClientVersions?.(new Date(Date.now() - 90 * 86400000).toISOString()); } catch { /* next time */ }
+}, 6 * 3600 * 1000).unref();
+
 // ============ FCM Push Notifications (Capacitor Mobile App v2.31.0) ============
 
 // Register FCM push token (for Capacitor native apps)
 app.post('/api/push/fcm/register', authenticateToken, (req, res) => {
   const { token, platform, deviceId } = req.body;
+  // v2.146.0 — an app that can ring natively says so. Only then is an incoming
+  // call sent as a data message for the app to ring with; to an older app a
+  // data message would show nothing at all, so it keeps the plain notification.
+  const features = Array.isArray(req.body.features) ? req.body.features : [];
+  const appVersion = cleanVersion(req.body.appVersion);
 
   if (!token || typeof token !== 'string') {
     return res.status(400).json({ error: 'FCM token is required' });
@@ -8846,6 +8899,8 @@ app.post('/api/push/fcm/register', authenticateToken, (req, res) => {
         platform: platform || 'unknown',
         deviceName: `${(platform || 'Mobile').charAt(0).toUpperCase() + (platform || 'mobile').slice(1)} Device`,
         deviceId: deviceId || null,
+        ...(features.includes('call-ring') ? { ring: true } : {}),
+        ...(appVersion ? { appVersion } : {}),
       },
     });
 
@@ -22584,6 +22639,9 @@ function moveCall(callId, from, to) {
   if (!moved) return null;
   if (to !== 'ringing') stopRingTimer(callId);
   tellCallParties(moved);
+  // A phone ringing natively hears no WebSocket; tell it the ring is over,
+  // including on the device that answered (v2.146.0).
+  if (from.includes('ringing') && to !== 'ringing') stopNativeRing(moved.callee_id, moved.id, to);
   // Ringing stopped without an answer the callee gave: they missed it.
   if (to === 'missed' || to === 'cancelled') notifyMissedCall(moved);
   // Nobody may stay in the room of a call that is over.
@@ -22591,6 +22649,15 @@ function moveCall(callId, from, to) {
     livekitRoomService.deleteRoom(directCallRoomName(callId)).catch(() => {});
   }
   return moved;
+}
+
+/**
+ * DECLINE on the lock screen answers without the app open, so without the
+ * person's session. The ring carries this instead: a key that can only decline
+ * this one call for its callee, and only while it rings (v2.146.0).
+ */
+function callDeclineToken(callId, calleeId) {
+  return crypto.createHmac('sha256', JWT_SECRET).update(`call-decline:${callId}:${calleeId}`).digest('hex');
 }
 
 function directCallsConfigured(res) {
@@ -22636,6 +22703,14 @@ app.post('/api/calls', authenticateToken, callLimiter, (req, res) => {
     tag: `call-${id}`,
     callId: id,
     ring: true,
+    ringData: {
+      type: 'incoming_call',
+      callId: id,
+      callerName: plainText(callerName(call)),
+      kind,
+      declineToken: callDeclineToken(id, calleeId),
+      expiresAt: Date.parse(call.created_at) + DIRECT_CALL_RING_MS,
+    },
   });
   directCallRingTimers.set(id, setTimeout(() => {
     directCallRingTimers.delete(id);
@@ -22685,6 +22760,20 @@ app.post('/api/calls/:id/decline', authenticateToken, (req, res) => {
   if (call.callee_id !== req.user.userId) return res.status(403).json({ error: 'Only the person called can decline' });
   const moved = moveCall(call.id, ['ringing'], 'declined');
   res.json({ call: directCallView(moved || db.getDirectCall(call.id), req.user.userId) });
+});
+
+// POST /api/calls/:id/decline-from-ring { token } — DECLINE tapped on the
+// phone's ring, with the app closed. No session: the token is the permission.
+app.post('/api/calls/:id/decline-from-ring', callLimiter, (req, res) => {
+  const call = db.getDirectCall(String(req.params.id || ''));
+  const given = typeof req.body?.token === 'string' ? req.body.token : '';
+  const expected = call ? Buffer.from(callDeclineToken(call.id, call.callee_id)) : null;
+  if (!call || !expected || given.length !== expected.length
+      || !crypto.timingSafeEqual(Buffer.from(given), expected)) {
+    return res.status(404).json({ error: 'Call not found' });
+  }
+  const moved = moveCall(call.id, ['ringing'], 'declined');
+  res.json({ state: (moved || db.getDirectCall(call.id)).state });
 });
 
 // Hang up: the caller giving up on the ring, or either person ending the call.
@@ -30662,6 +30751,12 @@ async function sendPushNotification(userId, payload) {
 
     for (const sub of fcmTokens) {
       const fcmToken = sub.endpoint.replace(/^fcm:/, '');
+      // An app that rings natively gets the call as a data message and rings
+      // like a phone itself (v2.146.0); a notification would only make a sound.
+      if (payload.type === 'incoming_call' && payload.ringData && sub.keys?.ring) {
+        await sendRingSignal(sub, payload.ringData);
+        continue;
+      }
       try {
         await getFirebaseMessaging().send({
           token: fcmToken,
@@ -30706,6 +30801,40 @@ async function sendPushNotification(userId, payload) {
           console.error('📱 FCM push error:', errorCode, error.message);
         }
       }
+    }
+  }
+}
+
+/**
+ * A data-only message to an Android app that rings natively (v2.146.0):
+ * `incoming_call` starts its ring, `call_ring_stop` ends it. High priority so
+ * it is delivered with the phone asleep; it lives no longer than a ring.
+ */
+async function sendRingSignal(sub, data) {
+  const fcmToken = sub.endpoint.replace(/^fcm:/, '');
+  try {
+    await getFirebaseMessaging().send({
+      token: fcmToken,
+      data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v ?? '')])),
+      android: { priority: 'high', ttl: DIRECT_CALL_RING_MS },
+    });
+  } catch (error) {
+    const errorCode = error.code || error.errorInfo?.code || '';
+    if (errorCode === 'messaging/registration-token-not-registered' ||
+        errorCode === 'messaging/invalid-registration-token') {
+      pushSubs.removeByEndpoint(sub.endpoint);
+    } else {
+      console.error('📱 FCM ring signal error:', errorCode, error.message);
+    }
+  }
+}
+
+/** Tell a person's ringing apps that a call has stopped ringing. */
+function stopNativeRing(userId, callId, state) {
+  if (!getFirebaseApps().length) return;
+  for (const sub of pushSubs.getSubscriptions(userId)) {
+    if (sub.endpoint?.startsWith('fcm:') && sub.keys?.ring) {
+      sendRingSignal(sub, { type: 'call_ring_stop', callId, state });
     }
   }
 }

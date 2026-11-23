@@ -94,7 +94,8 @@ These are **not end-to-end encrypted, even in an encrypted wave.** The encryptio
 - **Direct calls** (v2.145.0): ringing a contact, outside waves. Only someone who has you as a contact, and whom you have as a contact, can ring you.
   - **Media** goes through LiveKit, like wave calls, and is not encrypted against it yet.
   - **What Cortex keeps:** a call history for the two people: who rang whom, audio or video, when, whether it was answered, and how long it lasted. Never what was said. Only the two people can see it. It is deleted after 90 days, or with either account.
-  - **Notifications:** a ring and a missed call reach your devices as push notifications naming the caller.
+  - **Notifications:** a ring and a missed call reach your devices as push notifications naming the caller. In the Android app (from v2.146.0) the ring is a message the app turns into a phone-style ring; it also carries a key that can decline that one call, so DECLINE works with the app closed. Like every push to the Android app, it passes through Google's Firebase service.
+- **Which version of the app you use** (v2.146.0): each install reports its web build, its platform and, in an installed app, the app's version, under a random id kept on that device. The server stores no account with it. Admins see only counts by version. An install not seen for 90 days is deleted. Your Android app's version is also kept with its push token.
 - **Recordings** are made only when the performer chooses to record.
   - **Where they're stored:** in the operator's S3-compatible bucket (for example Backblaze B2), written there by LiveKit.
   - **Who can watch:** members of the wave, through Cortex, which checks membership on every request. The bucket itself is private.
@@ -154,6 +155,7 @@ Cortex supports PIN-protected hidden waves (Ghost Protocol). These waves:
 - **Broadcast recordings** — retained until deleted by the performer or wave staff, or until the wave is deleted
 - **Unconfirmed email follow sign-ups** — deleted after 7 days
 - **Direct call history** — deleted after 90 days (v2.145.0)
+- **Client version reports** — deleted 90 days after an install last reported (v2.146.0)
 - **Account data** — retained until you delete your account
 
 ---
