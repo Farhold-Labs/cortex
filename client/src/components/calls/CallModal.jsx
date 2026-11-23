@@ -230,8 +230,11 @@ const CallModal = ({ isOpen, onClose, wave, voiceCall, user, isMobile }) => {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      // A video call fills the window (v2.144.0).
-      padding: isMobile || hasAnyVideo ? '0' : '20px'
+      // A video call fills the window (v2.144.0), clear of the phone's
+      // status bar, notch and home indicator (v2.145.3).
+      padding: isMobile || hasAnyVideo
+        ? 'env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px)'
+        : '20px'
     }}
       onClick={onClose}
     >
