@@ -25461,10 +25461,12 @@ app.post('/api/waves/:id/key-request', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Wave is not encrypted' });
     }
 
-    // Check if user already has a valid key — no need to request
-    const existing = db.getWaveKeyForUser(waveId, requesterId);
-    if (existing) {
-      return res.status(400).json({ error: 'You already have a wave key' });
+    // Every version of the key they lack, not only the current one: a
+    // newcomer holds the current key and none of the older ones the earlier
+    // pings were sealed with (v2.145.4). Before, having any key ended it.
+    const missing = db.missingWaveKeyVersions(waveId, requesterId);
+    if (missing.length === 0) {
+      return res.status(400).json({ error: 'You already have every key for this wave' });
     }
 
     // Get requester's current public key
@@ -25478,22 +25480,24 @@ app.post('/api/waves/:id/key-request', authenticateToken, (req, res) => {
     const requester = db.findUserById(requesterId);
     const requestId = db.upsertWaveKeyRequest(waveId, requesterId, requesterKeys.public_key);
 
-    // Notify all other participants so they can grant the key
-    const participants = db.getWaveParticipants(waveId);
-    for (const participant of participants) {
-      if (participant.id === requesterId) continue;
-      broadcastToUser(participant.id, {
+    // Notify everyone else in the wave so a device holding the keys can grant
+    // them. Everyone in it, not only participant rows (a crew wave's crew).
+    const wave = db.getWave(waveId);
+    for (const uid of waveMemberIds(wave)) {
+      if (uid === requesterId) continue;
+      broadcastToUser(uid, {
         type: 'wave_key_request',
         requestId,
         waveId,
         requesterId,
         requesterHandle: requester?.handle,
-        requesterPublicKey: requesterKeys.public_key
+        requesterPublicKey: requesterKeys.public_key,
+        versions: missing,
       });
     }
 
     console.log(`Wave key request: user ${requester?.handle} requesting key for wave ${waveId}`);
-    res.json({ success: true, requestId });
+    res.json({ success: true, requestId, versions: missing });
   } catch (err) {
     console.error('Wave key request error:', err);
     res.status(500).json({ error: 'Failed to create key request' });
@@ -25507,9 +25511,16 @@ app.post('/api/waves/:id/key-grant', authenticateToken, (req, res) => {
     const waveId = req.params.id;
     const granterId = req.user.userId;
     const { requestId, encryptedWaveKey, senderPublicKey } = req.body;
+    // v2.145.4: `keys: [{ keyVersion, encryptedWaveKey }]`, every version the
+    // requester lacks. `encryptedWaveKey` alone is the current version, as before.
+    const offered = Array.isArray(req.body.keys) ? req.body.keys : [];
 
-    if (!requestId || !encryptedWaveKey || !senderPublicKey) {
-      return res.status(400).json({ error: 'Missing required fields: requestId, encryptedWaveKey, senderPublicKey' });
+    if (!requestId || !senderPublicKey || (!encryptedWaveKey && offered.length === 0)) {
+      return res.status(400).json({ error: 'Missing required fields: requestId, keys or encryptedWaveKey, senderPublicKey' });
+    }
+    if (offered.length > 1000 || offered.some(k => !k || !Number.isInteger(k.keyVersion) || k.keyVersion < 1
+        || typeof k.encryptedWaveKey !== 'string' || !k.encryptedWaveKey || k.encryptedWaveKey.length > 1000)) {
+      return res.status(400).json({ error: 'Invalid keys' });
     }
 
     // Must be a wave participant
@@ -25534,10 +25545,30 @@ app.post('/api/waves/:id/key-grant', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'The key must be wrapped with your own key', code: 'SENDER_KEY_MISMATCH' });
     }
 
-    // Store the wave key for the requester at the current key version
+    // The requester must still be in the wave: a request outlives a removal.
+    if (!canAccessWaveFromCache(waveId, request.requester_id)) {
+      return res.status(403).json({ error: `They are no longer in this ${T_WAVE()}`, code: 'NOT_A_MEMBER' });
+    }
+
+    // Each version only if the granter holds it, never over a key the
+    // requester already has (a member must not be able to swap someone's key
+    // for one they made up), and nothing beyond the current version.
     const currentVersion = db.getWaveKeyVersion(waveId);
-    db.createWaveEncryptionKey(request.wave_id, request.requester_id, encryptedWaveKey, senderPublicKey, currentVersion);
-    db.grantWaveKeyRequest(requestId, granterId);
+    const keys = offered.length ? offered : [{ keyVersion: currentVersion, encryptedWaveKey }];
+    let stored = 0;
+    db.db.transaction(() => {
+      for (const k of keys) {
+        if (k.keyVersion > currentVersion) continue;
+        if (!db.hasWaveKeyRow(waveId, granterId, k.keyVersion)) continue;
+        if (db.hasWaveKeyRow(waveId, request.requester_id, k.keyVersion)) continue;
+        db.createWaveEncryptionKey(request.wave_id, request.requester_id, k.encryptedWaveKey, senderPublicKey, k.keyVersion);
+        stored++;
+      }
+      // Settled once they lack nothing; otherwise it waits for someone who
+      // holds the rest.
+      if (db.missingWaveKeyVersions(waveId, request.requester_id).length === 0) db.grantWaveKeyRequest(requestId, granterId);
+    })();
+    if (stored === 0) return res.json({ success: true, stored: 0 });
 
     // Notify the requester they can now decrypt the wave
     broadcastToUser(request.requester_id, {
@@ -25547,8 +25578,8 @@ app.post('/api/waves/:id/key-grant', authenticateToken, (req, res) => {
     });
 
     const granter = db.findUserById(granterId);
-    console.log(`Wave key granted: ${granter?.handle} granted key for wave ${waveId} to user ${request.requester_id}`);
-    res.json({ success: true });
+    console.log(`Wave key granted: ${granter?.handle} granted ${stored} key version(s) for wave ${waveId} to user ${request.requester_id}`);
+    res.json({ success: true, stored });
   } catch (err) {
     console.error('Wave key grant error:', err);
     res.status(500).json({ error: 'Failed to grant wave key' });

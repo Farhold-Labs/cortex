@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.145.4] - 2026-11-22
+
+Someone added to an encrypted wave can read what was said before they joined. No migration.
+
+### Fixed
+- **A newcomer to an encrypted wave saw "Unable to decrypt" on every older ping, and renewing the key didn't help.** Each ping is sealed with the version of the wave's key that was current when it was sent, and the key gets a new version whenever it is renewed (since v2.143.0, every time someone leaves). Someone added later was only ever given the current version, whether through a key request, the invite or a renewal. A renewal only adds another version, which covers new pings, not old ones. Before v2.143.0 most waves stayed on version 1, so this rarely showed.
+  - **The newcomer's device asks** as soon as it meets a ping sealed with a version it doesn't hold, once a session per wave. Before, it only asked when it had no key at all.
+  - **A key request names every version they lack** that someone in the wave holds (`key-request` → `versions`), and goes to everyone in the wave, not just participant rows.
+  - **A member's device wraps each of those versions it holds** (`key-grant` with `keys`); it sent only the current one.
+  - **The server stores a version only if** the giver holds it, it isn't beyond the current version, the person has no key for it yet (a member can't swap someone's key for one they made up), and the person is still in the wave. A request is settled once nothing is missing, so another member can fill in versions the first didn't have.
+- Whether a newcomer should see the history is the same as for a wave that isn't encrypted, and as it was before v2.143.0: they do. Someone who has left gets no key made after they left.
+
+### Verified
+- `tests/e2ee-history-keys.test.cjs` (real server): a wave renewed to version 2; a newcomer holding only version 2 asks and is told `[1]`; an outsider is refused; a grant of versions 1, 2 and 7 stores only 1 (their own 2 kept unchanged, 7 held by nobody ignored); a wrong sender key is refused; nothing left to ask afterwards; someone removed before the grant gets nothing. Counterfactual: with the old request rule, the newcomer can't even ask.
+- Real crypto in browsers on dev: Mal encrypts a wave with two pings in it from wave settings (version 1); Kaylee leaves and Mal's device renews it (version 2); Wash is added and Zoe leaves (version 3, Wash included). Wash holds only version 3. He opens the wave: within 2 s his device has asked, Mal's has granted versions 1 and 2, and both earlier pings read correctly. No "[Unable to decrypt]", no console errors.
+- **Waves where nobody who holds the old keys opens the app** stay unreadable for the newcomer until someone who does comes online; the request is sent again each session.
+
 ## [2.145.3] - 2026-11-22
 
 Call screens keep clear of a phone's status bar. No migration.
