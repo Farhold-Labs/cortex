@@ -91,7 +91,15 @@ export function useAPI() {
       const rotatable = code !== 'STEP_UP_REQUIRED'
         && code !== 'SESSION_REVOKED'
         && code !== 'SESSION_EXPIRED';
-      if (rotatable && hasRefreshToken()) {
+      // A token rotated while this request was out (another request's refresh,
+      // or another tab's) is retried first: refreshing again would make a swap
+      // nobody needed (v2.146.1).
+      const stored = storage.getToken();
+      if (rotatable && stored && stored !== requestToken) {
+        res = await send(stored);
+        if (res.status === 401) code = await codeOf(res);
+      }
+      if (res.status === 401 && rotatable && hasRefreshToken()) {
         const fresh = await refreshAccessToken();
         if (fresh) {
           res = await send(fresh);
