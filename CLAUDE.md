@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.146.1**. Last brought current 2026-10-30.
+Current version: **2.147.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2146001 / versionName "2.146.1"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2146001 / MARKETING_VERSION 2.146.1
+client/android/app/build.gradle                  versionCode 2147000 / versionName "2.147.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2147000 / MARKETING_VERSION 2.147.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -355,6 +355,8 @@ Node-to-node, **push-only and opt-in**. There is no discovery, join or subscribe
 
 **People on other servers are asked (v2.137.0).** `inviteRemotePeople()` records the question on the wave's server (`remote_wave_invitations`) and sends a signed `wave_invite`; the invitee's server stores it (`federated_wave_invitations`) and makes no copy. Accepting calls `/api/federation/wave-invitations/answer` on the wave's server, which honours only a question it asked and only then adds the server to `wave_federation`; the copy is made and the history pulled (`pullFederatedHistory()`) after that. Never add a server to `wave_federation` on invitation. Blocks of remote accounts live in `remote_blocks` (by address), since `blocks` references `users(id)`; read block lists through `db.blockedIdsFor()`.
 
+**A server's key is replaced by handshake (v2.147.0, `docs/federation-keys/`).** The next key waits beside the current one until every active ally has answered the announcement. That announcement is signed by the current key, carries a proof by the new key, and is checked against our `/identity`. Every signer goes through `signingKeyFor(node)`, which returns the new key only for an ally that confirmed; every verifier goes through `verifyWithNodeKeys()`, which accepts an ally's announced key and promotes it on first use. KEY WAS EXPOSED is the one deliberate replace-at-once. A name change is refused while allies exist. A new signer must use `signingKeyFor()`.
+
 **Encrypted waves don't federate yet (v2.142.0).** Federation carries no wave key, nonce or key version, so an encrypted wave and people on other servers are refused together (`encryptedTravellersRefusal()`, 409 `ENCRYPTED_NO_TRAVELLERS`). The full feature is decided, not built: keys from the person's home server, with fingerprints.
 
 **Groups and travellers (v2.138.0).** A group wave stays a group wave with people elsewhere: its group is its people here, its travellers are `wave_remote_members` on its own server (recorded on accept and when they post). `isFederatedWave()` is the test for "has people on other servers", never `privacy === 'crossServer'` alone. Removing a traveller goes through their server (`/api/federation/wave-members/remove`); leaving a copy tells the origin (`wave_member_left`); an empty copy is deleted (`dropEmptyFederatedCopy`). On a copy, `createdBy` is only whoever accepted first and must not be treated as its owner. Remote mutes live in `remote_mutes`; read mute lists through `db.mutedIdsFor()`.
@@ -393,7 +395,7 @@ Instance-level settings also cover branding, terminology, notification defaults,
 
 The access token is **not** the session. A 1-hour rotating access token sits on top of a 90-day sliding refresh-token session, with reuse detection, step-up re-auth for sensitive actions, new-device email alerts, and password change ending all other sessions.
 
-**Nothing is retired until its replacement is known to have arrived (v2.146.1).** A refresh swap stays pending, with the new token sealed (`pending_secret`), until the client presents it or uses the access token sent with it (`rt` claim, `settleHandshake()`); the old token presented meanwhile gets the **same** new one. Only after confirmation is a replay reuse, and it ends that login (`endLoginForReuse()`: family, its sessions by `user_sessions.family_id`, its sockets), never every device. Regenerated secrets (recovery codes, E2EE recovery key and keypair, bot keys, calendar links) wait in `credential_handovers` until confirmed or used; renewed sessions retire the old one on first use (`rep` claim). A new place that hands out a replacement must follow the same rule. Retiring at the swap signed a person out on farhold when one answer was lost.
+**Nothing is retired until its replacement is known to have arrived (v2.146.1).** A refresh swap stays pending, with the new token sealed (`pending_secret`), until the client presents it or uses the access token sent with it (`rt` claim, `settleHandshake()`); the old token presented meanwhile gets the **same** new one. Only after confirmation is a replay reuse, and it ends that login (`endLoginForReuse()`: family, its sessions by `user_sessions.family_id`, its sockets), never every device. Regenerated secrets (recovery codes, E2EE recovery key and keypair, bot keys, calendar links) wait in `credential_handovers` until confirmed or used; renewed sessions retire the old one on first use (`rep` claim). A new place that hands out a replacement must follow the same rule. Retiring at the swap signed a person out on farhold when one answer was lost. Federation keys follow the same rule since v2.147.0 (see Federation).
 
 Every path that completes an authentication must go through `issueAuthCredentials` — it was wired only into `/api/auth/login` until v2.81.2, so most users silently kept getting legacy long-lived JWTs.
 
@@ -474,6 +476,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/HIGH-AVAILABILITY.md** — proposed warm-standby failover (DNS health checks, Litestream, lease + boot guard); not built yet
 - **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0, phase 5 folders and audience labels in v2.135.0, phase 6 federated audience v2.136.1, invitations v2.137.0, groups and travellers v2.138.0)
 - **docs/direct-calls/** — ringing a contact, outside waves (decided 2026-11-22; phase 1 built in v2.145.0, phase 2 in v2.146.0, phase 3 not built)
+- **docs/federation-keys/** — replacing a server's federation key by handshake (built in v2.147.0)
 - **docs/federated-e2ee/** — encryption across servers (decided 2026-11-20, not built; phase 0 = local [SECURITY] fixes)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap

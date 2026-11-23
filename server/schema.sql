@@ -579,7 +579,7 @@ CREATE TABLE IF NOT EXISTS server_identity (
     private_key TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+, next_public_key TEXT, next_private_key TEXT, rotation_started_at TEXT);
 
 CREATE TABLE IF NOT EXISTS federation_nodes (
     id TEXT PRIMARY KEY,
@@ -593,7 +593,7 @@ CREATE TABLE IF NOT EXISTS federation_nodes (
     protocol_version INTEGER DEFAULT 1,  -- v2.28.0: federation protocol version (1=legacy, 2=decoy+padding)
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+, next_public_key TEXT, next_key_received_at TEXT, previous_public_key TEXT, previous_key_until TEXT);
 CREATE INDEX IF NOT EXISTS idx_federation_nodes_status ON federation_nodes(status);
 CREATE INDEX IF NOT EXISTS idx_federation_nodes_name ON federation_nodes(node_name);
 
@@ -1659,6 +1659,17 @@ CREATE TABLE IF NOT EXISTS guest_cancel_tokens (
         created_at    TEXT NOT NULL
       );
 CREATE INDEX IF NOT EXISTS idx_guest_cancel_tokens_guest ON guest_cancel_tokens(guest_rsvp_id);
+
+CREATE TABLE IF NOT EXISTS federation_key_handovers (
+        node_id         TEXT PRIMARY KEY REFERENCES federation_nodes(id) ON DELETE CASCADE,
+        key_id          TEXT NOT NULL,
+        action          TEXT NOT NULL DEFAULT 'announce',
+        created_at      TEXT NOT NULL,
+        last_attempt_at TEXT,
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        confirmed_at    TEXT
+      );
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN

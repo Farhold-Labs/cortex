@@ -3,6 +3,21 @@ import { LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { formatError, CONFIRM_DIALOG, FEDERATION } from '../../../messages.js';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 
+// A key's id as admins compare it: groups of four.
+const formatKeyId = (id) => (id ? id.match(/.{1,4}/g).join(' ') : '—');
+
+const keyButtonStyle = (isMobile, color, busy) => ({
+  padding: isMobile ? '10px 16px' : '8px 14px',
+  minHeight: isMobile ? '44px' : 'auto',
+  background: 'transparent',
+  border: `1px solid ${color}`,
+  color,
+  cursor: busy ? 'wait' : 'pointer',
+  fontFamily: 'monospace',
+  fontSize: isMobile ? '0.8rem' : '0.75rem',
+  opacity: busy ? 0.6 : 1,
+});
+
 const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 0, isOpen, onToggle }) => {
   // One section open at a time, like the rest of Settings (v2.116.0).
   const [openGroup, setOpenGroup] = useState(null);
@@ -24,6 +39,8 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
   const [acceptLoading, setAcceptLoading] = useState(null);
   // Cover traffic (v2.28.0)
   const [decoyToggling, setDecoyToggling] = useState(false);
+  // Signing key handover (v2.147.0)
+  const [keyBusy, setKeyBusy] = useState(false);
 
   const loadFederationData = useCallback(async () => {
     setLoading(true);
@@ -69,6 +86,36 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
     }
   };
 
+  // v2.147.0 — the key is replaced by handover: every ally keeps working on the
+  // current key until it has confirmed the new one.
+  const keyAction = async (endpoint, body, okMessage) => {
+    setKeyBusy(true);
+    try {
+      const result = await fetchAPI(endpoint, { method: 'POST', ...(body ? { body } : {}), stepUpReason: FEDERATION.keyStepUpReason });
+      if (okMessage) showToast(typeof okMessage === 'function' ? okMessage(result) : okMessage, 'success');
+      await loadFederationData();
+    } catch (err) {
+      showToast(err.message || FEDERATION.keyActionFailed, 'error');
+    }
+    setKeyBusy(false);
+  };
+  const handleReplaceKey = () => {
+    if (!confirm(FEDERATION.replaceKeyConfirm)) return;
+    keyAction('/admin/federation/key-rotation', null,
+      (r) => r.keyRotation ? FEDERATION.replaceKeyStarted : FEDERATION.replaceKeyDone);
+  };
+  const handleRetryKey = () => keyAction('/admin/federation/key-rotation/retry', null, null);
+  const handleCancelKey = () => {
+    if (!confirm(FEDERATION.cancelKeyConfirm)) return;
+    keyAction('/admin/federation/key-rotation/cancel', null, FEDERATION.cancelKeyDone);
+  };
+  const handleExposedKey = () => {
+    const typed = window.prompt(FEDERATION.exposedKeyPrompt(status?.nodeName, status?.activeNodes || 0));
+    if (typed === null) return;
+    keyAction('/admin/federation/identity/replace-now', { confirm: typed.trim() },
+      (r) => FEDERATION.exposedKeyDone(formatKeyId(r.keyId), r.cutOff || []));
+  };
+
   const handleAddNode = async () => {
     if (!newNodeName.trim() || !newNodeUrl.trim()) {
       showToast(FEDERATION.portNameUrlRequired, 'error');
@@ -95,7 +142,7 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
       const result = await fetchAPI(`/admin/federation/nodes/${nodeId}/handshake`, {
         method: 'POST'
       });
-      showToast(result.message || FEDERATION.dockingSuccessful, 'success');
+      showToast(result.message || FEDERATION.dockingSuccessful, result.keyChanged ? 'info' : 'success');
       loadFederationData();
     } catch (err) {
       showToast(err.message || formatError(FEDERATION.failedToDock), 'error');
@@ -291,7 +338,7 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
                 }}
               >CANCEL</button>
               <div style={{ width: '100%', color: 'var(--accent-orange)', fontSize: '0.65rem', marginTop: '2px' }}>
-                ⚠ Changing the identity name breaks trust with existing partners — you'll need to re-establish federation with them afterward. The keypair is kept (no key change).
+                {FEDERATION.nameChangeHint}
               </div>
             </div>
           ) : (
@@ -353,6 +400,69 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
           </div>
         )}
       </div>
+
+      {/* Signing key and its handover (v2.147.0) */}
+      {status?.configured && (
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px', textTransform: 'uppercase' }}>
+            {FEDERATION.signingKey}
+          </div>
+          <div style={{ fontFamily: 'monospace', fontSize: isMobile ? '0.8rem' : '0.75rem', color: 'var(--text-secondary)', marginBottom: '8px', overflowWrap: 'anywhere' }}>
+            {formatKeyId(status.keyId)}
+          </div>
+
+          {status.keyRotation?.inProgress ? (
+            <div style={{ padding: '10px 12px', border: '1px solid var(--accent-amber)40', background: 'var(--accent-amber)10', marginBottom: '8px' }}>
+              <div style={{ color: 'var(--accent-amber)', fontSize: '0.75rem', marginBottom: '6px' }}>
+                {FEDERATION.keyHandoverInProgress}
+              </div>
+              <div style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '8px', overflowWrap: 'anywhere' }}>
+                {FEDERATION.nextKey}: {formatKeyId(status.keyRotation.nextKeyId)}
+              </div>
+              {status.keyRotation.allies.map(a => (
+                <div key={a.nodeId} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '0.75rem', padding: '3px 0', flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: 'monospace', color: 'var(--text-primary)' }}>
+                    {a.nodeName}{a.suspended ? ` (${FEDERATION.suspendedNotWaited})` : ''}
+                  </span>
+                  <span style={{ color: a.state === 'confirmed' ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
+                    {a.state === 'confirmed' ? FEDERATION.allyConfirmed : FEDERATION.allyWaiting(a.attempts, a.lastAttemptAt)}
+                  </span>
+                  {a.state !== 'confirmed' && a.lastError && (
+                    <span style={{ width: '100%', color: 'var(--text-dim)', fontSize: '0.65rem', overflowWrap: 'anywhere' }}>{a.lastError}</span>
+                  )}
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                <button onClick={handleRetryKey} disabled={keyBusy} style={keyButtonStyle(isMobile, 'var(--accent-teal)', keyBusy)}>
+                  {FEDERATION.tellAgainNow}
+                </button>
+                {!status.keyRotation.allies.some(a => a.state === 'confirmed') && (
+                  <button onClick={handleCancelKey} disabled={keyBusy} style={keyButtonStyle(isMobile, 'var(--text-dim)', keyBusy)}>
+                    {FEDERATION.cancelKeyChange}
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
+              <button onClick={handleReplaceKey} disabled={keyBusy} style={keyButtonStyle(isMobile, 'var(--accent-teal)', keyBusy)}>
+                {FEDERATION.replaceKey}
+              </button>
+              <button onClick={handleExposedKey} disabled={keyBusy} style={keyButtonStyle(isMobile, 'var(--status-error)', keyBusy)}>
+                {FEDERATION.keyWasExposed}
+              </button>
+            </div>
+          )}
+          {status.keyRotation?.withdrawals?.length > 0 && (
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginTop: '4px' }}>
+              {FEDERATION.withdrawalsOwed(status.keyRotation.withdrawals.map(w => w.nodeName))}
+            </div>
+          )}
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem', marginTop: '4px' }}>
+            {FEDERATION.replaceKeyHint}
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div style={{ display: 'flex', gap: '24px', color: 'var(--text-dim)', fontSize: isMobile ? '0.85rem' : '0.8rem' }}>
@@ -720,6 +830,13 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
                 {node.baseUrl}
               </div>
 
+              {node.keyId && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '8px', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                  {FEDERATION.keyLabel}: {formatKeyId(node.keyId)}
+                  {node.nextKeyId && <span style={{ color: 'var(--accent-amber)' }}> · {FEDERATION.nextKeyAnnounced}: {formatKeyId(node.nextKeyId)}</span>}
+                </div>
+              )}
+
               {node.lastContactAt && (
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '8px' }}>
                   Last contact: {new Date(node.lastContactAt).toLocaleString()}
@@ -769,6 +886,17 @@ const FederationAdminPanel = ({ fetchAPI, showToast, isMobile, refreshTrigger = 
                   }}>
                     {FEDERATION.requestWasDeclined}
                   </span>
+                )}
+
+                {node.status === 'active' && (
+                  <button
+                    onClick={() => handleHandshake(node.id)}
+                    disabled={handshakeLoading === node.id}
+                    title={FEDERATION.fetchKeyAgainHint}
+                    style={keyButtonStyle(isMobile, 'var(--accent-teal)', handshakeLoading === node.id)}
+                  >
+                    {FEDERATION.fetchKeyAgain}
+                  </button>
                 )}
 
                 {node.status === 'active' && (

@@ -6032,7 +6032,7 @@ async function verifyCrossPortStanding(user) {
 
     const url = `${node.baseUrl.replace(/\/$/, '')}/api/federation/cross-port/verify`;
     const body = JSON.stringify({ userId: user.home_user_id, guestNode: FEDERATION_NODE_NAME });
-    const headers = createHttpSignatureFromString('POST', url, body, identity.privateKey, FEDERATION_NODE_NAME);
+    const headers = createHttpSignatureFromString('POST', url, body, signingKeyFor(node, identity), FEDERATION_NODE_NAME);
 
     // Bounded: a slow peer must not hold a refresh open.
     const controller = new AbortController();
@@ -15849,7 +15849,7 @@ app.post('/api/cross-port/step-up/complete', authenticateToken, async (req, res)
 
     const exchangeUrl = `${new URL(node.baseUrl).origin}/api/federation/cross-port/exchange`;
     const body = JSON.stringify({ code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME, requestId: request.id, nonce: request.nonce });
-    const headers = createHttpSignatureFromString('POST', exchangeUrl, body, identity.privateKey, FEDERATION_NODE_NAME);
+    const headers = createHttpSignatureFromString('POST', exchangeUrl, body, signingKeyFor(node, identity), FEDERATION_NODE_NAME);
     const exchangeRes = await fetch(exchangeUrl, { method: 'POST', headers, body });
     const data = await exchangeRes.json().catch(() => ({}));
     if (!exchangeRes.ok) return res.status(400).json({ error: data.error || 'Your home server did not confirm it' });
@@ -15922,7 +15922,7 @@ app.post('/api/cross-port/session', async (req, res) => {
       code: sanitizeInput(code), guestNode: FEDERATION_NODE_NAME,
       requestId: request.id, nonce: request.nonce,
     });
-    const headers = createHttpSignatureFromString('POST', exchangeUrl, body, identity.privateKey, FEDERATION_NODE_NAME);
+    const headers = createHttpSignatureFromString('POST', exchangeUrl, body, signingKeyFor(node, identity), FEDERATION_NODE_NAME);
 
     const exchangeRes = await fetch(exchangeUrl, { method: 'POST', headers, body });
     const exchangeData = await exchangeRes.json();
@@ -18384,6 +18384,88 @@ function generateFederationKeypair() {
   return { publicKey, privateKey };
 }
 
+// ============ Federation key handover (v2.147.0) ============
+//
+// Nothing is retired until its replacement is known to have arrived. Replacing
+// our key used to take effect at once: every ally went on checking our
+// signatures against the key it had saved, refused everything, and the queue
+// dropped what it could not deliver. Now the next key waits beside the current
+// one. Each active ally is told (`POST /api/federation/key-rotation`) and counts
+// as having it only when it answers; we sign to an ally with the next key only
+// after that, and the ally switches when it first sees it. The current private
+// key is replaced when every active ally has answered. Design:
+// docs/federation-keys/README.md.
+
+// A key's id: 32 hex characters of SHA-256 over the public key's DER. Shown to
+// admins as the fingerprint they compare after pairing again by hand.
+const federationKeyIds = new Map();
+function federationKeyId(publicKeyPem) {
+  if (!publicKeyPem) return null;
+  let id = federationKeyIds.get(publicKeyPem);
+  if (!id) {
+    try {
+      const der = crypto.createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' });
+      id = crypto.createHash('sha256').update(der).digest('hex').slice(0, 32);
+    } catch {
+      return null;
+    }
+    if (federationKeyIds.size > 200) federationKeyIds.clear();
+    federationKeyIds.set(publicKeyPem, id);
+  }
+  return id;
+}
+
+// How long an ally's old key is still accepted after it switches: requests it
+// signed just before are still on their way. Matches the signature date window.
+const FEDERATION_PREVIOUS_KEY_GRACE_MS = 5 * 60 * 1000;
+// How often an ally that has not answered is told again. No attempt cap: the
+// change waits for the ally, or for an admin to suspend or unpair it.
+const FEDERATION_KEY_RETRY_MS = Math.max(1000, parseInt(process.env.FEDERATION_KEY_RETRY_MS, 10) || 10 * 60 * 1000);
+
+/**
+ * The private key to sign a request to `node` with. The next key only once that
+ * ally has confirmed receiving it — before then it could not check it. Every
+ * signer goes through here, so none can pick its own key.
+ */
+function signingKeyFor(node, identity = db.getServerIdentity()) {
+  if (!identity) return null;
+  if (identity.nextPrivateKey && node?.id && db.getKeyHandover) {
+    const h = db.getKeyHandover(node.id);
+    if (h?.action === 'announce' && h.confirmedAt && h.keyId === federationKeyId(identity.nextPublicKey)) {
+      return identity.nextPrivateKey;
+    }
+  }
+  return identity.privateKey;
+}
+
+// What the next key signs to prove the announcement comes from whoever holds it.
+function keyRotationProofString(fromNode, toNode, keyId, date) {
+  return `cortex-key-rotation\n${fromNode}\n${toNode}\n${keyId}\n${date}`;
+}
+
+/**
+ * Check a request's signature against what we hold for this ally: its key; its
+ * announced next key ('next': the caller makes it the key once the request has
+ * passed every other check, see promoteAllyKey); or its old key, for a few
+ * minutes after a switch.
+ */
+function verifyWithNodeKeys(req, node, { requireSignedDigest, previousKeyAnyAge = false } = {}) {
+  if (node.publicKey && verifyHttpSignature(req, node.publicKey, { requireSignedDigest })) return 'current';
+  if (node.nextPublicKey && verifyHttpSignature(req, node.nextPublicKey, { requireSignedDigest })) return 'next';
+  if (node.previousPublicKey && (previousKeyAnyAge || (node.previousKeyUntil && new Date(node.previousKeyUntil).getTime() > Date.now()))
+      && verifyHttpSignature(req, node.previousPublicKey, { requireSignedDigest })) {
+    return 'previous';
+  }
+  return null;
+}
+
+/** The ally signed with its announced key: that is its key now. */
+function promoteAllyKey(node) {
+  if (db.promoteNodeKey(node.id, node.nextPublicKey, new Date(Date.now() + FEDERATION_PREVIOUS_KEY_GRACE_MS).toISOString())) {
+    console.log(`🔑 ${node.nodeName} now signs with its new key ${federationKeyId(node.nextPublicKey)}`);
+  }
+}
+
 // HTTP Signature utilities for server-to-server authentication
 // Format: Signature: keyId="https://server/api/federation/identity#main-key",
 //                    algorithm="rsa-sha256",
@@ -18526,7 +18608,7 @@ function verifyHttpSignature(req, publicKey, { requireSignedDigest = false } = {
 
 // Middleware to authenticate federation requests (server-to-server)
 // Factory function to create auth middleware with allowed statuses
-function createFederationAuthMiddleware(allowedStatuses = ['active']) {
+function createFederationAuthMiddleware(allowedStatuses = ['active'], { previousKeyAnyAge = false } = {}) {
   return function(req, res, next) {
     if (!FEDERATION_ENABLED) {
       return res.status(404).json({ error: 'Federation is not enabled' });
@@ -18585,9 +18667,12 @@ function createFederationAuthMiddleware(allowedStatuses = ['active']) {
     // Verify signature. The minimum signed set is enforced inside, so a
     // signature that does not cover the date or the body is refused here
     // rather than being waved through by the checks that follow.
-    if (!verifyHttpSignature(req, node.publicKey, { requireSignedDigest: hasBody })) {
+    // v2.147.0: the ally's key, its announced next key, or its old one briefly.
+    const signedWith = verifyWithNodeKeys(req, node, { requireSignedDigest: hasBody, previousKeyAnyAge });
+    if (!signedWith) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
+    req.federationKeyUsed = signedWith;
 
     // Freshness. `date` is guaranteed present and signed by this point, but an
     // unparseable value would still yield NaN — and `NaN > 5` is false, which
@@ -18600,6 +18685,10 @@ function createFederationAuthMiddleware(allowedStatuses = ['active']) {
     if (diffMinutes > 5) {
       return res.status(401).json({ error: 'Request date too old or in future' });
     }
+
+    // v2.147.0 — a fresh, verified request signed with the ally's announced
+    // key: the ally has switched to it.
+    if (signedWith === 'next') promoteAllyKey(node);
 
     // Attach node info to request
     req.federationNode = node;
@@ -18646,7 +18735,7 @@ function stripPadding(envelope) {
 }
 
 // Helper to send signed federation requests
-async function sendSignedFederationRequest(targetNode, method, path, body = null) {
+async function sendSignedFederationRequest(targetNode, method, path, body = null, { currentKey = false } = {}) {
   const ourIdentity = db.getServerIdentity();
   if (!ourIdentity) {
     throw new Error('Server identity not configured');
@@ -18671,7 +18760,7 @@ async function sendSignedFederationRequest(targetNode, method, path, body = null
   }
 
   // Pass the stringified body to createHttpSignature for consistent digest calculation
-  const headers = createHttpSignatureFromString(method, url, bodyString, ourIdentity.privateKey, ourIdentity.nodeName);
+  const headers = createHttpSignatureFromString(method, url, bodyString, currentKey ? ourIdentity.privateKey : signingKeyFor(targetNode, ourIdentity), ourIdentity.nodeName);
 
   // Remove undefined headers
   Object.keys(headers).forEach(key => headers[key] === undefined && delete headers[key]);
@@ -18943,9 +19032,14 @@ app.get('/api/federation/identity', (req, res) => {
   res.json({
     nodeName: identity.nodeName,
     publicKey: identity.publicKey,
+    keyId: federationKeyId(identity.publicKey),
+    // v2.147.0 — a key being handed over. An ally told of it checks it here as
+    // well, so an announcement needs our domain as well as our current key.
+    nextPublicKey: identity.nextPublicKey || null,
+    nextKeyId: identity.nextPublicKey ? federationKeyId(identity.nextPublicKey) : null,
     createdAt: identity.createdAt,
     protocolVersion: 2,
-    capabilities: ['decoy', 'padding']
+    capabilities: ['decoy', 'padding', 'key-rotation']
   });
 });
 
@@ -18963,6 +19057,8 @@ app.get('/api/admin/federation/status', authenticateToken, (req, res) => {
     configured: !!identity,
     nodeName: identity?.nodeName || FEDERATION_NODE_NAME || null,
     hasKeypair: !!identity?.publicKey,
+    keyId: federationKeyId(identity?.publicKey),
+    keyRotation: keyRotationStatus(identity, nodes),
     trustedNodes: nodes.length,
     activeNodes: activeNodes.length,
     protocolVersion: 2,
@@ -19037,7 +19133,27 @@ app.post('/api/admin/federation/identity', authenticateToken, (req, res) => {
   const existingIdentity = db.getServerIdentity();
   let publicKey, privateKey;
 
-  if (req.body.regenerateKeys || !existingIdentity) {
+  // v2.147.0 — every ally's record of us is keyed by this name and checks our
+  // signatures with this key. Changing either here broke every pairing at once.
+  // A key is replaced by handover (/api/admin/federation/key-rotation); a name
+  // only while there is no ally to break.
+  if (existingIdentity && req.body.regenerateKeys) {
+    return res.status(409).json({
+      error: 'Replace the key with REPLACE KEY, which keeps every ally working while they receive the new one',
+      code: 'USE_KEY_ROTATION',
+    });
+  }
+  if (existingIdentity && nodeName !== existingIdentity.nodeName) {
+    const allies = db.getFederationNodes().filter(n => ['active', 'outbound_pending', 'suspended'].includes(n.status));
+    if (allies.length) {
+      return res.status(409).json({
+        error: `The name can't change while this server has allies (${allies.map(n => n.nodeName).join(', ')}): every one of them knows it by this name. Unpair them first.`,
+        code: 'NAME_CHANGE_WITH_ALLIES',
+      });
+    }
+  }
+
+  if (!existingIdentity) {
     // Generate new keypair
     const keypair = generateFederationKeypair();
     publicKey = keypair.publicKey;
@@ -19060,13 +19176,300 @@ app.post('/api/admin/federation/identity', authenticateToken, (req, res) => {
   });
 });
 
+// ============ Federation key handover routes (v2.147.0) ============
+
+/** Where a key replacement stands, for the admin panel. */
+function keyRotationStatus(identity = db.getServerIdentity(), nodes = db.getFederationNodes()) {
+  if (!db.listKeyHandovers) return null;
+  const rows = db.listKeyHandovers();
+  const withdrawals = rows.filter(r => r.action === 'withdraw');
+  if (!identity?.nextPublicKey && !withdrawals.length) return null;
+  const byNode = new Map(rows.filter(r => r.action === 'announce').map(r => [r.nodeId, r]));
+  const allies = identity?.nextPublicKey ? nodes.filter(n => n.status === 'active' || n.status === 'suspended').map(n => {
+    const h = byNode.get(n.id);
+    return {
+      nodeId: n.id, nodeName: n.nodeName, suspended: n.status === 'suspended',
+      state: h?.confirmedAt ? 'confirmed' : (h?.attempts ? 'waiting' : 'not-yet-told'),
+      confirmedAt: h?.confirmedAt || null, attempts: h?.attempts || 0,
+      lastAttemptAt: h?.lastAttemptAt || null, lastError: h?.lastError || null,
+    };
+  }) : [];
+  return {
+    inProgress: !!identity?.nextPublicKey,
+    startedAt: identity?.rotationStartedAt || null,
+    nextKeyId: identity?.nextPublicKey ? federationKeyId(identity.nextPublicKey) : null,
+    allies,
+    withdrawals: withdrawals.map(w => ({ nodeName: w.nodeName, keyId: w.keyId, attempts: w.attempts, lastError: w.lastError })),
+  };
+}
+
+/** Tell one ally of our next key. True once it has answered that it holds it. */
+async function announceNextKey(node, identity) {
+  const nextKeyId = federationKeyId(identity.nextPublicKey);
+  db.ensureKeyHandover(node.id, nextKeyId);
+  const date = new Date().toUTCString();
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(keyRotationProofString(identity.nodeName, node.nodeName, nextKeyId, date));
+  const body = {
+    nodeName: identity.nodeName,
+    newPublicKey: identity.nextPublicKey,
+    newKeyId: nextKeyId,
+    proofDate: date,
+    proof: signer.sign(identity.nextPrivateKey, 'base64'),
+  };
+  try {
+    // Signed with the current key: the ally can't check anything else yet.
+    const res = await sendSignedFederationRequest(node, 'POST', '/api/federation/key-rotation', body, { currentKey: true });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.received === nextKeyId) {
+      db.confirmKeyHandover(node.id, nextKeyId);
+      console.log(`🔑 ${node.nodeName} confirmed our next key ${nextKeyId}`);
+      return true;
+    }
+    const why = res.status === 404 ? 'HTTP 404: this ally needs Cortex v2.147.0 or later' : `HTTP ${res.status}: ${data.error || ''}`;
+    db.recordKeyHandoverAttempt(node.id, why);
+  } catch (err) {
+    db.recordKeyHandoverAttempt(node.id, err.message);
+  }
+  return false;
+}
+
+/** Tell one ally that a next key it may hold was cancelled. True once it answers. */
+async function withdrawNextKey(node, keyId) {
+  try {
+    const res = await sendSignedFederationRequest(node, 'POST', '/api/federation/key-rotation/withdraw', { nodeName: FEDERATION_NODE_NAME, keyId }, { currentKey: true });
+    if (res.ok) {
+      db.deleteKeyHandover(node.id);
+      return true;
+    }
+    const data = await res.json().catch(() => ({}));
+    db.recordKeyHandoverAttempt(node.id, `HTTP ${res.status}: ${data.error || ''}`);
+  } catch (err) {
+    db.recordKeyHandoverAttempt(node.id, err.message);
+  }
+  return false;
+}
+
+let keyRotationRunning = null;
+/**
+ * Tell every active ally that hasn't confirmed (each at most once per retry
+ * interval unless `force`), send owed withdrawals, and finish the change when
+ * every active ally has confirmed. An ally that pairs during a change is
+ * included: it got our current key and must be told of the next.
+ */
+function runKeyRotation({ force = false } = {}) {
+  if (!FEDERATION_ENABLED || !db.listKeyHandovers) return Promise.resolve();
+  if (keyRotationRunning) return keyRotationRunning;
+  keyRotationRunning = (async () => {
+    const due = (h) => force || !h?.lastAttemptAt || Date.now() - new Date(h.lastAttemptAt).getTime() >= FEDERATION_KEY_RETRY_MS;
+
+    for (const w of db.listKeyHandovers().filter(r => r.action === 'withdraw')) {
+      const node = db.getFederationNode(w.nodeId);
+      if (!node || !['active', 'suspended'].includes(node.status)) { db.deleteKeyHandover(w.nodeId); continue; }
+      if (node.status === 'active' && due(w)) await withdrawNextKey(node, w.keyId);
+    }
+
+    const identity = db.getServerIdentity();
+    if (!identity?.nextPrivateKey) return;
+    // Suspended allies are told too, so they still work when reactivated, but
+    // they don't hold the change open.
+    const told = db.getFederationNodes().filter(n => n.status === 'active' || n.status === 'suspended');
+    for (const node of told) {
+      const h = db.getKeyHandover(node.id);
+      if (h?.confirmedAt) continue;
+      if (h && !due(h)) continue;
+      await announceNextKey(node, identity);
+    }
+
+    // Only allies still active count. One suspended or unpaired by an admin no
+    // longer holds the change open; one that is merely unreachable does.
+    const stillActive = db.getFederationNodes({ status: 'active' });
+    const nextKeyId = federationKeyId(identity.nextPublicKey);
+    const allConfirmed = stillActive.every(n => {
+      const h = db.getKeyHandover(n.id);
+      return h?.action === 'announce' && h.keyId === nextKeyId && h.confirmedAt;
+    });
+    const current = db.getServerIdentity();
+    if (allConfirmed && current?.nextPublicKey === identity.nextPublicKey) {
+      db.completeKeyRotation();
+      console.log(`🔑 Federation key replaced: every active ally (${stillActive.length}) confirmed ${nextKeyId}; the old private key is deleted`);
+    }
+  })().catch(err => {
+    console.error('Federation key handover error:', err.message);
+  }).finally(() => { keyRotationRunning = null; });
+  return keyRotationRunning;
+}
+
+if (FEDERATION_ENABLED) {
+  setInterval(() => { runKeyRotation(); }, Math.min(FEDERATION_KEY_RETRY_MS, 60 * 1000));
+  setTimeout(() => { runKeyRotation(); }, 5000);
+}
+
+// Start replacing our key. Nothing changes for any ally until it has the new one.
+app.post('/api/admin/federation/key-rotation', authenticateToken, requireStepUp, async (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+  if (!FEDERATION_ENABLED) return res.status(400).json({ error: 'Federation is not enabled' });
+  if (!db.startKeyRotation) return res.status(501).json({ error: 'Key replacement needs the SQLite database' });
+  const identity = db.getServerIdentity();
+  if (!identity) return res.status(400).json({ error: 'Server identity not configured' });
+  if (identity.nextPublicKey) {
+    return res.status(409).json({ error: 'A key replacement is already in progress', code: 'KEY_ROTATION_IN_PROGRESS' });
+  }
+  const pairing = db.getFederationNodes({ status: 'outbound_pending' });
+  if (pairing.length) {
+    return res.status(409).json({
+      error: `Finish pairing with ${pairing.map(n => n.nodeName).join(', ')} first: pairing carries our key in its own messages`,
+      code: 'PAIRING_IN_PROGRESS',
+    });
+  }
+  const next = generateFederationKeypair();
+  db.startKeyRotation(next);
+  console.log(`🔑 Federation key replacement started by ${user.handle}: next key ${federationKeyId(next.publicKey)}`);
+  if (db.logActivity) db.logActivity(user.id, 'federation_key_rotation_started', 'server', identity.nodeName, { keyId: federationKeyId(next.publicKey) });
+  await runKeyRotation({ force: true });
+  res.json({ success: true, keyRotation: keyRotationStatus(), keyId: federationKeyId(db.getServerIdentity()?.publicKey) });
+});
+
+// Tell every waiting ally again now, instead of at the next interval.
+app.post('/api/admin/federation/key-rotation/retry', authenticateToken, async (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+  await runKeyRotation({ force: true });
+  res.json({ success: true, keyRotation: keyRotationStatus(), keyId: federationKeyId(db.getServerIdentity()?.publicKey) });
+});
+
+// Cancel a replacement. Refused once any ally has confirmed it: from then on we
+// sign to that ally with the new key, and it may already have switched.
+app.post('/api/admin/federation/key-rotation/cancel', authenticateToken, requireStepUp, async (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+  const identity = db.getServerIdentity();
+  if (!identity?.nextPublicKey) return res.status(409).json({ error: 'No key replacement is in progress' });
+  const confirmed = db.listKeyHandovers().filter(h => h.action === 'announce' && h.confirmedAt);
+  if (confirmed.length) {
+    return res.status(409).json({
+      error: `Too late to cancel: ${confirmed.map(h => h.nodeName).join(', ')} already confirmed the new key. Let the change finish.`,
+      code: 'KEY_ROTATION_CONFIRMED',
+    });
+  }
+  const keyId = federationKeyId(identity.nextPublicKey);
+  db.cancelKeyRotation(keyId);
+  console.log(`🔑 Federation key replacement ${keyId} cancelled by ${user.handle}; the next private key is deleted`);
+  await runKeyRotation({ force: true });
+  res.json({ success: true, keyRotation: keyRotationStatus() });
+});
+
+// The key was exposed: replace it at once and tell no one. Signed by the old
+// key, an announcement is exactly what whoever holds it could forge. Every ally
+// refuses us until its admin pairs again and compares the fingerprint.
+app.post('/api/admin/federation/identity/replace-now', authenticateToken, requireStepUp, (req, res) => {
+  const user = db.findUserById(req.user.userId);
+  if (!requireRole(user, ROLES.ADMIN, res)) return;
+  if (!db.replaceServerKeyNow) return res.status(501).json({ error: 'Key replacement needs the SQLite database' });
+  const identity = db.getServerIdentity();
+  if (!identity) return res.status(400).json({ error: 'Server identity not configured' });
+  if (req.body?.confirm !== identity.nodeName) {
+    return res.status(400).json({ error: `Type this server's name (${identity.nodeName}) to confirm`, code: 'CONFIRM_NAME' });
+  }
+  const cutOff = db.getFederationNodes().filter(n => n.status === 'active').map(n => n.nodeName);
+  const next = generateFederationKeypair();
+  db.replaceServerKeyNow(next);
+  const keyId = federationKeyId(next.publicKey);
+  console.warn(`🔑 Federation key REPLACED AT ONCE (exposed) by ${user.handle}: ${keyId}; ${cutOff.length} ally(ies) must pair again: ${cutOff.join(', ')}`);
+  if (db.logActivity) db.logActivity(user.id, 'federation_key_replaced_exposed', 'server', identity.nodeName, { keyId, cutOff });
+  res.json({ success: true, keyId, cutOff });
+});
+
+// An ally tells us of its next key. Accepted only if (1) it is signed with the
+// ally's current key (the middleware), (2) the new key signs a proof naming both
+// servers, and (3) the ally's own identity page, fetched from its address, lists
+// the same next key. Stored before answering, and the same announcement always
+// gets the same answer, so a lost answer costs only a resend.
+app.post('/api/federation/key-rotation', federationInboxLimiter, authenticateFederationRequest, async (req, res) => {
+  const node = req.federationNode;
+  const { nodeName, newPublicKey, newKeyId, proofDate, proof } = req.body || {};
+  if (nodeName !== node.nodeName) return res.status(400).json({ error: 'Announcement names another server' });
+  if (typeof newPublicKey !== 'string' || typeof proof !== 'string' || typeof proofDate !== 'string') {
+    return res.status(400).json({ error: 'Incomplete announcement' });
+  }
+  if (federationKeyId(newPublicKey) !== newKeyId) return res.status(400).json({ error: 'Key id does not match the key' });
+  if (req.federationKeyUsed !== 'current') return res.status(401).json({ error: 'Announcement must be signed with the current key' });
+
+  // Already switched to it: a resend after we answered.
+  if (federationKeyId(node.publicKey) === newKeyId) return res.json({ received: newKeyId });
+
+  const age = Math.abs(Date.now() - new Date(proofDate).getTime());
+  if (!Number.isFinite(age) || age > 5 * 60 * 1000) return res.status(401).json({ error: 'Proof date too old or in future' });
+  let proofOk = false;
+  try {
+    const v = crypto.createVerify('RSA-SHA256');
+    v.update(keyRotationProofString(node.nodeName, FEDERATION_NODE_NAME, newKeyId, proofDate));
+    proofOk = v.verify(newPublicKey, proof, 'base64');
+  } catch { proofOk = false; }
+  if (!proofOk) return res.status(401).json({ error: 'Proof is not signed by the new key' });
+
+  if (node.nextPublicKey !== newPublicKey) {
+    // The second channel: what the ally's own address says.
+    let listed = null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      try {
+        const r = await fetch(`${node.baseUrl.replace(/\/$/, '')}/api/federation/identity`, { signal: controller.signal, headers: { Accept: 'application/json' } });
+        listed = r.ok ? await r.json() : null;
+      } finally { clearTimeout(timer); }
+    } catch { listed = null; }
+    if (!listed) return res.status(502).json({ error: "Could not read the announcing server's identity to confirm the key" });
+    if (listed.nodeName !== node.nodeName || listed.nextKeyId !== newKeyId || listed.nextPublicKey !== newPublicKey) {
+      console.warn(`[federation] ${node.nodeName} announced key ${newKeyId}, but its identity page does not list it — refused`);
+      return res.status(409).json({ error: 'The identity page of the announcing server does not list this key' });
+    }
+    db.setNodeNextKey(node.id, newPublicKey);
+    console.log(`🔑 ${node.nodeName} announced its next key ${newKeyId}; accepted alongside the current one`);
+  }
+  res.json({ received: newKeyId });
+});
+
+// An ally cancelled a next key it had told us of. Signed with its current key,
+// or with its old one if we had already switched (so at any age).
+app.post('/api/federation/key-rotation/withdraw', federationInboxLimiter,
+  createFederationAuthMiddleware(['active'], { previousKeyAnyAge: true }), async (req, res) => {
+  const node = req.federationNode;
+  const { nodeName, keyId } = req.body || {};
+  if (nodeName !== node.nodeName || typeof keyId !== 'string') return res.status(400).json({ error: 'Invalid withdrawal' });
+  if (node.nextPublicKey && federationKeyId(node.nextPublicKey) === keyId) {
+    db.clearNodeNextKey(node.id);
+    console.log(`🔑 ${node.nodeName} withdrew its next key ${keyId}`);
+  } else if (federationKeyId(node.publicKey) === keyId && req.federationKeyUsed === 'previous') {
+    // We had switched; the ally went back to the key it kept. Its identity page
+    // must say so as well, or this is someone holding the old key.
+    let listed = null;
+    try {
+      const r = await fetch(`${node.baseUrl.replace(/\/$/, '')}/api/federation/identity`, { headers: { Accept: 'application/json' } });
+      listed = r.ok ? await r.json() : null;
+    } catch { listed = null; }
+    if (!listed || listed.keyId !== federationKeyId(node.previousPublicKey) || listed.nextKeyId === keyId) {
+      return res.status(409).json({ error: 'The identity page of the withdrawing server does not agree' });
+    }
+    db.revertNodeKey(node.id, node.publicKey);
+    console.log(`🔑 ${node.nodeName} withdrew key ${keyId}; back to the key it kept`);
+  }
+  res.json({ withdrawn: keyId });
+});
+
 // List trusted federation nodes (admin only)
 app.get('/api/admin/federation/nodes', authenticateToken, (req, res) => {
   const user = db.findUserById(req.user.userId);
   if (!requireRole(user, ROLES.ADMIN, res)) return;
 
   const status = req.query.status ? sanitizeInput(req.query.status) : null;
-  const nodes = db.getFederationNodes({ status });
+  // v2.147.0: each ally's key fingerprint, and whether it has announced a next one.
+  const nodes = db.getFederationNodes({ status }).map(n => ({
+    ...n,
+    keyId: federationKeyId(n.publicKey),
+    nextKeyId: federationKeyId(n.nextPublicKey),
+  }));
 
   res.json({ nodes, count: nodes.length });
 });
@@ -19221,20 +19624,31 @@ app.post('/api/admin/federation/nodes/:id/handshake', authenticateToken, async (
       });
     }
 
-    // Update our record with the remote server's public key and mark as active
+    // Update our record with the remote server's public key and mark as active.
+    // v2.147.0: say when the key changed, with both fingerprints, so the admin
+    // can compare the new one with the other server's admin. A key replaced at
+    // once (exposed) reaches its allies only this way.
+    const previousKeyId = federationKeyId(node.publicKey);
+    const keyId = federationKeyId(remoteIdentity.publicKey);
     const updatedNode = db.updateFederationNode(nodeId, {
       publicKey: remoteIdentity.publicKey,
       status: 'active',
       protocolVersion: remoteIdentity.protocolVersion || 1
     });
+    if (db.clearNodeNextKey) db.clearNodeNextKey(nodeId);
     db.recordFederationContact(nodeId, true);
 
     // Refresh decoy targets if cover traffic is active (v2.28.0)
     if (FEDERATION_DECOY_ENABLED) refreshDecoyTargets();
 
+    const keyChanged = !!previousKeyId && previousKeyId !== keyId;
+    if (keyChanged) console.warn(`🔑 ${node.nodeName}'s key changed on pairing again: ${previousKeyId} → ${keyId}`);
     res.json({
       success: true,
-      message: 'Handshake successful',
+      message: keyChanged
+        ? `Handshake successful. Its key CHANGED: ${keyId}. Check this fingerprint with ${node.nodeName}'s admin.`
+        : 'Handshake successful',
+      keyId, previousKeyId, keyChanged,
       node: updatedNode,
       remoteIdentity: {
         nodeName: remoteIdentity.nodeName,
@@ -30265,6 +30679,15 @@ async function processFederationQueue() {
       } else {
         const errorText = await response.text();
         const errorMsg = `HTTP ${response.status}: ${errorText.substring(0, 200)}`;
+        // v2.147.0 — a refused signature means the two servers disagree about a
+        // key, which a key handover or pairing again repairs. It doesn't use up
+        // an attempt; the message waits, for up to a week, instead of being lost.
+        const ageMs = Date.now() - new Date(msg.createdAt).getTime();
+        if (response.status === 401 && db.deferFederationMessage && ageMs < 7 * 24 * 60 * 60 * 1000) {
+          db.deferFederationMessage(msg.id, errorMsg, FEDERATION_KEY_RETRY_MS);
+          console.warn(`⏸  ${msg.targetNode} refused our signature for ${msg.messageType}; kept to try again`);
+          continue;
+        }
         db.markFederationMessageFailed(msg.id, errorMsg);
         console.error(`❌ Failed to deliver ${msg.messageType} to ${msg.targetNode}: ${errorMsg}`);
       }
