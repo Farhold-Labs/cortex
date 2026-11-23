@@ -4133,6 +4133,49 @@ export class DatabaseSQLite {
       CREATE INDEX IF NOT EXISTS idx_guest_cancel_tokens_guest ON guest_cancel_tokens(guest_rsvp_id);
     `);
 
+    // v2.147.0 — a server's federation key is replaced by handshake. Replacing
+    // it used to take effect at once, and every allied server refused us until
+    // its admin paired again by hand.
+    //   server_identity.next_*            our next key, held beside the current one
+    //                                     until every active ally has confirmed it
+    //   federation_key_handovers          per ally: told of the next key (announce)
+    //                                     or of a cancelled one (withdraw), and
+    //                                     whether it answered
+    //   federation_nodes.next_public_key  an ally's announced key, accepted from the
+    //                                     first request it signs
+    //   federation_nodes.previous_*       an ally's old key, accepted for a short
+    //                                     while after the switch, for requests in flight
+    const idCols = this.db.prepare('PRAGMA table_info(server_identity)').all().map(c => c.name);
+    if (idCols.length && !idCols.includes('next_public_key')) {
+      console.log('📝 Adding federation key handshake columns (v2.147.0)...');
+      this.db.exec(`
+        ALTER TABLE server_identity ADD COLUMN next_public_key TEXT;
+        ALTER TABLE server_identity ADD COLUMN next_private_key TEXT;
+        ALTER TABLE server_identity ADD COLUMN rotation_started_at TEXT;
+      `);
+    }
+    const fnCols = this.db.prepare('PRAGMA table_info(federation_nodes)').all().map(c => c.name);
+    if (fnCols.length && !fnCols.includes('next_public_key')) {
+      this.db.exec(`
+        ALTER TABLE federation_nodes ADD COLUMN next_public_key TEXT;
+        ALTER TABLE federation_nodes ADD COLUMN next_key_received_at TEXT;
+        ALTER TABLE federation_nodes ADD COLUMN previous_public_key TEXT;
+        ALTER TABLE federation_nodes ADD COLUMN previous_key_until TEXT;
+      `);
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS federation_key_handovers (
+        node_id         TEXT PRIMARY KEY REFERENCES federation_nodes(id) ON DELETE CASCADE,
+        key_id          TEXT NOT NULL,
+        action          TEXT NOT NULL DEFAULT 'announce',
+        created_at      TEXT NOT NULL,
+        last_attempt_at TEXT,
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        confirmed_at    TEXT
+      );
+    `);
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -9945,6 +9988,10 @@ export class DatabaseSQLite {
       nodeName: row.node_name,
       publicKey: row.public_key,
       privateKey: row.private_key,
+      // v2.147.0: the next key while a replacement is being handed over.
+      nextPublicKey: row.next_public_key || null,
+      nextPrivateKey: row.next_private_key || null,
+      rotationStartedAt: row.rotation_started_at || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
@@ -9970,6 +10017,121 @@ export class DatabaseSQLite {
     return this.getServerIdentity();
   }
 
+  // ============ Federation - Key Handover (v2.147.0) ============
+  //
+  // Our side: the next key is kept beside the current one, and each active ally
+  // has a row saying whether it confirmed receiving it. The current private key
+  // is replaced only when every active ally has.
+
+  startKeyRotation({ publicKey, privateKey }) {
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      this.db.prepare(`UPDATE server_identity SET next_public_key = ?, next_private_key = ?, rotation_started_at = ?, updated_at = ? WHERE id = 1`)
+        .run(publicKey, privateKey, now, now);
+      // Rows left from a cancelled change are withdrawals still owed; keep them.
+      this.db.prepare(`DELETE FROM federation_key_handovers WHERE action = 'announce'`).run();
+    })();
+    return this.getServerIdentity();
+  }
+
+  /** Every active ally confirmed: the next key becomes the key. */
+  completeKeyRotation() {
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      this.db.prepare(`UPDATE server_identity SET public_key = next_public_key, private_key = next_private_key,
+                         next_public_key = NULL, next_private_key = NULL, rotation_started_at = NULL, updated_at = ?
+                       WHERE id = 1 AND next_private_key IS NOT NULL`).run(now);
+      this.db.prepare(`DELETE FROM federation_key_handovers WHERE action = 'announce'`).run();
+    })();
+    return this.getServerIdentity();
+  }
+
+  /** Cancelled: the next private key is gone at once; allies are told to drop it. */
+  cancelKeyRotation(keyId) {
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      this.db.prepare(`UPDATE server_identity SET next_public_key = NULL, next_private_key = NULL, rotation_started_at = NULL, updated_at = ? WHERE id = 1`).run(now);
+      this.db.prepare(`UPDATE federation_key_handovers SET action = 'withdraw', key_id = ?, attempts = 0, last_attempt_at = NULL,
+                         last_error = NULL, confirmed_at = NULL, created_at = ? WHERE action = 'announce'`).run(keyId, now);
+    })();
+  }
+
+  /** The key was exposed: replaced at once, nothing announced (v2.147.0). */
+  replaceServerKeyNow({ publicKey, privateKey }) {
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      this.db.prepare(`UPDATE server_identity SET public_key = ?, private_key = ?, next_public_key = NULL, next_private_key = NULL,
+                         rotation_started_at = NULL, updated_at = ? WHERE id = 1`).run(publicKey, privateKey, now);
+      this.db.prepare('DELETE FROM federation_key_handovers').run();
+    })();
+    return this.getServerIdentity();
+  }
+
+  listKeyHandovers() {
+    return this.db.prepare(`
+      SELECT h.*, n.node_name, n.status AS node_status FROM federation_key_handovers h
+      LEFT JOIN federation_nodes n ON n.id = h.node_id ORDER BY n.node_name
+    `).all().map(r => ({
+      nodeId: r.node_id, nodeName: r.node_name || null, nodeStatus: r.node_status || null,
+      keyId: r.key_id, action: r.action, createdAt: r.created_at, lastAttemptAt: r.last_attempt_at,
+      attempts: r.attempts, lastError: r.last_error, confirmedAt: r.confirmed_at,
+    }));
+  }
+
+  getKeyHandover(nodeId) {
+    const r = this.db.prepare('SELECT * FROM federation_key_handovers WHERE node_id = ?').get(nodeId);
+    return r ? { nodeId: r.node_id, keyId: r.key_id, action: r.action, attempts: r.attempts, confirmedAt: r.confirmed_at,
+                 lastAttemptAt: r.last_attempt_at, lastError: r.last_error } : null;
+  }
+
+  ensureKeyHandover(nodeId, keyId) {
+    this.db.prepare(`INSERT INTO federation_key_handovers (node_id, key_id, action, created_at)
+                     VALUES (?, ?, 'announce', ?) ON CONFLICT(node_id) DO NOTHING`).run(nodeId, keyId, new Date().toISOString());
+    return this.getKeyHandover(nodeId);
+  }
+
+  recordKeyHandoverAttempt(nodeId, error = null) {
+    this.db.prepare(`UPDATE federation_key_handovers SET attempts = attempts + 1, last_attempt_at = ?, last_error = ? WHERE node_id = ?`)
+      .run(new Date().toISOString(), error ? String(error).slice(0, 300) : null, nodeId);
+  }
+
+  confirmKeyHandover(nodeId, keyId) {
+    const now = new Date().toISOString();
+    return this.db.prepare(`UPDATE federation_key_handovers SET confirmed_at = COALESCE(confirmed_at, ?), last_attempt_at = ?, last_error = NULL
+                            WHERE node_id = ? AND key_id = ? AND action = 'announce'`).run(now, now, nodeId, keyId).changes > 0;
+  }
+
+  deleteKeyHandover(nodeId) {
+    this.db.prepare('DELETE FROM federation_key_handovers WHERE node_id = ?').run(nodeId);
+  }
+
+  // An ally's side of the same change.
+
+  setNodeNextKey(nodeId, publicKey) {
+    this.db.prepare(`UPDATE federation_nodes SET next_public_key = ?, next_key_received_at = ?, updated_at = ? WHERE id = ?`)
+      .run(publicKey, new Date().toISOString(), new Date().toISOString(), nodeId);
+  }
+
+  /** The ally signed with its next key: that is its key now. The old one is kept for in-flight requests until `until`. */
+  promoteNodeKey(nodeId, expectedNextKey, until) {
+    return this.db.prepare(`UPDATE federation_nodes SET previous_public_key = public_key, previous_key_until = ?,
+                              public_key = next_public_key, next_public_key = NULL, next_key_received_at = NULL, updated_at = ?
+                            WHERE id = ? AND next_public_key = ?`).run(until, new Date().toISOString(), nodeId, expectedNextKey).changes > 0;
+  }
+
+  clearNodeNextKey(nodeId) {
+    this.db.prepare(`UPDATE federation_nodes SET next_public_key = NULL, next_key_received_at = NULL, updated_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), nodeId);
+  }
+
+  /** A change the ally cancelled after we had switched: back to the key it kept. */
+  revertNodeKey(nodeId, expectedCurrentKey) {
+    return this.db.prepare(`UPDATE federation_nodes SET public_key = previous_public_key, previous_public_key = NULL, previous_key_until = NULL,
+                              next_public_key = NULL, next_key_received_at = NULL, updated_at = ?
+                            WHERE id = ? AND public_key = ? AND previous_public_key IS NOT NULL`)
+      .run(new Date().toISOString(), nodeId, expectedCurrentKey).changes > 0;
+  }
+
   hasServerIdentity() {
     const row = this.db.prepare('SELECT COUNT(*) as count FROM server_identity').get();
     return row.count > 0;
@@ -9989,55 +10151,40 @@ export class DatabaseSQLite {
     query += ' ORDER BY created_at DESC';
 
     const rows = this.db.prepare(query).all(...params);
-    return rows.map(r => ({
-      id: r.id,
-      nodeName: r.node_name,
-      baseUrl: r.base_url,
-      publicKey: r.public_key,
-      status: r.status,
-      addedBy: r.added_by,
-      lastContactAt: r.last_contact_at,
-      failureCount: r.failure_count,
-      protocolVersion: r.protocol_version || 1,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at
-    }));
+    return rows.map(r => this.rowToFederationNode(r));
+  }
+
+  rowToFederationNode(row) {
+    return {
+      id: row.id,
+      nodeName: row.node_name,
+      baseUrl: row.base_url,
+      publicKey: row.public_key,
+      // v2.147.0: an ally's announced key, and its old one for requests in flight.
+      nextPublicKey: row.next_public_key || null,
+      nextKeyReceivedAt: row.next_key_received_at || null,
+      previousPublicKey: row.previous_public_key || null,
+      previousKeyUntil: row.previous_key_until || null,
+      status: row.status,
+      addedBy: row.added_by,
+      lastContactAt: row.last_contact_at,
+      failureCount: row.failure_count,
+      protocolVersion: row.protocol_version || 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
   }
 
   getFederationNode(nodeId) {
     const row = this.db.prepare('SELECT * FROM federation_nodes WHERE id = ?').get(nodeId);
     if (!row) return null;
-    return {
-      id: row.id,
-      nodeName: row.node_name,
-      baseUrl: row.base_url,
-      publicKey: row.public_key,
-      status: row.status,
-      addedBy: row.added_by,
-      lastContactAt: row.last_contact_at,
-      failureCount: row.failure_count,
-      protocolVersion: row.protocol_version || 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at
-    };
+    return this.rowToFederationNode(row);
   }
 
   getFederationNodeByName(nodeName) {
     const row = this.db.prepare('SELECT * FROM federation_nodes WHERE node_name = ?').get(nodeName);
     if (!row) return null;
-    return {
-      id: row.id,
-      nodeName: row.node_name,
-      baseUrl: row.base_url,
-      publicKey: row.public_key,
-      status: row.status,
-      addedBy: row.added_by,
-      lastContactAt: row.last_contact_at,
-      failureCount: row.failure_count,
-      protocolVersion: row.protocol_version || 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at
-    };
+    return this.rowToFederationNode(row);
   }
 
   addFederationNode({ nodeName, baseUrl, publicKey = null, status = 'pending', addedBy }) {
@@ -10092,6 +10239,9 @@ export class DatabaseSQLite {
   }
 
   deleteFederationNode(nodeId) {
+    // Foreign keys are not enforced on every connection; an unpaired ally must
+    // stop holding a key replacement open either way.
+    this.db.prepare('DELETE FROM federation_key_handovers WHERE node_id = ?').run(nodeId);
     const result = this.db.prepare('DELETE FROM federation_nodes WHERE id = ?').run(nodeId);
     return result.changes > 0;
   }
@@ -10611,6 +10761,15 @@ export class DatabaseSQLite {
     this.db.prepare(`
       UPDATE federation_queue SET status = 'delivered', delivered_at = ? WHERE id = ?
     `).run(now, messageId);
+  }
+
+  // v2.147.0 — try again later without using up an attempt. A signature the
+  // ally refuses means the two servers disagree about a key, which pairing
+  // again or a key handover repairs; dropping the message after five refusals
+  // lost it for good.
+  deferFederationMessage(messageId, error, delayMs) {
+    this.db.prepare(`UPDATE federation_queue SET next_retry_at = ?, last_error = ? WHERE id = ?`)
+      .run(new Date(Date.now() + delayMs).toISOString(), error, messageId);
   }
 
   markFederationMessageFailed(messageId, error) {

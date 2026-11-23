@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.147.0] - 2026-11-23
+
+**A server's federation key is replaced by handshake.** Replacing the key took effect at once and told no one. Every allied server went on checking our signatures against the key it had saved, so it refused everything: posts, edits, invitations, history, people signed in from another server. The queue then dropped each message after five refusals. This applies v2.146.1's rule to the last credential it left out: nothing is retired until its replacement is known to have arrived. Design: `docs/federation-keys/README.md`. **Migrates** (three columns on `server_identity`, four on `federation_nodes`, table `federation_key_handovers`). Every ally needs v2.147.0 before anyone changes a key.
+
+### Added
+- **REPLACE KEY** (Settings → ADMINISTRATION → FEDERATION → STATUS & IDENTITY):
+  - **Both keys during a change.** The next key waits beside the current one. Each active ally is told (`POST /api/federation/key-rotation`) and counts as having it only when it answers. An ally that doesn't answer is told again every 10 minutes, with no cap.
+  - **No ally sees a key it can't check.** We sign to an ally with the new key only after it confirmed. The ally switches when the new key first verifies, and accepts the old one for 5 more minutes for requests already in flight.
+  - **The old private key is deleted only when every active ally has confirmed.** An ally that is offline holds the change open; the panel shows each ally's state and last error. A suspended ally is still told but not waited for.
+- **[SECURITY] An announcement needs three things:** a signature by the current key, a proof signed by the new key naming both servers, and the announcer's own `/api/federation/identity`, fetched from its address, listing the same next key. A thief holding only the old key can't swap in a key of their own; they would need the domain as well.
+- **A lost answer costs only a resend.** The ally stores the key before replying and answers a repeat the same way.
+- **CANCEL** until any ally confirms. The new private key is deleted at once, and allies are told to forget it, including one whose answer was lost.
+- **KEY WAS EXPOSED** is the deliberate exception. After step-up and typing the server's name, the key is replaced at once and nobody is told, because an announcement signed by a leaked key is what the thief could forge. Each ally's admin presses the new **FETCH KEY AGAIN**, which says when the key changed and shows the fingerprint, and the two admins compare it over another channel.
+- **Key fingerprints** (32 hex characters of SHA-256 over the key) are shown for this server and for every ally, with any next key an ally has announced.
+
+### Fixed
+- **A refused signature no longer loses queued messages.** A `401` from an ally doesn't use up a delivery attempt; the message is kept and tried again for up to a week.
+- **The identity form refuses what used to break every pairing.** A name change while the server has allies is refused (409 `NAME_CHANGE_WITH_ALLIES`), since each ally knows the server by that name. `regenerateKeys` on an existing identity is refused (409 `USE_KEY_ROTATION`), since it went around the handover.
+
+### Verified
+- **`federation-key-handshake`** (new) runs three real servers, with two allies behind proxies that drop announcements or lose answers. It covers:
+  - an ally offline: the change stays open, A still signs to it with the old key, and nothing is deleted;
+  - a lost answer: the ally stored the key, and the resend finishes the change with nothing duplicated;
+  - the ally switching on first use, the old key accepted just after and refused once its 5 minutes are over;
+  - three forged announcements refused;
+  - a queued message kept after a 401, its attempts unused;
+  - refusals of a name change, of `regenerateKeys`, of a change during pairing, and of cancel after a confirmation;
+  - cancel, with the withdrawal reaching the ally whose answer was lost;
+  - a suspended ally told but not waited for;
+  - the exposed-key path, with the ally's re-fetch reporting the same fingerprint.
+- **Counterfactual:** a copy of `server.js` in which A signs with the new key before the ally confirmed. The ally that missed the announcement then refuses A, which is the failure this release prevents. It also showed that the announcement itself must always be signed with the current key.
+- Full suite 759/759.
+- Headless Chrome on dev at 390 px: the key panel, the in-progress view (status faked in the browser, so no change was started against dev's real allies) and the allies list, with no horizontal scroll and no errors. Dev's boot log shows the migration.
+
 ## [2.146.1] - 2026-11-23
 
 **Nothing is retired until its replacement is known to have arrived.** A person on farhold was signed out mid-sentence: their browser traded its refresh token for a new one, the answer never reached the tab, and 55 minutes later the tab presented the token it still had. The server took that for theft and ended every session the account had, including their phone's. **Migrates** (two columns on `refresh_tokens`, one on `user_sessions`, tables `credential_handovers` and `guest_cancel_tokens`).
@@ -25,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `token-handshake` (new, 18 tests): the lost answer resent unchanged with the other device untouched; two simultaneous presentations; confirmation by the confirm call, by any request and by presenting the new token; reuse after confirmation ending only that login; thief-first still caught; a dead login's replay not ending a new one; the pending token stored sealed and gone after confirmation; renew and password refresh; recovery codes (old works, new use retires old, explicit confirm); E2EE recovery key and keypair; bot keys (first use, admin retire); calendar links; guest cancel links; handovers removed with the account. **Counterfactual:** with the resend removed from a copy of `server.js`, the lost answer signs the person out (`SESSION_REVOKED`). Full suite 757/757.
 - Headless Chrome on dev (360 px), two tabs sharing one stored token with a broken access token: one swap, the receipt sent straight after it, both tabs still signed in, no errors.
 - Read on farhold (read-only) to find the cause: family `fam-42aa0b7b…` (Chrome/Windows) swapped at 12:59:52 and 12:59:53, the second token never used, reuse at 13:55:02.
-- **Not covered:** federation node keys. Regenerating them (`regenerateKeys` on the identity route) still switches at once; peers must acknowledge a new key, which needs a protocol and is left for its own change.
+- **Not covered:** federation node keys. Regenerating them (`regenerateKeys` on the identity route) still switches at once; peers must acknowledge a new key, which needs a protocol and is left for its own change (done in v2.147.0).
 
 ## [2.146.0] - 2026-11-22
 
