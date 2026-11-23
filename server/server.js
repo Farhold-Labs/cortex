@@ -19394,7 +19394,11 @@ app.post('/api/federation/key-rotation', federationInboxLimiter, authenticateFed
     return res.status(400).json({ error: 'Incomplete announcement' });
   }
   if (federationKeyId(newPublicKey) !== newKeyId) return res.status(400).json({ error: 'Key id does not match the key' });
-  if (req.federationKeyUsed !== 'current') return res.status(401).json({ error: 'Announcement must be signed with the current key' });
+  // The ally's current key. 'next' counts: a request verified with the key it
+  // announced earlier has just made that key its current one (v2.147.1 — a
+  // change straight after another was refused once, until the retry). Only
+  // the key it replaced may not announce.
+  if (req.federationKeyUsed === 'previous') return res.status(401).json({ error: 'Announcement must be signed with the current key' });
 
   // Already switched to it: a resend after we answered.
   if (federationKeyId(node.publicKey) === newKeyId) return res.json({ received: newKeyId });
