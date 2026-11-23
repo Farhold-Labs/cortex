@@ -4,6 +4,8 @@
 // web browsers, breaking native-app detection in pwa.js and constants.js.
 
 import { API_URL } from '../config/constants.js';
+import { canRingNatively } from './nativeCalls.js';
+import { getInstalledApp } from './installedApp.js';
 
 const FCM_TOKEN_KEY = 'farhold_fcm_token';
 const DEVICE_ID_KEY = 'farhold_device_id';
@@ -43,6 +45,15 @@ function getOrCreateDeviceId() {
     localStorage.setItem(DEVICE_ID_KEY, deviceId);
   }
   return deviceId;
+}
+
+/**
+ * What the server should know about this app when registering its token: the
+ * installed version, and whether it can ring for calls itself (v2.146.0).
+ */
+async function appDetails() {
+  const app = await getInstalledApp().catch(() => null);
+  return { appVersion: app?.version || null, features: canRingNatively() ? ['call-ring'] : [] };
 }
 
 function getPlatform() {
@@ -123,6 +134,7 @@ export async function registerCapacitorPush(authToken) {
         token,
         platform: getPlatform(),
         deviceId: getOrCreateDeviceId(),
+        ...(await appDetails()),
       }),
     });
 
@@ -193,6 +205,7 @@ export async function registerStoredFcmToken(authToken) {
         token: fcmToken,
         platform: getPlatform(),
         deviceId: getOrCreateDeviceId(),
+        ...(await appDetails()),
       }),
     });
 

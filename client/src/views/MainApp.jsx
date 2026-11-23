@@ -39,6 +39,8 @@ import { useVoiceCall } from '../hooks/useVoiceCall.js';
 import { voiceCallService } from '../services/VoiceCallService.js';
 // Eager, not lazy: a call has to be able to ring the moment it arrives.
 import { IncomingCallScreen, InterruptedCallBar, RingbackTone, isMissedCall } from '../components/calls/DirectCallUI.jsx';
+import { startNativeCalls, stopNativeRing, setCallOverLockScreen } from '../utils/nativeCalls.js';
+import { reportClientVersion } from '../utils/clientReport.js';
 import { initializeCustomTheme, applyCustomTheme, removeCustomTheme, getCurrentCustomTheme } from '../hooks/useTheme.js';
 import { T } from '../config/terminology.js';
 import HolidayEffectsOverlay from '../components/effects/HolidayEffectsOverlay.jsx';
@@ -1849,6 +1851,26 @@ function MainApp({ sharePingId }) {
   useEffect(() => {
     if (wsConnected) voiceCallService.loadLiveCall();
   }, [wsConnected]);
+  // The Android app's own ring (v2.146.0): ANSWER there opens the call here.
+  useEffect(() => startNativeCalls((callId) => voiceCallService.answerFromRing(callId)), []);
+  // Seen ending here first: silence the phone's ring. In a call: stay above
+  // the lock screen, as a phone call does, until it ends.
+  const ringingId = globalVoiceCall.incomingCall?.id || null;
+  const prevRingingId = useRef(null);
+  useEffect(() => {
+    if (prevRingingId.current && prevRingingId.current !== ringingId) stopNativeRing(prevRingingId.current);
+    prevRingingId.current = ringingId;
+  }, [ringingId]);
+  // Not on first render: ANSWER on a locked phone opened the app above the
+  // lock screen already, and the call is still being joined.
+  const inDirectCall = !!globalVoiceCall.directCall;
+  const wasInDirectCall = useRef(false);
+  useEffect(() => {
+    if (inDirectCall || wasInDirectCall.current) setCallOverLockScreen(inDirectCall);
+    wasInDirectCall.current = inDirectCall;
+  }, [inDirectCall]);
+  // Which builds are in use (v2.146.0): once per load, no account attached.
+  useEffect(() => { if (user) reportClientVersion(storage.getToken()); }, [user]);
   // Back online: key requests and renewals that came while away (v2.145.5).
   useEffect(() => {
     if (wsConnected && e2eeRef.current?.isUnlocked) e2eeRef.current.runPendingRotations();

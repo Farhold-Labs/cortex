@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.146.0] - 2026-11-22
+
+Direct calls phase 2: the Android app rings like a phone, over the lock screen and with the app closed. And admins can see which versions of the app are in use. **Migrates** (one new table, `client_versions`). **Needs the v2.146.0 APK** for the ring; older apps keep the v2.145 notification.
+
+### Added
+- **The Android app rings for a call like a phone call** (docs/direct-calls/, phase 2). The ring is the phone's own ringtone, repeating, with vibration, in a call-style notification with ANSWER and DECLINE. When the phone is locked or asleep it lights the screen with a full-screen call screen over the lock screen. ANSWER opens the app straight into the call, still above the lock screen until it ends. DECLINE tells the server without opening the app. The ring stops wherever the call stops ringing: answered on another device, given up by the caller, declined, or timed out.
+  - **How it gets there:** an app that can ring says so when it registers for push (`features: ['call-ring']`, from the new `CortexCalls` plugin). Only then is an incoming call sent as a high-priority FCM *data* message, which the app's own messaging service (`CallMessagingService`, in place of the push plugin's) turns into the ring. A data message to an older app would show nothing at all, so older apps keep the plain notification. When the call stops ringing the server sends a `call_ring_stop` the same way.
+  - **DECLINE with the app closed** has no session to use. The ring carries a token, an HMAC of the call and the callee, that can decline that one call while it rings and nothing else (`POST /api/calls/:id/decline-from-ring`). A wrong token gets the same 404 as a call that doesn't exist.
+  - With the app open, the app's own call screen rings instead, as in v2.145.0.
+  - **Needs `USE_FULL_SCREEN_INTENT`.** Google Play allows it only for calling and alarm apps and asks for a declaration in the Play Console; Cortex qualifies. Without the permission (the user can turn it off on Android 14+) the ring still comes as a heads-up call notification.
+- **Settings → ADMINISTRATION → CLIENT VERSIONS:** the installs seen in the last 30 days, by platform (Android, iPhone, desktop, installed web app, browser), installed app version and web build. Each install reports once per load under a random id it keeps (`POST /api/clients/report`); the server stores no account with it, and drops an install after 90 days without a report. The apps load their web build from the server, so the app version only matters for what the app does itself, such as this ring. Installs on a build before v2.146.0 don't report, so they don't show.
+  - The push registration also records the installed app's version with each Android push token.
+
+### Changed
+- `getInstalledApp()` moved from the About panel to `src/utils/installedApp.js`, shared with the version report.
+
+### Verified
+- `android-call-ring` (new, 4 tests): with Firebase replaced by a recorder, an app registered with `call-ring` gets a data message with no notification, caller, kind, deadline and a 64-hex decline token, high priority, living no longer than the ring; an older app's token on the same account gets the notification. Answering sends `call_ring_stop` to the ringing app only. Six wrong tokens, including the previous call's, are refused and leave it ringing; the token opens no other route (401); the right one declines and the caller hears it. Counterfactual: with the token check removed from a copy of `server.js`, a made-up token declines someone's call. Version reports: unauthenticated refused, bad ids and platforms 400, junk versions dropped, one row per install, admin-only counts, no account column.
+- The Android code compiles (`compileReleaseJavaWithJavac`); the merged manifest has `CallMessagingService` and not the push plugin's service. **The ring itself is not verified on a phone yet**: lock screen, screen off, app closed, ANSWER and DECLINE need a person with the APK.
+
 ## [2.145.5] - 2026-11-22
 
 A newcomer's request for an encrypted wave's older keys is answered even if nobody who holds them was online when they asked. No migration.

@@ -63,6 +63,7 @@ const AlertSubscriptionsPanel = React.lazy(() => import('../admin/AlertSubscript
 const EventsAdminPanel = React.lazy(() => import('../admin/EventsAdminPanel.jsx'));
 const FederationAdminPanel = React.lazy(() => import('../admin/FederationAdminPanel.jsx'));
 const HandleRequestsList = React.lazy(() => import('../admin/HandleRequestsList.jsx'));
+const ClientVersionsPanel = React.lazy(() => import('../admin/ClientVersionsPanel.jsx'));
 const BotsAdminPanel = React.lazy(() => import('../admin/BotsAdminPanel.jsx'));
 const SupportTicketsAdminPanel = React.lazy(() => import('../admin/SupportTicketsAdminPanel.jsx'));
 const PublicPortalAdminPanel = React.lazy(() => import('../admin/PublicPortalAdminPanel.jsx'));
@@ -2494,6 +2495,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
           <SupportTicketsAdminPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'support'} onToggle={() => toggleSub('support')} />
           <CommunityWaveReportPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'communityWaves'} onToggle={() => toggleSub('communityWaves')} />
           <PrivacyDashboard fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'privacy'} onToggle={() => toggleSub('privacy')} />
+          <ClientVersionsPanel fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} isOpen={openSub === 'clientVersions'} onToggle={() => toggleSub('clientVersions')} />
           </React.Suspense>
         </CollapsibleSection>
       )}

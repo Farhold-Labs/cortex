@@ -3,6 +3,7 @@ package com.farhold.cortex;
 import android.app.DownloadManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -11,6 +12,8 @@ import android.webkit.CookieManager;
 import android.webkit.URLUtil;
 import android.widget.Toast;
 
+import com.farhold.cortex.calls.CallRinger;
+import com.farhold.cortex.calls.CortexCallsPlugin;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -18,9 +21,29 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         // Local plugins must be registered before the bridge starts (v2.113.0).
         registerPlugin(OrientationPlugin.class);
+        registerPlugin(CortexCallsPlugin.class);
+        showOverLockScreenForCall(getIntent());
         super.onCreate(savedInstanceState);
         createNotificationChannel();
         enableFileDownloads();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        showOverLockScreenForCall(intent);
+        super.onNewIntent(intent);
+    }
+
+    /**
+     * ANSWER on a locked phone opens the call over the lock screen, as a phone
+     * call does (v2.146.0). The web layer turns this off when the call ends.
+     */
+    private void showOverLockScreenForCall(Intent intent) {
+        if (intent == null || !CallRinger.ACTION_ANSWER.equals(intent.getAction())) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        }
     }
 
     /**
