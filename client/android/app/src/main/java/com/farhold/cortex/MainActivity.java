@@ -1,6 +1,11 @@
 package com.farhold.cortex;
 
 import android.app.DownloadManager;
+import android.app.PictureInPictureParams;
+import android.content.res.Configuration;
+import android.util.Rational;
+
+import androidx.annotation.RequiresApi;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Intent;
@@ -26,6 +31,60 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         createNotificationChannel();
         enableFileDownloads();
+    }
+
+    // ===== A call in progress floats when you leave the app (v2.148.0) =====
+    //
+    // As the phone app does: press Home or switch apps during a call and
+    // Cortex shrinks into a floating window that keeps showing the call. The
+    // web layer shows only the call while it floats (the `pip` event).
+    private boolean callActive = false;
+    private boolean callVideo = false;
+
+    public void setCallActive(boolean active, boolean video) {
+        callActive = active;
+        callVideo = video;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                setPictureInPictureParams(pipParams());
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                // No floating windows on this device.
+            }
+        }
+        // The call ended while floating: put the window away, as the phone app does.
+        if (!active && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode()) {
+            moveTaskToBack(false);
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private PictureInPictureParams pipParams() {
+        PictureInPictureParams.Builder b = new PictureInPictureParams.Builder()
+            .setAspectRatio(callVideo ? new Rational(9, 16) : new Rational(1, 1));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android 12+: float as the app leaves, without a jump.
+            b.setAutoEnterEnabled(callActive).setSeamlessResizeEnabled(true);
+        }
+        return b.build();
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        // Android 8-11 have no auto-enter: float when the person leaves.
+        if (callActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            try {
+                enterPictureInPictureMode(pipParams());
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                // Floating windows turned off for the app.
+            }
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean inPip, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(inPip, newConfig);
+        CortexCallsPlugin.pictureInPictureChanged(inPip);
     }
 
     @Override

@@ -380,8 +380,12 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
     paddingRight: 'env(safe-area-inset-right, 0px)',
   };
 
+  // Floating (v2.148.0): the Android app shrank into its picture-in-picture
+  // window as the person left it. Only the call shows, edge to edge.
+  const floating = Boolean(voiceCall.pip);
+
   // Mobile: fixed bottom position
-  const containerStyle = isFullscreen ? fullscreenStyle : (isMobile ? {
+  const containerStyle = floating ? { ...fullscreenStyle, padding: 0, zIndex: 3000 } : isFullscreen ? fullscreenStyle : (isMobile ? {
     position: 'fixed',
     bottom: 0,
     left: 0,
@@ -470,8 +474,8 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
       <UprightCamera isMobile={isMobile} facing={voiceCall.facingMode} />
       {/* Dock window UI */}
       <div ref={windowRef} style={containerStyle}>
-        {/* Header */}
-        <div
+        {/* Header (not while floating) */}
+        {!floating && <div
           style={headerStyle}
           onMouseDown={isMobile ? undefined : handleMouseDown}
         >
@@ -585,14 +589,15 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
               </button>
             )}
           </div>
-        </div>
+        </div>}
 
-        {/* Video tiles area - only shown when maximized or fullscreen */}
-        {(isFullscreen || !voiceCall.dockMinimized) && (
+        {/* Video tiles area - only shown when maximized, fullscreen or floating */}
+        {(floating || isFullscreen || !voiceCall.dockMinimized) && (
           <>
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
               <CallStage isMobile={isMobile} status={callStatus} mirrorSelf={voiceCall.facingMode !== 'environment'} />
             </div>
+            {!floating && <>
 
             {/* Controls footer */}
             <div style={{
@@ -690,6 +695,7 @@ const DockedCallWindow = ({ voiceCall, isMobile, user }) => {
                 {directCall ? '📞 Hang up' : '📞 Leave'}
               </button>
             </div>
+            </>}
           </>
         )}
       </div>

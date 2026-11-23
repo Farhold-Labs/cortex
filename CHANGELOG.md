@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.148.0] - 2026-11-23
+
+Calls in the Android app behave like phone calls, two video calls that hung up just after being answered get a likely fix and a record, and leaving or removing someone always asks first. **Needs the v2.148.0 APK** for the call changes; the rest is server and web. No migration.
+
+### Added
+- **Call volume, not media volume** (Android app). While a call lasts the volume buttons set the call volume, as on a phone call; a phone with media turned down is no longer silent on a call. Sound goes to a connected headset or Bluetooth device, else the loudspeaker (never the earpiece), and follows a headset plugged in mid-call. Everything goes back when the call ends.
+- **The call floats when you leave the app** (Android app). Press Home or switch apps during a call and Cortex shrinks into a floating window that shows only the call, like the phone app. Tap it to go back.
+- **An ongoing-call notification** with HANG UP (Android app). It is also what keeps your microphone working while Cortex is off screen: Android silences the microphone of an app that isn't on screen unless it says it is in a call.
+- These apply to every call in the app: direct calls, wave calls and voice channels.
+
+### Fixed
+- **Two video calls on farhold (5:56pm EST, 2026-11-23) ended 0.8 s and 20 s after being answered.** The third, an audio call, lasted 18 minutes.
+  - **What the server recorded:** only the state changes. Nothing said who or what ended a call, and the same calls on dev in a browser stayed up.
+  - **Most likely cause:** an answered call ended the moment its room read empty. One side reconnecting while the other was still joining therefore hung it up.
+  - **The fix:** the room must now stay empty for 10 seconds (`DIRECT_CALL_EMPTY_GRACE_MS`).
+  - **Logging:** every call state change is now logged with a timestamp and its reason: who hung up and from which kind of app, no answer, or room empty for how long. Joins are logged too. The next failure will say what happened.
+- **Leaving or removing always asks, in the app.**
+  - Removing a contact and removing someone from a crew acted on one tap.
+  - Leaving a wave, leaving a crew and removing someone from a wave used the browser's own `confirm()`. A browser can be told to stop showing that, and it looks like the browser asking rather than Cortex.
+  - All five now ask with an in-app dialog (`askConfirm()`) that names the person or wave, with Cancel and the action spelled out. Cancel, a tap outside and Escape all mean no.
+- The full-screen ring registered its receiver in a way lint flagged; it uses `ContextCompat.registerReceiver` now. Behaviour is unchanged: it was already correct on Android 13+.
+
+### Verified
+- `direct-calls` adds a test that a room empty for a moment (the caller dropping and coming back before the callee joined) no longer ends the call, that it does end once the grace has passed, and that both are logged with their reason.
+- Headless Chrome on dev at 390 px:
+  - LEAVE in a wave's people panel shows the in-app dialog; Cancel keeps you in the wave and Leave leaves it, with no browser dialog either way.
+  - Removing a contact asks, and Cancel leaves the contacts unchanged.
+- A video call between two accounts on dev stayed up after the answer, so the farhold failures did not reproduce in a browser.
+- **Android:** the APK builds, and lint reports no errors. **Not tried on a phone:** call volume, the floating window and the notification need a device. This box has no emulator (no KVM).
+- Read on farhold (read-only, with permission): tonight's `direct_calls` rows and the API log, which had no call lines at all.
+
 ## [2.147.1] - 2026-11-23
 
 **A key replacement straight after another is confirmed at once.** Found replacing QA's key for real. The first replacement went through: dev and port1 confirmed within a second and switched on first use. A second one, started a few minutes later with no traffic in between, was refused by both allies ("Announcement must be signed with the current key"). Server only, no migration.
