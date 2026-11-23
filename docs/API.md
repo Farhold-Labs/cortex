@@ -4722,7 +4722,17 @@ States: `ringing` → `answered` → `ended`; or `declined` (the callee said no)
 | POST | `/api/calls/:id/answer` | the callee | `ringing` → `answered`. Of two devices answering at once, one gets 200, the other 409 `NOT_RINGING` |
 | POST | `/api/calls/:id/decline` | the callee | `ringing` → `declined`; does nothing otherwise |
 | POST | `/api/calls/:id/end` | either | hang up: a ringing call becomes `cancelled` (caller) or `declined` (callee), an answered one `ended`. Already over is not an error |
+| POST | `/api/calls/:id/decline-from-ring` | the ring's token | `{ token }`, no session (v2.146.0). DECLINE on the Android app's ring with the app closed. The token arrives in the ring's data message and declines that call only, while it rings. `{ state }`; a wrong token gets 404, like a call that doesn't exist. Rate limited as `/api/calls` |
 | POST | `/api/calls/:id/token` | either | `{ token, url, roomName }`. The caller while it rings or once answered; the callee only once answered; 409 `NOT_JOINABLE` otherwise |
+
+**The Android app's ring (v2.146.0).** An app registered for push with `features: ['call-ring']` (`POST /api/push/fcm/register`, which also takes `appVersion`) is sent an incoming call as a high-priority FCM data message, with no notification: `{ type: 'incoming_call', callId, callerName, kind, declineToken, expiresAt }` (milliseconds). When the call stops ringing, for any reason, it gets `{ type: 'call_ring_stop', callId, state }`. Other apps get the notification as before.
+
+#### Client versions (v2.146.0)
+
+| Method | Path | Who | What |
+|--------|------|-----|------|
+| POST | `/api/clients/report` | anyone signed in | `{ installId, platform, webVersion, appVersion }`. `installId` is a random id the install keeps (8 to 64 letters, digits, dashes); `platform` is `web`, `pwa`, `android`, `ios` or `desktop`. Versions that don't look like `2.146.0` are dropped. Stored by install, without the account |
+| GET | `/api/admin/client-versions` | admins | `{ since, days, serverVersion, versions: [{ platform, webVersion, appVersion, installs, lastSeen }] }`, installs seen in the last 30 days |
 
 - **WebSocket `direct_call`** `{ call }` goes to every device of both people on every change. A device that answered knows it; the others stop ringing.
 - **Push.** The callee gets `incoming_call` (`tag: call-<id>`, `ring: true`), and on `missed`, `cancelled` or `busy` a `missed_call` notification with the same tag, which replaces it. The missed call is also a notification of type `missed_call`.

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.145.5**. Last brought current 2026-10-30.
+Current version: **2.146.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2145005 / versionName "2.145.5"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2145005 / MARKETING_VERSION 2.145.5
+client/android/app/build.gradle                  versionCode 2146000 / versionName "2.146.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2146000 / MARKETING_VERSION 2.146.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -344,7 +344,7 @@ A member streams to a wave through LiveKit; viewers get hidden, subscribe-only t
 - **What someone may publish is one rule** (v2.119.0), `voiceSourcesFor()`: capabilities, the stage, the camera limit. It goes into the token and is re-applied to live connections with UpdateParticipant whenever it could change. Stage flags live in LiveKit participant metadata.
 - **Voice channel media is end-to-end encrypted against LiveKit** (v2.119.0); the key is derived from the room's session id and `JWT_SECRET`.
 - **Call video goes through `CallStage.jsx` (v2.144.0):** the other person fills the space and you are a preview; rules in `utils/callLayout.js`, room options in `callRoomOptions()`. `index.html` forces LiveKit videos to `object-fit: contain !important`, so the stage sets fit through `--call-fit` and a more specific rule.
-- **Direct calls (v2.145.0, `docs/direct-calls/`):** one person rings a contact, outside waves, in room `call-<id>`. The `direct_calls` row's state is the only judge of who gets a token; move it only through `moveCall()` (an atomic `UPDATE … WHERE state IN`, so one answer wins) and every change goes to both people as `direct_call`. Ringing needs contacts both ways (`isMutualContact`): anyone can add anyone as a contact without asking. The app's ring and call state live in `VoiceCallService` (`directCall`, `incomingCall`) and `DirectCallUI.jsx`.
+- **Direct calls (v2.145.0, `docs/direct-calls/`):** one person rings a contact, outside waves, in room `call-<id>`. The `direct_calls` row's state is the only judge of who gets a token; move it only through `moveCall()` (an atomic `UPDATE … WHERE state IN`, so one answer wins) and every change goes to both people as `direct_call`. Ringing needs contacts both ways (`isMutualContact`): anyone can add anyone as a contact without asking. The app's ring and call state live in `VoiceCallService` (`directCall`, `incomingCall`) and `DirectCallUI.jsx`. Since v2.146.0 the Android app rings natively (`calls/` in the Android project, `utils/nativeCalls.js`), but only for a push token registered with `call-ring`: a data message to an older APK shows nothing, so never send calls as data-only to every token.
 - **Sign LiveKit tokens with `livekitJwt(at)`, never `at.toJwt()`.** The SDK dates tokens 0, and LiveKit refuses a token dated before someone's removal, so a removed person could never rejoin (v2.119.0).
 
 ### Federation
@@ -471,7 +471,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/DEPLOYMENT.md** — hardened VPS deployment, hardware sizing, broadcasts/recording setup, release backups
 - **docs/HIGH-AVAILABILITY.md** — proposed warm-standby failover (DNS health checks, Litestream, lease + boot guard); not built yet
 - **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0, phase 5 folders and audience labels in v2.135.0, phase 6 federated audience v2.136.1, invitations v2.137.0, groups and travellers v2.138.0)
-- **docs/direct-calls/** — ringing a contact, outside waves (decided 2026-11-22; phase 1 built in v2.145.0, phases 2 and 3 not built)
+- **docs/direct-calls/** — ringing a contact, outside waves (decided 2026-11-22; phase 1 built in v2.145.0, phase 2 in v2.146.0, phase 3 not built)
 - **docs/federated-e2ee/** — encryption across servers (decided 2026-11-20, not built; phase 0 = local [SECURITY] fixes)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap

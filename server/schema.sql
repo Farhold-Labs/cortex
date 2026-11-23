@@ -1633,6 +1633,16 @@ CREATE INDEX IF NOT EXISTS idx_direct_calls_caller ON direct_calls(caller_id, cr
 CREATE INDEX IF NOT EXISTS idx_direct_calls_callee ON direct_calls(callee_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_direct_calls_live ON direct_calls(state) WHERE state IN ('ringing', 'answered');
 
+CREATE TABLE IF NOT EXISTS client_versions (
+        install_id  TEXT PRIMARY KEY,
+        platform    TEXT NOT NULL,
+        web_version TEXT,
+        app_version TEXT,
+        first_seen  TEXT NOT NULL,
+        last_seen   TEXT NOT NULL
+      );
+CREATE INDEX IF NOT EXISTS idx_client_versions_seen ON client_versions(last_seen);
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
