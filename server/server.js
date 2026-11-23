@@ -7403,6 +7403,29 @@ app.get('/api/e2ee/rekey-needed', authenticateToken, (req, res) => {
   }
 });
 
+// Key requests this person's device can answer (v2.145.5). A request was
+// only ever pushed to whoever was online when it was made, so a newcomer
+// waited until a member happened to be online at the same moment. Each entry
+// lists the versions the requester lacks that this person holds; requests
+// from someone no longer in the wave, or now missing nothing this person
+// can give, are left out.
+app.get('/api/e2ee/key-requests', authenticateToken, (req, res) => {
+  try {
+    const me = req.user.userId;
+    const requests = [];
+    for (const r of db.pendingWaveKeyRequestsFor(me)) {
+      if (!canAccessWaveFromCache(r.wave_id, me) || !canAccessWaveFromCache(r.wave_id, r.requester_id)) continue;
+      const mine = new Set(db.getAllWaveKeysForUser(r.wave_id, me).map(k => k.keyVersion));
+      const versions = db.missingWaveKeyVersions(r.wave_id, r.requester_id).filter(v => mine.has(v));
+      if (versions.length) requests.push({ requestId: r.id, waveId: r.wave_id, requesterId: r.requester_id, versions });
+    }
+    res.json({ requests });
+  } catch (err) {
+    console.error('Key request list error:', err);
+    res.status(500).json({ error: 'Failed to list key requests' });
+  }
+});
+
 // Rotate user keypair (generate new keys with new passphrase)
 app.post('/api/e2ee/keys/rotate', authenticateToken, (req, res) => {
   try {
