@@ -16,6 +16,8 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [selectedBot, setSelectedBot] = useState(null);
   const [newApiKey, setNewApiKey] = useState(null);
+  // The bot whose old key still works beside the new one (v2.146.1).
+  const [oldKeyBotId, setOldKeyBotId] = useState(null);
   const [newWebhookSecret, setNewWebhookSecret] = useState(null);
   const [postingTokens, setPostingTokens] = useState([]);
 
@@ -105,11 +107,12 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
 
   // Regenerate API key
   const handleRegenerateKey = async (botId) => {
-    if (!confirm(CONFIRM_DIALOG.regenerateKey)) return;
+    if (!confirm(CONFIRM_DIALOG.regenerateBotKey)) return;
 
     try {
       const data = await fetchAPI(`/admin/bots/${botId}/regenerate`, { method: 'POST' });
       setNewApiKey(data.apiKey);
+      setOldKeyBotId(data.oldKeyActive ? botId : null);
       setNewWebhookSecret(null);
       setShowApiKeyModal(true);
       showToast('API key regenerated', 'success');
@@ -460,6 +463,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
         }} onClick={() => {
           setShowApiKeyModal(false);
           setNewApiKey(null);
+          setOldKeyBotId(null);
           setNewWebhookSecret(null);
         }}>
           <div style={{
@@ -474,6 +478,30 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
             <div style={{ color: 'var(--accent-orange)', fontSize: '0.85rem', fontWeight: 500 }}>
               This API key will only be shown once. Save it securely!
             </div>
+
+            {oldKeyBotId && (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                The old key keeps working until the bot first uses this one. If the old key leaked, retire it now.
+                <button
+                  onClick={async () => {
+                    try {
+                      await fetchAPI(`/admin/bots/${oldKeyBotId}/regenerate/confirm`, { method: 'POST' });
+                      setOldKeyBotId(null);
+                      showToast('Old key retired', 'success');
+                    } catch (err) {
+                      showToast(err.message || formatError('Failed to retire the old key'), 'error');
+                    }
+                  }}
+                  style={{
+                    display: 'block', marginTop: '8px', padding: '8px 12px',
+                    background: 'var(--accent-orange)20', border: '1px solid var(--accent-orange)',
+                    color: 'var(--accent-orange)', cursor: 'pointer', fontSize: '0.75rem',
+                  }}
+                >
+                  RETIRE OLD KEY NOW
+                </button>
+              </div>
+            )}
 
             <div>
               <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '6px' }}>
@@ -562,6 +590,7 @@ const BotsAdminPanel = ({ fetchAPI, showToast, isMobile, isOpen, onToggle }) => 
               onClick={() => {
                 setShowApiKeyModal(false);
                 setNewApiKey(null);
+                setOldKeyBotId(null);
                 setNewWebhookSecret(null);
               }}
               style={{

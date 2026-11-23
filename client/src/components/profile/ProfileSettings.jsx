@@ -108,6 +108,8 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
   const [emailVerifyCode, setEmailVerifyCode] = useState('');
   const [emailChallengeId, setEmailChallengeId] = useState(null);
   const [recoveryCodes, setRecoveryCodes] = useState(null);
+  // New codes replacing old ones wait for "I'VE SAVED THEM" (v2.146.1).
+  const [recoveryCodesPending, setRecoveryCodesPending] = useState(false);
   const [mfaLoading, setMfaLoading] = useState(false);
   const [mfaDisablePassword, setMfaDisablePassword] = useState('');
   const [mfaDisableCode, setMfaDisableCode] = useState('');
@@ -231,6 +233,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
     try {
       const data = await fetchAPI('/auth/mfa/totp/verify', { method: 'POST', body: { code: totpVerifyCode } });
       setRecoveryCodes(data.recoveryCodes);
+      setRecoveryCodesPending(!!data.pendingConfirm);
       setMfaSetupStep(null);
       setTotpSetupData(null);
       setTotpVerifyCode('');
@@ -342,6 +345,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
       }
       const data = await fetchAPI('/auth/mfa/recovery/regenerate', { method: 'POST', body });
       setRecoveryCodes(data.recoveryCodes);
+      setRecoveryCodesPending(!!data.pendingConfirm);
       setMfaDisablePassword('');
       setMfaDisableCode('');
       showToast('Recovery codes regenerated', 'success');
@@ -1764,6 +1768,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                     </div>
                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
                       Store these codes in a safe place. Each code can only be used once. You won't be able to see them again!
+                      {recoveryCodesPending && ' Your old codes keep working until you press I\'VE SAVED THEM.'}
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', marginBottom: '12px' }}>
                       {recoveryCodes.map((code, i) => (
@@ -1783,7 +1788,18 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                         COPY CODES
                       </button>
                       <button
-                        onClick={() => setRecoveryCodes(null)}
+                        onClick={async () => {
+                          if (recoveryCodesPending) {
+                            try {
+                              await fetchAPI('/auth/mfa/recovery/confirm', { method: 'POST' });
+                            } catch (err) {
+                              showToast(err.message || formatError('Could not confirm. Your old codes still work.'), 'error');
+                              return;
+                            }
+                          }
+                          setRecoveryCodes(null);
+                          setRecoveryCodesPending(false);
+                        }}
                         style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--border-primary)', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem' }}
                       >
                         I'VE SAVED THEM
@@ -2054,7 +2070,16 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                       {e2eeRecoveryCopied ? '✓ COPIED' : 'COPY KEY'}
                     </button>
                     <button
-                      onClick={() => setE2eeRecoveryKey(null)}
+                      onClick={async () => {
+                        // The new key replaces the old one only now (v2.146.1).
+                        try {
+                          await fetchAPI('/e2ee/recovery/confirm', { method: 'POST' });
+                        } catch (err) {
+                          showToast(err.message || formatError('Could not confirm. Your old recovery key still works.'), 'error');
+                          return;
+                        }
+                        setE2eeRecoveryKey(null);
+                      }}
                       style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--border-primary)', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem' }}
                     >
                       I'VE SAVED IT
@@ -2062,7 +2087,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                   </div>
                   <div style={{ marginTop: '12px', padding: '8px', background: 'var(--accent-orange)10', border: '1px solid var(--accent-orange)', borderRadius: '4px' }}>
                     <div style={{ color: 'var(--accent-orange)', fontSize: '0.75rem' }}>
-                      ⚠️ This key will only be shown once. Your old recovery key is now invalid.
+                      ⚠️ This key will only be shown once. Your old recovery key keeps working until you press I'VE SAVED IT.
                     </div>
                   </div>
                 </div>
@@ -2118,7 +2143,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                   </button>
 
                   <div style={{ marginTop: '12px', color: 'var(--text-dim)', fontSize: '0.7rem' }}>
-                    Note: Generating a new recovery key will invalidate your previous recovery key.
+                    Note: Once you confirm you've saved a new recovery key, your previous one stops working.
                   </div>
                 </>
               )}

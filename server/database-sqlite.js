@@ -4085,6 +4085,54 @@ export class DatabaseSQLite {
       CREATE INDEX IF NOT EXISTS idx_client_versions_seen ON client_versions(last_seen);
     `);
 
+    // v2.146.1 — nothing is retired until its replacement is known to have
+    // arrived. A refresh token swapped for a new one stayed retired even when the
+    // answer never reached the client, and the client's retry then read as theft
+    // and signed the person out everywhere.
+    //   refresh_tokens.confirmed_at    the holder has shown it has this token
+    //   refresh_tokens.pending_secret  the token, sealed, kept only until then, so a
+    //                                  lost answer can be sent again unchanged
+    //   user_sessions.family_id        the login an access session belongs to, so a
+    //                                  real reuse ends that login, not every device
+    //   credential_handovers           a regenerated secret waiting to be confirmed;
+    //                                  the current one stays valid until it is
+    //   guest_cancel_tokens            every cancel link a guest was emailed
+    const rtCols = this.db.prepare('PRAGMA table_info(refresh_tokens)').all().map(c => c.name);
+    if (rtCols.length && !rtCols.includes('confirmed_at')) {
+      console.log('📝 Adding refresh-token handshake columns (v2.146.1)...');
+      this.db.exec(`
+        ALTER TABLE refresh_tokens ADD COLUMN confirmed_at TEXT;
+        ALTER TABLE refresh_tokens ADD COLUMN pending_secret TEXT;
+      `);
+      // A token already redeemed was plainly received.
+      this.db.exec('UPDATE refresh_tokens SET confirmed_at = used_at WHERE used_at IS NOT NULL');
+    }
+    if (rtCols.length) {
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_refresh_parent ON refresh_tokens(parent_id)');
+    }
+    const sessCols = this.db.prepare('PRAGMA table_info(user_sessions)').all().map(c => c.name);
+    if (sessCols.length && !sessCols.includes('family_id')) {
+      this.db.exec('ALTER TABLE user_sessions ADD COLUMN family_id TEXT');
+    }
+    if (sessCols.length) {
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_family ON user_sessions(family_id)');
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS credential_handovers (
+        kind       TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        payload    TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (kind, subject_id)
+      );
+      CREATE TABLE IF NOT EXISTS guest_cancel_tokens (
+        token_hash    TEXT PRIMARY KEY,
+        guest_rsvp_id TEXT NOT NULL REFERENCES event_rsvp_guest(id) ON DELETE CASCADE,
+        created_at    TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_guest_cancel_tokens_guest ON guest_cancel_tokens(guest_rsvp_id);
+    `);
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -5015,6 +5063,10 @@ export class DatabaseSQLite {
   storeRecoveryCodes(userId, hashedCodes) {
     const now = new Date().toISOString();
     const codesJson = JSON.stringify(hashedCodes);
+    // Whatever set is stored now is the set: one still waiting for confirmation
+    // (v2.146.1) is dropped, so an admin's reset or a fresh set cannot leave
+    // codes the person thinks are gone.
+    this.db.prepare(`DELETE FROM credential_handovers WHERE kind = 'mfa-recovery-codes' AND subject_id = ?`).run(userId);
     const existing = this.db.prepare('SELECT user_id FROM user_mfa WHERE user_id = ?').get(userId);
 
     if (existing) {
@@ -10839,20 +10891,35 @@ export class DatabaseSQLite {
   // and in the client's storage.
 
   createRefreshToken({ id, userId, familyId, tokenHash, parentId = null, deviceInfo = null,
-                       deviceLabel = null, ipAddress = null, expiresAt, absoluteExpiresAt = null }) {
+                       deviceLabel = null, ipAddress = null, expiresAt, absoluteExpiresAt = null,
+                       pendingSecret = null }) {
     const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO refresh_tokens
         (id, user_id, family_id, token_hash, parent_id, device_info, device_label,
-         ip_address, created_at, expires_at, absolute_expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ip_address, created_at, expires_at, absolute_expires_at, pending_secret)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, userId, familyId, tokenHash, parentId, deviceInfo, deviceLabel,
-           ipAddress, now, expiresAt, absoluteExpiresAt);
+           ipAddress, now, expiresAt, absoluteExpiresAt, pendingSecret);
     return { id, userId, familyId, expiresAt, absoluteExpiresAt, createdAt: now };
   }
 
   getRefreshTokenByHash(tokenHash) {
-    const r = this.db.prepare('SELECT * FROM refresh_tokens WHERE token_hash = ?').get(tokenHash);
+    return this.refreshTokenRow(this.db.prepare('SELECT * FROM refresh_tokens WHERE token_hash = ?').get(tokenHash));
+  }
+
+  getRefreshTokenById(id) {
+    return this.refreshTokenRow(this.db.prepare('SELECT * FROM refresh_tokens WHERE id = ?').get(id));
+  }
+
+  // The swap made from this token, while it still stands (v2.146.1).
+  getLiveChildRefreshToken(parentId) {
+    return this.refreshTokenRow(this.db.prepare(
+      'SELECT * FROM refresh_tokens WHERE parent_id = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1'
+    ).get(parentId));
+  }
+
+  refreshTokenRow(r) {
     if (!r) return null;
     return {
       id: r.id, userId: r.user_id, familyId: r.family_id, parentId: r.parent_id,
@@ -10860,12 +10927,28 @@ export class DatabaseSQLite {
       createdAt: r.created_at, lastUsedAt: r.last_used_at,
       expiresAt: r.expires_at, absoluteExpiresAt: r.absolute_expires_at,
       usedAt: r.used_at, revokedAt: r.revoked_at, revokedReason: r.revoked_reason,
+      confirmedAt: r.confirmed_at || null, pendingSecret: r.pending_secret || null,
     };
   }
 
+  // Presenting a token is itself proof the holder has it, so redeeming confirms.
   markRefreshTokenUsed(id) {
-    this.db.prepare('UPDATE refresh_tokens SET used_at = ?, last_used_at = ? WHERE id = ?')
-      .run(new Date().toISOString(), new Date().toISOString(), id);
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE refresh_tokens SET used_at = ?, last_used_at = ?,
+        confirmed_at = COALESCE(confirmed_at, ?), pending_secret = NULL
+      WHERE id = ?
+    `).run(now, now, now, id);
+  }
+
+  // The holder has shown it received this token (v2.146.1). Its parent is
+  // retired from here on, and the sealed copy kept for resending is dropped.
+  // True only the first time, and never for a withdrawn token.
+  confirmRefreshToken(id) {
+    return this.db.prepare(`
+      UPDATE refresh_tokens SET confirmed_at = ?, pending_secret = NULL
+      WHERE id = ? AND confirmed_at IS NULL AND revoked_at IS NULL
+    `).run(new Date().toISOString(), id).changes > 0;
   }
 
   // Revoking the family, not the token, is the point: on a detected reuse we
@@ -10928,6 +11011,46 @@ export class DatabaseSQLite {
   pruneRefreshTokens(graceDays = 30) {
     const cutoff = new Date(Date.now() - graceDays * 86400000).toISOString();
     return this.db.prepare('DELETE FROM refresh_tokens WHERE expires_at < ?').run(cutoff).changes;
+  }
+
+  // ============ Credential handovers (v2.146.1) ============
+  // A regenerated secret waits here until its holder shows it arrived; the one
+  // it replaces stays valid until then. Only hashes and client-encrypted blobs
+  // are stored, never a usable secret. One pending replacement per kind and
+  // subject: regenerating again replaces the unconfirmed one, which nobody has.
+
+  setHandover(kind, subjectId, payload) {
+    this.db.prepare(`
+      INSERT INTO credential_handovers (kind, subject_id, payload, created_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(kind, subject_id) DO UPDATE SET payload = excluded.payload, created_at = excluded.created_at
+    `).run(kind, subjectId, JSON.stringify(payload), new Date().toISOString());
+  }
+
+  getHandover(kind, subjectId) {
+    const r = this.db.prepare('SELECT payload, created_at FROM credential_handovers WHERE kind = ? AND subject_id = ?')
+      .get(kind, subjectId);
+    if (!r) return null;
+    try { return { payload: JSON.parse(r.payload), createdAt: r.created_at }; } catch { return null; }
+  }
+
+  // Take the pending replacement, if it is still there. Two confirmations
+  // racing each other get it once.
+  takeHandover(kind, subjectId) {
+    const r = this.db.prepare('DELETE FROM credential_handovers WHERE kind = ? AND subject_id = ? RETURNING payload')
+      .get(kind, subjectId);
+    if (!r) return null;
+    try { return JSON.parse(r.payload); } catch { return null; }
+  }
+
+  findHandoverByField(kind, field, value) {
+    const rows = this.db.prepare('SELECT subject_id, payload FROM credential_handovers WHERE kind = ?').all(kind);
+    for (const r of rows) {
+      try {
+        const payload = JSON.parse(r.payload);
+        if (payload?.[field] === value) return { subjectId: r.subject_id, payload };
+      } catch { /* skip */ }
+    }
+    return null;
   }
 
   // ============ Known Devices (v2.75.0) ============
@@ -11407,14 +11530,14 @@ export class DatabaseSQLite {
 
   // Create a new session
   // deviceInfo and ipAddress should be pre-anonymized by caller (v2.16.0)
-  createSession({ userId, tokenHash, deviceInfo, ipAddress, expiresAt, createdAt }) {
+  createSession({ userId, tokenHash, deviceInfo, ipAddress, expiresAt, createdAt, familyId = null }) {
     const id = `sess-${uuidv4()}`;
     const timestamp = createdAt || new Date().toISOString();
 
     this.db.prepare(`
-      INSERT INTO user_sessions (id, user_id, token_hash, device_info, ip_address, created_at, last_active, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, userId, tokenHash, deviceInfo || 'Unknown', ipAddress || 'Unknown', timestamp, timestamp, expiresAt);
+      INSERT INTO user_sessions (id, user_id, token_hash, device_info, ip_address, created_at, last_active, expires_at, family_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, userId, tokenHash, deviceInfo || 'Unknown', ipAddress || 'Unknown', timestamp, timestamp, expiresAt, familyId);
 
     return { id, userId, tokenHash, deviceInfo, ipAddress, createdAt: timestamp, lastActive: timestamp, expiresAt, revoked: false };
   }
@@ -11490,6 +11613,14 @@ export class DatabaseSQLite {
   }
 
   // Revoke all sessions for a user except one
+  // The access sessions of one login (v2.146.1).
+  revokeFamilySessions(userId, familyId) {
+    return this.db.prepare(`
+      UPDATE user_sessions SET revoked = 1, revoked_at = ?
+      WHERE user_id = ? AND family_id = ? AND revoked = 0
+    `).run(new Date().toISOString(), userId, familyId).changes;
+  }
+
   revokeAllUserSessions(userId, exceptSessionId = null) {
     const now = new Date().toISOString();
     if (exceptSessionId) {
@@ -11813,6 +11944,12 @@ export class DatabaseSQLite {
       // 4. Delete password reset tokens
       try {
         this.db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').run(userId);
+      } catch { /* Table may not exist */ }
+
+      // Unconfirmed replacements (v2.146.1). Keyed by subject with no foreign
+      // key, because a subject can be a bot, so nothing cascades them.
+      try {
+        this.db.prepare('DELETE FROM credential_handovers WHERE subject_id = ?').run(userId);
       } catch { /* Table may not exist */ }
 
       // 5. Delete notifications
@@ -12892,6 +13029,7 @@ export class DatabaseSQLite {
    * Delete bot (cascades to permissions and keys)
    */
   deleteBot(botId) {
+    this.db.prepare(`DELETE FROM credential_handovers WHERE kind = 'bot-key' AND subject_id = ?`).run(botId);
     const result = this.db.prepare('DELETE FROM bots WHERE id = ?').run(botId);
     return result.changes > 0;
   }
@@ -13903,18 +14041,23 @@ export class DatabaseSQLite {
     `).run(`grem-${crypto.randomUUID()}`, eventId, guestRsvpId, window, new Date().toISOString());
   }
 
-  // Issue a fresh cancellation token for a guest RSVP and store only its hash.
-  // Rotating means the newest email always carries a working link and older
-  // ones stop working — the same trade-off as any "use the latest email" flow,
-  // and the alternative would be storing a token we could replay ourselves.
+  // Issue a fresh cancellation token for a reminder email and store only its
+  // hash. Until v2.146.1 each new one replaced the last, so a reminder that
+  // never arrived left the guest's earlier links dead. Every link a guest was
+  // sent now keeps working until the RSVP itself goes.
   rotateGuestCancelToken(guestRsvpId) {
     const token = crypto.randomBytes(24).toString('hex');
     const hash = crypto.createHash('sha256').update(token).digest('hex');
-    this.db.prepare(`UPDATE event_rsvp_guest SET cancel_token_hash = ? WHERE id = ?`).run(hash, guestRsvpId);
+    this.db.prepare(`INSERT INTO guest_cancel_tokens (token_hash, guest_rsvp_id, created_at) VALUES (?, ?, ?)`)
+      .run(hash, guestRsvpId, new Date().toISOString());
     return token;
   }
 
   cancelGuestRsvpByToken(cancelTokenHash) {
+    const viaEmail = this.db.prepare(`SELECT guest_rsvp_id FROM guest_cancel_tokens WHERE token_hash = ?`).get(cancelTokenHash);
+    if (viaEmail) {
+      return this.db.prepare(`DELETE FROM event_rsvp_guest WHERE id = ?`).run(viaEmail.guest_rsvp_id).changes > 0;
+    }
     return this.db.prepare(
       `DELETE FROM event_rsvp_guest WHERE cancel_token_hash = ?`
     ).run(cancelTokenHash).changes > 0;
@@ -15233,13 +15376,35 @@ export class DatabaseSQLite {
     return { plaintext };
   }
 
+  // v2.146.1: the new link waits as a handover and the old one keeps working
+  // until the new one is first used, or the person retires the old one.
   regenerateCalendarFeedToken(userId) {
-    this.db.prepare(`DELETE FROM calendar_feed_tokens WHERE user_id = ?`).run(userId);
-    return this.getOrCreateCalendarFeedToken(userId);
+    if (!this.db.prepare(`SELECT 1 FROM calendar_feed_tokens WHERE user_id = ?`).get(userId)) {
+      return this.getOrCreateCalendarFeedToken(userId);
+    }
+    const plaintext = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(plaintext).digest('hex');
+    this.setHandover('calendar-feed', userId, { tokenHash });
+    return { plaintext, pending: true };
+  }
+
+  // Put a pending calendar link in place of the current one. False if there
+  // was nothing pending.
+  promoteCalendarFeedToken(userId) {
+    const pending = this.takeHandover('calendar-feed', userId);
+    if (!pending?.tokenHash) return false;
+    this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM calendar_feed_tokens WHERE user_id = ?`).run(userId);
+      this.db.prepare(`INSERT INTO calendar_feed_tokens (id, user_id, token_hash, created_at) VALUES (?, ?, ?, ?)`)
+        .run(`cft-${crypto.randomUUID()}`, userId, pending.tokenHash, new Date().toISOString());
+    })();
+    return true;
   }
 
   getUserByCalendarFeedToken(plaintext) {
     const tokenHash = crypto.createHash('sha256').update(plaintext).digest('hex');
+    const pending = this.findHandoverByField('calendar-feed', 'tokenHash', tokenHash);
+    if (pending) this.promoteCalendarFeedToken(pending.subjectId);   // first use is the receipt
     const row = this.db.prepare(`
       SELECT cft.*, u.id as uid FROM calendar_feed_tokens cft JOIN users u ON cft.user_id = u.id WHERE cft.token_hash = ?
     `).get(tokenHash);

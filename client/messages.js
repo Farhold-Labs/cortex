@@ -142,6 +142,7 @@ export const CONFIRM_DIALOG = {
   deleteMessage: "Scrub this signal from the cortex? Can't unring that bell.",
   deleteBot: (name) => `Decommission ${name}? This can't be undone.`,
   regenerateKey: "Generate new encryption keys? Old messages stay locked with the old keys.",
+  regenerateBotKey: "Generate a new API key for this bot? The old key keeps working until the bot uses the new one, or you retire it.",
   removeConnection: "Cut ties with this contact? The black is lonely.",
   removeFederationNode: "Cut this port loose from the Verse?",
   declineFederationRequest: "Deny docking clearance for this request?",
