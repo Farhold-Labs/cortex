@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.147.1**. Last brought current 2026-10-30.
+Current version: **2.148.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2147001 / versionName "2.147.1"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2147001 / MARKETING_VERSION 2.147.1
+client/android/app/build.gradle                  versionCode 2148000 / versionName "2.148.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2148000 / MARKETING_VERSION 2.148.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -344,7 +344,7 @@ A member streams to a wave through LiveKit; viewers get hidden, subscribe-only t
 - **What someone may publish is one rule** (v2.119.0), `voiceSourcesFor()`: capabilities, the stage, the camera limit. It goes into the token and is re-applied to live connections with UpdateParticipant whenever it could change. Stage flags live in LiveKit participant metadata.
 - **Voice channel media is end-to-end encrypted against LiveKit** (v2.119.0); the key is derived from the room's session id and `JWT_SECRET`.
 - **Call video goes through `CallStage.jsx` (v2.144.0):** the other person fills the space and you are a preview; rules in `utils/callLayout.js`, room options in `callRoomOptions()`. `index.html` forces LiveKit videos to `object-fit: contain !important`, so the stage sets fit through `--call-fit` and a more specific rule.
-- **Direct calls (v2.145.0, `docs/direct-calls/`):** one person rings a contact, outside waves, in room `call-<id>`. The `direct_calls` row's state is the only judge of who gets a token; move it only through `moveCall()` (an atomic `UPDATE … WHERE state IN`, so one answer wins) and every change goes to both people as `direct_call`. Ringing needs contacts both ways (`isMutualContact`): anyone can add anyone as a contact without asking. The app's ring and call state live in `VoiceCallService` (`directCall`, `incomingCall`) and `DirectCallUI.jsx`. Since v2.146.0 the Android app rings natively (`calls/` in the Android project, `utils/nativeCalls.js`), but only for a push token registered with `call-ring`: a data message to an older APK shows nothing, so never send calls as data-only to every token.
+- **Direct calls (v2.145.0, `docs/direct-calls/`):** one person rings a contact, outside waves, in room `call-<id>`. The `direct_calls` row's state is the only judge of who gets a token; move it only through `moveCall()` (an atomic `UPDATE … WHERE state IN`, so one answer wins) and every change goes to both people as `direct_call`. Ringing needs contacts both ways (`isMutualContact`): anyone can add anyone as a contact without asking. The app's ring and call state live in `VoiceCallService` (`directCall`, `incomingCall`) and `DirectCallUI.jsx`. Since v2.146.0 the Android app rings natively (`calls/` in the Android project, `utils/nativeCalls.js`), but only for a push token registered with `call-ring`: a data message to an older APK shows nothing, so never send calls as data-only to every token. Since v2.148.0 a call in the app uses the call volume, floats in a picture-in-picture window when the app is left, and holds an ongoing-call foreground service, which is what keeps the microphone alive off screen (`syncNativeCall()`). Every call state change is logged with its reason (`moveCall(…, why)`), and an answered call ends for an empty room only after `DIRECT_CALL_EMPTY_GRACE_MS`.
 - **Sign LiveKit tokens with `livekitJwt(at)`, never `at.toJwt()`.** The SDK dates tokens 0, and LiveKit refuses a token dated before someone's removal, so a removed person could never rejoin (v2.119.0).
 
 ### Federation

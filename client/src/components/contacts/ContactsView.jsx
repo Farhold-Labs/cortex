@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { SUCCESS, EMPTY, LOADING, formatError } from '../../../messages.js';
+import { SUCCESS, EMPTY, LOADING, CONFIRM_DIALOG, formatError } from '../../../messages.js';
+import { askConfirm } from '../../utils/askConfirm.jsx';
 import { useWindowSize } from '../../hooks/useWindowSize.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
 import ContactRequestsPanel from './ContactRequestsPanel.jsx';
@@ -31,7 +32,9 @@ const ContactsView = ({
     return () => clearTimeout(timeout);
   }, [searchQuery, fetchAPI]);
 
-  const handleRemoveContact = async (id) => {
+  const handleRemoveContact = async (contact) => {
+    if (!(await askConfirm(CONFIRM_DIALOG.removeContact(contact.name || `@${contact.handle}`)))) return;
+    const id = contact.id;
     try {
       await fetchAPI(`/contacts/${id}`, { method: 'DELETE' });
       showToast(SUCCESS.contactRemoved, 'success');
@@ -170,7 +173,7 @@ const ContactsView = ({
                     )}
                   </div>
                 </div>
-                <button onClick={() => handleRemoveContact(contact.id)} style={{
+                <button onClick={() => handleRemoveContact(contact)} style={{
                   padding: isMobile ? '10px' : '6px 10px',
                   minHeight: isMobile ? '44px' : 'auto',
                   background: 'transparent', border: '1px solid var(--accent-orange)50',

@@ -199,7 +199,7 @@ async function startServer(livekitUrl, { env = {}, mutate } = {}) {
 
 const joined = (room, identity) => ({ event: 'participant_joined', room: { name: room }, participant: { identity, name: identity } });
 // Short enough to test a missed call, long enough for a slow CI machine.
-const RING_ENV = { DIRECT_CALL_RING_MS: '4000', DIRECT_CALL_SWEEP_MS: '300', DIRECT_CALL_EMPTY_MS: '800', RATE_LIMIT_CALL_MAX: '1000' };
+const RING_ENV = { DIRECT_CALL_RING_MS: '4000', DIRECT_CALL_SWEEP_MS: '300', DIRECT_CALL_EMPTY_MS: '800', DIRECT_CALL_EMPTY_GRACE_MS: '300', RATE_LIMIT_CALL_MAX: '1000' };
 
 /** Contacts both ways: what lets two people ring each other. */
 async function befriend(s, a, b) {
@@ -405,6 +405,42 @@ test('an answered call ends when its room empties, or when both just closed the 
     assert.equal(swept.state, 'ended');
     // And they can ring each other again.
     assert.equal((await ring(s, zoe, mal)).status, 201);
+  } finally { s.stop(); lk.server.close(); }
+});
+
+// v2.148.0 — two video calls on farhold ended a second or so after being
+// answered. The room reading empty for a moment (one side reconnecting while
+// the other was still joining) ended the call at once. It now has to stay
+// empty for the grace period.
+test('a room empty for a moment does not end an answered call', { timeout: 90000 }, async () => {
+  const lk = await fakeLiveKit();
+  const s = await startServer(lk.url, { env: { ...RING_ENV, DIRECT_CALL_EMPTY_MS: '5000', DIRECT_CALL_EMPTY_GRACE_MS: '2000' } });
+  try {
+    const mal = await s.makeUser('mal'), zoe = await s.makeUser('zoe');
+    await befriend(s, mal, zoe);
+    const id = (await ring(s, mal, zoe)).body.call.id;
+    const room = `call-${id}`;
+    assert.equal((await s.webhook(joined(room, mal.id))).status, 200);
+    await s.api('POST', `/api/calls/${id}/answer`, { token: zoe.token });
+    // The caller drops and comes back before the callee has joined.
+    await s.webhook({ event: 'participant_left', room: { name: room }, participant: { identity: mal.id } });
+    await new Promise(r => setTimeout(r, 600));
+    await s.webhook(joined(room, mal.id));
+    await s.webhook(joined(room, zoe.id));
+    await new Promise(r => setTimeout(r, 2600));
+    const state = (await s.api('GET', `/api/calls/${id}`, { token: mal.token })).body.call.state;
+    assert.equal(state, 'answered', 'a moment of empty room must not hang up');
+    assert.match(s.output(), new RegExp(`\\[calls\\] \\S+ ${id} ringing→answered \\(answered from `), 'the answer is logged');
+    // Both gone for good: over once the grace has passed.
+    await s.webhook({ event: 'participant_left', room: { name: room }, participant: { identity: zoe.id } });
+    await s.webhook({ event: 'participant_left', room: { name: room }, participant: { identity: mal.id } });
+    assert.equal((await s.api('GET', `/api/calls/${id}`, { token: mal.token })).body.call.state, 'answered', 'not before the grace');
+    const ended = await waitFor(async () => {
+      const c = (await s.api('GET', `/api/calls/${id}`, { token: mal.token })).body.call;
+      return c.state === 'ended' && c;
+    }, 8000);
+    assert.equal(ended.state, 'ended');
+    assert.match(s.output(), new RegExp(`${id} answered→ended \\(room empty for \\d+ s\\)`), 'why it ended is logged');
   } finally { s.stop(); lk.server.close(); }
 });
 
