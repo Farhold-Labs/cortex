@@ -221,8 +221,38 @@ function deviceHashFor(req) {
   return crypto.createHash('sha256').update(ua).digest('hex').slice(0, 32);
 }
 
+// ---- The swap handshake (v2.146.1) ----
+// A rotated refresh token is not retired when the new one is sent, only when
+// the client shows it arrived: by presenting the new refresh token, or by using
+// the access token that travelled with it (`rt` claim). Until then the new
+// token is kept sealed so that, if the old one comes back because the answer
+// was lost, the SAME new token is sent again. Nothing is branched and nobody is
+// signed out. Sealed with a key derived from JWT_SECRET, which already signs
+// every access token, and dropped the moment the swap is confirmed.
+const SWAP_SEAL_KEY = Buffer.from(crypto.hkdfSync('sha256', JWT_SECRET, 'cortex-swap', 'refresh-token handover v1', 32));
+
+function sealSwapSecret(text) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', SWAP_SEAL_KEY, iv);
+  const ct = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), ct.toString('base64url')].join('.');
+}
+
+function openSwapSecret(sealed) {
+  try {
+    const [v, iv, tag, ct] = String(sealed || '').split('.');
+    if (v !== 'v1') return null;
+    const decipher = crypto.createDecipheriv('aes-256-gcm', SWAP_SEAL_KEY, Buffer.from(iv, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    return Buffer.concat([decipher.update(Buffer.from(ct, 'base64url')), decipher.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
 // Issue a refresh token, either starting a family (login) or extending one
-// (rotation). Returns the plaintext exactly once — it is never recoverable after.
+// (rotation). Returns the plaintext once; a rotation also keeps it sealed until
+// the client confirms it (above).
 function issueRefreshToken(userId, req, { familyId = null, parentId = null, absoluteExpiresAt = null } = {}) {
   const policy = getSecurityPolicy();
   const token = generateRefreshToken();
@@ -238,8 +268,9 @@ function issueRefreshToken(userId, req, { familyId = null, parentId = null, abso
 
   const rawIp = req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || req?.ip || 'Unknown';
   const family = familyId || `fam-${crypto.randomUUID()}`;
+  const id = `rt-${crypto.randomUUID()}`;
   db.createRefreshToken({
-    id: `rt-${crypto.randomUUID()}`,
+    id,
     userId,
     familyId: family,
     tokenHash: hashToken(token),
@@ -248,8 +279,9 @@ function issueRefreshToken(userId, req, { familyId = null, parentId = null, abso
     ipAddress: anonymizeIP(rawIp) || 'Unknown',
     expiresAt,
     absoluteExpiresAt: absolute,
+    pendingSecret: parentId ? sealSwapSecret(token) : null,
   });
-  return { token, expiresAt, absoluteExpiresAt: absolute, familyId: family };
+  return { id, token, expiresAt, absoluteExpiresAt: absolute, familyId: family };
 }
 
 // Mint the credentials a successful authentication hands back.
@@ -259,9 +291,10 @@ function issueRefreshToken(userId, req, { familyId = null, parentId = null, abso
 // token as the whole session — handing one of those clients a 60-minute token
 // would log it out hourly. Those callers keep the old long-lived JWT until
 // their bundle updates; only clients that say they can rotate get the short one.
-function issueAuthCredentials(user, req, { sessionDuration, supportsRefresh, sessionOnly = false }) {
+function issueAuthCredentials(user, req, { sessionDuration, supportsRefresh, sessionOnly = false, replaces = null }) {
   const policy = getSecurityPolicy();
-  const base = { userId: user.id, handle: user.handle };
+  // `rep`: the session this one replaces, retired only once this one is used (v2.146.1).
+  const base = { userId: user.id, handle: user.handle, ...(replaces ? { rep: hashToken(replaces) } : {}) };
 
   if (!supportsRefresh) {
     const token = jwt.sign({ ...base, jti: crypto.randomUUID() }, JWT_SECRET, { expiresIn: sessionDuration });
@@ -1005,6 +1038,7 @@ function createSession(userId, token, req) {
     const tokenHash = hashToken(token);
     const decoded = jwt.decode(token);
     const expiresAt = new Date(decoded.exp * 1000).toISOString();
+    const familyId = typeof decoded.fam === 'string' ? decoded.fam : null;
 
     // Privacy hardening: anonymize IP and truncate UA
     const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'Unknown';
@@ -1021,7 +1055,8 @@ function createSession(userId, token, req) {
       deviceInfo: truncatedUA,
       ipAddress: anonIp,
       expiresAt,
-      createdAt  // Pass rounded timestamp
+      createdAt,  // Pass rounded timestamp
+      familyId,
     });
   } catch (err) {
     console.error('[Session] Failed to create session:', err.message);
@@ -5502,6 +5537,11 @@ function authenticateToken(req, res, next) {
     if (!validation.valid) {
       return res.status(401).json({ error: validation.reason });
     }
+    // A login ended for reuse, whose sessions predate per-login tracking.
+    if (decoded.fam && deadRefreshFamilies.has(decoded.fam)) {
+      return res.status(401).json({ error: 'Session revoked', code: 'SESSION_REVOKED' });
+    }
+    settleHandshake(decoded);
 
     req.user = decoded;
     req.sessionId = validation.session?.id || null;
@@ -5563,7 +5603,13 @@ function authenticateBotToken(req, res, next) {
 
   // Hash the token and look up bot
   const tokenHash = hashToken(token);
-  const bot = db.findBotByApiKeyHash(tokenHash);
+  let bot = db.findBotByApiKeyHash(tokenHash);
+  // A regenerated key's first use is its receipt: it replaces the old key now
+  // (v2.146.1). Until then the old key kept working.
+  if (!bot && db.findHandoverByField) {
+    const pending = db.findHandoverByField('bot-key', 'keyHash', tokenHash);
+    if (pending && promoteBotKey(pending.subjectId)) bot = db.findBotByApiKeyHash(tokenHash);
+  }
 
   if (!bot) {
     return res.status(403).json({ error: 'Invalid or revoked bot token' });
@@ -6015,6 +6061,49 @@ async function verifyCrossPortStanding(user) {
   return { state: 'stale', reason: 'home node unreachable beyond grace' };
 }
 
+// A refresh token presented again after its replacement was confirmed: two
+// parties hold it and we cannot tell which is the person. That login ends — its
+// refresh tokens, its access sessions and its live connections. Other devices
+// are separate logins with their own tokens and are left alone (v2.146.1; until
+// then every session the account had ended too).
+const deadRefreshFamilies = new Set();
+
+function endLoginForReuse(record, req) {
+  try {
+    const killed = db.revokeRefreshFamily(record.familyId, 'reuse-detected');
+    deadRefreshFamilies.add(record.familyId);
+    const sessions = db.revokeFamilySessions ? db.revokeFamilySessions(record.userId, record.familyId) : 0;
+    disconnectFamily(record.userId, record.familyId, 'Session ended for security reasons');
+    console.warn(`🚨 [Auth] Refresh token reuse detected for user ${record.userId} — revoked ${killed} token(s) and ${sessions} session(s) in family ${record.familyId}`);
+    if (db.logActivity) {
+      db.logActivity(record.userId, 'session_reuse_detected', 'user', record.userId, getRequestMeta(req));
+    }
+  } catch (err) {
+    console.error('[Auth] Family revocation failed:', err.message);
+  }
+}
+
+// The receipt half of the handshake, run on every authenticated request and
+// socket: the first use of an access token confirms the refresh token it came
+// with (`rt`), and retires the session it replaced (`rep`).
+const settledHandshakes = new Set();
+
+function settleHandshake(decoded) {
+  for (const [key, act] of [
+    [decoded?.rt, (id) => db.confirmRefreshToken && db.confirmRefreshToken(id)],
+    [decoded?.rep, (hash) => db.revokeSessionByTokenHash && db.revokeSessionByTokenHash(hash)],
+  ]) {
+    if (typeof key !== 'string' || settledHandshakes.has(key)) continue;
+    try {
+      act(key);
+      if (settledHandshakes.size > 50000) settledHandshakes.clear();
+      settledHandshakes.add(key);
+    } catch (err) {
+      console.error('[Auth] Could not settle a credential handshake:', err.message);
+    }
+  }
+}
+
 app.post('/api/auth/token/refresh', refreshLimiter, async (req, res) => {
   const presented = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : null;
   if (!presented) return res.status(400).json({ error: 'Refresh token required' });
@@ -6033,32 +6122,9 @@ app.post('/api/auth/token/refresh', refreshLimiter, async (req, res) => {
     return res.status(401).json({ error: 'Invalid refresh token', code: 'REFRESH_INVALID' });
   }
 
-  // === Reuse detection ===
-  // This token was already redeemed. A well-behaved client discards a refresh
-  // token the moment it trades it in, so seeing it again means two parties hold
-  // the same credential. We cannot tell which caller is the legitimate one, so
-  // the whole family dies and everyone re-authenticates.
-  if (record.usedAt) {
-    try {
-      const killed = db.revokeRefreshFamily(record.familyId, 'reuse-detected');
-      // Two parties hold the same credential and we cannot tell which is
-      // legitimate, so neither keeps a live feed either (v2.105.2).
-      disconnectUser(record.userId, 'Session ended for security reasons');
-      console.warn(`🚨 [Auth] Refresh token reuse detected for user ${record.userId} — revoked ${killed} token(s) in family ${record.familyId}`);
-      if (db.logActivity) {
-        db.logActivity(record.userId, 'session_reuse_detected', 'user', record.userId, getRequestMeta(req));
-      }
-      // Kill the access tokens too, or the thief keeps working until theirs expires.
-      if (db.revokeAllUserSessions) db.revokeAllUserSessions(record.userId);
-    } catch (err) {
-      console.error('[Auth] Family revocation failed:', err.message);
-    }
-    return res.status(401).json({
-      error: 'This session was ended for security reasons. Please sign in again.',
-      code: 'SESSION_REVOKED',
-    });
-  }
-
+  // A withdrawn token stays withdrawn. Saying so is all: the family it belonged
+  // to was already dealt with, and re-running the teardown here would end a
+  // login made since (v2.146.1).
   if (record.revokedAt) {
     return res.status(401).json({
       error: record.revokedReason === 'reuse-detected'
@@ -6115,26 +6181,56 @@ app.post('/api/auth/token/refresh', refreshLimiter, async (req, res) => {
     }
   }
 
+  // === The swap handshake (v2.146.1) ===
+  // This token was already traded for a new one. If the client never showed it
+  // received the new one, the answer was lost: send the same new token again.
+  // Only when the new one is confirmed does a second presentation of this one
+  // mean two parties hold it, and then only this login ends.
+  // Decided here, after the only await above, from the row as it is now: two
+  // presentations racing each other must not both mint a token.
+  record = db.getRefreshTokenById(record.id) || record;
+  if (record.revokedAt) {
+    return res.status(401).json({ error: 'Session ended. Please sign in again.', code: 'SESSION_REVOKED' });
+  }
+  let resend = null;
+  if (record.usedAt) {
+    const child = db.getLiveChildRefreshToken(record.id);
+    const secret = child && !child.confirmedAt ? openSwapSecret(child.pendingSecret) : null;
+    if (!secret) {
+      endLoginForReuse(record, req);
+      return res.status(401).json({
+        error: 'This session was ended for security reasons. Please sign in again.',
+        code: 'SESSION_REVOKED',
+      });
+    }
+    resend = { child, secret };
+  }
+
   try {
     const policy = getSecurityPolicy();
 
-    // Mint replacements BEFORE retiring the presented token. If the response is
-    // lost in transit the client still holds a token it can retry with, rather
-    // than being locked out by a rotation it never learned about.
-    const next = issueRefreshToken(user.id, req, {
-      familyId: record.familyId,
-      parentId: record.id,
-      absoluteExpiresAt: record.absoluteExpiresAt,
-    });
+    // The new refresh token: the one already sent, if this is a resend, or a
+    // fresh one. The presented token is not retired by this — only by the client
+    // confirming the new one.
+    const next = resend
+      ? { id: resend.child.id, token: resend.secret, expiresAt: resend.child.expiresAt }
+      : issueRefreshToken(user.id, req, {
+          familyId: record.familyId,
+          parentId: record.id,
+          absoluteExpiresAt: record.absoluteExpiresAt,
+        });
+    if (resend) console.log(`🔁 [Auth] Resent an unconfirmed refresh swap for ${user.handle}: its answer never arrived`);
 
+    // `rt` names the refresh token this access token travelled with: using it
+    // is the client's receipt for that token.
     const accessToken = jwt.sign(
-      { userId: user.id, handle: user.handle, jti: crypto.randomUUID(), fam: record.familyId },
+      { userId: user.id, handle: user.handle, jti: crypto.randomUUID(), fam: record.familyId, rt: next.id },
       JWT_SECRET,
       { expiresIn: `${policy.accessTokenMinutes}m` }
     );
     createSession(user.id, accessToken, req);
 
-    db.markRefreshTokenUsed(record.id);
+    if (!resend) db.markRefreshTokenUsed(record.id);
 
     res.json({
       token: accessToken,
@@ -6152,6 +6248,14 @@ app.post('/api/auth/token/refresh', refreshLimiter, async (req, res) => {
     console.error('[Auth] Rotation failed:', err.message);
     res.status(500).json({ error: 'Refresh failed' });
   }
+});
+
+// The client's explicit receipt for a refresh swap (v2.146.1). authenticateToken
+// has already done the work: using the access token that came with the new
+// refresh token confirms it. Called right after the client has stored both, so
+// the old token is retired within a moment rather than on the next request.
+app.post('/api/auth/token/confirm', authenticateToken, (req, res) => {
+  res.json({ confirmed: typeof req.user?.rt === 'string' });
 });
 
 // What the client needs to pace its own refreshes, and what the operator's
@@ -6187,11 +6291,8 @@ app.post('/api/auth/refresh', loginLimiter, authenticateToken, async (req, res) 
       return res.status(401).json({ error: 'Invalid password' });
     }
 
-    // Revoke old session
-    if (req.token) {
-      revokeSessionByToken(req.token);
-    }
-
+    // The old session is retired when the new token is first used (`replaces`,
+    // v2.146.1), not before the client has it.
     // Issue new token
     // Also an upgrade point (v2.81.2): this is where a legacy session lands
     // when its token nears expiry, and the user has just proved their password.
@@ -6200,6 +6301,7 @@ app.post('/api/auth/refresh', loginLimiter, authenticateToken, async (req, res) 
       sessionDuration,
       supportsRefresh: req.body.supportsRefresh === true,
       sessionOnly: req.body.sessionOnly === true,
+      replaces: req.token || null,
     });
     const token = creds.token;
     console.log(`🔄 Session refreshed for: ${user.handle}${creds.refreshToken ? ' (rotating)' : ` with ${sessionDuration} session`}`);
@@ -6260,8 +6362,11 @@ app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) =>
     // Issue new token BEFORE revoking old one. If the response is lost in transit,
     // the client still holds a valid old token and can retry or enter grace period
     // rather than being hard-logged-out with a revoked token.
+    // `rep`: the old session is retired when this token is first used, not
+    // when it is sent (v2.146.1). Until then the client may still hold only
+    // the old one.
     const newToken = jwt.sign(
-      { userId: req.user.userId, handle: req.user.handle, jti: crypto.randomUUID() },
+      { userId: req.user.userId, handle: req.user.handle, jti: crypto.randomUUID(), rep: hashToken(req.token) },
       JWT_SECRET,
       { expiresIn: originalDurationSecs }
     );
@@ -6275,9 +6380,6 @@ app.post('/api/auth/renew', loginLimiter, authenticateToken, async (req, res) =>
       token: newToken,
       user: { id: user.id, handle: user.handle, email: user.email, displayName: user.displayName, avatar: user.avatar, avatarUrl: user.avatarUrl || null, bio: user.bio || null, nodeName: user.nodeName, status: user.status, isAdmin: user.isAdmin, role: user.role || (user.isAdmin ? 'admin' : 'user'), preferences: resolvePreferences(user), preferenceOverrides: user.preferences || {} }
     });
-
-    // Revoke old token after response is sent — client already has the new one
-    revokeSessionByToken(req.token);
   } catch (err) {
     console.error('Auto-renew error:', err);
     res.status(500).json({ error: 'Renewal failed' });
@@ -6797,8 +6899,8 @@ app.post('/api/auth/mfa/totp/verify', authenticateToken, mfaLimiter, (req, res) 
       hashedCodes.push(crypto.createHash('sha256').update(code).digest('hex'));
     }
 
-    // Store hashed recovery codes
-    db.storeRecoveryCodes(req.user.userId, hashedCodes);
+    // Store hashed recovery codes; any already held stay valid until these are confirmed
+    const recoveryCodesPending = handOverRecoveryCodes(req.user.userId, hashedCodes);
 
     // Log activity
     if (db.logActivity) db.logActivity(req.user.userId, 'mfa_enable', 'user', req.user.userId, { ...getRequestMeta(req), method: 'totp' });
@@ -6806,7 +6908,8 @@ app.post('/api/auth/mfa/totp/verify', authenticateToken, mfaLimiter, (req, res) 
     res.json({
       success: true,
       message: 'TOTP enabled successfully',
-      recoveryCodes // Return plaintext codes once (user must save them)
+      recoveryCodes, // Return plaintext codes once (user must save them)
+      pendingConfirm: recoveryCodesPending,
     });
   } catch (err) {
     console.error('TOTP verify error:', err);
@@ -7055,6 +7158,27 @@ app.post('/api/auth/mfa/email/disable', authenticateToken, mfaLimiter, async (re
   }
 });
 
+// New recovery codes wait until the person confirms they saved them (v2.146.1).
+// With none held there is nothing to retire, so they take effect at once.
+// True when they are waiting.
+function handOverRecoveryCodes(userId, hashedCodes) {
+  const current = db.getRecoveryCodes(userId) || [];
+  if (!current.length || !db.setHandover) {
+    db.storeRecoveryCodes(userId, hashedCodes);
+    return false;
+  }
+  db.setHandover('mfa-recovery-codes', userId, { hashes: hashedCodes });
+  return true;
+}
+
+app.post('/api/auth/mfa/recovery/confirm', authenticateToken, (req, res) => {
+  const pending = db.takeHandover ? db.takeHandover('mfa-recovery-codes', req.user.userId) : null;
+  if (!pending?.hashes) return res.json({ confirmed: false });
+  db.storeRecoveryCodes(req.user.userId, pending.hashes);
+  if (db.logActivity) db.logActivity(req.user.userId, 'mfa_recovery_codes_confirmed', 'user', req.user.userId, getRequestMeta(req));
+  res.json({ confirmed: true });
+});
+
 // Regenerate recovery codes (requires password + one MFA method)
 app.post('/api/auth/mfa/recovery/regenerate', authenticateToken, mfaLimiter, async (req, res) => {
   try {
@@ -7099,13 +7223,15 @@ app.post('/api/auth/mfa/recovery/regenerate', authenticateToken, mfaLimiter, asy
       hashedCodes.push(crypto.createHash('sha256').update(code).digest('hex'));
     }
 
-    // Store new hashed codes (replaces old ones)
-    db.storeRecoveryCodes(req.user.userId, hashedCodes);
+    // The new codes replace the old ones only once the person confirms they
+    // saved them, or uses one (v2.146.1). A lost answer leaves the old ones.
+    const pendingConfirm = handOverRecoveryCodes(req.user.userId, hashedCodes);
 
     res.json({
       success: true,
       message: 'Recovery codes regenerated',
-      recoveryCodes // Return plaintext codes once (user must save them)
+      recoveryCodes, // Return plaintext codes once (user must save them)
+      pendingConfirm,
     });
   } catch (err) {
     console.error('Recovery codes regenerate error:', err);
@@ -7209,11 +7335,20 @@ app.post('/api/auth/mfa/verify', mfaLimiter, (req, res) => {
     } else if (method === 'recovery') {
       // Verify recovery code (stored as array of hashed codes)
       const hashedCodes = db.getRecoveryCodes(challenge.userId);
+      const codeHash = crypto.createHash('sha256').update(code.toUpperCase()).digest('hex');
       if (hashedCodes && hashedCodes.length > 0) {
-        const codeHash = crypto.createHash('sha256').update(code.toUpperCase()).digest('hex');
         const codeIndex = hashedCodes.findIndex(hash => hash === codeHash);
         if (codeIndex !== -1) {
           db.markRecoveryCodeUsed(challenge.userId, codeIndex);
+          verified = true;
+        }
+      }
+      // A code from a set not yet confirmed: using it is the receipt (v2.146.1).
+      if (!verified && db.getHandover) {
+        const pending = db.getHandover('mfa-recovery-codes', challenge.userId)?.payload?.hashes || [];
+        const pendingIndex = pending.indexOf(codeHash);
+        if (pendingIndex !== -1 && db.takeHandover('mfa-recovery-codes', challenge.userId)) {
+          db.storeRecoveryCodes(challenge.userId, pending.filter((_, i) => i !== pendingIndex));
           verified = true;
         }
       }
@@ -7426,6 +7561,25 @@ app.get('/api/e2ee/key-requests', authenticateToken, (req, res) => {
   }
 });
 
+// Put a rotated keypair in place, once the device that made it has it (v2.146.1).
+app.post('/api/e2ee/keys/rotate/confirm', authenticateToken, (req, res) => {
+  try {
+    const pending = db.takeHandover('e2ee-keypair', req.user.userId);
+    if (!pending?.publicKey) return res.json({ confirmed: false });
+    const result = db.createUserEncryptionKeys(req.user.userId, pending.publicKey, pending.encryptedPrivateKey, pending.salt);
+    if (db.logActivity) {
+      db.logActivity(req.user.userId, 'e2ee_key_rotation', 'user', req.user.userId, {
+        ...getRequestMeta(req),
+        newKeyVersion: result.keyVersion
+      });
+    }
+    res.json({ confirmed: true, keyVersion: result.keyVersion });
+  } catch (err) {
+    console.error('E2EE key rotation confirm error:', err);
+    res.status(500).json({ error: 'Failed to confirm key rotation' });
+  }
+});
+
 // Rotate user keypair (generate new keys with new passphrase)
 app.post('/api/e2ee/keys/rotate', authenticateToken, (req, res) => {
   try {
@@ -7440,20 +7594,15 @@ app.post('/api/e2ee/keys/rotate', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'No existing keys to rotate. Use /api/e2ee/keys/register instead.' });
     }
 
-    const result = db.createUserEncryptionKeys(req.user.userId, publicKey, encryptedPrivateKey, salt);
-
-    // Log key rotation
-    if (db.logActivity) {
-      db.logActivity(req.user.userId, 'e2ee_key_rotation', 'user', req.user.userId, {
-        ...getRequestMeta(req),
-        newKeyVersion: result.keyVersion
-      });
-    }
+    // The new keypair is not put in place until the device that made it
+    // confirms it has kept it (v2.146.1). Until then the current keys stand,
+    // and a lost answer leaves nothing half-switched.
+    db.setHandover('e2ee-keypair', req.user.userId, { publicKey, encryptedPrivateKey, salt });
 
     res.json({
       success: true,
-      message: 'Keys rotated successfully',
-      keyVersion: result.keyVersion
+      message: 'New keys waiting for confirmation',
+      pendingConfirm: true,
     });
   } catch (err) {
     console.error('E2EE key rotation error:', err);
@@ -7508,6 +7657,12 @@ app.post('/api/e2ee/recovery/setup', authenticateToken, (req, res) => {
     // Validate hint length if provided
     const sanitizedHint = hint ? sanitizeInput(hint).slice(0, 100) : null;
 
+    // Replacing a recovery key the person already has waits for their
+    // confirmation, like regenerating (v2.146.1).
+    if (db.getRecoveryKeyInfo(req.user.userId) && db.setHandover) {
+      db.setHandover('e2ee-recovery-key', req.user.userId, { encryptedPrivateKey, recoverySalt, hint: sanitizedHint });
+      return res.json({ success: true, message: 'Recovery key waiting for confirmation', hasHint: !!sanitizedHint, pendingConfirm: true });
+    }
     const result = db.createRecoveryKey(req.user.userId, encryptedPrivateKey, recoverySalt, sanitizedHint);
 
     // Log recovery setup
@@ -7556,12 +7711,12 @@ app.post('/api/e2ee/recovery/regenerate', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: encryptedPrivateKey, recoverySalt' });
     }
 
-    // Update the recovery key info
-    const result = db.updateRecoveryKey(req.user.userId, encryptedPrivateKey, recoverySalt);
-
-    if (!result) {
+    if (!db.getRecoveryKeyInfo(req.user.userId)) {
       return res.status(404).json({ error: 'No existing recovery key to regenerate' });
     }
+    // The new key replaces the old one only once the person confirms they saved
+    // it, or recovers with it (v2.146.1). Until then the old key still works.
+    db.setHandover('e2ee-recovery-key', req.user.userId, { encryptedPrivateKey, recoverySalt });
 
     // Log recovery regeneration
     if (db.logActivity) {
@@ -7570,12 +7725,26 @@ app.post('/api/e2ee/recovery/regenerate', authenticateToken, (req, res) => {
 
     res.json({
       success: true,
-      message: 'Recovery key regenerated'
+      message: 'Recovery key regenerated',
+      pendingConfirm: true,
     });
   } catch (err) {
     console.error('E2EE recovery regenerate error:', err);
     res.status(500).json({ error: 'Failed to regenerate recovery key' });
   }
+});
+
+// The person has the new recovery key: put it in place of the old one (v2.146.1).
+app.post('/api/e2ee/recovery/confirm', authenticateToken, (req, res) => {
+  const pending = db.takeHandover ? db.takeHandover('e2ee-recovery-key', req.user.userId) : null;
+  if (!pending?.encryptedPrivateKey) return res.json({ confirmed: false });
+  if (pending.hint !== undefined) {
+    db.createRecoveryKey(req.user.userId, pending.encryptedPrivateKey, pending.recoverySalt, pending.hint);
+  } else {
+    db.updateRecoveryKey(req.user.userId, pending.encryptedPrivateKey, pending.recoverySalt);
+  }
+  if (db.logActivity) db.logActivity(req.user.userId, 'e2ee_recovery_confirmed', 'user', req.user.userId, getRequestMeta(req));
+  res.json({ confirmed: true });
 });
 
 // Get full recovery key info (for account recovery)
@@ -7587,11 +7756,18 @@ app.get('/api/e2ee/recovery', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'No recovery key configured' });
     }
 
+    // A replacement not yet confirmed travels too: the person may be holding
+    // either key (v2.146.1).
+    const pending = db.getHandover ? db.getHandover('e2ee-recovery-key', req.user.userId) : null;
     res.json({
       encryptedPrivateKey: recoveryInfo.encryptedPrivateKey,
       recoverySalt: recoveryInfo.recoverySalt,
       hint: recoveryInfo.hint,
-      createdAt: recoveryInfo.createdAt
+      createdAt: recoveryInfo.createdAt,
+      pending: pending ? {
+        encryptedPrivateKey: pending.payload.encryptedPrivateKey,
+        recoverySalt: pending.payload.recoverySalt,
+      } : null,
     });
   } catch (err) {
     console.error('E2EE recovery fetch error:', err);
@@ -7607,6 +7783,8 @@ app.post('/api/e2ee/keys/reset', authenticateToken, (req, res) => {
 
     db.db.prepare('DELETE FROM user_encryption_keys WHERE user_id = ?').run(userId);
     db.db.prepare('DELETE FROM user_recovery_keys WHERE user_id = ?').run(userId);
+    // A waiting recovery key or keypair wraps the keys being wiped (v2.146.1).
+    db.db.prepare("DELETE FROM credential_handovers WHERE subject_id = ? AND kind IN ('e2ee-recovery-key', 'e2ee-keypair')").run(userId);
     db.db.prepare('DELETE FROM wave_encryption_keys WHERE user_id = ?').run(userId);
 
     if (db.logActivity) db.logActivity(userId, 'e2ee_keys_self_reset', 'user', userId, getRequestMeta(req));
@@ -13108,6 +13286,33 @@ app.get('/api/events/wave/:waveId', authenticateToken, (req, res) => {
   }
 });
 
+// GET /api/events/feed.ics?token=FEED_TOKEN — subscribable iCal feed (no JWT)
+// Registered before /api/events/:id, which otherwise took it as an event id
+// and refused it for want of a login (until v2.146.1 the feed never answered).
+app.get('/api/events/feed.ics', (req, res) => {
+  try {
+    const token = req.query.token;
+    if (!token) return res.status(401).send('Token required');
+    const user = db.getUserByCalendarFeedToken(token);
+    if (!user) return res.status(401).send('Invalid token');
+
+    const from = new Date(); from.setMonth(from.getMonth() - 1);
+    const to   = new Date(); to.setMonth(to.getMonth() + 12);
+    const events = db.getEventsForRange(user.id, {
+      from: from.toISOString().slice(0, 10),
+      to:   to.toISOString().slice(0, 10),
+      scopes: ['server', 'personal', 'wave'],
+    });
+    const ics = buildICS(events, 'Cortex Calendar');
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(ics);
+  } catch (err) {
+    console.error('Calendar feed error:', err);
+    res.status(500).send('Failed to generate feed');
+  }
+});
+
 // GET /api/events/:id — single event with RSVP counts
 app.get('/api/events/:id', authenticateToken, (req, res) => {
   try {
@@ -13173,30 +13378,6 @@ app.get('/api/events/:id/ics', authenticateToken, (req, res) => {
   }
 });
 
-// GET /api/events/feed.ics?token=FEED_TOKEN — subscribable iCal feed (no JWT)
-app.get('/api/events/feed.ics', (req, res) => {
-  try {
-    const token = req.query.token;
-    if (!token) return res.status(401).send('Token required');
-    const user = db.getUserByCalendarFeedToken(token);
-    if (!user) return res.status(401).send('Invalid token');
-
-    const from = new Date(); from.setMonth(from.getMonth() - 1);
-    const to   = new Date(); to.setMonth(to.getMonth() + 12);
-    const events = db.getEventsForRange(user.id, {
-      from: from.toISOString().slice(0, 10),
-      to:   to.toISOString().slice(0, 10),
-      scopes: ['server', 'personal', 'wave'],
-    });
-    const ics = buildICS(events, 'Cortex Calendar');
-    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.send(ics);
-  } catch (err) {
-    console.error('Calendar feed error:', err);
-    res.status(500).send('Failed to generate feed');
-  }
-});
 
 // POST /api/events — create event
 app.post('/api/events', authenticateToken, (req, res) => {
@@ -13889,11 +14070,18 @@ app.get('/api/user/calendar-feed', authenticateToken, (req, res) => {
 app.post('/api/user/calendar-feed/regenerate', authenticateToken, (req, res) => {
   try {
     const result = db.regenerateCalendarFeedToken(req.user.userId);
-    res.json({ token: result.plaintext });
+    // v2.146.1: the old link keeps working until this one is first used or the
+    // old one is retired below, so a lost answer leaves the calendar working.
+    res.json({ token: result.plaintext, oldLinkActive: !!result.pending });
   } catch (err) {
     console.error('Regenerate calendar feed token error:', err);
     res.status(500).json({ error: 'Failed to regenerate token' });
   }
+});
+
+// POST /api/user/calendar-feed/confirm — the person has the new link; retire the old one now
+app.post('/api/user/calendar-feed/confirm', authenticateToken, (req, res) => {
+  res.json({ retiredOld: db.promoteCalendarFeedToken(req.user.userId) });
 });
 
 // ============ Bot Management Endpoints (v2.1.0) ============
@@ -14092,6 +14280,27 @@ app.delete('/api/admin/bots/:id', authenticateToken, (req, res) => {
   }
 });
 
+// Put a bot's regenerated key in place of the old one. False if none waits.
+function promoteBotKey(botId) {
+  const pending = db.takeHandover('bot-key', botId);
+  if (!pending?.keyHash) return false;
+  db.regenerateBotApiKey(botId, pending.keyHash);
+  return true;
+}
+
+// The admin has the new key: retire the old one now (v2.146.1).
+app.post('/api/admin/bots/:id/regenerate/confirm', authenticateToken, (req, res) => {
+  const admin = db.findUserById(req.user.userId);
+  if (!requireRole(admin, ROLES.ADMIN, res)) return;
+  const botId = sanitizeInput(req.params.id);
+  if (!db.getBot(botId)) return res.status(404).json({ error: 'Bot not found' });
+  const retired = promoteBotKey(botId);
+  if (retired && db.logActivity) {
+    db.logActivity(req.user.userId, 'retire_old_bot_key', 'bot', botId, getRequestMeta(req));
+  }
+  res.json({ retiredOld: retired });
+});
+
 /**
  * Regenerate bot API key (admin only)
  */
@@ -14111,7 +14320,11 @@ app.post('/api/admin/bots/:id/regenerate', authenticateToken, (req, res) => {
     const newApiKey = `bot_${crypto.randomBytes(32).toString('hex')}`;
     const newApiKeyHash = hashToken(newApiKey);
 
-    db.regenerateBotApiKey(botId, newApiKeyHash);
+    // The old key keeps working until the new one is first used, or an admin
+    // retires it (below) — so a lost answer never leaves the bot locked out
+    // (v2.146.1). A leaked key is retired with the confirm call, or by
+    // suspending the bot.
+    db.setHandover('bot-key', botId, { keyHash: newApiKeyHash });
 
     // Log activity
     if (db.logActivity) {
@@ -14122,7 +14335,7 @@ app.post('/api/admin/bots/:id/regenerate', authenticateToken, (req, res) => {
     }
 
     // Return new key ONCE
-    res.json({ apiKey: newApiKey });
+    res.json({ apiKey: newApiKey, oldKeyActive: true });
   } catch (err) {
     console.error('Regenerate bot key error:', err);
     res.status(500).json({ error: 'Failed to regenerate bot key' });
@@ -17716,6 +17929,8 @@ app.post('/api/admin/users/:id/reset-encryption', authenticateToken, (req, res) 
     // Wipe all encryption keys for the user
     db.db.prepare('DELETE FROM user_encryption_keys WHERE user_id = ?').run(targetUserId);
     db.db.prepare('DELETE FROM user_recovery_keys WHERE user_id = ?').run(targetUserId);
+    // A waiting recovery key or keypair wraps the keys being wiped (v2.146.1).
+    db.db.prepare("DELETE FROM credential_handovers WHERE subject_id = ? AND kind IN ('e2ee-recovery-key', 'e2ee-keypair')").run(targetUserId);
     db.db.prepare('DELETE FROM wave_encryption_keys WHERE user_id = ?').run(targetUserId);
 
     if (db.logModerationAction) db.logModerationAction(admin.id, 'reset_encryption', 'user', targetUserId, reason.trim());
@@ -29601,13 +29816,15 @@ wss.on('connection', (ws, req) => {
           // circulation. Revocation that the realtime layer ignores is not
           // revocation; it just takes the slow door.
           const validation = validateSession(message.token);
-          if (!validation.valid) {
+          const deadLogin = decoded.fam && deadRefreshFamilies.has(decoded.fam);
+          if (!validation.valid || deadLogin) {
             ws.send(JSON.stringify({
               type: 'auth_error', error: validation.reason || 'Session ended', code: 'SESSION_REVOKED',
             }));
             ws.close(1008, 'Session revoked');
             return;
           }
+          settleHandshake(decoded);
 
           userId = decoded.userId;
           const user = db.findUserById(userId);
@@ -29912,6 +30129,27 @@ function disconnectUser(userId, reason = 'Session ended') {
  * caller out of the device they are sitting at. Each socket remembers the token
  * it was authorised with, so the right ones can be picked out.
  */
+// Close the sockets of one login (v2.146.1): those whose token names the
+// family, or whose session is no longer valid.
+function disconnectFamily(userId, familyId, reason = 'Session ended') {
+  const sockets = clients.get(userId);
+  if (!sockets || !sockets.size) return 0;
+  let closed = 0;
+  for (const ws of [...sockets]) {
+    if (!ws.authToken) continue;
+    const fam = jwt.decode(ws.authToken)?.fam;
+    if (fam !== familyId && validateSession(ws.authToken).valid) continue;
+    try {
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'auth_error', error: reason, code: 'SESSION_REVOKED' }));
+      }
+      ws.close(1008, reason);
+      closed++;
+    } catch { /* already gone */ }
+  }
+  return closed;
+}
+
 function disconnectRevokedSessions(userId, reason = 'Signed out on another device') {
   const sockets = clients.get(userId);
   if (!sockets || !sockets.size) return 0;

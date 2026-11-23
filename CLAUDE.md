@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.146.0**. Last brought current 2026-10-30.
+Current version: **2.146.1**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2146000 / versionName "2.146.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2146000 / MARKETING_VERSION 2.146.0
+client/android/app/build.gradle                  versionCode 2146001 / versionName "2.146.1"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2146001 / MARKETING_VERSION 2.146.1
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -391,7 +391,9 @@ Instance-level settings also cover branding, terminology, notification defaults,
 
 ### Sessions and auth (v2.75.0)
 
-The access token is **not** the session. A 1-hour rotating access token sits on top of a 90-day sliding refresh-token session, with reuse detection that revokes an entire token family on replay, step-up re-auth for sensitive actions, new-device email alerts, and password change ending all other sessions.
+The access token is **not** the session. A 1-hour rotating access token sits on top of a 90-day sliding refresh-token session, with reuse detection, step-up re-auth for sensitive actions, new-device email alerts, and password change ending all other sessions.
+
+**Nothing is retired until its replacement is known to have arrived (v2.146.1).** A refresh swap stays pending, with the new token sealed (`pending_secret`), until the client presents it or uses the access token sent with it (`rt` claim, `settleHandshake()`); the old token presented meanwhile gets the **same** new one. Only after confirmation is a replay reuse, and it ends that login (`endLoginForReuse()`: family, its sessions by `user_sessions.family_id`, its sockets), never every device. Regenerated secrets (recovery codes, E2EE recovery key and keypair, bot keys, calendar links) wait in `credential_handovers` until confirmed or used; renewed sessions retire the old one on first use (`rep` claim). A new place that hands out a replacement must follow the same rule. Retiring at the swap signed a person out on farhold when one answer was lost.
 
 Every path that completes an authentication must go through `issueAuthCredentials` — it was wired only into `/api/auth/login` until v2.81.2, so most users silently kept getting legacy long-lived JWTs.
 

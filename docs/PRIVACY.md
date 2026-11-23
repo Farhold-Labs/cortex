@@ -41,8 +41,9 @@ When you RSVP as a guest, the server stores:
 - **Party size and your answer** — going, maybe, or can't.
 - **A cancellation token** — stored only as a hash. The usable token is sent to
   you by email and is not recoverable from the database, so a leaked copy yields
-  no working cancellation links. It is reissued with each reminder, which means
-  the most recent email always holds the working link.
+  no working cancellation links. Each reminder carries a new one, and since
+  v2.146.1 the links in earlier emails keep working too, in case a reminder
+  never arrived.
 
 **Removing it:** the cancellation link in any confirmation or reminder email
 deletes the RSVP outright, including the stored name and email. Deleting the
@@ -95,6 +96,7 @@ These are **not end-to-end encrypted, even in an encrypted wave.** The encryptio
   - **Media** goes through LiveKit, like wave calls, and is not encrypted against it yet.
   - **What Cortex keeps:** a call history for the two people: who rang whom, audio or video, when, whether it was answered, and how long it lasted. Never what was said. Only the two people can see it. It is deleted after 90 days, or with either account.
   - **Notifications:** a ring and a missed call reach your devices as push notifications naming the caller. In the Android app (from v2.146.0) the ring is a message the app turns into a phone-style ring; it also carries a key that can decline that one call, so DECLINE works with the app closed. Like every push to the Android app, it passes through Google's Firebase service.
+- **A refresh token waiting to be received** (v2.146.1): when your app trades its sign-in token for a new one, the server keeps the new one, encrypted with a key derived from its signing secret, until your app shows it arrived. Then the copy is deleted. That is what lets a lost answer be sent again instead of signing you out. A regenerated recovery code set, recovery key, bot key or calendar link likewise waits, as a hash or as the encrypted blob your device made, until you confirm it; deleting your account deletes them.
 - **Which version of the app you use** (v2.146.0): each install reports its web build, its platform and, in an installed app, the app's version, under a random id kept on that device. The server stores no account with it. Admins see only counts by version. An install not seen for 90 days is deleted. Your Android app's version is also kept with its push token.
 - **Recordings** are made only when the performer chooses to record.
   - **Where they're stored:** in the operator's S3-compatible bucket (for example Backblaze B2), written there by LiveKit.

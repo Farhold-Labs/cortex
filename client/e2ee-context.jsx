@@ -429,10 +429,19 @@ export function E2EEProvider({ children, token, API_URL }) {
         throw new Error(err.error || 'No recovery key configured');
       }
 
-      const { encryptedPrivateKey, recoverySalt } = await res.json();
+      const { encryptedPrivateKey, recoverySalt, pending } = await res.json();
 
-      // Decrypt with recovery passphrase
-      const privKey = await crypto.recoverPrivateKey(recoveryPassphrase, encryptedPrivateKey, recoverySalt);
+      // Decrypt with recovery passphrase. A replacement key not yet confirmed is
+      // tried too (v2.146.1): the person may hold either, and recovering with
+      // the new one is the confirmation.
+      let privKey;
+      try {
+        privKey = await crypto.recoverPrivateKey(recoveryPassphrase, encryptedPrivateKey, recoverySalt);
+      } catch (err) {
+        if (!pending?.encryptedPrivateKey) throw err;
+        privKey = await crypto.recoverPrivateKey(recoveryPassphrase, pending.encryptedPrivateKey, pending.recoverySalt);
+        await fetchAPI('/e2ee/recovery/confirm', { method: 'POST' }).catch(() => {});
+      }
 
       // Fetch public key
       const keysRes = await fetchAPI('/e2ee/keys/me');
