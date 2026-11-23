@@ -118,6 +118,8 @@ export function E2EEProvider({ children, token, API_URL }) {
   const keyRecordsSaveRef = useRef(Promise.resolve());
   const [keyChanges, setKeyChanges] = useState([]);  // [{ personId, changedAt }]
   const rotationRunRef = useRef(null);
+  // Waves this session has asked older key versions for (v2.145.4).
+  const historyAskedRef = useRef(new Set());
 
   // Always-current token. saveToSessionCache reads this so the 'auto' duration
   // computes against the live JWT — the provider mounts on the login screen with
@@ -744,40 +746,43 @@ export function E2EEProvider({ children, token, API_URL }) {
   // v2.143.0 [SECURITY]: the key comes from lookUpKey(requesterId). The public
   // key carried in the push is ignored: it used to be used as given, so the
   // server could get any wave's key from every online member by sending one.
-  const grantWaveKey = useCallback(async (waveId, requestId, requesterId) => {
+  /**
+   * Someone in a wave asked for keys they lack (v2.47.3). Wraps each version
+   * they are missing that this device holds (v2.145.4: older versions too, so
+   * a newcomer can read the pings from before they joined; it used to send
+   * only the current one).
+   */
+  const grantWaveKey = useCallback(async (waveId, requestId, requesterId, versions = null) => {
     if (!privateKey || !publicKeyBase64 || !requesterId) return;
     try {
-      // Fetch our copy of the wave key (from cache or server)
-      const waveKey = await getWaveKey(waveId);
-      if (!waveKey) {
-        console.warn(`E2EE: Cannot grant wave key for ${waveId} — no key available`);
-        return;
-      }
-
       const requesterPublicKey = await lookUpKey(requesterId);
       if (!requesterPublicKey) {
         console.warn(`E2EE: Cannot grant wave key for ${waveId} — they have no key`);
         return;
       }
-
-      const { encryptedWaveKey, nonce, senderPublicKey } = await crypto.addParticipantToWave(
-        waveKey,
-        requesterPublicKey,
-        privateKey,
-        publicKeyBase64
-      );
-
+      const listRes = await fetchAPI(`/waves/${waveId}/keys/all`);
+      if (!listRes.ok) return;
+      const mine = ((await listRes.json()).keys || []).map(k => k.keyVersion);
+      const wanted = Array.isArray(versions) && versions.length ? mine.filter(v => versions.includes(v)) : mine;
+      const keys = [];
+      let senderPublicKey = null;
+      for (const keyVersion of wanted) {
+        const waveKey = await getVersionedWaveKey(waveId, keyVersion);
+        if (!waveKey) continue;
+        const wrapped = await crypto.addParticipantToWave(waveKey, requesterPublicKey, privateKey, publicKeyBase64);
+        senderPublicKey = wrapped.senderPublicKey;
+        keys.push({ keyVersion, encryptedWaveKey: `${wrapped.encryptedWaveKey}:${wrapped.nonce}` });
+      }
+      if (keys.length === 0) {
+        console.warn(`E2EE: Cannot grant wave key for ${waveId} — no key available`);
+        return;
+      }
       const res = await fetchAPI(`/waves/${waveId}/key-grant`, {
         method: 'POST',
-        body: JSON.stringify({
-          requestId,
-          encryptedWaveKey: `${encryptedWaveKey}:${nonce}`,
-          senderPublicKey
-        })
+        body: JSON.stringify({ requestId, keys, senderPublicKey })
       });
-
       if (res.ok) {
-        console.log(`E2EE: Wave key granted for request ${requestId}`);
+        console.log(`E2EE: ${keys.length} wave key version(s) granted for request ${requestId}`);
       } else {
         const err = await res.json().catch(() => ({}));
         console.warn('Wave key grant failed:', err.error);
@@ -785,7 +790,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     } catch (err) {
       console.warn('Wave key grant error:', err);
     }
-  }, [privateKey, publicKeyBase64, fetchAPI, getWaveKey, lookUpKey]);
+  }, [privateKey, publicKeyBase64, fetchAPI, getVersionedWaveKey, lookUpKey]);
 
   const createWaveWithEncryption = useCallback(async (participants) => {
     if (!privateKey || !publicKeyBase64) {
@@ -859,6 +864,13 @@ export function E2EEProvider({ children, token, API_URL }) {
         waveKey = current.waveKey;
       } else {
         waveKey = await getVersionedWaveKey(waveId, keyVersion);
+        // A ping sealed with a version of the key we were never given: we
+        // joined after it (v2.145.4). Ask the others for the older versions,
+        // once a session per wave; wave_key_granted reloads the wave.
+        if (!waveKey && !historyAskedRef.current.has(waveId)) {
+          historyAskedRef.current.add(waveId);
+          requestWaveKey(waveId);
+        }
       }
     }
 
@@ -873,7 +885,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
 
     return crypto.decryptPing(ciphertext, nonce, waveKey);
-  }, [getWaveKey, getVersionedWaveKey]);
+  }, [getWaveKey, getVersionedWaveKey, requestWaveKey]);
 
   // ============ Audio Encryption (v2.3.0) ============
 
@@ -1200,6 +1212,7 @@ export function E2EEProvider({ children, token, API_URL }) {
 
   // ============ Clear on Logout ============
   const clearE2EE = useCallback(() => {
+    historyAskedRef.current.clear();
     setPrivateKey(null);
     setPublicKey(null);
     setPublicKeyBase64(null);

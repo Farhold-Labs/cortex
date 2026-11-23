@@ -167,6 +167,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Direct Calls: Ring a Contact, Answer or Decline, Missed Calls, Call History; Flip Camera; Wave Calls Announced | v2.145.0 |
 | Contacts Fit a Phone; Calling From a Contact's Profile | v2.145.2 (v2.145.1 tag mis-released) |
 | Call Screens Clear of the Status Bar | v2.145.3 |
+| Encrypted Waves: Newcomers Read the History (Older Key Versions Shared) | v2.145.4 |
 
 ---
 
