@@ -3694,11 +3694,72 @@ Get this server's federation identity (public key). No authentication required.
 {
   "nodeName": "cortex.example.com",
   "publicKey": "-----BEGIN PUBLIC KEY-----\nMIIBIjAN...",
-  "createdAt": "2025-12-12T10:00:00.000Z"
+  "keyId": "249a1511346f292e1347d5c8255609fe",
+  "nextPublicKey": null,
+  "nextKeyId": null,
+  "createdAt": "2025-12-12T10:00:00.000Z",
+  "protocolVersion": 2,
+  "capabilities": ["decoy", "padding", "key-rotation"]
 }
 ```
 
+`publicKey` is always the key the server signs with by default. `nextPublicKey`/`nextKeyId` are set while a key replacement is being handed over (v2.147.0); an ally told of a new key checks it here as well. `keyId` is the first 32 hex characters of SHA-256 over the key's DER, the fingerprint admins compare.
+
 **Response (404 Not Found):** Federation not enabled or identity not configured.
+
+---
+
+### Federation key handover (v2.147.0)
+
+A server's key is replaced by handshake: nothing changes for an ally until it has confirmed the new key. Design: `docs/federation-keys/README.md`.
+
+#### POST /api/federation/key-rotation
+
+An ally announces its next key. **Authentication:** HTTP Signature with the ally's **current** key.
+
+```json
+{ "nodeName": "a.example", "newPublicKey": "-----BEGIN PUBLIC KEY-----…", "newKeyId": "…",
+  "proofDate": "Mon, 23 Nov 2026 16:00:00 GMT", "proof": "<base64 RSA-SHA256 by the new key>" }
+```
+
+The proof signs `cortex-key-rotation\n<from>\n<to>\n<newKeyId>\n<proofDate>` and must be under 5 minutes old. The receiver also fetches the announcer's `/api/federation/identity` from its stored address and requires `nextKeyId`/`nextPublicKey` to match. Stored before answering; repeats get the same answer.
+
+- **200** `{ "received": "<newKeyId>" }`: the announcer counts this ally as confirmed only on this answer.
+- **400:** the announcement is malformed, or the key id doesn't match the key.
+- **401:** bad signature, not signed with the current key, or a stale or invalid proof.
+- **409:** the announcer's identity page does not list the key.
+- **502:** the identity page could not be read.
+
+From then on the receiver accepts the ally's current key or the new one. The first request that verifies with the new key makes it the key. The old key stays accepted for 5 minutes after that.
+
+#### POST /api/federation/key-rotation/withdraw
+
+The ally cancelled a next key: `{ "nodeName": "a.example", "keyId": "…" }`. Signed with its current key; the receiver also accepts the ally's previous key at any age. Clears the stored next key if the id matches. **200** `{ "withdrawn": "<keyId>" }`.
+
+#### Admin
+
+All require an admin. Those marked **step-up** need `X-Step-Up-Token`.
+
+- **`POST /api/admin/federation/key-rotation`** (step-up): starts a replacement.
+  - It makes the next key, tells every active and suspended ally at once, and answers with `keyRotation`.
+  - **409** `KEY_ROTATION_IN_PROGRESS` when a replacement is already under way, or `PAIRING_IN_PROGRESS` while a pairing is outstanding.
+  - With no active ally, it completes at once.
+- **`POST /api/admin/federation/key-rotation/retry`:** tells every ally that hasn't answered again now. Otherwise this happens every 10 minutes, with no cap (`FEDERATION_KEY_RETRY_MS`).
+- **`POST /api/admin/federation/key-rotation/cancel`** (step-up): deletes the next private key and sends withdrawals. **409** `KEY_ROTATION_CONFIRMED` once any ally has confirmed.
+- **`POST /api/admin/federation/identity/replace-now`** (step-up): the key was exposed.
+  - Body: `{ "confirm": "<this server's name>" }`.
+  - Replaces the key at once and tells no ally. Answers `{ keyId, cutOff: [...] }`.
+  - Each ally's admin must then re-run `POST /api/admin/federation/nodes/:id/handshake`. It now answers `keyChanged`, `keyId` and `previousKeyId`.
+- **`GET /api/admin/federation/status`** adds `keyId` and `keyRotation`:
+  - `keyRotation` is `null`, or `{ inProgress, startedAt, nextKeyId, allies: [{ nodeName, state, attempts, lastAttemptAt, lastError, suspended }], withdrawals }`;
+  - `state` is `confirmed`, `waiting` or `not-yet-told`.
+- **`GET /api/admin/federation/nodes`** adds each ally's `keyId` and `nextKeyId`.
+
+**`POST /api/admin/federation/identity` refusals:**
+- **409** `USE_KEY_ROTATION` for `regenerateKeys` once an identity exists.
+- **409** `NAME_CHANGE_WITH_ALLIES` for a name change while any ally is active, suspended or pairing.
+
+**Queue:** a `401` from an ally no longer uses up a delivery attempt. The message is retried for up to 7 days.
 
 ---
 
