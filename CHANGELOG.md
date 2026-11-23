@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.145.5] - 2026-11-22
+
+A newcomer's request for an encrypted wave's older keys is answered even if nobody who holds them was online when they asked. No migration.
+
+### Fixed
+- **Getting the older keys (v2.145.4) needed a member's app open at the same moment.** A key request was only ever pushed to whoever was online when it was made, and the newcomer's app asks once per session. Tried on farhold, it took several refreshes on both devices. Now the request waits on the server, and a member's app answers any still open when it unlocks, reconnects, or every ten minutes (`GET /api/e2ee/key-requests`, alongside the pending key renewals). The answer reaches the newcomer as `wave_key_granted`, and their open wave reloads by itself.
+  - Listed only for someone who holds a key in that wave, only for a requester still in it, and only the versions this person can give. Your own requests aren't listed.
+- Some of the refreshes were the release itself: an open app runs the build it loaded, and the first refresh after a release only fetches the new one.
+
+### Verified
+- `e2ee-history-keys`: a member finds the newcomer's request with exactly the version they lack; an outsider and the newcomer don't see it; it's gone once granted; none for someone who has left. `npm test`: all pass.
+- Real crypto in browsers on dev: as in v2.145.4, Wash is added to an encrypted wave on its third key version. With Mal's app closed, Wash's two earlier pings show "[Unable to decrypt]" for six seconds and he holds only version 3. Mal opens the app: within 2 s, without Wash refreshing, his wave reloads and both pings read. No console errors.
+
 ## [2.145.4] - 2026-11-22
 
 Someone added to an encrypted wave can read what was said before they joined. No migration.

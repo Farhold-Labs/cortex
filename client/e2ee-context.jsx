@@ -1162,7 +1162,8 @@ export function E2EEProvider({ children, token, API_URL }) {
     throw new Error('The people in this wave kept changing; the key will be renewed later');
   }, [privateKey, publicKeyBase64, fetchAPI, lookUpKey]);
 
-  // Renew every wave this person should: on unlock, when told, and every ten minutes.
+  // Renew every wave this person should, and answer key requests made while
+  // this device was away: on unlock, when told, on reconnect, every ten minutes.
   const runPendingRotations = useCallback(() => {
     if (!privateKey || !publicKeyBase64) return Promise.resolve();
     if (rotationRunRef.current) return rotationRunRef.current;
@@ -1182,10 +1183,21 @@ export function E2EEProvider({ children, token, API_URL }) {
       } catch (err) {
         console.warn('E2EE: pending rotations unavailable:', err.message);
       }
+      // Key requests made while this device was away (v2.145.5): a request
+      // was only pushed to whoever was online at that moment.
+      try {
+        const res = await fetchAPI('/e2ee/key-requests');
+        if (res.ok) {
+          const { requests = [] } = await res.json();
+          for (const r of requests) await grantWaveKey(r.waveId, r.requestId, r.requesterId, r.versions);
+        }
+      } catch (err) {
+        console.warn('E2EE: pending key requests unavailable:', err.message);
+      }
     })().finally(() => { rotationRunRef.current = null; });
     rotationRunRef.current = run;
     return run;
-  }, [privateKey, publicKeyBase64, fetchAPI, rotateWaveKey]);
+  }, [privateKey, publicKeyBase64, fetchAPI, rotateWaveKey, grantWaveKey]);
 
   useEffect(() => {
     if (!privateKey || !publicKeyBase64) return undefined;
