@@ -3,6 +3,7 @@
 // This lives outside React's component lifecycle, enabling persistent calls across navigation
 
 import { BASE_URL } from '../config/constants.js';
+import { setCallOverLockScreen } from '../utils/nativeCalls.js';
 
 // A direct call that has finished (v2.145.0).
 const FINAL_CALL_STATES = new Set(['declined', 'missed', 'cancelled', 'busy', 'ended']);
@@ -206,6 +207,12 @@ class VoiceCallService {
   // ============ AUTHENTICATION ============
   setAuthToken(token) {
     this.authToken = token;
+    // ANSWER on the phone's ring arrived before sign-in finished (v2.146.0).
+    if (token && this.pendingRingAnswer) {
+      const callId = this.pendingRingAnswer;
+      this.pendingRingAnswer = null;
+      this.answerFromRing(callId);
+    }
   }
 
   // ============ SERVER API CALLS ============
@@ -615,6 +622,7 @@ class VoiceCallService {
     try {
       data = await this.callApi(`/api/calls/${encodeURIComponent(call.id)}/answer`, 'POST');
     } catch (err) {
+      setCallOverLockScreen(false);
       this.directCallNotice = err.code === 'NOT_RINGING' ? 'That call has ended' : err.message;
       this.notifySubscribers();
       return;
@@ -623,6 +631,33 @@ class VoiceCallService {
     this.answeredHere = data.call.id;
     this.notifySubscribers();
     await this.joinDirectRoom(data.call, withVideo);
+  }
+
+  /**
+   * ANSWER tapped on the Android app's own ring (v2.146.0). The app may have
+   * just started, so the call is fetched rather than waited for.
+   */
+  async answerFromRing(callId) {
+    if (!callId || this.directCall?.id === callId) return;
+    if (!this.authToken) { this.pendingRingAnswer = callId; return; }
+    if (this.incomingCall?.id !== callId) {
+      let call;
+      try {
+        ({ call } = await this.callApi(`/api/calls/${encodeURIComponent(callId)}`));
+      } catch {
+        setCallOverLockScreen(false);
+        return;
+      }
+      if (call?.direction !== 'incoming' || call.state !== 'ringing') {
+        // Nothing to show above the lock screen after all.
+        setCallOverLockScreen(false);
+        this.directCallNotice = 'That call has ended';
+        this.notifySubscribers();
+        return;
+      }
+      this.incomingCall = call;
+    }
+    await this.answerCall(this.incomingCall.kind === 'video');
   }
 
   async declineCall() {

@@ -259,6 +259,9 @@ Local plugins live in `android/app/src/main/java/com/farhold/cortex/` and must b
 | Plugin | Since | What it does |
 |--------|-------|--------------|
 | `CortexOrientation` (`OrientationPlugin.java`) | v2.113.0 | `lock({orientation: 'landscape'\|'portrait'})` / `unlock()`. Uses the activity's SENSOR orientations, so it works with auto-rotate off. Used by the broadcast studio and the broadcast player. |
+| `CortexCalls` (`calls/CortexCallsPlugin.java`) | v2.146.0 | The phone-style ring for direct calls. `configure({apiBase})`, `takePendingAnswer()` and the `answer` event, `stopRing({callId})`, `setOverLockScreen({on})`. Web side: `client/src/utils/nativeCalls.js`. Its presence is what makes the app register for push with `call-ring`. |
+
+**The call ring (v2.146.0)** lives in `calls/`: `CallMessagingService` replaces the push plugin's `MessagingService` (the manifest removes the plugin's with `tools:node="remove"`), rings for `incoming_call` data messages and stops on `call_ring_stop`, and hands everything else to the plugin. `CallRinger` posts the call-style notification on the `cortex_calls` channel (ringtone, repeating); `IncomingCallActivity` is the full-screen call screen over the lock screen; `CallActionReceiver` and `CallDecliner` send DECLINE with the app closed. The app needs `USE_FULL_SCREEN_INTENT`: **declare it in the Play Console** (App content → Full-screen intent → calling app) before publishing to Google Play, or the release is held.
 
 From the web side, reach a plugin through `window.Capacitor.registerPlugin('Name')`, guarded by `window.Capacitor?.isNativePlatform?.()` and `isPluginAvailable('Name')` (see `client/src/utils/orientation.js`). **Don't** `import '@capacitor/core'` for this: in an ordinary browser that import installs a Capacitor stub on `window`, which breaks native-app detection elsewhere.
 

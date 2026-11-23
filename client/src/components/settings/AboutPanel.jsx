@@ -1,41 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { VERSION, API_URL, hostname } from '../../config/constants.js';
+import { getInstalledApp } from '../../utils/installedApp.js';
 
 const PROJECT_SITE = 'https://farhold.com';
 const PROJECT_REPO = 'https://github.com/Farhold-Labs/cortex';
-
-/**
- * The installed app, when there is one (v2.114.0).
- *
- * The native apps load the web app from the server, so VERSION is always the
- * server's build. Only the shell knows what was actually installed — which is
- * what tells you whether someone is still on an old APK.
- * Reached through window.Capacitor, never `import '@capacitor/core'` (which
- * stubs window.Capacitor in a plain browser).
- */
-async function getInstalledApp() {
-  const cap = window.Capacitor;
-  if (cap?.isNativePlatform?.()) {
-    const platform = cap.getPlatform?.() === 'ios' ? 'iOS' : 'Android';
-    const App = cap.Plugins?.App;
-    if (!App?.getInfo) return { platform, version: null };
-    try {
-      const info = await App.getInfo();
-      return { platform, version: info.version, build: info.build };
-    } catch {
-      return { platform, version: null };
-    }
-  }
-  if (window.electronAPI?.getAppVersion) {
-    const platform = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' }[window.electronAPI.platform] || 'Desktop';
-    try {
-      return { platform: `Desktop (${platform})`, version: await window.electronAPI.getAppVersion() };
-    } catch {
-      return { platform: `Desktop (${platform})`, version: null };
-    }
-  }
-  return null; // a browser
-}
 
 const AboutPanel = ({ showToast, isMobile }) => {
   const [app, setApp] = useState(undefined); // undefined = still asking

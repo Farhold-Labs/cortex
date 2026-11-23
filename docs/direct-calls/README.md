@@ -51,6 +51,7 @@ caller taps CALL ──► server checks contacts + blocks ──► call row: r
 - Wave calls announced: banner in the wave, mark in the list, quiet push.
 
 ### Phase 2: the Android lock-screen ring (needs a new APK)
+- **Built in v2.146.0.** Only an app that registers with `call-ring` gets the data message, so older APKs keep the phase 1 notification. DECLINE from the ring uses a per-call token (`decline-from-ring`). Not yet tried on a phone at the time of the release.
 - A high-priority FCM data message for an incoming call, handled by a small native service in the app (alongside `CortexOrientation`), which posts an Android **call-style notification** with a full-screen screen, ringtone and vibration, ANSWER and DECLINE. It rings with the screen off and over the lock screen.
 - ANSWER opens the app straight into the call; DECLINE tells the server without opening the app.
 - Needs the `USE_FULL_SCREEN_INTENT` permission. Since Android 14, Google Play lets only calling and alarm apps use it, and asks apps to declare it. Cortex placing calls qualifies, but the declaration has to be made.

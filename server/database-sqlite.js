@@ -4069,6 +4069,22 @@ export class DatabaseSQLite {
       CREATE INDEX IF NOT EXISTS idx_direct_calls_live ON direct_calls(state) WHERE state IN ('ringing', 'answered');
     `);
 
+    // v2.146.0 — which builds of the app are in use, so an admin can see who is
+    // still on an old APK. One row per install (a random id the app keeps), with
+    // no account in it: the question is "which versions", never "who". Pruned
+    // after 90 days without a report.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS client_versions (
+        install_id  TEXT PRIMARY KEY,
+        platform    TEXT NOT NULL,
+        web_version TEXT,
+        app_version TEXT,
+        first_seen  TEXT NOT NULL,
+        last_seen   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_client_versions_seen ON client_versions(last_seen);
+    `);
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -6282,6 +6298,33 @@ export class DatabaseSQLite {
     return this.db.prepare(`
       DELETE FROM direct_calls WHERE created_at < ? AND state NOT IN ('ringing', 'answered')
     `).run(beforeIso).changes;
+  }
+
+  /** An install reports the builds it runs (v2.146.0). */
+  recordClientVersion({ installId, platform, webVersion, appVersion }) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO client_versions (install_id, platform, web_version, app_version, first_seen, last_seen)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (install_id) DO UPDATE SET
+        platform = excluded.platform, web_version = excluded.web_version,
+        app_version = excluded.app_version, last_seen = excluded.last_seen
+    `).run(installId, platform, webVersion, appVersion, now, now);
+  }
+
+  /** Installs seen since `sinceIso`, counted by platform and versions. */
+  clientVersionCounts(sinceIso) {
+    return this.db.prepare(`
+      SELECT platform, web_version AS webVersion, app_version AS appVersion,
+             COUNT(*) AS installs, MAX(last_seen) AS lastSeen
+      FROM client_versions WHERE last_seen >= ?
+      GROUP BY platform, web_version, app_version
+      ORDER BY platform, installs DESC
+    `).all(sinceIso);
+  }
+
+  pruneClientVersions(beforeIso) {
+    return this.db.prepare('DELETE FROM client_versions WHERE last_seen < ?').run(beforeIso).changes;
   }
 
   muteUser(userId, mutedUserId) {
