@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.145.3] - 2026-11-22
+
+Call screens keep clear of a phone's status bar. No migration.
+
+### Fixed
+- **In the Android app, a call's header sat under the status bar** (the clock and notification icons). The app targets Android 16, where every app is drawn edge to edge, and Capacitor 8 hands the bar's height to the page as `env(safe-area-inset-top)`. The main header and the broadcast pages already use it; the full-screen call window, the wave call screen and the incoming call screen did not. All three now leave room for the status bar and the notch, and the wave call screen also for the home indicator.
+
+### Verified
+- Headless at 390 px with a faked 40 px status bar and 24 px home bar (`Emulation.setSafeAreaInsetsOverride`): the page reads `env(safe-area-inset-top)` as 40; the main header starts at 53; Zoe's incoming call screen starts at 88 (48 + 40); Mal's call header at 55, under the bar; the controls end above the home bar. No console errors.
+- **Not verified in the Android app itself**; it loads the deployed site, so the fix reaches it with the deploy.
+
 ## [2.145.2] - 2026-11-22
 
 The contacts fix of v2.145.1, released for real. No migration.

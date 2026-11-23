@@ -73,7 +73,7 @@ export function IncomingCallScreen({ call, onAnswer, onDecline }) {
     <div role="dialog" aria-label={`${person.displayName} is calling`} data-incoming-call="" style={{
       position: 'fixed', inset: 0, zIndex: 3000, background: 'var(--bg-base)',
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between',
-      padding: '48px 16px calc(40px + env(safe-area-inset-bottom, 0px))', textAlign: 'center',
+      padding: 'calc(48px + env(safe-area-inset-top, 0px)) 16px calc(40px + env(safe-area-inset-bottom, 0px))', textAlign: 'center',
     }}>
       <div style={{ color: 'var(--text-dim)', fontFamily: 'monospace', letterSpacing: 2, fontSize: '0.85rem' }}>
         INCOMING {video ? 'VIDEO' : 'VOICE'} CALL
