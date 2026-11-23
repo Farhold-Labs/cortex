@@ -12552,6 +12552,21 @@ export class DatabaseSQLite {
     `).all(userId, userId).map(r => r.id);
   }
 
+  /**
+   * The versions of a wave's key that someone in it holds and this person
+   * doesn't (v2.145.4): a newcomer is given the current key, and the pings
+   * from before they joined were encrypted under older ones.
+   */
+  missingWaveKeyVersions(waveId, userId) {
+    return this.db.prepare(`
+      SELECT DISTINCT key_version FROM wave_encryption_keys
+      WHERE wave_id = ? AND key_version NOT IN (
+        SELECT key_version FROM wave_encryption_keys WHERE wave_id = ? AND user_id = ?
+      )
+      ORDER BY key_version
+    `).all(waveId, waveId, userId).map(r => r.key_version);
+  }
+
   hasWaveKeyRow(waveId, userId, keyVersion) {
     return !!this.db.prepare('SELECT 1 FROM wave_encryption_keys WHERE wave_id = ? AND user_id = ? AND key_version = ?')
       .get(waveId, userId, keyVersion);

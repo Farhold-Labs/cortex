@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.145.3**. Last brought current 2026-10-30.
+Current version: **2.145.4**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2145003 / versionName "2.145.3"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2145003 / MARKETING_VERSION 2.145.3
+client/android/app/build.gradle                  versionCode 2145004 / versionName "2.145.4"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2145004 / MARKETING_VERSION 2.145.4
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -167,6 +167,7 @@ Encrypted pings never reach server-side processing — the server cannot read th
 **Phase 0 of `docs/federated-e2ee/` (v2.143.0):**
 - **Every ping send and edit goes through `sealPing()`** (`client/src/utils/sealPing.js`). The server refuses plain text in an encrypted wave (`ENCRYPTION_REQUIRED`). The focus view and thread panel sent plain text for years, and a view handed the open tab doesn't know `encrypted`: take it from the server.
 - **A device wraps a wave key only for a key from `lookUpKey(userId)`**, never one carried in a request. Keys seen are kept in `user_key_records`, encrypted on the device, and a change is flagged.
+- **A newcomer needs every older version of the key**, not just the current one: each ping is sealed with the version current when it was sent. A device that meets a ping sealed with a version it lacks asks (`key-request`, once a session per wave), and a member's device wraps each version it holds (`grantWaveKey`). The server stores a version only if the giver holds it and never over a key someone has (v2.145.4).
 - **A wave needs a new key when any holder of the current one is no longer in it** (`waveNeedsRekey()`, from the key rows). Its owner, admins or moderators renew it (`runPendingRotations`).
 
 The unlocked key lives in `E2EEProvider`, above the routes; the unlock gate (`E2EEAuthenticatedApp`) unmounts on full-page routes such as `/about` and `/watch`. So the gate's re-check must keep a key already in memory, and **any sign-out must clear it**. The provider clears it whenever the token goes null, not only when the gate's logout button is used (v2.114.1).
