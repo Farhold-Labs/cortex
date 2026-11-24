@@ -4176,6 +4176,17 @@ export class DatabaseSQLite {
       );
     `);
 
+    // v2.149.0 — encryption format of a ping and of a wrapped wave key
+    // (docs/federated-e2ee/, phase 1). 1 is everything written so far; 2 binds
+    // a ping to its wave and author and a wrapped key to its wave, version and
+    // recipient. Devices learn to read 2 a release before any device writes it.
+    for (const table of ['pings', 'wave_encryption_keys']) {
+      const cols = this.db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+      if (cols.length && !cols.includes('format')) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN format INTEGER NOT NULL DEFAULT 1`);
+      }
+    }
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -8742,6 +8753,7 @@ export class DatabaseSQLite {
         encrypted: d.encrypted === 1,
         nonce: d.nonce,
         keyVersion: d.key_version,
+        format: d.format || 1,
         isBot: isBot,
         botId: d.bot_id || undefined,
         // Media fields (v2.7.0)
@@ -8830,7 +8842,7 @@ export class DatabaseSQLite {
 
     let sql = `
       SELECT d.id, d.wave_id, d.parent_id, d.author_id, d.content,
-             d.created_at, d.edited_at, d.deleted, d.deleted_at, d.encrypted, d.nonce, d.key_version,
+             d.created_at, d.edited_at, d.deleted, d.deleted_at, d.encrypted, d.nonce, d.key_version, d.format,
              d.broken_out_to, d.media_type, d.media_url, d.media_duration, d.media_encrypted,
              d.threaded, d.is_thread_reply, d.event_id, d.pinned_at, d.pinned_by,
              d.expires_at,
@@ -8891,6 +8903,7 @@ export class DatabaseSQLite {
         encrypted: d.encrypted === 1,
         nonce: d.nonce,
         keyVersion: d.key_version,
+        format: d.format || 1,
         isBot: isBot,
         botId: d.bot_id || undefined,
         // Media fields (v2.7.0)
@@ -8983,6 +8996,8 @@ export class DatabaseSQLite {
       encrypted: data.encrypted ? 1 : 0,
       nonce: data.nonce || null,
       keyVersion: data.keyVersion || null,
+      // v2.149.0: 1, or 2 for a ping bound to its wave and author.
+      format: data.encrypted && data.format === 2 ? 2 : 1,
       // Media fields (v2.7.0)
       mediaType: data.mediaType || null,       // 'audio', 'video', or null
       mediaUrl: data.mediaUrl || null,
@@ -9014,17 +9029,17 @@ export class DatabaseSQLite {
       this.db.exec('PRAGMA foreign_keys = OFF');
       try {
         this.db.prepare(`
-          INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id, expires_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId, ping.expiresAt);
+          INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, format, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, ping.format, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId, ping.expiresAt);
       } finally {
         this.db.exec('PRAGMA foreign_keys = ON');
       }
     } else {
       this.db.prepare(`
-        INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId, ping.expiresAt);
+        INSERT INTO pings (id, wave_id, parent_id, author_id, content, privacy, version, created_at, reactions, encrypted, nonce, key_version, format, bot_id, media_type, media_url, media_duration, media_encrypted, is_thread_reply, event_id, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(ping.id, ping.waveId, ping.parentId, ping.authorId, ping.content, ping.privacy, ping.version, ping.createdAt, ping.encrypted, ping.nonce, ping.keyVersion, ping.format, data.botId || null, ping.mediaType, ping.mediaUrl, ping.mediaDuration, ping.mediaEncrypted, ping.is_thread_reply, ping.eventId, ping.expiresAt);
     }
 
     // Author has read their own ping (skip for bot pings)
@@ -9121,6 +9136,7 @@ export class DatabaseSQLite {
       encrypted: d.encrypted === 1,
       nonce: d.nonce,
       keyVersion: d.key_version,
+      format: d.format || 1,
       // Media fields (v2.7.0)
       // Event card (v2.72.0) — the client renders the card from this id.
       event_id: d.event_id || null,
@@ -9170,7 +9186,7 @@ export class DatabaseSQLite {
     return { success: true, ping: updated };
   }
 
-  updatePing(pingId, content, { encrypted = false, nonce = null, keyVersion = null } = {}) {
+  updatePing(pingId, content, { encrypted = false, nonce = null, keyVersion = null, format = 1 } = {}) {
     const existing = this.db.prepare('SELECT * FROM pings WHERE id = ?').get(pingId);
     if (!existing || existing.deleted) return null;
 
@@ -9194,10 +9210,11 @@ export class DatabaseSQLite {
     this.db.prepare(`
       UPDATE pings
       SET content = ?, version = ?, edited_at = ?,
-          encrypted = ?, nonce = ?, key_version = ?
+          encrypted = ?, nonce = ?, key_version = ?, format = ?
       WHERE id = ?
     `).run(processedContent, existing.version + 1, now,
            encrypted ? 1 : 0, nonce ?? existing.nonce, keyVersion ?? existing.key_version,
+           encrypted && format === 2 ? 2 : 1,
            pingId);
 
     // Return updated ping
@@ -9230,6 +9247,7 @@ export class DatabaseSQLite {
       encrypted: updated.encrypted,
       nonce: updated.nonce,
       keyVersion: updated.key_version,
+      format: updated.format || 1,
     };
   }
 
@@ -9437,7 +9455,7 @@ export class DatabaseSQLite {
   getPinnedPings(waveId, limit = 50) {
     const rows = this.db.prepare(`
       SELECT p.id, p.wave_id, p.author_id, p.content, p.created_at,
-             p.encrypted, p.nonce, p.key_version, p.media_type, p.event_id,
+             p.encrypted, p.nonce, p.key_version, p.format, p.media_type, p.event_id,
              p.pinned_at, p.pinned_by,
              u.display_name AS author_name, u.handle AS author_handle,
              b.name AS bot_name,
@@ -9462,6 +9480,7 @@ export class DatabaseSQLite {
       encrypted: r.encrypted === 1,
       nonce: r.nonce,
       keyVersion: r.key_version,
+      format: r.format || 1,
       mediaType: r.media_type,
       eventId: r.event_id || null,
       createdAt: r.created_at,
@@ -12649,7 +12668,9 @@ export class DatabaseSQLite {
   }
 
   // Create wave encryption key for a participant
-  createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, keyVersion = 1, userKeyId = null) {
+  // format (v2.149.0): 1, or 2 for a key bound to its wave, version and recipient.
+  createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, keyVersion = 1, userKeyId = null, format = 1) {
+    format = format === 2 ? 2 : 1;
     const id = uuidv4();
     const now = new Date().toISOString();
 
@@ -12663,16 +12684,16 @@ export class DatabaseSQLite {
       // Update existing
       this.db.prepare(`
         UPDATE wave_encryption_keys
-        SET encrypted_wave_key = ?, sender_public_key = ?, user_key_id = COALESCE(?, user_key_id)
+        SET encrypted_wave_key = ?, sender_public_key = ?, user_key_id = COALESCE(?, user_key_id), format = ?
         WHERE wave_id = ? AND user_id = ? AND key_version = ?
-      `).run(encryptedWaveKey, senderPublicKey, userKeyId, waveId, userId, keyVersion);
+      `).run(encryptedWaveKey, senderPublicKey, userKeyId, format, waveId, userId, keyVersion);
       return existing.id;
     }
 
     this.db.prepare(`
-      INSERT INTO wave_encryption_keys (id, wave_id, user_id, encrypted_wave_key, sender_public_key, key_version, created_at, user_key_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, waveId, userId, encryptedWaveKey, senderPublicKey, keyVersion, now, userKeyId);
+      INSERT INTO wave_encryption_keys (id, wave_id, user_id, encrypted_wave_key, sender_public_key, key_version, created_at, user_key_id, format)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, waveId, userId, encryptedWaveKey, senderPublicKey, keyVersion, now, userKeyId, format);
 
     return id;
   }
@@ -12694,6 +12715,7 @@ export class DatabaseSQLite {
         encryptedWaveKey: row.encrypted_wave_key,
         senderPublicKey: row.sender_public_key,
         keyVersion: row.key_version,
+        format: row.format || 1,
         currentKeyVersion: row.current_key_version || 1
       };
     }
@@ -12707,6 +12729,7 @@ export class DatabaseSQLite {
       encryptedWaveKey: row.encrypted_wave_key,
       senderPublicKey: row.sender_public_key,
       keyVersion: row.key_version,
+      format: row.format || 1,
       currentKeyVersion: row.current_key_version || 1
     };
   }
@@ -12714,7 +12737,7 @@ export class DatabaseSQLite {
   // Get all wave keys for a user (for key rotation/history)
   getAllWaveKeysForUser(waveId, userId) {
     const rows = this.db.prepare(`
-      SELECT encrypted_wave_key, sender_public_key, key_version, created_at
+      SELECT encrypted_wave_key, sender_public_key, key_version, format, created_at
       FROM wave_encryption_keys
       WHERE wave_id = ? AND user_id = ?
       ORDER BY key_version ASC
@@ -12724,6 +12747,7 @@ export class DatabaseSQLite {
       encryptedWaveKey: row.encrypted_wave_key,
       senderPublicKey: row.sender_public_key,
       keyVersion: row.key_version,
+      format: row.format || 1,
       createdAt: row.created_at
     }));
   }
@@ -12771,8 +12795,8 @@ export class DatabaseSQLite {
       }
 
       // Insert new encrypted keys for each remaining participant
-      for (const { userId, encryptedWaveKey, senderPublicKey } of newKeyDistribution) {
-        this.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, newVersion);
+      for (const { userId, encryptedWaveKey, senderPublicKey, format } of newKeyDistribution) {
+        this.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, newVersion, null, format);
       }
 
       return { waveId, newKeyVersion: newVersion };

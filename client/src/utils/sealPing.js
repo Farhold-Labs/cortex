@@ -22,3 +22,11 @@ export async function sealPing(e2ee, wave, text) {
   const { ciphertext, nonce, keyVersion } = await e2ee.encryptPing(text, wave.id);
   return { content: ciphertext, encrypted: true, nonce, keyVersion };
 }
+
+/**
+ * What decryptPing needs to know about a ping besides its key (v2.149.0):
+ * its format, and for format 2 its author, which the seal is bound to.
+ */
+export function pingSeal(ping) {
+  return { format: ping?.format || 1, authorId: ping?.authorId || ping?.author_id || null };
+}

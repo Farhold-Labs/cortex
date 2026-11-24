@@ -13,7 +13,13 @@
  * could delete or roll it back, which makes a change look like a first
  * sighting; that limit is accepted (docs/federated-e2ee/01-design.md).
  *
- * Shape: { v: 1, people: { [personId]: { key, seenAt, changedAt?, previousKey?, unacknowledged? } } }
+ * Verified (v2.149.0). After comparing fingerprints with someone, a person
+ * marks their key as verified. The mark is for that key only: when the key
+ * changes, it is dropped and `verificationLost` says so until they verify the
+ * new one, so a changed key can never inherit a verification.
+ *
+ * Shape: { v: 1, people: { [personId]: { key, seenAt, changedAt?, previousKey?,
+ *   unacknowledged?, verifiedKey?, verifiedAt?, unverifiedAt?, verificationLost? } } }
  * Pure functions: callers save what they return.
  */
 
@@ -32,16 +38,46 @@ export function noteKey(records, personId, publicKey, now = new Date().toISOStri
     return { status: 'new', records: { v: 1, people: { ...people, [personId]: { key: publicKey, seenAt: now } } } };
   }
   if (prev.key === publicKey) return { status: 'same', records };
-  return {
-    status: 'changed',
-    records: {
-      v: 1,
-      people: {
-        ...people,
-        [personId]: { key: publicKey, seenAt: prev.seenAt, changedAt: now, previousKey: prev.key, unacknowledged: true },
-      },
-    },
-  };
+  const next = { key: publicKey, seenAt: prev.seenAt, changedAt: now, previousKey: prev.key, unacknowledged: true };
+  if (prev.verifiedKey || prev.verificationLost) next.verificationLost = true;
+  return { status: 'changed', records: { v: 1, people: { ...people, [personId]: next } } };
+}
+
+/**
+ * The person compared fingerprints and says this key is theirs. Only the key
+ * on record can be verified: if it has changed since they looked, nothing is
+ * marked and they must compare the new one.
+ */
+export function markVerified(records, personId, publicKey, now = new Date().toISOString()) {
+  const people = records?.people || {};
+  const prev = people[personId];
+  if (prev && prev.key !== publicKey) return records;
+  const { unacknowledged, verificationLost, unverifiedAt, ...rest } = prev || { key: publicKey, seenAt: now };
+  return { v: 1, people: { ...people, [personId]: { ...rest, verifiedKey: publicKey, verifiedAt: now } } };
+}
+
+export function unmarkVerified(records, personId, now = new Date().toISOString()) {
+  const prev = records?.people?.[personId];
+  if (!prev?.verifiedKey) return records;
+  const { verifiedKey, verifiedAt, ...rest } = prev;
+  return { v: 1, people: { ...records.people, [personId]: { ...rest, unverifiedAt: now } } };
+}
+
+/**
+ * How a key stands for this person:
+ *   'verified'  they verified this very key
+ *   'lost'      they had verified an earlier key; this one is not verified
+ *   'changed'   it changed and they have not looked yet
+ *   'seen'      on record, never verified
+ *   'unknown'   not on record (or a different key from the one on record)
+ */
+export function keyStanding(records, personId, publicKey) {
+  const e = records?.people?.[personId];
+  if (!e || !publicKey || e.key !== publicKey) return 'unknown';
+  if (e.verifiedKey === publicKey) return 'verified';
+  if (e.verificationLost) return 'lost';
+  if (e.unacknowledged) return 'changed';
+  return 'seen';
 }
 
 /** The person has seen the flag. */
@@ -56,10 +92,11 @@ export function acknowledgeKeyChange(records, personId) {
 export function unacknowledgedChanges(records) {
   return Object.entries(records?.people || {})
     .filter(([, e]) => e.unacknowledged)
-    .map(([personId, e]) => ({ personId, changedAt: e.changedAt }));
+    .map(([personId, e]) => ({ personId, changedAt: e.changedAt, verificationLost: !!e.verificationLost }));
 }
 
-const latest = (e) => e.changedAt || e.seenAt || '';
+const latest = (e) => [e.changedAt, e.seenAt, e.verifiedAt, e.unverifiedAt]
+  .filter(Boolean).sort().pop() || '';
 
 /**
  * Two devices saved at once: keep both. For the same person with the same

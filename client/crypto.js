@@ -265,6 +265,89 @@ async function deriveSharedKey(privateKey, publicKey) {
   );
 }
 
+// ============ Format 2: bound to its place (v2.149.0) ============
+//
+// docs/federated-e2ee/01-design.md, "Format 2". Format 1 encrypts with no
+// associated data and uses the ECDH output as the AES key directly, so a
+// server could hand someone the wrapped key of one wave as the key of another
+// (same two people), or move a ping between waves that share a key version,
+// and no device would notice. Format 2 binds each to where it belongs:
+//
+//   wrapped wave key  ECDH → HKDF-SHA256 (empty salt, info = context) → AES-GCM,
+//                     with the same context as associated data, where context =
+//                     "cortex-wavekey-v2" ‖ origin wave id ‖ key version ‖ recipient address
+//   ping              AES-GCM with associated data
+//                     "cortex-ping-v2" ‖ origin wave id ‖ author address
+//
+// ‖ is one 0x00 byte, which no label, id, version or address contains, so no
+// two different lists of fields give the same bytes. An address is
+// <user id on their home server>@<home server's name>: the id, not the handle,
+// because a handle can be changed and the binding must not.
+//
+// Devices read format 2 from v2.149.0; nothing writes it until encryption
+// across servers (phase 3), so every device can read it by the time any does.
+
+/** The bytes a format-2 seal is bound to. */
+export function sealContext(label, ...fields) {
+  for (const f of [label, ...fields]) {
+    if (f === null || f === undefined || String(f).includes('\u0000')) throw new Error('Invalid seal context');
+  }
+  return new TextEncoder().encode([label, ...fields.map(String)].join('\u0000'));
+}
+
+/** Someone's address in a seal: their id on their home server, and its name. */
+export function personAddress(userId, nodeName) {
+  if (!userId) throw new Error('Invalid seal context');
+  return `${userId}@${nodeName || ''}`;
+}
+
+export function pingContext(originWaveId, authorAddress) {
+  return sealContext('cortex-ping-v2', originWaveId, authorAddress);
+}
+
+export function waveKeyContext(originWaveId, keyVersion, recipientAddress) {
+  if (!Number.isInteger(keyVersion) || keyVersion < 1) throw new Error('Invalid seal context');
+  return sealContext('cortex-wavekey-v2', originWaveId, keyVersion, recipientAddress);
+}
+
+function requireContext(context) {
+  if (!(context instanceof Uint8Array) || context.length === 0) throw new Error('Format 2 needs its seal context');
+  return context;
+}
+
+async function deriveBoundWrapKey(privateKey, publicKey, context) {
+  const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: publicKey }, privateKey, 384);
+  const hkdfKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: context },
+    hkdfKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+// ============ Fingerprints (v2.149.0) ============
+
+const FINGERPRINT_LABEL = new TextEncoder().encode('cortex-fp-v1');
+
+/**
+ * What people compare to know they have each other's real key: the first
+ * 16 bytes (128 bits) of SHA-256 over "cortex-fp-v1" ‖ the SPKI public key,
+ * as 8 groups of 4 upper-case hex characters (decision 5, 2026-11-20).
+ * @param {string} spkiBase64
+ * @returns {Promise<string>} e.g. "3F9A 0C71 …"
+ */
+export async function keyFingerprint(spkiBase64) {
+  const spki = new Uint8Array(base64Decode(spkiBase64));
+  const input = new Uint8Array(FINGERPRINT_LABEL.length + spki.length);
+  input.set(FINGERPRINT_LABEL, 0);
+  input.set(spki, FINGERPRINT_LABEL.length);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input)).slice(0, 16);
+  const hex = Array.from(digest, b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+  return hex.match(/.{4}/g).join(' ');
+}
+
 /**
  * Encrypt a wave key for a recipient
  * @param {CryptoKey} waveKey - AES-256-GCM wave key
@@ -272,9 +355,11 @@ async function deriveSharedKey(privateKey, publicKey) {
  * @param {CryptoKey} senderPrivateKey - Sender's ECDH private key
  * @returns {Promise<{encryptedKey: string, nonce: string}>}
  */
-export async function encryptWaveKey(waveKey, recipientPublicKey, senderPrivateKey) {
+export async function encryptWaveKey(waveKey, recipientPublicKey, senderPrivateKey, { format = 1, context = null } = {}) {
   // Derive shared secret
-  const sharedKey = await deriveSharedKey(senderPrivateKey, recipientPublicKey);
+  const sharedKey = format === 2
+    ? await deriveBoundWrapKey(senderPrivateKey, recipientPublicKey, requireContext(context))
+    : await deriveSharedKey(senderPrivateKey, recipientPublicKey);
 
   // Export the wave key
   const rawWaveKey = await exportWaveKey(waveKey);
@@ -282,7 +367,7 @@ export async function encryptWaveKey(waveKey, recipientPublicKey, senderPrivateK
   // Encrypt with shared key
   const nonce = generateNonce();
   const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce },
+    format === 2 ? { name: 'AES-GCM', iv: nonce, additionalData: context } : { name: 'AES-GCM', iv: nonce },
     sharedKey,
     rawWaveKey
   );
@@ -301,16 +386,18 @@ export async function encryptWaveKey(waveKey, recipientPublicKey, senderPrivateK
  * @param {CryptoKey} recipientPrivateKey - Recipient's ECDH private key
  * @returns {Promise<CryptoKey>} - Decrypted AES-256-GCM wave key
  */
-export async function decryptWaveKey(encryptedKeyBase64, nonceBase64, senderPublicKey, recipientPrivateKey) {
+export async function decryptWaveKey(encryptedKeyBase64, nonceBase64, senderPublicKey, recipientPrivateKey, { format = 1, context = null } = {}) {
   // Derive shared secret (same as sender used)
-  const sharedKey = await deriveSharedKey(recipientPrivateKey, senderPublicKey);
+  const sharedKey = format === 2
+    ? await deriveBoundWrapKey(recipientPrivateKey, senderPublicKey, requireContext(context))
+    : await deriveSharedKey(recipientPrivateKey, senderPublicKey);
 
   // Decrypt
   const encryptedKey = base64Decode(encryptedKeyBase64);
   const nonce = base64Decode(nonceBase64);
 
   const rawWaveKey = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: nonce },
+    format === 2 ? { name: 'AES-GCM', iv: nonce, additionalData: context } : { name: 'AES-GCM', iv: nonce },
     sharedKey,
     encryptedKey
   );
@@ -327,12 +414,12 @@ export async function decryptWaveKey(encryptedKeyBase64, nonceBase64, senderPubl
  * @param {CryptoKey} waveKey - AES-256-GCM wave key
  * @returns {Promise<{ciphertext: string, nonce: string}>}
  */
-export async function encryptPing(plaintext, waveKey) {
+export async function encryptPing(plaintext, waveKey, { format = 1, context = null } = {}) {
   const encoder = new TextEncoder();
   const nonce = generateNonce();
 
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce },
+    format === 2 ? { name: 'AES-GCM', iv: nonce, additionalData: requireContext(context) } : { name: 'AES-GCM', iv: nonce },
     waveKey,
     encoder.encode(plaintext)
   );
@@ -350,13 +437,13 @@ export async function encryptPing(plaintext, waveKey) {
  * @param {CryptoKey} waveKey - AES-256-GCM wave key
  * @returns {Promise<string>} - Decrypted plaintext
  */
-export async function decryptPing(ciphertextBase64, nonceBase64, waveKey) {
+export async function decryptPing(ciphertextBase64, nonceBase64, waveKey, { format = 1, context = null } = {}) {
   const decoder = new TextDecoder();
   const ciphertext = base64Decode(ciphertextBase64);
   const nonce = base64Decode(nonceBase64);
 
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: nonce },
+    format === 2 ? { name: 'AES-GCM', iv: nonce, additionalData: requireContext(context) } : { name: 'AES-GCM', iv: nonce },
     waveKey,
     ciphertext
   );

@@ -10,7 +10,7 @@ import Message from '../messages/Message.jsx';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
 import { lazyComponent } from '../../utils/lazyComponent.jsx';
-import { sealPing } from '../../utils/sealPing.js';
+import { sealPing, pingSeal } from '../../utils/sealPing.js';
 
 // Loaded when the GIF picker first opens (v2.107.0).
 const GifSearchModal = lazyComponent(() => import('../search/GifSearchModal.jsx'));
@@ -100,7 +100,8 @@ const ThreadPanel = ({
           node.content,
           node.nonce,
           waveId,
-          node.keyVersion
+          node.keyVersion,
+          pingSeal(node)
         );
         decryptedNode = { ...node, content: plaintext, _decrypted: true };
       } catch (err) {

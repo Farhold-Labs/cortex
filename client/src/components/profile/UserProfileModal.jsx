@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LOADING, FEDERATION, formatError } from '../../../messages.js';
 import { GlowText, Avatar } from '../ui/SimpleComponents.jsx';
+import { PersonKeyDisclosure } from '../ui/KeyFingerprint.jsx';
 
 const UserProfileModal = ({ isOpen, onClose, userId, currentUser, fetchAPI, showToast, contacts, blockedUsers, mutedUsers, onAddContact, onBlock, onMute, onFollow, onUnfollow, onNavigateToWave, onCall, isMobile }) => {
   const [profile, setProfile] = useState(null);
@@ -162,6 +163,13 @@ const UserProfileModal = ({ isOpen, onClose, userId, currentUser, fetchAPI, show
                 ) : (
                   <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No videos posted yet</div>
                 )}
+              </div>
+            )}
+
+            {/* Encryption key fingerprint (v2.149.0); other servers' people come with phase 2 */}
+            {!isCurrentUser && !profile.isRemote && (
+              <div style={{ marginBottom: '16px' }}>
+                <PersonKeyDisclosure userId={userId} name={profile.displayName || profile.handle} isMobile={isMobile} />
               </div>
             )}
 

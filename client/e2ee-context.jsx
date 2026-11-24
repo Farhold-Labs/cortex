@@ -12,7 +12,8 @@
 
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import * as crypto from './crypto.js';
-import { emptyKeyRecords, noteKey, acknowledgeKeyChange as ackKeyChange, unacknowledgedChanges, mergeKeyRecords } from './src/utils/keyRecords.js';
+import { emptyKeyRecords, noteKey, acknowledgeKeyChange as ackKeyChange, unacknowledgedChanges, mergeKeyRecords,
+  markVerified, unmarkVerified, keyStanding } from './src/utils/keyRecords.js';
 
 // ============ Constants ============
 const WAVE_KEY_CACHE_MAX = 100;  // Max cached wave keys
@@ -116,7 +117,19 @@ export function E2EEProvider({ children, token, API_URL }) {
   // Keys seen for other people (v2.143.0): { records, version, ready: Promise }.
   const keyRecordsRef = useRef(null);
   const keyRecordsSaveRef = useRef(Promise.resolve());
-  const [keyChanges, setKeyChanges] = useState([]);  // [{ personId, changedAt }]
+  const [keyChanges, setKeyChanges] = useState([]);  // [{ personId, changedAt, verificationLost }]
+  // Bumped whenever the record changes, so fingerprint views re-read it (v2.149.0).
+  const [keyRecordsTick, setKeyRecordsTick] = useState(0);
+  const [myFingerprint, setMyFingerprint] = useState(null);
+  // Who this device is, as format-2 seals name people: { userId, nodeName } (v2.149.0).
+  const sealIdentityRef = useRef(null);
+
+  useEffect(() => {
+    let live = true;
+    if (!publicKeyBase64) { setMyFingerprint(null); return undefined; }
+    crypto.keyFingerprint(publicKeyBase64).then(fp => { if (live) setMyFingerprint(fp); }).catch(() => {});
+    return () => { live = false; };
+  }, [publicKeyBase64]);
   const rotationRunRef = useRef(null);
   // Waves this session has asked older key versions for (v2.145.4).
   const historyAskedRef = useRef(new Set());
@@ -549,6 +562,38 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
   }, [token, fetchAPI]);
 
+  /**
+   * Who this device is in a format-2 seal (v2.149.0): its person's id and the
+   * server's name. Asked once, and only when a format-2 seal turns up.
+   */
+  const getSealIdentity = useCallback(() => {
+    if (!sealIdentityRef.current) {
+      sealIdentityRef.current = (async () => {
+        const res = await fetchAPI('/e2ee/status');
+        if (!res.ok) throw new Error('E2EE status unavailable');
+        const { userId, nodeName } = await res.json();
+        if (!userId) throw new Error('E2EE status has no user');
+        return { userId, nodeName: nodeName || null };
+      })();
+      sealIdentityRef.current.catch(() => { sealIdentityRef.current = null; });
+    }
+    return sealIdentityRef.current;
+  }, [fetchAPI]);
+
+  /**
+   * Open a wrapped wave key of either format. Format 2 is bound to the wave,
+   * the key version and this person (crypto.js); phase 1 has no encrypted
+   * copies of other servers' waves, so the wave here is the origin.
+   */
+  const unwrapWaveKey = useCallback(async (waveId, row, keyVersion) => {
+    const [encKeyBase64, nonceBase64] = row.encryptedWaveKey.split(':');
+    const senderPubKey = await crypto.importPublicKey(row.senderPublicKey);
+    if (row.format !== 2) return crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey);
+    const me = await getSealIdentity();
+    const context = crypto.waveKeyContext(waveId, keyVersion, crypto.personAddress(me.userId, me.nodeName));
+    return crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey, { format: 2, context });
+  }, [privateKey, getSealIdentity]);
+
   const getWaveKey = useCallback(async (waveId) => {
     // Check cache first
     const cached = waveKeyCacheRef.current.get(waveId);
@@ -578,20 +623,14 @@ export function E2EEProvider({ children, token, API_URL }) {
           throw new Error(err.error || 'Failed to fetch wave key');
         }
 
-        const { encrypted, encryptedWaveKey, senderPublicKey, keyVersion } = await res.json();
+        const { encrypted, encryptedWaveKey, senderPublicKey, keyVersion, format } = await res.json();
 
         if (!encrypted) {
           return null;  // Wave not encrypted
         }
 
-        // Parse the encrypted key (format: encryptedKey:nonce)
-        const [encKeyBase64, nonceBase64] = encryptedWaveKey.split(':');
-
-        // Import sender's public key
-        const senderPubKey = await crypto.importPublicKey(senderPublicKey);
-
-        // Decrypt wave key
-        const waveKey = await crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey);
+        // The stored key is "encryptedKey:nonce", wrapped by senderPublicKey.
+        const waveKey = await unwrapWaveKey(waveId, { encryptedWaveKey, senderPublicKey, format }, keyVersion);
 
         // Cache it (with LRU eviction) — unless the cache was cleared meanwhile
         if (generation === keyGenerationRef.current) {
@@ -613,7 +652,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       if (waveKeyInFlightRef.current.get(waveId) === work) waveKeyInFlightRef.current.delete(waveId);
     }).catch(() => {}); // the caller handles the rejection; this chain must not
     return work;
-  }, [privateKey, fetchAPI, requestWaveKey]);
+  }, [privateKey, fetchAPI, requestWaveKey, unwrapWaveKey]);
 
   /**
    * The key for one specific version of a wave's key (v2.117.2).
@@ -644,9 +683,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       const keys = await list;
       const versionKey = keys?.find(k => k.keyVersion === keyVersion);
       if (!versionKey) return null;
-      const [encKeyBase64, nonceBase64] = versionKey.encryptedWaveKey.split(':');
-      const senderPubKey = await crypto.importPublicKey(versionKey.senderPublicKey);
-      const waveKey = await crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey);
+      const waveKey = await unwrapWaveKey(waveId, versionKey, keyVersion);
       if (generation === keyGenerationRef.current) {
         waveKeyCacheRef.current.set(id, { waveKey, version: keyVersion });
       }
@@ -657,7 +694,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       if (versionKeyInFlightRef.current.get(id) === work) versionKeyInFlightRef.current.delete(id);
     }).catch(() => {});
     return work;
-  }, [fetchAPI, privateKey]);
+  }, [fetchAPI, unwrapWaveKey]);
 
   // ============ Keys seen (v2.143.0) ============
 
@@ -684,7 +721,10 @@ export function E2EEProvider({ children, token, API_URL }) {
       } catch (err) {
         console.warn('E2EE: key records unavailable:', err.message);
       }
-      if (keyRecordsRef.current === state) setKeyChanges(unacknowledgedChanges(state.records));
+      if (keyRecordsRef.current === state) {
+        setKeyChanges(unacknowledgedChanges(state.records));
+        setKeyRecordsTick(t => t + 1);
+      }
       return state;
     })();
     return state.ready;
@@ -705,6 +745,7 @@ export function E2EEProvider({ children, token, API_URL }) {
         state.version = theirs.version || 0;
         try {
           state.records = mergeKeyRecords(state.records, await crypto.decryptKeyRecords(theirs.encryptedData, theirs.nonce, privateKey, publicKey));
+          setKeyRecordsTick(t => t + 1);
         } catch { /* theirs is unreadable to this key; ours replaces it */ }
       }
     }).catch(err => console.warn('E2EE:', err.message));
@@ -729,6 +770,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       const { status, records } = noteKey(state.records, userId, theirKey);
       if (status !== 'same') {
         state.records = records;
+        setKeyRecordsTick(t => t + 1);
         saveKeyRecords(state);
         if (status === 'changed') {
           console.warn(`E2EE: the key for ${userId} has changed`);
@@ -744,8 +786,55 @@ export function E2EEProvider({ children, token, API_URL }) {
     if (!state) return;
     state.records = ackKeyChange(state.records, personId);
     setKeyChanges(unacknowledgedChanges(state.records));
+    setKeyRecordsTick(t => t + 1);
     await saveKeyRecords(state);
   }, [loadKeyRecords, saveKeyRecords]);
+
+  // ============ Fingerprints and verification (v2.149.0) ============
+
+  /**
+   * Someone's key as people compare it: looked up the same way a wave key is
+   * given (lookUpKey), so what is shown is what this device would use.
+   * @returns {Promise<{ publicKey, fingerprint, standing }|null>} null if they
+   *   have not set up encryption
+   */
+  const describeKey = useCallback(async (userId) => {
+    const publicKey = await lookUpKey(userId);
+    if (!publicKey) return null;
+    const state = await loadKeyRecords();
+    return {
+      publicKey,
+      fingerprint: await crypto.keyFingerprint(publicKey),
+      standing: keyStanding(state?.records, userId, publicKey),
+    };
+  }, [lookUpKey, loadKeyRecords]);
+
+  /** After comparing fingerprints: this key, and only this key, is theirs. */
+  const markKeyVerified = useCallback(async (userId, publicKey) => {
+    const state = await loadKeyRecords();
+    if (!state) return false;
+    const next = markVerified(state.records, userId, publicKey);
+    if (next === state.records) return false;
+    state.records = next;
+    setKeyChanges(unacknowledgedChanges(next));
+    setKeyRecordsTick(t => t + 1);
+    await saveKeyRecords(state);
+    return true;
+  }, [loadKeyRecords, saveKeyRecords]);
+
+  const unmarkKeyVerified = useCallback(async (userId) => {
+    const state = await loadKeyRecords();
+    if (!state) return;
+    state.records = unmarkVerified(state.records, userId);
+    setKeyRecordsTick(t => t + 1);
+    await saveKeyRecords(state);
+  }, [loadKeyRecords, saveKeyRecords]);
+
+  /** The standing of the key on record for someone, without a lookup. */
+  const keyStandingOf = useCallback((userId) => {
+    const records = keyRecordsRef.current?.records;
+    return keyStanding(records, userId, records?.people?.[userId]?.key);
+  }, []);
 
   useEffect(() => {
     if (privateKey && publicKey) loadKeyRecords();
@@ -858,7 +947,10 @@ export function E2EEProvider({ children, token, API_URL }) {
     return { ciphertext, nonce, keyVersion: version };
   }, [getWaveKey]);
 
-  const decryptPing = useCallback(async (ciphertext, nonce, waveId, keyVersion = null) => {
+  // `seal` (v2.149.0): { format, authorId } from the ping. Format 2 is bound
+  // to the wave and its author, so a ping moved to another wave or credited to
+  // someone else does not open.
+  const decryptPing = useCallback(async (ciphertext, nonce, waveId, keyVersion = null, seal = null) => {
     // For key rotation: may need to get specific version
     let waveKey;
 
@@ -893,8 +985,14 @@ export function E2EEProvider({ children, token, API_URL }) {
       throw new Error('Wave key not found');
     }
 
+    if (seal?.format === 2) {
+      if (!seal.authorId) throw new Error('A format-2 ping needs its author');
+      const me = await getSealIdentity();
+      const context = crypto.pingContext(waveId, crypto.personAddress(seal.authorId, seal.authorNode || me.nodeName));
+      return crypto.decryptPing(ciphertext, nonce, waveKey, { format: 2, context });
+    }
     return crypto.decryptPing(ciphertext, nonce, waveKey);
-  }, [getWaveKey, getVersionedWaveKey, requestWaveKey]);
+  }, [getWaveKey, getVersionedWaveKey, requestWaveKey, getSealIdentity]);
 
   // ============ Audio Encryption (v2.3.0) ============
 
@@ -1246,6 +1344,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     versionKeyInFlightRef.current.clear();
     keyListInFlightRef.current.clear();
     keyRecordsRef.current = null;
+    sealIdentityRef.current = null;
     setKeyChanges([]);
     clearSessionCache();
     sessionRestoreAttempted.current = false;
@@ -1485,6 +1584,14 @@ export function E2EEProvider({ children, token, API_URL }) {
     lookUpKey,
     keyChanges,
     acknowledgeKeyChange,
+
+    // Fingerprints and verification (v2.149.0)
+    myFingerprint,
+    describeKey,
+    markKeyVerified,
+    unmarkKeyVerified,
+    keyStandingOf,
+    keyRecordsTick,
 
     // Legacy wave migration
     getWaveEncryptionStatus,
