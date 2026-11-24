@@ -6770,6 +6770,18 @@ app.post('/api/auth/reset-password', async (req, res) => {
     // Mark token as used
     db.markPasswordResetTokenUsed(tokenHash);
 
+    // v2.150.1 [SECURITY]: a reset ends every session, as a change does
+    // (v2.75.0). It never did, so someone resetting a password because they
+    // thought their account was taken left the intruder signed in, and a
+    // browser still holding the encryption key from before carried on with it.
+    try {
+      if (db.revokeAllUserSessions) db.revokeAllUserSessions(tokenResult.userId);
+      if (db.revokeAllRefreshTokensForUser) db.revokeAllRefreshTokensForUser(tokenResult.userId, 'password-reset');
+      disconnectRevokedSessions(tokenResult.userId, 'Password reset');
+    } catch (err) {
+      console.error('[Auth] Session revocation after password reset failed:', err.message);
+    }
+
     // Clear any account lockouts for this user
     const user = db.findUserById(tokenResult.userId);
     if (user) {
