@@ -19,6 +19,8 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.core.content.ContextCompat;
+
 /**
  * The full-screen incoming call, over the lock screen (v2.146.0).
  *
@@ -56,11 +58,7 @@ public class IncomingCallActivity extends Activity {
         handler.postDelayed(this::finish, left);
 
         IntentFilter filter = new IntentFilter(CallRinger.ACTION_STOPPED);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(stopped, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(stopped, filter);
-        }
+        ContextCompat.registerReceiver(this, stopped, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
 
         setContentView(buildView(who == null ? "Someone" : who, video));
     }

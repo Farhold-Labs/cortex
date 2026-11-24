@@ -3,7 +3,7 @@
 // This lives outside React's component lifecycle, enabling persistent calls across navigation
 
 import { BASE_URL } from '../config/constants.js';
-import { setCallOverLockScreen } from '../utils/nativeCalls.js';
+import { setCallOverLockScreen, nativeCallStarted, nativeCallEnded, onNativeCallEvents } from '../utils/nativeCalls.js';
 
 // A direct call that has finished (v2.145.0).
 const FINAL_CALL_STATES = new Set(['declined', 'missed', 'cancelled', 'busy', 'ended']);
@@ -98,6 +98,13 @@ class VoiceCallService {
     // Auth token (set by React component)
     this.authToken = null;
 
+    // The Android app's side of a call in progress (v2.148.0): call volume,
+    // and the ongoing-call notification with HANG UP.
+    this.nativeCallKey = null;
+    onNativeCallEvents({
+      onHangUp: () => { if (this.livekitToken) this.leaveCall(); },
+    });
+
     // Dock state (v2.6.1)
     this.isDocked = false;
     this.dockMinimized = true;
@@ -122,8 +129,24 @@ class VoiceCallService {
   }
 
   notifySubscribers() {
+    this.syncNativeCall();
     const state = this.getState();
     this.subscribers.forEach(callback => callback(state));
+  }
+
+  /**
+   * Tell the Android app when a call starts, changes camera, or ends
+   * (v2.148.0). A no-op in a browser and on an APK without it.
+   */
+  syncNativeCall() {
+    const active = Boolean(this.livekitToken) && this.connectionState !== 'disconnected';
+    const name = this.directCall?.other?.displayName || this.voiceChannel?.name || 'Cortex call';
+    const key = active ? `${name}|${this.isCameraOff ? 'audio' : 'video'}` : null;
+    if (key === this.nativeCallKey) return;
+    const wasActive = this.nativeCallKey !== null;
+    this.nativeCallKey = key;
+    if (active) nativeCallStarted({ name, video: !this.isCameraOff });
+    else if (wasActive) nativeCallEnded();
   }
 
   getState() {

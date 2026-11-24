@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.148.0] - 2026-11-23
+
+Calls in the Android app behave like phone calls, two video calls that hung up just after being answered get a likely fix and a record, and leaving or removing someone always asks first. **Needs the v2.148.0 APK** for the call changes; the rest is server and web. No migration.
+
+### Added
+- **Call volume, not media volume** (Android app). While a call lasts the volume buttons set the call volume, as on a phone call; a phone with media turned down is no longer silent on a call. Sound goes to a connected headset or Bluetooth device, else the loudspeaker (never the earpiece), and follows a headset plugged in mid-call. Everything goes back when the call ends.
+- **Leave the app and the call carries on** (Android app). Press Home or switch apps during a call and Cortex goes to the background like any app. An **ongoing-call notification** with a timer and HANG UP is the way back. It is also what keeps your microphone working in the background: Android silences the microphone of an app that isn't on screen unless it says it is in a call.
+  - A floating picture-in-picture window was tried first. It was dropped after testing on a phone: the call's buttons covered the picture, and the notification already gives the call a way back.
+- These apply to every call in the app: direct calls, wave calls and voice channels.
+
+### Fixed
+- **Two video calls on farhold (5:56pm EST, 2026-11-23) ended 0.8 s and 20 s after being answered.** The third, an audio call, lasted 18 minutes.
+  - **What the server recorded:** only the state changes. Nothing said who or what ended a call, and the same calls on dev in a browser stayed up.
+  - **Most likely cause:** an answered call ended the moment its room read empty. One side reconnecting while the other was still joining therefore hung it up.
+  - **The fix:** the room must now stay empty for 10 seconds (`DIRECT_CALL_EMPTY_GRACE_MS`).
+  - **Logging:** every call state change is now logged with a timestamp and its reason: who hung up and from which kind of app, no answer, or room empty for how long. Joins are logged too. The next failure will say what happened.
+- **Leaving or removing always asks, in the app.**
+  - Removing a contact and removing someone from a crew acted on one tap.
+  - Leaving a wave, leaving a crew and removing someone from a wave used the browser's own `confirm()`. A browser can be told to stop showing that, and it looks like the browser asking rather than Cortex.
+  - All five now ask with an in-app dialog (`askConfirm()`) that names the person or wave, with Cancel and the action spelled out. Cancel, a tap outside and Escape all mean no.
+- The full-screen ring registered its receiver in a way lint flagged; it uses `ContextCompat.registerReceiver` now. Behaviour is unchanged: it was already correct on Android 13+.
+
+### Verified
+- `direct-calls` adds a test that a room empty for a moment (the caller dropping and coming back before the callee joined) no longer ends the call, that it does end once the grace has passed, and that both are logged with their reason.
+- Headless Chrome on dev at 390 px:
+  - LEAVE in a wave's people panel shows the in-app dialog; Cancel keeps you in the wave and Leave leaves it, with no browser dialog either way.
+  - Removing a contact asks, and Cancel leaves the contacts unchanged.
+- A video call between two accounts on dev stayed up after the answer, so the farhold failures did not reproduce in a browser.
+- **Android:** the APK builds, and lint reports no errors. A test build pointed at dev was tried on a phone; the floating window was removed after that test. This box has no emulator (no KVM).
+- Read on farhold (read-only, with permission): tonight's `direct_calls` rows and the API log, which had no call lines at all.
+
+## [2.147.1] - 2026-11-23
+
+**A key replacement straight after another is confirmed at once.** Found replacing QA's key for real. The first replacement went through: dev and port1 confirmed within a second and switched on first use. A second one, started a few minutes later with no traffic in between, was refused by both allies ("Announcement must be signed with the current key"). Server only, no migration.
+
+### Fixed
+- **Cause:** the second announcement was the first request each ally saw signed with QA's new key. Verifying it switched the ally to that key, but the announcement route accepted only the key that was current *before* the request.
+- **Effect:** each ally confirmed on the resend 10 minutes later, so nothing broke; the change just waited.
+- **Fix:** the route now refuses only the key that was replaced.
+
+### Verified
+- **QA, for real:** QA replaced its key with fred's REPLACE KEY at 18:07 EST. The second change was then cancelled, and both allies dropped the cancelled key within 15 seconds.
+  - dev and port1 each checked the new key against QA's identity page, stored it and confirmed.
+  - QA deleted the old private key 3 seconds after the press.
+  - Both allies switched to the new key on first use, keeping the old one only for the 5-minute grace.
+- **Test:** `federation-key-handshake` adds two replacements back to back with no traffic between. Before the fix it fails with the same 401 seen on QA.
+
 ## [2.147.0] - 2026-11-23
 
 **A server's federation key is replaced by handshake.** Replacing the key took effect at once and told no one. Every allied server went on checking our signatures against the key it had saved, so it refused everything: posts, edits, invitations, history, people signed in from another server. The queue then dropped each message after five refusals. This applies v2.146.1's rule to the last credential it left out: nothing is retired until its replacement is known to have arrived. Design: `docs/federation-keys/README.md`. **Migrates** (three columns on `server_identity`, four on `federation_nodes`, table `federation_key_handovers`). Every ally needs v2.147.0 before anyone changes a key.

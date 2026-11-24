@@ -55,3 +55,31 @@ export function stopNativeRing(callId) {
 export function setCallOverLockScreen(on) {
   plugin()?.setOverLockScreen({ on: !!on }).catch(() => {});
 }
+
+// ===== A call in progress (v2.148.0) =====
+//
+// The v2.148.0 APK makes a call sound and behave like a phone call: the volume
+// buttons set the call volume, and an ongoing-call notification (tap to go
+// back, HANG UP) keeps the microphone alive when the app is in the background.
+// An older APK answers these with "not implemented", which is ignored.
+
+/** A call started, or its camera went on or off. */
+export function nativeCallStarted({ name, video }) {
+  plugin()?.callStarted?.({ name: name || 'Cortex call', video: !!video })?.catch?.(() => {});
+}
+
+/** The call is over: volume and notification back to normal. */
+export function nativeCallEnded() {
+  plugin()?.callEnded?.()?.catch?.(() => {});
+}
+
+/** HANG UP on the notification (`onHangUp`). Returns a cleanup. */
+export function onNativeCallEvents({ onHangUp }) {
+  const p = plugin();
+  if (!p) return () => {};
+  const handles = [];
+  let live = true;
+  const keep = (h) => Promise.resolve(h).then((x) => { if (live) handles.push(x); else x?.remove?.(); }).catch(() => {});
+  keep(p.addListener('hangUp', () => onHangUp?.()));
+  return () => { live = false; handles.forEach((h) => h?.remove?.()); };
+}

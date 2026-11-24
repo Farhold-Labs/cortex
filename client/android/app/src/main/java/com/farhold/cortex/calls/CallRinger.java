@@ -35,6 +35,8 @@ public final class CallRinger {
     public static final String ACTION_ANSWER = "com.farhold.cortex.ANSWER_CALL";
     public static final String ACTION_DECLINE = "com.farhold.cortex.DECLINE_CALL";
     public static final String ACTION_STOPPED = "com.farhold.cortex.CALL_RING_STOPPED";
+    /** HANG UP on the ongoing-call notification (v2.148.0). */
+    public static final String ACTION_HANG_UP = "com.farhold.cortex.HANG_UP_CALL";
     public static final String EXTRA_CALL_ID = "callId";
     public static final String EXTRA_CALLER = "callerName";
     public static final String EXTRA_KIND = "kind";
