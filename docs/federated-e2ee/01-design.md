@@ -438,7 +438,8 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
   responses) and each person's server's pinned seal name (from key lookups).
 - **Keys made at creation and at `/encrypt` stay format 1**: the wave's id
   doesn't exist yet at creation. Every other wrap is format 2.
-- **Tested** with two real servers and real browsers on one machine, not on
-  dev and QA: deploying the branch to QA was held for Jared's go-ahead. A
-  third server not allied with one of the others was not tried: dev, QA and
-  port1 are all paired with each other.
+- **Tested** with two real servers and real browsers on one machine, then
+  between the real dev and QA servers (a test account on QA): wave, key from
+  the other server, pings both ways, renewal, removal. A third server not
+  allied with one of the others was not tried: dev, QA and port1 are all
+  paired with each other.
