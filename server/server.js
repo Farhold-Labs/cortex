@@ -7526,7 +7526,8 @@ app.get('/api/e2ee/status', authenticateToken, (req, res) => {
       // v2.149.0: part of each person's address (id@node) in format-2
       // encryption, so a ping is bound to its author on every server.
       userId: req.user.userId,
-      nodeName: db.getServerIdentity?.()?.nodeName || FEDERATION_NODE_NAME || null,
+      // v2.151.0: fixed from the first signed ping (sealNodeName).
+      nodeName: sealNodeName() || null,
       // v2.150.0
       hasIdentity: !!db.getIdentity(req.user.userId),
     });
@@ -26308,10 +26309,35 @@ function encryptedPingRefusal(waveId, body) {
   if (typeof body.content !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.content) || body.content.length < 24) return fail('Encrypted content must be ciphertext');
   const version = Number(body.keyVersion);
   if (!Number.isInteger(version) || version < 1 || version > db.getWaveKeyVersion(waveId)) return fail('Unknown key version');
-  // v2.149.0: 1, or 2 for a ping bound to its wave and author. Devices read
-  // 2 from this release; none writes it yet.
+  // v2.149.0: 1, or 2 for a ping bound to its wave and author (signed by
+  // them since v2.150.0). Devices write 2 from v2.151.0.
   if (body.format !== undefined && body.format !== 1 && body.format !== 2) return fail('Unknown encryption format');
+  // v2.151.0: a format-2 ping names this server in its author's address, so
+  // the name used is fixed from the first one (sealNodeName).
+  if (body.format === 2) db.pinSealNodeName(currentNodeName());
   return null;
+}
+
+/** This server's name as it stands: the federation identity's, or the configured one. */
+function currentNodeName() {
+  return db.getServerIdentity?.()?.nodeName || FEDERATION_NODE_NAME || '';
+}
+
+/**
+ * The server name in this server's people's addresses in format-2 seals
+ * (v2.151.0): the name it had when the first signed ping was sent, kept from
+ * then on. A ping is bound to <user id>@<this name>; were the name to follow a
+ * rename, or a first name given when federation is turned on, every signed ping
+ * already sent would stop opening.
+ */
+function sealNodeName() {
+  return db.getPinnedSealNodeName() ?? currentNodeName();
+}
+{
+  const pinned = db.getPinnedSealNodeName?.();
+  if (pinned !== null && pinned !== undefined && pinned !== currentNodeName()) {
+    console.warn(`⚠️  This server is now named "${currentNodeName()}", but its signed encrypted pings name it "${pinned}"; devices keep using "${pinned}" (v2.151.0).`);
+  }
 }
 
 // v2.143.0 — a wave needs a new key when anyone holding the current one is
