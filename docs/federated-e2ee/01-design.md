@@ -445,5 +445,16 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
 - **Tested** with two real servers and real browsers on one machine, then
   between the real dev and QA servers (a test account on QA): wave, key from
   the other server, pings both ways, renewal, removal. A third server not
-  allied with one of the others was not tried: dev, QA and port1 are all
+  allied with one of the others was not tried then: dev, QA and port1 are all
   paired with each other.
+- **Third server, tried 2026-11-24 (v2.153.1)** with three real servers and
+  real browsers on one machine: the wave on A, allied with B and C, which are
+  not allied with each other. The wave was made in the app; B's and C's keys
+  were format 2, wrapped by the owner on A; all three read every ping, with no
+  ⚠. B and C learnt nothing of each other's people: no ally row, no cached
+  keys, a device's lookup across answered `NO_KEYS`, and neither server's log
+  names the other (so neither tried). Removing B's person renewed the key
+  once: A and C got version 2 from the owner, B's copy was dropped with its
+  keys, and C's person read a ping sent after. A ping from someone whose keys
+  a device can't look up shows without a mark, as decided in phase 3. Not
+  tried between the real servers, which would mean unpairing two of them.
