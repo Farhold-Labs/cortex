@@ -1,6 +1,6 @@
 # Encryption across servers — design
 
-Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below). **Fingerprints and format 2 are being revised** by `02-identity-keys.md` (decided 2026-11-24): the fingerprint becomes that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
+Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below), **phase 2 in v2.152.0** ("Phase 2 as built"). **Fingerprints and format 2 are being revised** by `02-identity-keys.md` (decided 2026-11-24): the fingerprint becomes that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
 public key comes from their home server over signed federation; members can
 see and compare key fingerprints, with a change flagged) and 2026-11-20 (the
 five questions) are recorded at the end and folded into the text. Not built.
@@ -383,3 +383,26 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
 - **A fingerprint should never change, and a verification should never be
   lost, while encryption keys change as needed** (lost password, compromised
   account). Worked out in `02-identity-keys.md`.
+
+### Phase 2 as built (v2.152.0)
+
+- **Lookups are by the person's id on their own server, not their handle.**
+  `POST /api/federation/e2ee-keys` takes `userIds`, as statements and seals
+  use ids (handles can change). The answer carries every statement, so pings
+  signed under an earlier one still check, and the server's `sealNodeName`.
+- **The cache** is `remote_user_keys (node_name, user_id, …)`, a day fresh;
+  `GET /api/e2ee/keys/remote?node=&userId=` for devices, only for a server the
+  caller shares an encrypted wave with. The server carries statements; devices
+  check them.
+- **The change push** goes after any key change here: identity made, replaced
+  or kept, keys replaced, registered, rotated, reset by the person or an
+  admin. For a reset, the allies are worked out before the wave keys go.
+- **Protocol 3** is in `/identity` and in every envelope; an ally's signed
+  envelope updates `federation_nodes.protocol_version`, so no separate
+  capabilities call was needed.
+- **Who may look up whom** comes from the waves: encrypted waves the person
+  holds a key for or created, which they can read, sent to that server (or a
+  copy from it), or with an open invitation to someone there.
+- **Not yet:** devices don't look up people elsewhere, and nothing lifts the
+  refusal. Both are phase 3, which must also tell other servers the pinned
+  seal name (v2.151.0) rather than assume the federation name.

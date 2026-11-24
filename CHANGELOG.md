@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.152.0] - 2026-11-24
+
+Encryption across servers, phase 2 (`docs/federated-e2ee/01-design.md`): the plumbing between servers. Encrypted waves and people on other servers are **still refused together**; this is what phase 3 builds on, so nothing changes for anyone yet. Server only, no app build. **Migrates** (four columns on `remote_pings`, one new table).
+
+### Added
+- **Protocol 3.** A server that can take part in encrypted waves says so: `/api/federation/identity` returns `protocolVersion: 3`, the capability `e2ee`, and `sealNodeName`, the name its people's addresses use in signed pings (pinned since v2.151.0, so it can differ from its federation name). Every signed envelope carries the version, and the receiver keeps what its ally last said, so an upgrade after pairing is noticed.
+- **Looking up keys on another server**, `POST /api/federation/e2ee-keys` (signed): a person's encryption key, identity key and every key statement, by their id on their own server.
+  - **[SECURITY] Answered only for people who share an encrypted wave with the asking server,** or are being invited into one from it. Anyone else is left out without saying whether they exist, so no server can use it as a directory of everyone's keys.
+  - **Cached for a day** (`remote_user_keys`). A device asks through its own server (`GET /api/e2ee/keys/remote?node=&userId=`), and only about a server it shares an encrypted conversation with.
+  - **A key change is pushed:** when someone sets up, replaces or resets their keys (or an admin resets them), their server sends `e2ee_key_changed` to every ally sharing an encrypted wave with them, which forgets its copy and tells the people in those waves.
+- **Encryption fields travel with pings.** New pings, edits and history (backfill) carry `encrypted`, `nonce`, `keyVersion` and `format`. The receiving server stores them with the copy (`remote_pings`) and gives them to devices.
+- **Plain text from another server into an encrypted wave is dropped**, and logged, for new pings, edits and history alike: the same rule a local ping has had since v2.143.0.
+
+### Verified
+- **Tests:** `tests/e2ee-federation-plumbing.test.cjs`, with a real server and a fake ally. It covers:
+  - protocol 3 and the seal name;
+  - an ally's envelope updating what it speaks;
+  - the key lookup answering the ally that shares a wave, and nothing to one that doesn't;
+  - ciphertext from the ally stored with its fields, and its plain text (new ping or edit) dropped;
+  - an encrypted ping going out with its fields;
+  - backfill serving them;
+  - a device's lookup cached, then asked again after the ally's change push;
+  - a key change here announced to the ally.
+- **Counterfactuals:**
+  - without the sharing check, a paired server that shares nothing reads everyone's keys;
+  - without the refusal, plain text from another server is stored in an encrypted wave.
+- Not tried between two real servers: nothing can use it until phase 3 lifts the refusal.
+
 ## [2.151.0] - 2026-11-24
 
 Signed pings, phase 1c (`docs/federated-e2ee/02-identity-keys.md`). In an encrypted wave, every ping is sealed with the wave's shared key, so any member could post one in someone else's name and nobody could tell. Now each ping is signed by its author, and a ✓ beside their name says it was signed by the fingerprint you verified. Server and web only, no app build. **Migrates** (one small table).

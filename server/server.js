@@ -7445,6 +7445,7 @@ app.post('/api/e2ee/keys/register', authenticateToken, (req, res) => {
     }
 
     const result = db.createUserEncryptionKeys(req.user.userId, publicKey, encryptedPrivateKey, salt);
+    announceKeyChange(req.user.userId); // v2.152.0
 
     // Log E2EE setup activity
     if (db.logActivity) {
@@ -7607,6 +7608,7 @@ app.post('/api/e2ee/keys/rotate/confirm', authenticateToken, (req, res) => {
       return res.status(409).json({ error: 'Replace your keys from Settings → Security instead.', code: 'USE_REPLACE_KEYS' });
     }
     const result = db.createUserEncryptionKeys(req.user.userId, pending.publicKey, pending.encryptedPrivateKey, pending.salt);
+    announceKeyChange(req.user.userId); // v2.152.0
     if (db.logActivity) {
       db.logActivity(req.user.userId, 'e2ee_key_rotation', 'user', req.user.userId, {
         ...getRequestMeta(req),
@@ -7846,6 +7848,7 @@ app.get('/api/e2ee/recovery', authenticateToken, (req, res) => {
 app.post('/api/e2ee/keys/reset', authenticateToken, (req, res) => {
   try {
     const userId = req.user.userId;
+    const sharing = e2eeSharingNodesFor(userId); // before its wave keys go
 
     db.db.prepare('DELETE FROM user_encryption_keys WHERE user_id = ?').run(userId);
     db.db.prepare('DELETE FROM user_recovery_keys WHERE user_id = ?').run(userId);
@@ -7855,6 +7858,7 @@ app.post('/api/e2ee/keys/reset', authenticateToken, (req, res) => {
 
     if (db.logActivity) db.logActivity(userId, 'e2ee_keys_self_reset', 'user', userId, getRequestMeta(req));
 
+    announceKeyChange(userId, sharing);
     console.log(`User ${userId} self-reset their E2EE keys`);
     res.json({ success: true, message: 'Encryption keys reset' });
   } catch (err) {
@@ -7977,6 +7981,7 @@ app.post('/api/e2ee/identity', authenticateToken, (req, res) => {
     if (result.ok && db.logActivity) {
       db.logActivity(userId, `e2ee_identity_${mode === 'create' ? 'created' : mode === 'replace' ? 'replaced' : 'kept'}`, 'user', userId, { ...getRequestMeta(req), seq: result.seq });
     }
+    if (result.ok) announceKeyChange(userId);
     return sendApplied(res, result);
   } catch (err) {
     console.error('E2EE identity error:', err);
@@ -8035,12 +8040,127 @@ app.post('/api/e2ee/keys/replace', authenticateToken, (req, res) => {
     if (result.ok && db.logActivity) {
       db.logActivity(userId, 'e2ee_keys_replaced', 'user', userId, { ...getRequestMeta(req), seq: result.seq, waveKeys: waveKeys.length });
     }
+    if (result.ok) announceKeyChange(userId);
     return sendApplied(res, result);
   } catch (err) {
     console.error('E2EE key replace error:', err);
     res.status(500).json({ error: 'Failed to replace keys' });
   }
 });
+
+// ============ Keys across servers (v2.152.0, phase 2) ============
+
+/**
+ * The allied servers that share an encrypted wave with this person: the
+ * wave's own server for a copy, the servers a wave of ours is sent to, and
+ * servers someone in it has been invited from. Only these may look up the
+ * person's keys (docs/federated-e2ee/01-design.md: not a directory).
+ */
+function e2eeSharingNodesFor(userId) {
+  const nodes = new Set();
+  for (const waveId of db.encryptedWavesFor(userId)) {
+    const wave = db.getWave(waveId);
+    if (!wave || !canAccessWaveFromCache(waveId, userId)) continue;
+    if (wave.federationState === 'participant' && wave.originNode) nodes.add(wave.originNode);
+    for (const n of db.getWaveFederationNodes(waveId)) nodes.add(n.nodeName);
+    for (const r of db.db.prepare('SELECT DISTINCT node_name FROM remote_wave_invitations WHERE wave_id = ?').all(waveId)) nodes.add(r.node_name);
+  }
+  return nodes;
+}
+
+function peopleKeysFor(userIds, askerNode) {
+  const people = [];
+  for (const userId of userIds) {
+    if (!e2eeSharingNodesFor(userId).has(askerNode)) continue;
+    const user = db.findUserById(userId);
+    const publicKey = user && db.getUserPublicKey(userId);
+    if (!publicKey) continue;
+    const identity = db.getIdentity(userId);
+    people.push({
+      userId, handle: user.handle, publicKey,
+      identityKey: identity?.identityKey || null,
+      statements: identity ? db.getKeyStatements(userId).map(st => ({ ...statementView(st), identityKey: st.identityKey })) : [],
+    });
+  }
+  return people;
+}
+
+const REMOTE_KEYS_FRESH_MS = 24 * 60 * 60 * 1000;
+
+function validRemoteStatement(st) {
+  return st && Number.isInteger(st.seq) && st.seq >= 1
+    && keyStatements.p384Key(st.identityKey) && keyStatements.p384Key(st.encryptionKey) && keyStatements.p384Key(st.signingKey)
+    && keyStatements.isIsoTime(st.issuedAt) && isB64(st.signature, 200);
+}
+
+/**
+ * Someone's keys on an allied server, from the cache when fresh (a day), or
+ * asked of their server. Devices check the statements themselves: this
+ * server only carries them.
+ */
+async function remoteUserKeys(nodeName, userId, { force = false } = {}) {
+  const cached = db.getRemoteUserKeys(nodeName, userId);
+  if (cached?.fetchedAt && !force && Date.now() - Date.parse(cached.fetchedAt) < REMOTE_KEYS_FRESH_MS) return cached;
+  const node = db.getFederationNodeByName(nodeName);
+  if (!node || node.status !== 'active' || (node.protocolVersion || 1) < 3) return null;
+  let data;
+  try {
+    const resp = await sendSignedFederationRequest(node, 'POST', '/api/federation/e2ee-keys', { userIds: [userId] });
+    if (!resp.ok) return null;
+    data = await resp.json();
+  } catch (err) {
+    console.warn(`[e2ee] key lookup on ${nodeName} failed: ${err.message}`);
+    return null;
+  }
+  const person = (data?.people || []).find(x => x?.userId === userId);
+  if (!person || !keyStatements.p384Key(person.publicKey)) return null;
+  const statements = Array.isArray(person.statements) ? person.statements.slice(0, 200).filter(validRemoteStatement) : [];
+  db.putRemoteUserKeys(nodeName, {
+    userId,
+    handle: typeof person.handle === 'string' ? person.handle.slice(0, 100) : null,
+    publicKey: person.publicKey,
+    identityKey: keyStatements.p384Key(person.identityKey) ? person.identityKey : null,
+    statements,
+    sealNodeName: typeof data.sealNodeName === 'string' ? data.sealNodeName.slice(0, 255) : null,
+  });
+  return db.getRemoteUserKeys(nodeName, userId);
+}
+
+// A device asks for someone's keys on another server, through its own. Only
+// for a server you share an encrypted wave with.
+app.get('/api/e2ee/keys/remote', authenticateToken, async (req, res) => {
+  const nodeName = String(req.query.node || '');
+  const userId = String(req.query.userId || '');
+  if (!nodeName || nodeName.length > 255 || !userId || userId.length > 100) return res.status(400).json({ error: 'node and userId required' });
+  if (!e2eeSharingNodesFor(req.user.userId).has(nodeName)) {
+    return res.status(404).json({ error: 'You share no encrypted conversation with that server', code: 'NOT_SHARED' });
+  }
+  const keys = await remoteUserKeys(nodeName, userId);
+  if (!keys?.publicKey) return res.status(404).json({ error: 'No keys for that person', code: 'NO_KEYS' });
+  const latest = keys.statements.reduce((a, b) => (!a || b.seq > a.seq ? b : a), null);
+  res.json({
+    nodeName, userId, handle: keys.handle, publicKey: keys.publicKey, identityKey: keys.identityKey,
+    statement: latest ? statementView(latest) : null, statements: keys.statements,
+    sealNodeName: keys.sealNodeName, fetchedAt: keys.fetchedAt,
+  });
+});
+
+/**
+ * Tell the allies that share an encrypted wave with someone that their keys
+ * changed, so they ask again rather than wait a day. `nodes` is worked out by
+ * the caller before a change that removes the person's wave keys (a reset).
+ */
+function announceKeyChange(userId, nodes = e2eeSharingNodesFor(userId)) {
+  if (!FEDERATION_ENABLED) return;
+  for (const nodeName of nodes) {
+    const node = db.getFederationNodeByName(nodeName);
+    if (!node || node.status !== 'active' || (node.protocolVersion || 1) < 3) continue;
+    const envelope = createFederationEnvelope(`e2ee_key_changed-${userId}-${Date.now()}`, 'e2ee_key_changed', { userId });
+    sendSignedFederationRequest(node, 'POST', '/api/federation/inbox', envelope)
+      .then(r => { if (!r.ok) console.warn(`[e2ee] key change to ${nodeName}: ${r.status}`); })
+      .catch(err => console.warn(`[e2ee] key change to ${nodeName}: ${err.message}`));
+  }
+}
 
 // Someone's statements, oldest first, to check pings signed under earlier ones.
 app.get('/api/e2ee/keys/user/:id/statements', authenticateToken, (req, res) => {
@@ -18177,6 +18297,8 @@ app.post('/api/admin/users/:id/reset-encryption', authenticateToken, (req, res) 
       return res.status(400).json({ error: 'Reason is required' });
     }
 
+    const sharing = e2eeSharingNodesFor(targetUserId); // v2.152.0, before their wave keys go
+
     // Wipe all encryption keys for the user
     db.db.prepare('DELETE FROM user_encryption_keys WHERE user_id = ?').run(targetUserId);
     db.db.prepare('DELETE FROM user_recovery_keys WHERE user_id = ?').run(targetUserId);
@@ -18188,6 +18310,7 @@ app.post('/api/admin/users/:id/reset-encryption', authenticateToken, (req, res) 
     if (db.logActivity) db.logActivity(admin.id, 'admin_reset_encryption', 'user', targetUserId, getRequestMeta(req));
 
     broadcastToUser(targetUserId, { type: 'encryption_reset', message: 'Your encryption keys have been reset by an administrator' });
+    announceKeyChange(targetUserId, sharing);
 
     console.log(`Admin ${admin.handle} reset encryption keys for: ${targetUser.handle}`);
     res.json({ success: true, message: `Encryption keys reset for @${targetUser.handle}` });
@@ -18962,8 +19085,12 @@ const authenticateFederationResponse = createFederationAuthMiddleware(['active',
 // ============ Federation Protocol v2 Helpers (v2.28.0) ============
 
 // Create a standardized federation envelope with protocol version
+// v2.152.0: protocol 3 is a server that can take part in encrypted waves
+// (docs/federated-e2ee/, phase 2). Each signed envelope says so, and the
+// receiver keeps what its ally last said.
+const FEDERATION_PROTOCOL_VERSION = 3;
 function createFederationEnvelope(id, type, payload) {
-  return { id, type, payload, protocolVersion: 2 };
+  return { id, type, payload, protocolVersion: FEDERATION_PROTOCOL_VERSION };
 }
 
 // Message padding — fixed-size buckets to resist traffic analysis
@@ -19289,8 +19416,11 @@ app.get('/api/federation/identity', (req, res) => {
     nextPublicKey: identity.nextPublicKey || null,
     nextKeyId: identity.nextPublicKey ? federationKeyId(identity.nextPublicKey) : null,
     createdAt: identity.createdAt,
-    protocolVersion: 2,
-    capabilities: ['decoy', 'padding', 'key-rotation']
+    protocolVersion: FEDERATION_PROTOCOL_VERSION,
+    capabilities: ['decoy', 'padding', 'key-rotation', 'e2ee'],
+    // v2.152.0: the name this server's people's addresses use in signed
+    // pings, fixed by the first one (sealNodeName); may differ from nodeName.
+    sealNodeName: sealNodeName() || null,
   });
 });
 
@@ -19312,8 +19442,10 @@ app.get('/api/admin/federation/status', authenticateToken, (req, res) => {
     keyRotation: keyRotationStatus(identity, nodes),
     trustedNodes: nodes.length,
     activeNodes: activeNodes.length,
-    protocolVersion: 2,
+    protocolVersion: FEDERATION_PROTOCOL_VERSION,
     v2NodeCount: activeNodes.filter(n => n.protocolVersion >= 2).length,
+    // v2.152.0: allies that can take part in encrypted waves.
+    e2eeNodeCount: activeNodes.filter(n => n.protocolVersion >= 3).length,
     decoy: {
       enabled: FEDERATION_DECOY_ENABLED,
       minIntervalS: FEDERATION_DECOY_MIN_INTERVAL_S,
@@ -20257,6 +20389,8 @@ async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
 
     for (const d of pings) {
       try {
+        const plain = federatedCiphertextRefusal(wave.id, d);
+        if (plain) { failed++; console.warn(`⚠️ history: dropped ping ${d.id}: ${plain}`); continue; }
         if (d.author && d.author.id) {
           db.cacheRemoteUser({
             id: d.author.id,
@@ -20280,6 +20414,7 @@ async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
           editedAt: d.editedAt,
           reactions: d.reactions,
           expiresAt: d.expiresAt,
+          ...encryptionFields(d),
         });
         cached++;
       } catch (e) {
@@ -20606,6 +20741,13 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
 
   // Log the incoming message
   db.logFederationInbox({ id, sourceNode: sourceNode.nodeName, messageType: type });
+
+  // v2.152.0: what the ally speaks, from its own signed envelope, so a server
+  // upgraded (or rolled back) since pairing is known as it is now.
+  const spoken = req.body.protocolVersion;
+  if (Number.isInteger(spoken) && spoken >= 1 && spoken <= 99 && spoken !== sourceNode.protocolVersion) {
+    db.updateFederationNode(sourceNode.id, { protocolVersion: spoken });
+  }
 
   // Process based on message type
   try {
@@ -20980,6 +21122,13 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         // neither re-broadcast nor relayed (CORTEX-COMM-006): repeating one
         // envelope under fresh ids was free amplification, since every relay
         // leaves this node under its own signature.
+        // v2.152.0: never plain text into an encrypted wave, from anywhere.
+        const plainFromAfar = federatedCiphertextRefusal(localWave.id, fedPing);
+        if (plainFromAfar) {
+          console.warn(`[federation] ${sourceNode.nodeName} sent ping ${fedPing.id} into encrypted wave ${localWave.id}: ${plainFromAfar} — dropped`);
+          break;
+        }
+
         const priorPing = db.getRemotePing(fedPing.id);
         const cachedPing = db.cacheRemotePing({
           id: fedPing.id,
@@ -20995,6 +21144,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           reactions: fedPing.reactions,
           // v2.122.0 — this node erases its copy at the same time.
           expiresAt: fedPing.expiresAt,
+          ...encryptionFields(fedPing),
         });
 
         if (cachedPing.applied === false) {
@@ -21051,6 +21201,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
 
         const editPingId = payload.pingId || payload.dropletId;
         const { originWaveId: editOriginWaveId, content, editedAt, version } = payload;
+        const editEncryption = encryptionFields(payload);
         if (!editPingId || !editOriginWaveId) {
           console.error(`Invalid ${type} payload`);
           break;
@@ -21074,6 +21225,11 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
           console.warn(`[federation] ${sourceNode.nodeName} tried to edit ping ${editPingId}, which belongs to wave ${existingPing.waveId}`);
           break;
         }
+        const plainEdit = existingPing && federatedCiphertextRefusal(editLocalWave.id, { ...payload, content });
+        if (plainEdit) {
+          console.warn(`[federation] ${sourceNode.nodeName} sent an edit of ${editPingId} into encrypted wave ${editLocalWave.id}: ${plainEdit} — dropped`);
+          break;
+        }
         if (existingPing) {
           // Update via cacheRemotePing (upsert)
           db.cacheRemotePing({
@@ -21092,6 +21248,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             editedAt,
             reactions: existingPing.reactions,
             expiresAt: existingPing.expiresAt,
+            ...editEncryption,
           });
 
           // Broadcast to local clients
@@ -21102,11 +21259,26 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
             content,
             editedAt,
             version,
+            ...editEncryption,
             isRemote: true,
           });
 
           console.log(`✅ Updated remote ping ${editPingId}`);
         }
+        break;
+      }
+
+      case 'e2ee_key_changed': {
+        // v2.152.0: one of the sender's people replaced their keys. Only its
+        // own people: the cache is keyed by the sender's name.
+        const changedId = typeof payload?.userId === 'string' ? payload.userId.slice(0, 100) : null;
+        if (!changedId) break;
+        db.expireRemoteUserKeys(sourceNode.nodeName, changedId);
+        const shared = db.db.prepare(`
+          SELECT id FROM waves WHERE encrypted != 0
+             AND (origin_node = ? OR id IN (SELECT wave_id FROM wave_federation WHERE node_name = ?))
+        `).all(sourceNode.nodeName, sourceNode.nodeName);
+        for (const w of shared) broadcastToWave(w.id, { type: 'e2ee_key_changed', nodeName: sourceNode.nodeName, userId: changedId });
         break;
       }
 
@@ -21414,6 +21586,18 @@ app.post('/api/federation/wave-backfill', federationInboxLimiter, authenticateFe
     console.error('Wave backfill error:', err);
     res.status(500).json({ error: 'Failed to serve wave backfill' });
   }
+});
+
+// v2.152.0 (helpers with the identity routes: peopleKeysFor)
+// An ally asks for its people's wave-mates' keys here. Answered only for
+// people who share an encrypted wave with it; anyone else is left out
+// without saying whether they exist.
+app.post('/api/federation/e2ee-keys', federationInboxLimiter, authenticateFederationRequest, (req, res) => {
+  const ids = Array.isArray(req.body?.userIds) ? req.body.userIds : null;
+  if (!ids || ids.length > 100 || !ids.every(x => typeof x === 'string' && x.length <= 100)) {
+    return res.status(400).json({ error: 'userIds: up to 100 ids' });
+  }
+  res.json({ sealNodeName: sealNodeName() || null, people: peopleKeysFor([...new Set(ids)], req.federationNode.nodeName) });
 });
 
 // Fetch a user's public profile (for remote user resolution)
@@ -26295,6 +26479,32 @@ app.delete('/api/waves/:id/participants/:userId', authenticateToken, async (req,
 
 // ============ Wave E2EE Key Routes (v1.19.0) ============
 
+// ============ Encryption across servers: the plumbing (v2.152.0) ============
+// docs/federated-e2ee/01-design.md phase 2. Encrypted waves and people on
+// other servers are still refused together (encryptedTravellersRefusal); this
+// is what phase 3 will stand on.
+
+/** A ping's encryption fields as they travel between servers. */
+function encryptionFields(p) {
+  if (!p?.encrypted) return { encrypted: false };
+  return { encrypted: true, nonce: p.nonce || null, keyVersion: p.keyVersion ?? p.key_version ?? null, format: p.format === 2 ? 2 : 1 };
+}
+
+/**
+ * A ping from another server for an encrypted wave here must be ciphertext,
+ * as a local one must (encryptedPingRefusal). Only its form can be checked.
+ * @returns {string|null} why it is refused
+ */
+function federatedCiphertextRefusal(localWaveId, p) {
+  if (!db.waveEncryptionState?.(localWaveId)) return null;
+  if (p?.encrypted !== true) return 'plain text in an encrypted wave';
+  if (typeof p.nonce !== 'string' || !/^[A-Za-z0-9+/]{16}$/.test(p.nonce)) return 'no 12-byte nonce';
+  if (typeof p.content !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(p.content) || p.content.length < 24) return 'content is not ciphertext';
+  if (!Number.isInteger(p.keyVersion) || p.keyVersion < 1) return 'no key version';
+  if (p.format !== undefined && p.format !== 1 && p.format !== 2) return 'unknown encryption format';
+  return null;
+}
+
 // v2.143.0 — what a ping sent or edited in an encrypted wave must look like.
 // The server cannot read it, but it can insist that it is ciphertext: the
 // focus view and the thread panel sent plain text into encrypted waves for
@@ -27137,6 +27347,8 @@ app.post('/api/pings', authenticateToken, (req, res) => {
         reactions: ping.reactions,
         // v2.122.0 — each node erases its own copy at this time.
         expiresAt: ping.expiresAt || null,
+        // v2.152.0 — what a device on another server needs to open it.
+        ...encryptionFields(ping),
       },
       originWaveId: wave.federationState === 'origin' ? waveId : wave.originWaveId,
       author: author ? {
@@ -27227,6 +27439,7 @@ app.put('/api/pings/:id', authenticateToken, (req, res) => {
       content: updated.content,
       editedAt: updated.editedAt,
       version: updated.version,
+      ...encryptionFields(updated),
     }).catch(err => {
       console.error('Federation ping edit delivery error:', err.message);
     });

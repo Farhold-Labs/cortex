@@ -4233,6 +4233,35 @@ export class DatabaseSQLite {
       );
     `);
 
+    // v2.152.0 — encryption across servers, phase 2 (docs/federated-e2ee/):
+    // pings from other servers keep their encryption fields, and the keys of
+    // people on allied servers are cached, keyed by their home id there.
+    {
+      const cols = this.db.prepare('PRAGMA table_info(remote_pings)').all().map(c => c.name);
+      if (cols.length && !cols.includes('encrypted')) {
+        this.db.exec(`
+          ALTER TABLE remote_pings ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;
+          ALTER TABLE remote_pings ADD COLUMN nonce TEXT;
+          ALTER TABLE remote_pings ADD COLUMN key_version INTEGER;
+          ALTER TABLE remote_pings ADD COLUMN format INTEGER NOT NULL DEFAULT 1;
+        `);
+      }
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS remote_user_keys (
+        node_name      TEXT NOT NULL,
+        user_id        TEXT NOT NULL,
+        handle         TEXT,
+        public_key     TEXT,
+        identity_key   TEXT,
+        statements     TEXT NOT NULL DEFAULT '[]',
+        seal_node_name TEXT,
+        fetched_at     TEXT NOT NULL,
+        changed_at     TEXT,
+        PRIMARY KEY (node_name, user_id)
+      );
+    `);
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -8854,6 +8883,11 @@ export class DatabaseSQLite {
       isRemote: true,
       originNode: rd.originNode,
       authorNode: rd.authorNode,
+      // v2.152.0: what a device needs to open it.
+      encrypted: rd.encrypted,
+      nonce: rd.nonce,
+      keyVersion: rd.keyVersion,
+      format: rd.format,
     }));
 
     // Merge and deduplicate by ID (prefer local over remote)
@@ -8997,6 +9031,11 @@ export class DatabaseSQLite {
       isRemote: true,
       originNode: rd.originNode,
       authorNode: rd.authorNode,
+      // v2.152.0: what a device needs to open it.
+      encrypted: rd.encrypted,
+      nonce: rd.nonce,
+      keyVersion: rd.keyVersion,
+      format: rd.format,
       expiresAt: rd.expiresAt || null,
       minimal: true,
     }));
@@ -10640,6 +10679,11 @@ export class DatabaseSQLite {
       expiresAt: row.expires_at || null,
       cachedAt: row.cached_at,
       updatedAt: row.updated_at,
+      // v2.152.0
+      encrypted: row.encrypted === 1,
+      nonce: row.nonce || null,
+      keyVersion: row.key_version || null,
+      format: row.format || 1,
       isRemote: true
     };
   }
@@ -10673,6 +10717,10 @@ export class DatabaseSQLite {
       cachedAt: r.cached_at,
       updatedAt: r.updated_at,
       expiresAt: r.expires_at || null,
+      encrypted: r.encrypted === 1,
+      nonce: r.nonce || null,
+      keyVersion: r.key_version || null,
+      format: r.format || 1,
       isRemote: true
     }));
   }
@@ -10683,6 +10731,7 @@ export class DatabaseSQLite {
   getWavePingsForFederation(waveId, { before = null, limit = 100 } = {}) {
     let sql = `
       SELECT d.id, d.parent_id, d.author_id, d.content, d.created_at, d.edited_at, d.reactions, d.bot_id, d.expires_at,
+             d.encrypted, d.nonce, d.key_version, d.format,
              u.display_name AS user_display_name, u.avatar AS user_avatar, u.avatar_url AS user_avatar_url, u.handle AS user_handle,
              b.name AS bot_name
       FROM pings d
@@ -10707,6 +10756,11 @@ export class DatabaseSQLite {
         editedAt: d.edited_at,
         reactions,
         expiresAt: d.expires_at || null,
+        // v2.152.0
+        encrypted: d.encrypted === 1,
+        nonce: d.nonce || null,
+        keyVersion: d.key_version || null,
+        format: d.format || 1,
         author: {
           id: d.author_id,
           handle: isBot ? String(d.bot_name || 'bot').toLowerCase().replace(/\s+/g, '-') : d.user_handle,
@@ -10731,7 +10785,8 @@ export class DatabaseSQLite {
    * The conflict clause now refuses to change a row whose provenance differs.
    * A caller that needs to know whether its write landed gets `applied` back.
    */
-  cacheRemotePing({ id, waveId, originWaveId, originNode, authorId, authorNode, parentId, content, createdAt, editedAt, reactions, expiresAt }) {
+  cacheRemotePing({ id, waveId, originWaveId, originNode, authorId, authorNode, parentId, content, createdAt, editedAt, reactions, expiresAt,
+    encrypted = false, nonce = null, keyVersion = null, format = 1 }) {
     const now = new Date().toISOString();
     // v2.122.0 — the expiry travels with the ping. One already past is stored
     // as gone, so a late delivery or a backfill cannot bring it back.
@@ -10739,17 +10794,23 @@ export class DatabaseSQLite {
     const gone = expiry && expiry <= now;
 
     const result = this.db.prepare(`
-      INSERT INTO remote_pings (id, wave_id, origin_wave_id, origin_node, author_id, author_node, parent_id, content, created_at, edited_at, reactions, cached_at, updated_at, expires_at, deleted)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO remote_pings (id, wave_id, origin_wave_id, origin_node, author_id, author_node, parent_id, content, created_at, edited_at, reactions, cached_at, updated_at, expires_at, deleted,
+        encrypted, nonce, key_version, format)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
         content = excluded.content,
         edited_at = excluded.edited_at,
         reactions = excluded.reactions,
-        updated_at = excluded.updated_at
+        updated_at = excluded.updated_at,
+        encrypted = excluded.encrypted,
+        nonce = excluded.nonce,
+        key_version = excluded.key_version,
+        format = excluded.format
       WHERE remote_pings.wave_id = excluded.wave_id
         AND remote_pings.origin_node = excluded.origin_node
         AND remote_pings.deleted = 0
-    `).run(id, waveId, originWaveId, originNode, authorId, authorNode, parentId || null, gone ? '' : content, createdAt, editedAt || null, gone ? '{}' : JSON.stringify(reactions || {}), now, now, expiry, gone ? 1 : 0);
+    `).run(id, waveId, originWaveId, originNode, authorId, authorNode, parentId || null, gone ? '' : content, createdAt, editedAt || null, gone ? '{}' : JSON.stringify(reactions || {}), now, now, expiry, gone ? 1 : 0,
+      encrypted ? 1 : 0, encrypted ? nonce : null, encrypted ? keyVersion : null, encrypted && format === 2 ? 2 : 1);
 
     const cached = this.getRemotePing(id);
     const applied = result.changes > 0;
@@ -13017,6 +13078,39 @@ export class DatabaseSQLite {
         .run(encryptedData, nonce, now, userId);
       return current + 1;
     })();
+  }
+
+  // ============ Keys of people on other servers (v2.152.0) ============
+
+  getRemoteUserKeys(nodeName, userId) {
+    const r = this.db.prepare('SELECT * FROM remote_user_keys WHERE node_name = ? AND user_id = ?').get(nodeName, userId);
+    if (!r) return null;
+    let statements = [];
+    try { statements = JSON.parse(r.statements || '[]'); } catch { statements = []; }
+    return {
+      nodeName: r.node_name, userId: r.user_id, handle: r.handle, publicKey: r.public_key, identityKey: r.identity_key,
+      statements, sealNodeName: r.seal_node_name, fetchedAt: r.fetched_at, changedAt: r.changed_at,
+    };
+  }
+
+  /** Store what an ally said about one of its people; notes when their keys changed. */
+  putRemoteUserKeys(nodeName, { userId, handle = null, publicKey = null, identityKey = null, statements = [], sealNodeName = null }) {
+    const now = new Date().toISOString();
+    const prev = this.getRemoteUserKeys(nodeName, userId);
+    const changed = prev && (prev.publicKey !== publicKey || prev.identityKey !== identityKey);
+    this.db.prepare(`
+      INSERT INTO remote_user_keys (node_name, user_id, handle, public_key, identity_key, statements, seal_node_name, fetched_at, changed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (node_name, user_id) DO UPDATE SET handle = excluded.handle, public_key = excluded.public_key,
+        identity_key = excluded.identity_key, statements = excluded.statements, seal_node_name = excluded.seal_node_name,
+        fetched_at = excluded.fetched_at, changed_at = COALESCE(excluded.changed_at, remote_user_keys.changed_at)
+    `).run(nodeName, userId, handle, publicKey, identityKey, JSON.stringify(statements || []), sealNodeName, now, changed ? now : null);
+    return { changed: !!changed };
+  }
+
+  /** An ally said someone's keys changed: the next lookup asks again. */
+  expireRemoteUserKeys(nodeName, userId) {
+    return this.db.prepare("UPDATE remote_user_keys SET fetched_at = '' WHERE node_name = ? AND user_id = ?").run(nodeName, userId).changes > 0;
   }
 
   // ============ Seal name (v2.151.0) ============

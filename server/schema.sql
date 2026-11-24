@@ -651,7 +651,7 @@ CREATE TABLE IF NOT EXISTS remote_pings (
     reactions TEXT DEFAULT '{}',
     cached_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-, expires_at TEXT);
+, expires_at TEXT, encrypted INTEGER NOT NULL DEFAULT 0, nonce TEXT, key_version INTEGER, format INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS idx_remote_pings_wave ON remote_pings(wave_id);
 CREATE INDEX IF NOT EXISTS idx_remote_pings_origin ON remote_pings(origin_node, origin_wave_id);
 CREATE INDEX IF NOT EXISTS idx_remote_pings_author ON remote_pings(author_node, author_id);
@@ -1696,6 +1696,19 @@ CREATE TABLE IF NOT EXISTS e2ee_seal_name (
         id        INTEGER PRIMARY KEY CHECK (id = 1),
         node_name TEXT NOT NULL,
         pinned_at TEXT NOT NULL
+      );
+
+CREATE TABLE IF NOT EXISTS remote_user_keys (
+        node_name      TEXT NOT NULL,
+        user_id        TEXT NOT NULL,
+        handle         TEXT,
+        public_key     TEXT,
+        identity_key   TEXT,
+        statements     TEXT NOT NULL DEFAULT '[]',
+        seal_node_name TEXT,
+        fetched_at     TEXT NOT NULL,
+        changed_at     TEXT,
+        PRIMARY KEY (node_name, user_id)
       );
 
 -- ============ Full-text search triggers ============
