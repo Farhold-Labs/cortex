@@ -971,7 +971,10 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   // devices last saw it, and renewing the key when someone who held it left.
   const keyChangedPeople = (waveData?.participants || [])
     .filter(p => p.id !== currentUser?.id && (e2ee.keyChanges || []).some(c => c.personId === p.id))
-    .map(p => ({ ...p, verificationLost: (e2ee.keyChanges || []).some(c => c.personId === p.id && c.verificationLost) }));
+    .map(p => {
+      const c = (e2ee.keyChanges || []).find(k => k.personId === p.id);
+      return { ...p, verificationLost: !!c?.verificationLost, unsigned: !!c?.unsigned };
+    });
   // v2.149.0 — opening the people list looks up each member's key, so a mark
   // there (verified, changed) is about the key the server hands out now, not
   // the one last seen. A swapped key shows here even if nobody was given a

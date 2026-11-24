@@ -6,6 +6,7 @@ import { E2EESetupModal, PassphraseUnlockModal } from '../../e2ee-components.jsx
 import { LoadingSpinner } from '../components/ui/SimpleComponents.jsx';
 import SessionExpiryModal from '../components/session/SessionExpiryModal.jsx';
 import MainApp from './MainApp.jsx';
+import { IdentityPrompt } from '../components/ui/KeyFingerprint.jsx';
 
 // Shown when auto-unlock fails because login password ≠ E2EE passphrase.
 // Gives the user a clear exit: reset their keys (wiped server-side, re-setup on
@@ -197,7 +198,7 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
   if (manualSetup) {
     return (
       <E2EESetupModal
-        onSetup={(passphrase, createRecoveryKey, rememberDuration) => setupE2EE(passphrase, createRecoveryKey, rememberDuration)}
+        onSetup={(passphrase, createRecoveryKey, rememberDuration) => setupE2EE(passphrase, createRecoveryKey, rememberDuration, { identity: true })}
         onSkip={handleLogout}
         isLoading={false}
         mode={(() => { const u = storage.getUser(); return (u?.isCrossPort || u?.is_cross_port) ? 'new-passphrase' : 'login-password'; })()}
@@ -257,6 +258,7 @@ function E2EEAuthenticatedApp({ sharePingId, logout }) {
   return (
     <>
       <MainApp sharePingId={sharePingId} />
+      <IdentityPrompt />
       {(sessionExpiring || sessionExpired) && <SessionExpiryModal />}
     </>
   );

@@ -32,7 +32,7 @@ test('a key is new, the same, or changed; a change stays flagged until seen', as
   assert.equal(r.people.zoe.key, 'K2');
   assert.equal(r.people.zoe.previousKey, 'K1');
   assert.equal(r.people.zoe.seenAt, '2026-11-20T10:00:00Z', 'first seen is kept');
-  assert.deepEqual(unacknowledgedChanges(r), [{ personId: 'zoe', changedAt: '2026-11-21T10:00:00Z', verificationLost: false }]);
+  assert.deepEqual(unacknowledgedChanges(r), [{ personId: 'zoe', changedAt: '2026-11-21T10:00:00Z', verificationLost: false, unsigned: false }]);
 
   r = acknowledgeKeyChange(r, 'zoe');
   assert.deepEqual(unacknowledgedChanges(r), []);

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.149.0**. Last brought current 2026-10-30.
+Current version: **2.150.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2149000 / versionName "2.149.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2149000 / MARKETING_VERSION 2.149.0
+client/android/app/build.gradle                  versionCode 2150000 / versionName "2.150.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2150000 / MARKETING_VERSION 2.150.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -170,7 +170,9 @@ Encrypted pings never reach server-side processing — the server cannot read th
 - **A newcomer needs every older version of the key**, not just the current one: each ping is sealed with the version current when it was sent. A device that meets a ping sealed with a version it lacks asks (`key-request`, once a session per wave), and a member's device wraps each version it holds (`grantWaveKey`). The server stores a version only if the giver holds it and never over a key someone has (v2.145.4). A request waits on the server; members' devices answer open ones on unlock and reconnect (`/api/e2ee/key-requests`, v2.145.5).
 - **A wave needs a new key when any holder of the current one is no longer in it** (`waveNeedsRekey()`, from the key rows). Its owner, admins or moderators renew it (`runPendingRotations`).
 
-**Phase 1 (v2.149.0): fingerprints and format 2.** A key's fingerprint (`keyFingerprint()` in `client/crypto.js`) is shown in Settings → Security, on an encrypted wave's people list and on profile cards (`components/ui/KeyFingerprint.jsx`); **Mark as verified** is stored in the same encrypted record and is for one key only (`keyRecords.js`: a change makes it `lost`). Opening the people list looks up every member's key. Pings and wrapped keys carry `format`; devices read format 2 (bound with associated data to wave, author, version and recipient, an address being `<user id>@<server name>`), and **nothing writes it until phase 3**. Every `decryptPing` call passes `pingSeal(ping)`.
+**Phase 1 (v2.149.0): fingerprints and format 2.** A key's fingerprint (`keyFingerprint()` in `client/crypto.js`) is shown in Settings → Security, on an encrypted wave's people list and on profile cards (`components/ui/KeyFingerprint.jsx`); **Mark as verified** is stored in the same encrypted record and is for one key only (`keyRecords.js`: a change makes it `lost`). Opening the people list looks up every member's key. Pings and wrapped keys carry `format`; devices read format 2 (bound with associated data to wave, author, version and recipient, an address being `<user id>@<server name>`), and **nothing writes it until phase 3**. Every `decryptPing` call passes `pingSeal(ping)`. Since v2.150.0 fingerprints and verification are of the identity (below), and a v2.149.0 verification shows as "compare once more".
+
+**Phase 1b (v2.150.0): identity keys** (`docs/federated-e2ee/02-identity-keys.md`). A fingerprint is now of a person's **identity key** (ECDSA P-384, `identityFingerprint()`), wrapped **only by the recovery key, never the password** (a password thief must not get it). It signs a **key statement** (`"cortex-keys-v1" ‖ user id ‖ seq ‖ encryption key ‖ signing key ‖ issuedAt`), checked by the server before storing (`server/lib/key-statements.js`) and by every device on lookup (`inspectKey()` in `e2ee-context.jsx`). Verification is of the identity (`keyRecords.js`: renewed keys keep it, an older seq is refused, a new identity loses it). **Keys not signed by someone's identity get no wave key** (`lookUpKey` returns null; decided 2026-11-24). Replacing keys (`replaceKeys`, `POST /api/e2ee/keys/replace`) re-wraps every wave key, the key record and contacts in one transaction. A new recovery key must carry the identity (`identityProof`). A reset keeps the identity. Format 2 is redefined as **signed** pings (`sealSignedPing`); nothing writes it until phase 1c. Never add a path that changes someone's public key without a statement (`/keys/register`, `/keys/rotate` refuse with `USE_REPLACE_KEYS`).
 
 The unlocked key lives in `E2EEProvider`, above the routes; the unlock gate (`E2EEAuthenticatedApp`) unmounts on full-page routes such as `/about` and `/watch`. So the gate's re-check must keep a key already in memory, and **any sign-out must clear it**. The provider clears it whenever the token goes null, not only when the gate's logout button is used (v2.114.1).
 
@@ -479,7 +481,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0, phase 5 folders and audience labels in v2.135.0, phase 6 federated audience v2.136.1, invitations v2.137.0, groups and travellers v2.138.0)
 - **docs/direct-calls/** — ringing a contact, outside waves (decided 2026-11-22; phase 1 built in v2.145.0, phase 2 in v2.146.0, phase 3 not built)
 - **docs/federation-keys/** — replacing a server's federation key by handshake (built in v2.147.0)
-- **docs/federated-e2ee/** — encryption across servers (decided 2026-11-20; phase 0 = local [SECURITY] fixes in v2.143.0, phase 1 = fingerprints and reading format 2 in v2.149.0; phases 2 and 3 not built)
+- **docs/federated-e2ee/** — encryption across servers (decided 2026-11-20; phase 0 = local [SECURITY] fixes in v2.143.0, phase 1 = fingerprints and reading format 2 in v2.149.0; `02-identity-keys.md` = lasting identity fingerprints and signed pings, decided 2026-11-24, phase 1b built in v2.150.0; 1c, 2 and 3 not built)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy
