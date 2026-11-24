@@ -180,7 +180,7 @@ export async function wrapPrivateKey(privateKey, wrappingKey) {
  * @param {CryptoKey} unwrappingKey - AES-GCM key from PBKDF2
  * @returns {Promise<CryptoKey>} - ECDH private key
  */
-export async function unwrapPrivateKey(wrappedKeyBase64, unwrappingKey) {
+export async function unwrapPrivateKey(wrappedKeyBase64, unwrappingKey, kind = 'ecdh') {
   const combined = new Uint8Array(base64Decode(wrappedKeyBase64));
 
   // Extract nonce and ciphertext
@@ -199,6 +199,10 @@ export async function unwrapPrivateKey(wrappedKeyBase64, unwrappingKey) {
   const jwkString = decoder.decode(jwkBytes);
   const jwk = JSON.parse(jwkString);
 
+  // v2.150.0: identity and signing keys are ECDSA, wrapped the same way.
+  if (kind === 'ecdsa') {
+    return crypto.subtle.importKey('jwk', jwk, { name: 'ECDSA', namedCurve: 'P-384' }, true, ['sign']);
+  }
   return crypto.subtle.importKey(
     'jwk',
     jwk,
@@ -284,8 +288,10 @@ async function deriveSharedKey(privateKey, publicKey) {
 // <user id on their home server>@<home server's name>: the id, not the handle,
 // because a handle can be changed and the binding must not.
 //
-// Devices read format 2 from v2.149.0; nothing writes it until encryption
-// across servers (phase 3), so every device can read it by the time any does.
+// Devices read format 2 from v2.149.0; nothing writes it yet. v2.150.0
+// redefined a format-2 ping to be signed by its author as well (sealSignedPing
+// below); devices start writing it in phase 1c, a release after every device
+// can read it.
 
 /** The bytes a format-2 seal is bound to. */
 export function sealContext(label, ...fields) {
@@ -346,6 +352,192 @@ export async function keyFingerprint(spkiBase64) {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input)).slice(0, 16);
   const hex = Array.from(digest, b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
   return hex.match(/.{4}/g).join(' ');
+}
+
+// ============ Identity keys (v2.150.0) ============
+//
+// docs/federated-e2ee/02-identity-keys.md. A person's fingerprint is their
+// identity key's, which lasts: it signs a statement naming their encryption
+// and signing keys, so those can be replaced and the fingerprint, and
+// everyone's verification of it, stays.
+//
+//   identity:   ECDSA P-384, wrapped only by the recovery key (never the login
+//               password, which a thief may have). Opened, used, dropped.
+//   signing:    ECDSA P-384, signs pings. Wrapped under a key derived from the
+//               encryption keypair, so whatever opens that opens this.
+//   statement:  "cortex-keys-v1" ‖ user id ‖ seq ‖ encryption key ‖ signing key
+//               ‖ issuedAt, signed by the identity; seq only goes up.
+//
+// The statement names the user id, not the full address: a server renaming
+// itself must not invalidate everyone's identity. Records of people elsewhere
+// are kept per address, so a statement can't stand in for someone on another
+// server.
+
+const ECDSA = { name: 'ECDSA', namedCurve: 'P-384' };
+const ECDSA_SIGN = { name: 'ECDSA', hash: 'SHA-384' };
+
+export async function generateSigningKeypair() {
+  return crypto.subtle.generateKey(ECDSA, true, ['sign', 'verify']);
+}
+
+export async function importVerifyKey(spkiBase64) {
+  return crypto.subtle.importKey('spki', base64Decode(spkiBase64), ECDSA, true, ['verify']);
+}
+
+export async function signBytes(privateKey, bytes) {
+  return base64Encode(await crypto.subtle.sign(ECDSA_SIGN, privateKey, bytes));
+}
+
+export async function verifyBytes(spkiBase64, bytes, signatureBase64) {
+  try {
+    const sig = new Uint8Array(base64Decode(signatureBase64));
+    if (sig.length !== 96) return false;
+    return await crypto.subtle.verify(ECDSA_SIGN, await importVerifyKey(spkiBase64), sig, bytes);
+  } catch {
+    return false;
+  }
+}
+
+export function keyStatementBytes({ userId, seq, encryptionKey, signingKey, issuedAt }) {
+  if (!Number.isInteger(seq) || seq < 1) throw new Error('Invalid seal context');
+  return sealContext('cortex-keys-v1', userId, seq, encryptionKey, signingKey, issuedAt);
+}
+
+export async function signKeyStatement(identityPrivateKey, fields) {
+  return signBytes(identityPrivateKey, keyStatementBytes(fields));
+}
+
+/**
+ * Is this statement, as served for `userId`, signed by `identityKey` and does
+ * it name `encryptionKey`? Every check a device makes before trusting keys.
+ */
+export async function verifyKeyStatement(identityKey, userId, statement, encryptionKey = statement?.encryptionKey) {
+  if (!identityKey || !statement || statement.encryptionKey !== encryptionKey) return false;
+  let bytes;
+  try {
+    bytes = keyStatementBytes({ userId, seq: statement.seq, encryptionKey, signingKey: statement.signingKey, issuedAt: statement.issuedAt });
+  } catch { return false; }
+  return verifyBytes(identityKey, bytes, statement.signature);
+}
+
+/** Proof, for a new recovery key, that whoever wraps the identity holds it. */
+export async function signIdentityRewrap(identityPrivateKey, { userId, wrappedIdentity, identitySalt }) {
+  return signBytes(identityPrivateKey, sealContext('cortex-identity-rewrap-v1', userId, wrappedIdentity, identitySalt));
+}
+
+/** Wrap an identity private key with the recovery key. */
+export async function wrapIdentity(identityPrivateKey, recoveryKey, identitySalt = generateSalt()) {
+  const wrappingKey = await deriveKeyFromPassphrase(normalizeRecoveryKey(recoveryKey), identitySalt);
+  return { wrappedIdentity: await wrapPrivateKey(identityPrivateKey, wrappingKey), identitySalt };
+}
+
+/** Open an identity with the recovery key; throws if it's the wrong one. */
+export async function unwrapIdentity(wrappedIdentity, identitySalt, recoveryKey) {
+  const key = await deriveKeyFromPassphrase(normalizeRecoveryKey(recoveryKey), identitySalt);
+  return unwrapPrivateKey(wrappedIdentity, key, 'ecdsa');
+}
+
+function signingWrapContext(userId) {
+  return sealContext('cortex-signing-key-wrap-v1', userId);
+}
+
+/** The signing key, sealed under a key only the encryption keypair derives. */
+export async function wrapSigningKey(signingPrivateKey, encPrivateKey, encPublicKey, userId) {
+  const context = signingWrapContext(userId);
+  const key = await deriveBoundWrapKey(encPrivateKey, encPublicKey, context);
+  const jwk = new TextEncoder().encode(JSON.stringify(await crypto.subtle.exportKey('jwk', signingPrivateKey)));
+  const nonce = generateNonce();
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: context }, key, jwk);
+  const combined = new Uint8Array(nonce.length + ct.byteLength);
+  combined.set(nonce, 0);
+  combined.set(new Uint8Array(ct), nonce.length);
+  return base64Encode(combined);
+}
+
+export async function unwrapSigningKey(encryptedSigningKey, encPrivateKey, encPublicKey, userId) {
+  const context = signingWrapContext(userId);
+  const key = await deriveBoundWrapKey(encPrivateKey, encPublicKey, context);
+  const combined = new Uint8Array(base64Decode(encryptedSigningKey));
+  const jwk = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: combined.slice(0, NONCE_LENGTH), additionalData: context }, key, combined.slice(NONCE_LENGTH));
+  return crypto.subtle.importKey('jwk', JSON.parse(new TextDecoder().decode(jwk)), ECDSA, true, ['sign']);
+}
+
+const IDENTITY_FINGERPRINT_LABEL = new TextEncoder().encode('cortex-id-v1');
+
+/**
+ * A person's fingerprint from v2.150.0: SHA-256 over "cortex-id-v1" ‖ their
+ * identity key, shown like keyFingerprint. The different label means it can
+ * never equal a v2.149.0 encryption-key fingerprint.
+ */
+export async function identityFingerprint(spkiBase64) {
+  const spki = new Uint8Array(base64Decode(spkiBase64));
+  const input = new Uint8Array(IDENTITY_FINGERPRINT_LABEL.length + spki.length);
+  input.set(IDENTITY_FINGERPRINT_LABEL, 0);
+  input.set(spki, IDENTITY_FINGERPRINT_LABEL.length);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input)).slice(0, 16);
+  return Array.from(digest, b => b.toString(16).padStart(2, '0')).join('').toUpperCase().match(/.{4}/g).join(' ');
+}
+
+// ============ Signed pings: format 2 (v2.150.0) ============
+//
+// Redefined before anything writes it (v2.149.0 only read it). The plaintext
+// sealed by AES-GCM (associated data pingContext, as before) is
+//   seq (4 bytes, big-endian) ‖ message id (16) ‖ signature (96) ‖ text
+// where the signature, by the author's signing key named in statement `seq`, is
+// over pingSignatureBytes(): wave, author, seq and message id, then the text.
+// The signature is inside the encryption, so the server learns nothing new.
+// A message id seen twice in a wave is the same ping: the server can't replay one.
+
+const PING_HEADER = 4 + 16 + 96;
+
+export function pingSignatureBytes(originWaveId, authorAddress, seq, messageIdHex, textBytes) {
+  const head = sealContext('cortex-ping-sig-v2', originWaveId, authorAddress, seq, messageIdHex);
+  const out = new Uint8Array(head.length + 1 + textBytes.length);
+  out.set(head, 0);
+  out[head.length] = 0;
+  out.set(textBytes, head.length + 1);
+  return out;
+}
+
+const toHex = (bytes) => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+
+/** Seal and sign a format-2 ping. Devices start writing these in phase 1c. */
+export async function sealSignedPing(text, waveKey, { originWaveId, authorAddress, seq, signingPrivateKey, messageId = null }) {
+  const textBytes = new TextEncoder().encode(text);
+  const id = messageId ? new Uint8Array(messageId) : generateRandomBytes(16);
+  const signature = new Uint8Array(base64Decode(await signBytes(signingPrivateKey,
+    pingSignatureBytes(originWaveId, authorAddress, seq, toHex(id), textBytes))));
+  const plain = new Uint8Array(PING_HEADER + textBytes.length);
+  new DataView(plain.buffer).setUint32(0, seq);
+  plain.set(id, 4);
+  plain.set(signature, 20);
+  plain.set(textBytes, PING_HEADER);
+  const nonce = generateNonce();
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: pingContext(originWaveId, authorAddress) }, waveKey, plain);
+  return { ciphertext: base64Encode(ct), nonce: base64Encode(nonce), messageId: toHex(id) };
+}
+
+/**
+ * Open a format-2 ping. The caller checks the signature against the author's
+ * statement `seq` with verifyPingSignature before showing it.
+ */
+export async function openSignedPing(ciphertextBase64, nonceBase64, waveKey, { originWaveId, authorAddress }) {
+  const plain = new Uint8Array(await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64Decode(nonceBase64), additionalData: pingContext(originWaveId, authorAddress) },
+    waveKey, base64Decode(ciphertextBase64)));
+  if (plain.length < PING_HEADER) throw new Error('Malformed signed ping');
+  const textBytes = plain.slice(PING_HEADER);
+  return {
+    seq: new DataView(plain.buffer, plain.byteOffset).getUint32(0),
+    messageId: toHex(plain.slice(4, 20)),
+    signature: base64Encode(plain.slice(20, PING_HEADER)),
+    text: new TextDecoder().decode(textBytes),
+    textBytes,
+  };
+}
+
+export async function verifyPingSignature(signingKey, opened, { originWaveId, authorAddress }) {
+  return verifyBytes(signingKey, pingSignatureBytes(originWaveId, authorAddress, opened.seq, opened.messageId, opened.textBytes), opened.signature);
 }
 
 /**
@@ -414,12 +606,13 @@ export async function decryptWaveKey(encryptedKeyBase64, nonceBase64, senderPubl
  * @param {CryptoKey} waveKey - AES-256-GCM wave key
  * @returns {Promise<{ciphertext: string, nonce: string}>}
  */
-export async function encryptPing(plaintext, waveKey, { format = 1, context = null } = {}) {
+export async function encryptPing(plaintext, waveKey) {
   const encoder = new TextEncoder();
   const nonce = generateNonce();
 
+  // Format 1. A format-2 ping is signed too: sealSignedPing (v2.150.0).
   const ciphertext = await crypto.subtle.encrypt(
-    format === 2 ? { name: 'AES-GCM', iv: nonce, additionalData: requireContext(context) } : { name: 'AES-GCM', iv: nonce },
+    { name: 'AES-GCM', iv: nonce },
     waveKey,
     encoder.encode(plaintext)
   );
@@ -437,13 +630,15 @@ export async function encryptPing(plaintext, waveKey, { format = 1, context = nu
  * @param {CryptoKey} waveKey - AES-256-GCM wave key
  * @returns {Promise<string>} - Decrypted plaintext
  */
-export async function decryptPing(ciphertextBase64, nonceBase64, waveKey, { format = 1, context = null } = {}) {
+export async function decryptPing(ciphertextBase64, nonceBase64, waveKey, { format = 1 } = {}) {
+  // Format 1. A format-2 ping is opened with openSignedPing (v2.150.0).
+  if (format !== 1) throw new Error('Format 2 pings are opened with openSignedPing');
   const decoder = new TextDecoder();
   const ciphertext = base64Decode(ciphertextBase64);
   const nonce = base64Decode(nonceBase64);
 
   const plaintext = await crypto.subtle.decrypt(
-    format === 2 ? { name: 'AES-GCM', iv: nonce, additionalData: requireContext(context) } : { name: 'AES-GCM', iv: nonce },
+    { name: 'AES-GCM', iv: nonce },
     waveKey,
     ciphertext
   );
@@ -610,6 +805,12 @@ export async function createRecoveryBackup(privateKey) {
     encryptedPrivateKey,   // Store on server
     recoverySalt           // Store on server
   };
+}
+
+/** Wrap a private key with a recovery key the person already has (v2.150.0). */
+export async function wrapWithRecoveryKey(privateKey, recoveryKey, recoverySalt = generateSalt()) {
+  const wrappingKey = await deriveKeyFromPassphrase(normalizeRecoveryKey(recoveryKey), recoverySalt);
+  return { encryptedPrivateKey: await wrapPrivateKey(privateKey, wrappingKey), recoverySalt };
 }
 
 /**
