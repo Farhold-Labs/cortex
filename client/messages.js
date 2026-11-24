@@ -392,3 +392,30 @@ export const GHOST_PROTOCOL = {
   revealWave: "Reveal Signal",
   genericNotification: "New activity on the cortex",
 };
+
+// Encryption key fingerprints (v2.149.0, docs/federated-e2ee/ phase 1).
+export const KEY_FINGERPRINT = {
+  yourKey: 'Your encryption key',
+  yourKeyHint: 'Read this to someone over a call or in person; they compare it with what their app shows for you. Matching means nobody has swapped your key on the way.',
+  theirKey: (name) => `${name}'s encryption key`,
+  compareHint: (name) => `Ask ${name} to read you the fingerprint in their Settings → Security → Your encryption key, over a call or in person, not in a message here. Mark it verified only if every character matches.`,
+  noKey: (name) => `${name} hasn't set up encryption yet.`,
+  locked: 'Unlock encryption to see keys.',
+  loadFailed: 'Could not look up this key.',
+  verified: '✓ VERIFIED',
+  notVerified: 'NOT VERIFIED',
+  changed: '⚠ KEY CHANGED',
+  lost: '⚠ CHANGED SINCE YOU VERIFIED',
+  lostShort: '⚠ VERIFY AGAIN',
+  changedHint: (name) => `${name}'s key changed. That happens when someone resets their encryption. If you didn't expect it, compare fingerprints again.`,
+  lostHint: (name) => `You had verified ${name}'s key, and it has changed since, so that verification no longer holds. Compare the new fingerprint before marking it again.`,
+  markVerified: 'MARK AS VERIFIED',
+  unmarkVerified: 'REMOVE VERIFICATION',
+  showKey: 'KEY',
+  verifyAsk: (name, fp) => ({
+    title: `Verify ${name}'s key?`,
+    message: `Only if ${name} read you this exact fingerprint over a call or in person:\n\n${fp}`,
+    confirmLabel: 'IT MATCHES',
+  }),
+  keyMovedOn: 'Their key changed while you were looking. Compare the new fingerprint.',
+};

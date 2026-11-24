@@ -218,6 +218,7 @@ Extend E2EE to federated messages between servers.
 - **Current status:** Local E2EE works (v2.1.0), and since v2.143.0 (phase 0) it encrypts thread and focus-view replies, renews keys when people leave and flags key changes. Across servers it never did: federation sends no wave key, nonce or key version, and travellers' own pings arrived in plain text. Since v2.142.0 encrypted waves and people on other servers are refused together.
 - **Decided 2026-11-07:** a person's public key comes from their home server over signed federation, and members can see and compare key fingerprints, with a change flagged.
 - **Design decided 2026-11-20:** `docs/federated-e2ee/01-design.md`, in four phases. A changed key still gets the wave key and is flagged, keys come only from allied servers, the wave's owner, admins or moderators rotate, fingerprints are 128-bit hex. Phase 0 fixes two security gaps in encryption on a single server first: a device gives the wave key to any public key the server names, and keys are never rotated when someone leaves.
+- **Phase 1 built in v2.149.0:** fingerprints in Settings, people lists and profile cards, Mark as verified (one key only; a change says the verification no longer holds), and devices reading format 2. Next: phase 2 (the plumbing between servers, still refused at the door), then phase 3 (keys across servers, refusal lifted, devices write format 2).
 
 ---
 
