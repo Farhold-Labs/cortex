@@ -4262,6 +4262,35 @@ export class DatabaseSQLite {
       );
     `);
 
+    // v2.153.0 — encryption across servers, phase 3. Who wrapped each wave
+    // key, so a device can check the wrapper's key against their fingerprint
+    // (null on rows from before: a local sender, unknown); and key requests
+    // from people on other servers, kept on the wave's own server.
+    {
+      const cols = this.db.prepare('PRAGMA table_info(wave_encryption_keys)').all().map(c => c.name);
+      if (cols.length && !cols.includes('sender_user_id')) {
+        this.db.exec(`
+          ALTER TABLE wave_encryption_keys ADD COLUMN sender_user_id TEXT;
+          ALTER TABLE wave_encryption_keys ADD COLUMN sender_node TEXT;
+        `);
+      }
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS remote_wave_key_requests (
+        id         TEXT PRIMARY KEY,
+        wave_id    TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        node_name  TEXT NOT NULL,
+        user_id    TEXT NOT NULL,
+        handle     TEXT,
+        versions   TEXT NOT NULL DEFAULT '[]',
+        status     TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        granted_at TEXT,
+        granted_by TEXT,
+        UNIQUE (wave_id, node_name, user_id)
+      );
+    `);
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -12779,8 +12808,11 @@ export class DatabaseSQLite {
 
   // Create wave encryption key for a participant
   // format (v2.149.0): 1, or 2 for a key bound to its wave, version and recipient.
-  createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, keyVersion = 1, userKeyId = null, format = 1) {
+  // sender (v2.153.0): { userId, node } of whoever wrapped it; node null = here.
+  createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, keyVersion = 1, userKeyId = null, format = 1, sender = null) {
     format = format === 2 ? 2 : 1;
+    const senderUserId = sender?.userId || null;
+    const senderNode = sender?.node || null;
     const id = uuidv4();
     const now = new Date().toISOString();
 
@@ -12794,16 +12826,17 @@ export class DatabaseSQLite {
       // Update existing
       this.db.prepare(`
         UPDATE wave_encryption_keys
-        SET encrypted_wave_key = ?, sender_public_key = ?, user_key_id = COALESCE(?, user_key_id), format = ?
+        SET encrypted_wave_key = ?, sender_public_key = ?, user_key_id = COALESCE(?, user_key_id), format = ?,
+            sender_user_id = ?, sender_node = ?
         WHERE wave_id = ? AND user_id = ? AND key_version = ?
-      `).run(encryptedWaveKey, senderPublicKey, userKeyId, format, waveId, userId, keyVersion);
+      `).run(encryptedWaveKey, senderPublicKey, userKeyId, format, senderUserId, senderNode, waveId, userId, keyVersion);
       return existing.id;
     }
 
     this.db.prepare(`
-      INSERT INTO wave_encryption_keys (id, wave_id, user_id, encrypted_wave_key, sender_public_key, key_version, created_at, user_key_id, format)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, waveId, userId, encryptedWaveKey, senderPublicKey, keyVersion, now, userKeyId, format);
+      INSERT INTO wave_encryption_keys (id, wave_id, user_id, encrypted_wave_key, sender_public_key, key_version, created_at, user_key_id, format, sender_user_id, sender_node)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, waveId, userId, encryptedWaveKey, senderPublicKey, keyVersion, now, userKeyId, format, senderUserId, senderNode);
 
     return id;
   }
@@ -12826,6 +12859,8 @@ export class DatabaseSQLite {
         senderPublicKey: row.sender_public_key,
         keyVersion: row.key_version,
         format: row.format || 1,
+        senderUserId: row.sender_user_id || null,
+        senderNode: row.sender_node || null,
         currentKeyVersion: row.current_key_version || 1
       };
     }
@@ -12840,6 +12875,8 @@ export class DatabaseSQLite {
       senderPublicKey: row.sender_public_key,
       keyVersion: row.key_version,
       format: row.format || 1,
+      senderUserId: row.sender_user_id || null,
+      senderNode: row.sender_node || null,
       currentKeyVersion: row.current_key_version || 1
     };
   }
@@ -12847,7 +12884,7 @@ export class DatabaseSQLite {
   // Get all wave keys for a user (for key rotation/history)
   getAllWaveKeysForUser(waveId, userId) {
     const rows = this.db.prepare(`
-      SELECT encrypted_wave_key, sender_public_key, key_version, format, created_at
+      SELECT encrypted_wave_key, sender_public_key, key_version, format, created_at, sender_user_id, sender_node
       FROM wave_encryption_keys
       WHERE wave_id = ? AND user_id = ?
       ORDER BY key_version ASC
@@ -12858,6 +12895,8 @@ export class DatabaseSQLite {
       senderPublicKey: row.sender_public_key,
       keyVersion: row.key_version,
       format: row.format || 1,
+      senderUserId: row.sender_user_id || null,
+      senderNode: row.sender_node || null,
       createdAt: row.created_at
     }));
   }
@@ -12905,12 +12944,57 @@ export class DatabaseSQLite {
       }
 
       // Insert new encrypted keys for each remaining participant
-      for (const { userId, encryptedWaveKey, senderPublicKey, format } of newKeyDistribution) {
-        this.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, newVersion, null, format);
+      for (const { userId, encryptedWaveKey, senderPublicKey, format, sender } of newKeyDistribution) {
+        this.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, newVersion, null, format, sender || null);
       }
 
       return { waveId, newKeyVersion: newVersion };
     })();
+  }
+
+  /**
+   * A copy of a wave on another server follows its key version (v2.153.0):
+   * set at acceptance and on each rotation there. Never backwards.
+   */
+  setWaveKeyVersion(waveId, version) {
+    const now = new Date().toISOString();
+    this.db.prepare('INSERT OR IGNORE INTO wave_key_metadata (wave_id, current_key_version, created_at) VALUES (?, ?, ?)').run(waveId, version, now);
+    this.db.prepare('UPDATE wave_key_metadata SET current_key_version = ?, last_rotated_at = ? WHERE wave_id = ? AND current_key_version < ?')
+      .run(version, now, waveId, version);
+  }
+
+  // ============ Key requests from other servers (v2.153.0) ============
+
+  upsertRemoteWaveKeyRequest(waveId, nodeName, userId, handle, versions) {
+    const now = new Date().toISOString();
+    const existing = this.db.prepare('SELECT id FROM remote_wave_key_requests WHERE wave_id = ? AND node_name = ? AND user_id = ?').get(waveId, nodeName, userId);
+    if (existing) {
+      this.db.prepare("UPDATE remote_wave_key_requests SET handle = ?, versions = ?, status = 'pending', created_at = ?, granted_at = NULL, granted_by = NULL WHERE id = ?")
+        .run(handle, JSON.stringify(versions), now, existing.id);
+      return existing.id;
+    }
+    const id = `rkr-${uuidv4()}`;
+    this.db.prepare('INSERT INTO remote_wave_key_requests (id, wave_id, node_name, user_id, handle, versions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, waveId, nodeName, userId, handle, JSON.stringify(versions), now);
+    return id;
+  }
+
+  getRemoteWaveKeyRequest(id) {
+    const r = this.db.prepare('SELECT * FROM remote_wave_key_requests WHERE id = ?').get(id);
+    if (!r) return null;
+    let versions = [];
+    try { versions = JSON.parse(r.versions || '[]'); } catch { versions = []; }
+    return { id: r.id, waveId: r.wave_id, nodeName: r.node_name, userId: r.user_id, handle: r.handle, versions, status: r.status };
+  }
+
+  pendingRemoteWaveKeyRequests() {
+    return this.db.prepare("SELECT id FROM remote_wave_key_requests WHERE status = 'pending' ORDER BY created_at").all()
+      .map(r => this.getRemoteWaveKeyRequest(r.id));
+  }
+
+  settleRemoteWaveKeyRequest(id, grantedBy) {
+    this.db.prepare("UPDATE remote_wave_key_requests SET status = 'granted', granted_at = ?, granted_by = ? WHERE id = ?")
+      .run(new Date().toISOString(), grantedBy, id);
   }
 
   // Store recovery key
@@ -13158,11 +13242,14 @@ export class DatabaseSQLite {
   /** Every wrapped wave key this person holds, in every wave. */
   getAllWaveKeyRowsForUser(userId) {
     return this.db.prepare(`
-      SELECT wave_id, key_version, encrypted_wave_key, sender_public_key, format
-      FROM wave_encryption_keys WHERE user_id = ? ORDER BY wave_id, key_version
+      SELECT wek.wave_id, wek.key_version, wek.encrypted_wave_key, wek.sender_public_key, wek.format, wek.sender_user_id, wek.sender_node,
+             w.federation_state, w.origin_wave_id
+      FROM wave_encryption_keys wek JOIN waves w ON w.id = wek.wave_id WHERE wek.user_id = ? ORDER BY wek.wave_id, wek.key_version
     `).all(userId).map(r => ({
       waveId: r.wave_id, keyVersion: r.key_version, encryptedWaveKey: r.encrypted_wave_key,
       senderPublicKey: r.sender_public_key, format: r.format || 1,
+      senderUserId: r.sender_user_id || null, senderNode: r.sender_node || null,
+      originWaveId: r.federation_state === 'participant' && r.origin_wave_id ? r.origin_wave_id : r.wave_id,
     }));
   }
 
@@ -13191,7 +13278,7 @@ export class DatabaseSQLite {
               .map(r => `${r.wave_id}:${r.key_version}`).sort();
             const sent = waveKeys.map(k => `${k.waveId}:${k.keyVersion}`).sort();
             if (held.length !== sent.length || held.some((h, i) => h !== sent[i])) fail('WAVE_KEYS_CHANGED');
-            const upd = this.db.prepare('UPDATE wave_encryption_keys SET encrypted_wave_key = ?, sender_public_key = ?, format = ? WHERE wave_id = ? AND user_id = ? AND key_version = ?');
+            const upd = this.db.prepare('UPDATE wave_encryption_keys SET encrypted_wave_key = ?, sender_public_key = ?, format = ?, sender_user_id = user_id, sender_node = NULL WHERE wave_id = ? AND user_id = ? AND key_version = ?');
             const drop = this.db.prepare('DELETE FROM wave_encryption_keys WHERE wave_id = ? AND user_id = ? AND key_version = ?');
             for (const k of waveKeys) {
               if (k.drop) drop.run(k.waveId, userId, k.keyVersion);

@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.153.0] - 2026-11-24
+
+Encryption across servers, phase 3 (`docs/federated-e2ee/01-design.md`): an end-to-end encrypted wave can now include people on other Cortex servers. Until now encrypted waves and other servers were refused together (v2.142.0). Server and web only, no app build. **Migrates** (two columns, one table).
+
+### Added
+- **Encrypted waves with people elsewhere.** Starting an encrypted wave with `@handle@server`, or inviting someone elsewhere into one, works when their server runs v2.153.0 or later (protocol 3). An older server is still refused, by name (`ENCRYPTED_SERVER_NOT_READY`). Before deciding, this server re-reads the other server's identity page, so one upgraded since pairing isn't refused for being out of date here. Turning encryption on for a wave that already has people elsewhere is still refused: their servers' copies hold its plain history.
+- **Their server makes an encrypted copy** at the wave's current key version, and asks the wave's server for the key as soon as the invitation is accepted, so it's there before the first ping.
+- **Keys go through the wave's own server**, allied with every server in the wave:
+  - the newcomer's server sends `wave_key_request`, naming only the wave and the person;
+  - a member's device there looks up the newcomer's keys through its own server, checks they're signed by the newcomer's fingerprint, and wraps the key for them;
+  - the wave's server passes it on as `wave_key_grant`.
+  - Each server stores wrapped keys only for its own people. A grant is accepted only from the wave's own server, only for someone in that server's copy, and never over a key someone already has.
+- **Renewing the key reaches everyone.** When someone elsewhere leaves or is removed, the wave is marked as needing a new key. The owner's device wraps the new one for everyone here and everyone elsewhere whose signed keys it can find, and each server is sent its own people's keys and the new version (`wave_key_rotated`). Anyone left out asks for it.
+- **Every wave key a device hands over is now bound** to the wave's id on its own server, its version and its recipient (format 2). The key also records who wrapped it, and the device opening it checks that the wrapper's key is one their fingerprint signed (the fingerprint on record, if there is one). Keys made when a wave is created or first encrypted stay format 1.
+
+### Fixed
+- **A ping from another server now appears in an open wave straight away**, in every federated wave. It arrived under `ping` rather than `data`, so the app never reloaded for one.
+- **Pings from someone who has left can still be checked.** Their server stops answering for them once they share no encrypted wave, so this server keeps their keys, and a device may look up anyone whose pings are in a wave it can read. When nothing at all is known of an author's keys, their ping is shown without a mark, as an unsigned one is, rather than as a forgery.
+- **One departure means one renewal.** A device renewing a key because one was pending sends `ifNeeded`, and the server skips it if another device or page already made it. A departure reported twice (removed here, then reported by their server) is marked once.
+
+### Verified
+- **Tests:** `tests/e2ee-across-servers.test.cjs`, with a real server and a fake ally, from both sides. It covers:
+  - the refusal of servers that aren't ready;
+  - an encrypted answer and copy, and the request at acceptance;
+  - requests kept only for the wave's people;
+  - grants with their wrapper, stored on the copy's server only from the wave's server, only for people in the copy, never over a key someone has;
+  - renewals sending each server its own people's keys;
+  - a stale version refused, a renewal skipped when none is needed;
+  - a departure marked once, and keys still found for someone who left.
+  - Counterfactuals: finding the copy by wave id alone, a server that isn't the wave's hands out keys; without the membership check, a request for someone not in the wave is kept.
+  - `federation-consent.test.cjs` now expects older servers to be refused as not ready.
+- **Two real servers on one machine, paired, with real browsers** (a.test with alice, b.test with bob; each app behind a small stand-in for nginx):
+  - both set up encryption and got fingerprints;
+  - alice's encrypted wave with bob was created;
+  - bob's copy was encrypted, and his key arrived from alice's device before the first ping;
+  - each read the other's signed pings, live;
+  - a renewal reached bob's server and he read the new ping and the old ones;
+  - removing bob dropped his copy and renewed the key once, without him.
+- **Between the real dev and QA servers** (2026-11-24, a throwaway account `e2eetest` on QA, mal on dev):
+  - QA reported protocol 3; dev's encrypted wave with the QA account was created;
+  - QA's copy was encrypted, and its key came from mal's device on dev (bound, format 2, wrapper recorded);
+  - each read the other's pings;
+  - a renewal reached QA, which read the new ping and the old;
+  - removing the QA account renewed dev's key once (2 → 3), and QA dropped its copy; mal still read the QA account's old ping.
+  - Not tried on a phone.
+
 ## [2.152.0] - 2026-11-24
 
 Encryption across servers, phase 2 (`docs/federated-e2ee/01-design.md`): the plumbing between servers. Encrypted waves and people on other servers are **still refused together**; this is what phase 3 builds on, so nothing changes for anyone yet. Server only, no app build. **Migrates** (four columns on `remote_pings`, one new table).

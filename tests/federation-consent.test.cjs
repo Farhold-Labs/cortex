@@ -117,17 +117,16 @@ async function run({ noInvitationCheck = false, noHomeBlockCheck = false, noEncr
       src = src.replace(check, '// Blocked check removed\n        if (false) if (');
     }
     if (noEncryptedCheck) {
-      // v2.142.0 counterfactual: the four places an encrypted wave meets
-      // people on other servers, as they were.
-      for (const check of [
-        'if (encrypted && hasFederatedParticipants) {',
-        '  if (db.isWaveEncrypted(waveId)) {\n    return res.status(409)',
-        'if (isFederatedWave(wave) || db.listRemoteWaveInvitations?.(waveId)?.length) {',
-        '  if (db.isWaveEncrypted(wave.id)) {\n    console.log(`📭',
-      ]) {
-        assert.ok(src.includes(check), `counterfactual: could not find ${check.slice(0, 50)}`);
-        src = src.replace(check, check.replace(/if \((.*?)\) \{/, 'if (false && ($1)) {'));
-      }
+      // v2.142.0 counterfactual: the places an encrypted wave meets people
+      // on other servers. Since v2.153.0 creating, inviting and answering
+      // refuse only servers not at protocol 3 (encryptedServersRefusal);
+      // turning encryption on for a wave with people elsewhere still refuses.
+      const refusal = 'async function encryptedServersRefusal(nodeNames) {';
+      assert.ok(src.includes(refusal), 'counterfactual: could not find encryptedServersRefusal');
+      src = src.replace(refusal, refusal + '\n  return null;');
+      const encrypt = 'if (isFederatedWave(wave) || db.listRemoteWaveInvitations?.(waveId)?.length) {';
+      assert.ok(src.includes(encrypt), 'counterfactual: could not find the /encrypt check');
+      src = src.replace(encrypt, 'if (false && (isFederatedWave(wave) || db.listRemoteWaveInvitations?.(waveId)?.length)) {');
     }
     fs.writeFileSync(f, src + "\nserver.on('listening', () => console.log('FEDCONSENT_PORT=' + server.address().port));\n");
 
@@ -390,10 +389,12 @@ test('people on other servers are asked', { timeout: 120000 }, async (t) => {
     assert.deepEqual(r.aliceBlocked, { refused: ['@zed@near.example'], sent: 0 });
   });
 
-  await t.test('an encrypted wave and people on other servers are kept apart (v2.142.0)', () => {
+  // v2.153.0: these servers speak protocol 2 or below, so they are refused as
+  // not ready; e2ee-across-servers.test.cjs has protocol-3 servers taken.
+  await t.test('an encrypted wave and people on servers not ready are kept apart (v2.142.0, v2.153.0)', () => {
     assert.deepEqual(r.encrypted, {
-      create: '409 ENCRYPTED_NO_TRAVELLERS',
-      invite: '409 ENCRYPTED_NO_TRAVELLERS',
+      create: '409 ENCRYPTED_SERVER_NOT_READY',
+      invite: '409 ENCRYPTED_SERVER_NOT_READY',
       asked: [],
       encrypt: '409 ENCRYPTED_NO_TRAVELLERS',
       lateAnswer: '404 INVITATION_GONE',
