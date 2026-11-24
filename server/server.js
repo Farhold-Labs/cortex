@@ -42,6 +42,7 @@ import { getMessaging as getFirebaseMessaging } from 'firebase-admin/messaging';
 import { plainText } from './lib/plain-text.js';
 import { isReservedHandle } from './lib/reserved-handles.js';
 import * as keyStatements from './lib/key-statements.js';
+import { reserveWaveId, checkWaveIdReservation } from './lib/wave-id-reservation.js';
 import { canAccessMedia, validMediaTarget } from './lib/media-access.js';
 import { HlsSessions, proxyMedia, upstreamUrl } from './lib/media-proxy.js';
 import { BroadcastRecorder, recordingConfigFromEnv, recordingKey } from './lib/broadcast-recording.js';
@@ -24051,6 +24052,12 @@ function sweepDirectCalls() {
 }
 setInterval(sweepDirectCalls, DIRECT_CALL_SWEEP_MS).unref();
 
+// v2.153.1: an id for a wave about to be created, signed for the asker, so an
+// encrypted wave's keys can be bound to it before it exists. Stores nothing.
+app.post('/api/waves/reserve-id', authenticateToken, (req, res) => {
+  res.json(reserveWaveId(JWT_SECRET, req.user.userId));
+});
+
 app.post('/api/waves', authenticateToken, async (req, res) => {
   const title = sanitizeInput(req.body.title);
   if (!title) return res.status(400).json({ error: 'Title is required' });
@@ -24152,6 +24159,19 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     return res.status(409).json({ error: `People on other servers can only join a ${T_WAVE()} kept to its people`, code: 'CROSS_SERVER' });
   }
 
+  // v2.153.1: an id reserved beforehand, so an encrypted wave's keys can be
+  // bound to it (format 2). Only one this server signed for this person.
+  let reservedWaveId = null;
+  if (req.body.waveId !== undefined || req.body.waveIdReservation !== undefined) {
+    if (!checkWaveIdReservation(JWT_SECRET, req.body.waveId, req.user.userId, req.body.waveIdReservation)) {
+      return res.status(400).json({ error: 'That reserved id is not valid', code: 'INVALID_WAVE_RESERVATION' });
+    }
+    if (db.getWave(req.body.waveId)) {
+      return res.status(409).json({ error: 'That reserved id has been used', code: 'WAVE_ID_USED' });
+    }
+    reservedWaveId = req.body.waveId;
+  }
+
   // v2.132.0: started with two or more other people, outside Communities and on
   // this server, a wave gets a group of its own. A one-to-one conversation
   // stays a direct conversation until a third person is added.
@@ -24173,6 +24193,7 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
   const keyDistribution = req.body.keyDistribution;
 
   const wave = db.createWave({
+    id: reservedWaveId,
     title,
     // A group wave stays a group wave with travellers (v2.138.0); any other
     // wave with people elsewhere is Verse-Wide, kept to its people.
@@ -24222,11 +24243,15 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     // Create key metadata
     db.createWaveKeyMetadata(wave.id);
 
-    // Store encrypted keys for each participant
+    // Store encrypted keys for each participant. v2.153.1: only for the
+    // wave's people (a crew wave's whole crew) and those invited, never for
+    // someone refused (a block, a channel they can't see).
+    const keyHolders = new Set([req.user.userId, ...waveMemberIds(db.getWave(wave.id)), ...joined.invited]);
     for (const { userId, encryptedWaveKey, senderPublicKey, format } of keyDistribution) {
       if (encryptedWaveKey && senderPublicKey) {
         // If userId is null, it's the creator's own key
         const targetUserId = userId || req.user.userId;
+        if (!keyHolders.has(targetUserId)) continue;
         db.createWaveEncryptionKey(wave.id, targetUserId, encryptedWaveKey, senderPublicKey, 1, null, format, { userId: req.user.userId });
       }
     }

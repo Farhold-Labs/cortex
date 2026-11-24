@@ -1401,12 +1401,42 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
   }, [privateKey, publicKeyBase64, fetchAPI, getVersionedWaveKey, recipientOf, wrapFor]);
 
+  /**
+   * Version 1 of a wave's key for its first holders, bound to the wave
+   * (v2.153.1): this person, and each of `userIds` whose keys their
+   * fingerprint signed. Someone left out asks later, as a newcomer does.
+   */
+  const bindInitialKeys = useCallback(async (waveKey, waveId, userIds) => {
+    const me = await getSealIdentity();
+    const self = { publicKey: publicKeyBase64, address: crypto.personAddress(me.userId, me.nodeName) };
+    const out = [{ userId: null, senderPublicKey: publicKeyBase64, format: 2, encryptedWaveKey: await wrapFor(waveKey, waveId, 1, self) }];
+    for (const userId of [...new Set(userIds)]) {
+      // People elsewhere ("@handle@server") are given it once they accept (v2.153.0).
+      if (!userId || userId === me.userId || String(userId).startsWith('@')) continue;
+      const recipient = await recipientOf(userId).catch(() => null);
+      if (!recipient) continue;
+      out.push({ userId, senderPublicKey: publicKeyBase64, format: 2, encryptedWaveKey: await wrapFor(waveKey, waveId, 1, recipient) });
+    }
+    return out;
+  }, [publicKeyBase64, getSealIdentity, recipientOf, wrapFor]);
+
+  // v2.153.1: the wave's id is reserved first, so every key is bound to the
+  // wave, version 1 and its holder (format 2), as later keys are. A server
+  // that can't reserve one (older) gets format 1, as before.
   const createWaveWithEncryption = useCallback(async (participants) => {
     if (!privateKey || !publicKeyBase64) {
       throw new Error('E2EE not unlocked');
     }
 
     try {
+      const reserved = await fetchAPI('/waves/reserve-id', { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null)).catch(() => null);
+      if (reserved?.waveId && reserved?.reservation) {
+        const waveKey = await crypto.generateWaveKey();
+        const keyDistribution = await bindInitialKeys(waveKey, reserved.waveId, participants);
+        return { waveKey, keyDistribution, waveId: reserved.waveId, waveIdReservation: reserved.reservation };
+      }
+
       // Get participant public keys
       const participantKeys = await Promise.all(
         participants.map(async (userId) => ({ userId, publicKey: await lookUpKey(userId) }))
@@ -1436,7 +1466,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       console.error('Create encrypted wave error:', err);
       throw err;
     }
-  }, [privateKey, publicKeyBase64, lookUpKey]);
+  }, [privateKey, publicKeyBase64, lookUpKey, fetchAPI, bindInitialKeys]);
 
   // ============ Encrypt/Decrypt Pings ============
   // Returns the version of the key it actually used (v2.143.0). Callers used
@@ -1658,21 +1688,12 @@ export function E2EEProvider({ children, token, API_URL }) {
       const participantsWithE2EE = participantKeys.filter(p => p.publicKey);
       const allHaveE2EE = participantsWithE2EE.length === participantKeys.length;
 
-      // Generate and distribute wave key
-      const { waveKey, keyDistribution } = await crypto.setupWaveEncryption(
-        participantsWithE2EE,
-        privateKey,
-        publicKeyBase64
-      );
+      const waveKey = await crypto.generateWaveKey();
 
-      // Format for API
-      const formattedDistribution = keyDistribution
-        .filter(k => !k.error)
-        .map(({ userId, encryptedWaveKey, nonce, senderPublicKey }) => ({
-          userId: userId === 'self' ? null : userId,
-          encryptedWaveKey: `${encryptedWaveKey}:${nonce}`,
-          senderPublicKey
-        }));
+      // v2.153.1: the wave exists, so its keys are bound to it (format 2).
+      // Turning encryption on is refused for a wave with people elsewhere,
+      // so this server is its own.
+      const formattedDistribution = await bindInitialKeys(waveKey, waveId, participantIds);
 
       // Call encrypt endpoint to enable encryption on the wave
       const res = await fetchAPI(`/waves/${waveId}/encrypt`, {
@@ -1693,7 +1714,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       console.error('Enable wave encryption error:', err);
       throw err;
     }
-  }, [privateKey, publicKeyBase64, fetchAPI, lookUpKey]);
+  }, [privateKey, publicKeyBase64, fetchAPI, lookUpKey, bindInitialKeys]);
 
   // Encrypt a batch of pings from a legacy wave
   const encryptLegacyWaveBatch = useCallback(async (waveId, batchSize = 50) => {
