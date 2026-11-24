@@ -437,7 +437,11 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
 - **Seals** use the wave's id on its own server (`originWaveId` in key
   responses) and each person's server's pinned seal name (from key lookups).
 - **Keys made at creation and at `/encrypt` stay format 1**: the wave's id
-  doesn't exist yet at creation. Every other wrap is format 2.
+  doesn't exist yet at creation. Every other wrap is format 2. *Since
+  v2.153.1 these are format 2 too:* the device reserves the wave's id first
+  (`POST /api/waves/reserve-id`, signed for that person, 10 minutes) and
+  creates the wave under it; `/encrypt` binds to the id the wave has. An
+  older server that can't reserve gets format 1.
 - **Tested** with two real servers and real browsers on one machine, then
   between the real dev and QA servers (a test account on QA): wave, key from
   the other server, pings both ways, renewal, removal. A third server not

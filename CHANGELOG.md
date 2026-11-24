@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.153.1] - 2026-11-24
+
+Encryption across servers: the last unbound wave keys. Since v2.153.0 every wave key a device hands over is bound to its wave, version and holder (format 2), except the first version: at creation the wave's id didn't exist yet, so those keys stayed format 1, and so did the keys made when encryption is turned on for an existing wave. Server and web only, no app build, no migration.
+
+### Changed
+- **A new encrypted wave's keys are bound from the start.** The device first asks for the wave's id (`POST /api/waves/reserve-id`), then creates the wave under it with every key wrapped format 2 for its holder. The reservation is signed by the server for the person who asked and lasts 10 minutes; nothing is stored, and an id can be used once. An app talking to an older server, which can't reserve, makes format-1 keys as before.
+- **Turning encryption on for an existing wave binds its keys too.** The wave's id already exists there; it was simply never used. Keys go only to people whose keys are signed by their fingerprint, as with every other key handed over since v2.150.0; anyone left out asks, as a newcomer does.
+
+### Fixed
+- **[SECURITY] A wave's keys are stored only for its people.** Keys sent when a wave is created were stored for whoever the creator listed, including someone refused (for example, someone who had blocked the creator) and people outside a crew wave's crew. A key without access to the wave reads nothing, but it would have if they were later let in some other way. Now only the wave's people (a crew wave's whole crew) and those invited get one.
+
+### Verified
+- **Tests:** `tests/e2ee-format2-at-creation.test.cjs` covers:
+  - the reservation: signed, for one person and one id, expiring (unit-tested);
+  - a wave created under its reserved id, with format-2 keys;
+  - a reservation refused a second time, for someone else and for another id, and an id named without one;
+  - an older app's creation still working;
+  - a crew wave keying its whole crew and nobody else;
+  - `/encrypt` storing format 2.
+- **Counterfactuals:** without the reservation check, anyone can name a wave's id; without the holder check, someone who blocked the creator, and someone outside the crew, are stored a key.
+- **In a browser** (headless Chrome, two local servers):
+  - a wave made through the New wave dialog, on a server that forces encryption, stored format-2 keys for both people, wrapped by the creator, and each read the other's pings;
+  - turning encryption on for an existing wave from Wave Settings stored format-2 keys and encrypted the earlier ping, and the other person read both.
+- Full suite: 787 tests pass.
+
 ## [2.153.0] - 2026-11-24
 
 Encryption across servers, phase 3 (`docs/federated-e2ee/01-design.md`): an end-to-end encrypted wave can now include people on other Cortex servers. Until now encrypted waves and other servers were refused together (v2.142.0). Server and web only, no app build. **Migrates** (two columns, one table).
