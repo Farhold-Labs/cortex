@@ -1,6 +1,6 @@
 # Encryption across servers — design
 
-Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below). Jared's decisions of 2026-11-07 (a person's
+Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below). **Fingerprints and format 2 are being revised** by `02-identity-keys.md` (proposed 2026-11-24): the fingerprint becomes that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
 public key comes from their home server over signed federation; members can
 see and compare key fingerprints, with a change flagged) and 2026-11-20 (the
 five questions) are recorded at the end and folded into the text. Not built.
@@ -323,6 +323,9 @@ New signed federation traffic:
 
 Each phase is its own release. 1 and 2 can be built in either order.
 
+Proposed 2026-11-24 (`02-identity-keys.md`): **1b**, identity keys and
+statements, and **1c**, signed pings on one server, before 2 and 3.
+
 ### Phase 1 as built (v2.149.0)
 
 - **Fingerprints** as specified, in Settings → Security → Your encryption key
@@ -374,3 +377,9 @@ Each phase is its own release. 1 and 2 can be built in either order.
 4. **Phase 0 ships first,** as its own security release.
 5. **Fingerprints:** whichever is more secure or easiest to make. Hex, 128
    bits: as secure in practice as digits, shorter and simplest.
+
+2026-11-24:
+
+- **A fingerprint should never change, and a verification should never be
+  lost, while encryption keys change as needed** (lost password, compromised
+  account). Worked out in `02-identity-keys.md`.
