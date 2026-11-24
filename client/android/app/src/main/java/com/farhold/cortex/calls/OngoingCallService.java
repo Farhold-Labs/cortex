@@ -23,8 +23,8 @@ import com.farhold.cortex.R;
  * While Cortex is in a call this foreground service holds an ongoing-call
  * notification (tap to go back, HANG UP to end) and tells Android the app is
  * using the microphone and camera on purpose. Without it Android silences the
- * microphone of an app that is no longer on screen, so leaving the app, or
- * shrinking it into its floating window, would have muted the call.
+ * microphone of an app that is no longer on screen, so leaving the app during
+ * a call would have muted it.
  *
  * Started and stopped by CortexCallsPlugin.callStarted / callEnded; it only
  * shows the call, it never decides it.
