@@ -123,7 +123,8 @@ export function E2EEProvider({ children, token, API_URL }) {
   // This person's identity (v2.150.0): { state, identityKey, fingerprint, seq,
   // createdAt, changedAt }. state: 'ok', 'none' (not made yet), 'stale' (from
   // before a reset: keep it or start a new one), 'elsewhere' (keys replaced on
-  // another device), 'mismatch' (the statement served doesn't check), 'unknown'.
+  // another device), 'outdated' (this page holds keys the server no longer
+  // has, v2.150.1), 'mismatch' (the statement served doesn't check), 'unknown'.
   const [myIdentity, setMyIdentity] = useState(null);
   const myFingerprint = myIdentity?.fingerprint || null;
   // Who this device is, as format-2 seals name people: { userId, nodeName } (v2.149.0).
@@ -287,7 +288,24 @@ export function E2EEProvider({ children, token, API_URL }) {
       // First, try to restore from session cache (for page refreshes)
       if (!sessionRestoreAttempted.current) {
         sessionRestoreAttempted.current = true;
-        const cached = await restoreFromSessionCache();
+        let cached = await restoreFromSessionCache();
+        // v2.150.1: the key remembered here may be from before a password
+        // reset or a key replacement on another device. Using it went on
+        // signing for keys the server no longer has, with errors that said
+        // nothing about why. If the server definitely holds a different key,
+        // forget this one and ask for the password. (Offline, keep it: the
+        // app must still start on a bad connection.)
+        if (cached) {
+          try {
+            const mine = await fetchAPI('/e2ee/keys/me');
+            const current = mine.ok ? (await mine.json()).publicKey : null;
+            if (mine.status === 404 || (current && current !== cached.publicKeyBase64)) {
+              console.warn('E2EE: the key remembered here is out of date; asking for the password');
+              clearSessionCache();
+              cached = null;
+            }
+          } catch { /* offline: keep it */ }
+        }
         if (cached) {
           setPrivateKey(cached.privateKey);
           setPublicKey(cached.publicKey);
@@ -328,7 +346,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       console.error('E2EE status check failed:', err);
       setE2eeStatus({ enabled: false, error: err.message });
     }
-  }, [token, fetchAPI, restoreFromSessionCache]);
+  }, [token, fetchAPI, restoreFromSessionCache, clearSessionCache]);
 
   // ============ E2EE Setup ============
   // { identity: true } makes your fingerprint with the recovery key, for a
@@ -900,6 +918,12 @@ export function E2EEProvider({ children, token, API_URL }) {
     if (!privateKey || !publicKeyBase64) { setMyIdentity(null); return null; }
     try {
       const me = await getSealIdentity();
+      // Keys changed on another device while this page held the old ones
+      // (v2.150.1): nothing can be signed for them here, so say so first.
+      const mine = await fetchAPI('/e2ee/keys/me');
+      if (mine.ok && (await mine.json()).publicKey !== publicKeyBase64) {
+        const v = { state: 'outdated' }; setMyIdentity(v); return v;
+      }
       const res = await fetchAPI('/e2ee/identity');
       if (res.status === 404) { const v = { state: 'none' }; setMyIdentity(v); return v; }
       if (!res.ok) throw new Error(`identity ${res.status}`);

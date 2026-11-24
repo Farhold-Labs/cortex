@@ -446,7 +446,7 @@ export const KEY_FINGERPRINT = {
   previousRecovery: 'Your previous recovery key',
   keep: 'KEEP MY FINGERPRINT',
   startNew: 'START A NEW FINGERPRINT',
-  elsewhere: 'Your keys were replaced on another device. Lock encryption and unlock it again to use them here.',
+  elsewhere: 'Your encryption keys changed on another device: a password reset, or keys replaced there. This browser still has the old ones. Sign out and sign in again with your current password.',
   mismatch: "The server is giving out a statement for your keys that your fingerprint didn't sign. Tell your server's admin.",
   unknown: 'Your fingerprint could not be loaded.',
   changedSelf: (when) => `Your fingerprint changed on ${when}. If you didn't do that, someone had your recovery key: replace your fingerprint.`,

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.150.1] - 2026-11-24
+
+A fingerprint couldn't be made in a browser left signed in across a password reset, with an error that didn't say why. Two causes, both fixed. Server and web only, no app build, no migration.
+
+### Security
+- **[SECURITY] Resetting a password by email now ends every session**, as changing it in Settings has since v2.75.0: sessions, refresh tokens and live connections. It never did, so someone resetting because they thought their account was taken left the intruder signed in. `tests/password-reset-sessions.test.cjs`, with a counterfactual: a copy of `server.js` without the revocation keeps the old session working after the reset.
+
+### Fixed
+- **A browser holding encryption keys the server no longer has now notices.** The key remembered for this session (so you aren't asked to unlock every time) is checked against the server's when the app starts. If they differ, after a password reset or keys replaced on another device, it is dropped and the password asked for. Offline it is kept, so the app still starts on a bad connection. Before, the old key went on being used, and making a fingerprint failed with "Key statement signature does not check".
+- **Your fingerprint says so if the page's keys are out of date:** "Your encryption keys changed on another device… Sign out and sign in again with your current password."
+
+### Verified
+- `tests/password-reset-sessions.test.cjs`: after a reset the old session gets 401 and can't be refreshed; the new password signs in. The counterfactual passes with the fix stripped.
+- Headless Chrome on dev: a reload with the key unchanged did not ask for the password; with the key changed in the database it did, and logged why (then restored).
+
 ## [2.150.0] - 2026-11-24
 
 Identity keys, phase 1b (`docs/federated-e2ee/02-identity-keys.md`, decided 2026-11-24): a fingerprint now lasts. In v2.149.0 it was the fingerprint of the encryption key, so every legitimate key change (a forgotten password with no recovery key, an account broken into) lost everyone's verification. Server and web only, no app build. **Migrates** (two tables, two columns).
