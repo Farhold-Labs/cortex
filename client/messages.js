@@ -137,8 +137,6 @@ export const NOTIFICATION = {
 // ============ CONFIRM DIALOG MESSAGES ============
 export const CONFIRM_DIALOG = {
   deleteCrew: `Disband this ${T.crew}? There's no putting it back together.`,
-  leaveCrew: `Jump ship from this ${T.crew}? You'll need a new invite to get back.`,
-  leaveWave: `Leave this ${T.wave}? You'll drift out of range.`,
   deleteMessage: "Scrub this signal from the cortex? Can't unring that bell.",
   deleteBot: (name) => `Decommission ${name}? This can't be undone.`,
   regenerateKey: "Generate new encryption keys? Old messages stay locked with the old keys.",
@@ -149,7 +147,18 @@ export const CONFIRM_DIALOG = {
   deleteAlert: "Scrub this alert from the cortex?",
   unsubscribe: "Stop listening on this channel?",
   deleteCategory: `Delete this folder? ${T.Waves} in it stay in your list, outside any folder.`,
-  removeParticipant: (name) => `Show ${name} the airlock?`,
+  // v2.148.0 — asked in the app (askConfirm), not with the browser's confirm().
+  // Removing a contact or a crew member acted on one tap before.
+  removeContact: (name) => ({ title: 'Remove contact', confirmLabel: 'Remove',
+    message: `Remove ${name} from your contacts? You'll need to send a new contact request to add them back.` }),
+  removeCrewMember: (name) => ({ title: `Remove from ${T.crew}`, confirmLabel: 'Remove',
+    message: `Remove ${name} from this ${T.crew}? They lose its ${T.waves} and need a new invite to come back.` }),
+  leaveWaveAsk: (title) => ({ title: `Leave ${T.wave}`, confirmLabel: 'Leave',
+    message: `Leave "${title}"? You won't see new pings in it, and you'll need to be invited back.` }),
+  removeParticipantAsk: (name, title) => ({ title: `Remove from ${T.wave}`, confirmLabel: 'Remove',
+    message: `Remove ${name} from "${title}"? They won't see new pings in it.` }),
+  leaveCrewAsk: (name) => ({ title: `Leave ${T.crew}`, confirmLabel: 'Leave',
+    message: `Leave ${name ? `"${name}"` : `this ${T.crew}`}? You'll lose its ${T.waves} and need a new invite to come back.` }),
   revokeAccess: (title) => `Revoke access to "${title}"? They'll be cut off.`,
   deleteWebhook: "Pull the plug on this webhook?",
   clearLocalData: "Wipe local data? You'll need to log in again.",

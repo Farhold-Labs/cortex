@@ -19394,7 +19394,11 @@ app.post('/api/federation/key-rotation', federationInboxLimiter, authenticateFed
     return res.status(400).json({ error: 'Incomplete announcement' });
   }
   if (federationKeyId(newPublicKey) !== newKeyId) return res.status(400).json({ error: 'Key id does not match the key' });
-  if (req.federationKeyUsed !== 'current') return res.status(401).json({ error: 'Announcement must be signed with the current key' });
+  // The ally's current key. 'next' counts: a request verified with the key it
+  // announced earlier has just made that key its current one (v2.147.1 — a
+  // change straight after another was refused once, until the retry). Only
+  // the key it replaced may not announce.
+  if (req.federationKeyUsed === 'previous') return res.status(401).json({ error: 'Announcement must be signed with the current key' });
 
   // Already switched to it: a resend after we answered.
   if (federationKeyId(node.publicKey) === newKeyId) return res.json({ received: newKeyId });
@@ -23193,6 +23197,12 @@ const DIRECT_CALL_RING_MS = Math.max(500, Number(process.env.DIRECT_CALL_RING_MS
 // closed the app without hanging up.
 const DIRECT_CALL_EMPTY_MS = Math.max(500, Number(process.env.DIRECT_CALL_EMPTY_MS) || 30_000);
 const DIRECT_CALL_SWEEP_MS = Math.max(200, Number(process.env.DIRECT_CALL_SWEEP_MS) || 15_000);
+// v2.148.0 — how long an answered call's room must stay empty before the call
+// is over. It ended the moment the roster read zero, so one side reconnecting
+// (a phone changing network) while the other was still joining hung it up.
+const DIRECT_CALL_EMPTY_GRACE_MS = Math.max(100, Number(process.env.DIRECT_CALL_EMPTY_GRACE_MS) || 10_000);
+// When each answered call's room was last seen empty, while it stays empty.
+const directCallEmptySince = new Map();
 const DIRECT_CALL_KEEP_MS = 90 * 24 * 60 * 60 * 1000;
 const RATE_LIMIT_CALL_MAX = parseInt(process.env.RATE_LIMIT_CALL_MAX) || 10;
 const callLimiter = rateLimit({
@@ -23263,9 +23273,13 @@ function notifyMissedCall(call) {
 }
 
 /** Move a call on, and tell both people. Returns the moved call or null. */
-function moveCall(callId, from, to) {
+function moveCall(callId, from, to, why = '') {
   const moved = db.moveDirectCall(callId, from, to);
   if (!moved) return null;
+  // v2.148.0 — every change, with when and why. Two calls on farhold ended
+  // seconds after being answered and nothing recorded who or what ended them.
+  console.log(`[calls] ${new Date().toISOString()} ${callId} ${from.join('|')}→${to}${why ? ` (${why})` : ''}`);
+  if (to !== 'answered') directCallEmptySince.delete(callId);
   if (to !== 'ringing') stopRingTimer(callId);
   tellCallParties(moved);
   // A phone ringing natively hears no WebSocket; tell it the ring is over,
@@ -23343,7 +23357,7 @@ app.post('/api/calls', authenticateToken, callLimiter, (req, res) => {
   });
   directCallRingTimers.set(id, setTimeout(() => {
     directCallRingTimers.delete(id);
-    moveCall(id, ['ringing'], 'missed');
+    moveCall(id, ['ringing'], 'missed', 'no answer');
   }, DIRECT_CALL_RING_MS).unref());
   res.status(201).json({ call: directCallView(call, callerId) });
 });
@@ -23378,7 +23392,7 @@ app.post('/api/calls/:id/answer', authenticateToken, (req, res) => {
   const call = partyCall(req, res);
   if (!call) return;
   if (call.callee_id !== req.user.userId) return res.status(403).json({ error: 'Only the person called can answer' });
-  const moved = moveCall(call.id, ['ringing'], 'answered');
+  const moved = moveCall(call.id, ['ringing'], 'answered', `answered from ${clientKind(req)}`);
   if (!moved) return res.status(409).json({ error: 'This call is no longer ringing', code: 'NOT_RINGING', call: directCallView(db.getDirectCall(call.id), req.user.userId) });
   res.json({ call: directCallView(moved, req.user.userId) });
 });
@@ -23387,7 +23401,7 @@ app.post('/api/calls/:id/decline', authenticateToken, (req, res) => {
   const call = partyCall(req, res);
   if (!call) return;
   if (call.callee_id !== req.user.userId) return res.status(403).json({ error: 'Only the person called can decline' });
-  const moved = moveCall(call.id, ['ringing'], 'declined');
+  const moved = moveCall(call.id, ['ringing'], 'declined', `declined from ${clientKind(req)}`);
   res.json({ call: directCallView(moved || db.getDirectCall(call.id), req.user.userId) });
 });
 
@@ -23401,7 +23415,7 @@ app.post('/api/calls/:id/decline-from-ring', callLimiter, (req, res) => {
       || !crypto.timingSafeEqual(Buffer.from(given), expected)) {
     return res.status(404).json({ error: 'Call not found' });
   }
-  const moved = moveCall(call.id, ['ringing'], 'declined');
+  const moved = moveCall(call.id, ['ringing'], 'declined', 'declined on the phone\'s ring');
   res.json({ state: (moved || db.getDirectCall(call.id)).state });
 });
 
@@ -23412,8 +23426,9 @@ app.post('/api/calls/:id/end', authenticateToken, (req, res) => {
   if (!call) return;
   const userId = req.user.userId;
   let moved = null;
-  if (call.state === 'ringing') moved = moveCall(call.id, ['ringing'], call.caller_id === userId ? 'cancelled' : 'declined');
-  else if (call.state === 'answered') moved = moveCall(call.id, ['answered'], 'ended');
+  const who = `${call.caller_id === userId ? 'caller' : 'callee'} hung up from ${clientKind(req)}`;
+  if (call.state === 'ringing') moved = moveCall(call.id, ['ringing'], call.caller_id === userId ? 'cancelled' : 'declined', who);
+  else if (call.state === 'answered') moved = moveCall(call.id, ['answered'], 'ended', who);
   res.json({ call: directCallView(moved || db.getDirectCall(call.id), userId) });
 });
 
@@ -23435,6 +23450,7 @@ app.post('/api/calls/:id/token', authenticateToken, async (req, res) => {
       ttl: '6h',
     });
     at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true, canPublishData: false });
+    console.log(`[calls] ${new Date().toISOString()} ${call.id} ${call.caller_id === userId ? 'caller' : 'callee'} joining (${call.state}) from ${clientKind(req)}`);
     res.json({ token: await livekitJwt(at), url: LIVEKIT_URL, roomName });
   } catch (err) {
     console.error('[calls] token failed:', err.message);
@@ -23448,9 +23464,35 @@ app.post('/api/calls/:id/token', authenticateToken, async (req, res) => {
  */
 function directCallRoomChanged(room) {
   const kind = classifyRoom(room);
-  if (kind?.kind !== 'direct' || voiceRoster.count(room) > 0) return;
+  if (kind?.kind !== 'direct') return;
+  if (voiceRoster.count(room) > 0) {
+    directCallEmptySince.delete(kind.callId);
+    return;
+  }
   const call = db.getDirectCall(kind.callId);
-  if (call?.state === 'answered') moveCall(call.id, ['answered'], 'ended');
+  if (call?.state !== 'answered' || directCallEmptySince.has(call.id)) return;
+  // Empty now; over only if it stays empty (v2.148.0).
+  directCallEmptySince.set(call.id, Date.now());
+  setTimeout(() => endIfStillEmpty(call.id), DIRECT_CALL_EMPTY_GRACE_MS + 50).unref();
+}
+
+function endIfStillEmpty(callId) {
+  const since = directCallEmptySince.get(callId);
+  if (since === undefined) return; // someone came back
+  if (voiceRoster.count(directCallRoomName(callId)) > 0) { directCallEmptySince.delete(callId); return; }
+  if (Date.now() - since < DIRECT_CALL_EMPTY_GRACE_MS) return;
+  directCallEmptySince.delete(callId);
+  moveCall(callId, ['answered'], 'ended', `room empty for ${Math.round((Date.now() - since) / 1000)} s`);
+}
+
+/** Where a request came from, for the call log: never more than the kind of app. */
+function clientKind(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  if (/; wv\)/.test(ua) || /Capacitor/i.test(ua)) return 'the Android app';
+  if (/Electron/i.test(ua)) return 'the desktop app';
+  if (/iPhone|iPad/.test(ua)) return 'iOS';
+  if (/Android/.test(ua)) return 'an Android browser';
+  return 'a browser';
 }
 
 let directCallSweeps = 0;
@@ -23460,10 +23502,13 @@ function sweepDirectCalls() {
     for (const call of db.liveDirectCalls()) {
       // A ring outlived by a restart (its timer was in the old process).
       if (call.state === 'ringing' && now - Date.parse(call.created_at) > DIRECT_CALL_RING_MS + 5_000) {
-        moveCall(call.id, ['ringing'], 'missed');
+        moveCall(call.id, ['ringing'], 'missed', 'ring outlived a restart');
       } else if (call.state === 'answered' && now - Date.parse(call.answered_at) > DIRECT_CALL_EMPTY_MS
                  && voiceRoster.count(directCallRoomName(call.id)) === 0) {
-        moveCall(call.id, ['answered'], 'ended');
+        // Seen empty recently: the grace timer decides, not the sweep.
+        const since = directCallEmptySince.get(call.id);
+        if (since !== undefined) endIfStillEmpty(call.id);
+        else moveCall(call.id, ['answered'], 'ended', 'nobody in the room after the answer');
       }
     }
     // Call history is kept 90 days. Hourly is plenty.

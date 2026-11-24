@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWindowSize } from '../../hooks/useWindowSize.js';
 import { SUCCESS, EMPTY, LOADING, CONFIRM_DIALOG, FEDERATION, formatError } from '../../../messages.js';
+import { askConfirm } from '../../utils/askConfirm.jsx';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { BASE_URL, canAccess } from '../../config/constants.js';
 import GroupInvitationsPanel from './GroupInvitationsPanel.jsx';
@@ -112,7 +113,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
   };
 
   const handleLeaveGroup = async () => {
-    if (!confirm(CONFIRM_DIALOG.leaveCrew)) return;
+    if (!(await askConfirm(CONFIRM_DIALOG.leaveCrewAsk(groupDetails?.name)))) return;
     try {
       await fetchAPI(`/groups/${selectedGroup}/members/${groupDetails.currentUserId}`, { method: 'DELETE' });
       showToast(SUCCESS.left, 'success');
@@ -124,7 +125,9 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
     }
   };
 
-  const handleRemoveMember = async (userId) => {
+  const handleRemoveMember = async (member) => {
+    if (!(await askConfirm(CONFIRM_DIALOG.removeCrewMember(member.name || 'this person')))) return;
+    const userId = member.id;
     try {
       await fetchAPI(`/groups/${selectedGroup}/members/${userId}`, { method: 'DELETE' });
       showToast('Member removed', 'success');
@@ -332,7 +335,7 @@ const GroupsView = ({ groups, fetchAPI, showToast, onGroupsChange, groupInvitati
                           padding: '4px 8px', background: 'transparent', border: '1px solid var(--border-primary)',
                           color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.65rem', fontFamily: 'monospace',
                         }}>{member.role === 'admin' ? '↺' : '↑'}</button>
-                      <button onClick={() => handleRemoveMember(member.id)} style={{
+                      <button onClick={() => handleRemoveMember(member)} style={{
                         padding: '4px 8px', background: 'transparent', border: '1px solid var(--accent-orange)50',
                         color: 'var(--accent-orange)', cursor: 'pointer', fontSize: '0.65rem', fontFamily: 'monospace',
                       }}>✕</button>

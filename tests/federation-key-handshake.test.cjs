@@ -322,6 +322,15 @@ async function run({ signNextAlways = false } = {}) {
     assert.equal(late.body.code, 'KEY_ROTATION_CONFIRMED');
     proxy.mode = 'pass';
     await eventually(async () => (await A.api('POST', '/api/admin/federation/key-rotation/retry', { token: A.token })).body.keyRotation === null, 'second change to finish');
+
+    // v2.147.1 — back to back, with no traffic between: the next announcement
+    // is the first request each ally sees signed with the key it just learned,
+    // and that switch makes it the current key. QA found this refused once
+    // ("must be signed with the current key"), costing a 10-minute retry.
+    const backToBack = await A.api('POST', '/api/admin/federation/key-rotation', { token: A.token, stepUp: A.stepUp });
+    assert.equal(backToBack.status, 200, JSON.stringify(backToBack.body));
+    assert.equal(backToBack.body.keyRotation, null,
+      `a change straight after another is confirmed at once: ${JSON.stringify(backToBack.body.keyRotation)}`);
     const keyAfterSecond = A.sql('SELECT public_key FROM server_identity')[0].public_key;
     assert.equal(await lookUp('b'), 404);
     assert.equal(await lookUp('c'), 404);
