@@ -13,7 +13,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import * as crypto from './crypto.js';
 import { emptyKeyRecords, noteKey, acknowledgeKeyChange as ackKeyChange, unacknowledgedChanges, mergeKeyRecords,
-  markVerified, unmarkVerified, keyStanding } from './src/utils/keyRecords.js';
+  markVerified, unmarkVerified, keyStanding, noteIdentity, markUnsigned } from './src/utils/keyRecords.js';
 
 // ============ Constants ============
 const WAVE_KEY_CACHE_MAX = 100;  // Max cached wave keys
@@ -120,16 +120,16 @@ export function E2EEProvider({ children, token, API_URL }) {
   const [keyChanges, setKeyChanges] = useState([]);  // [{ personId, changedAt, verificationLost }]
   // Bumped whenever the record changes, so fingerprint views re-read it (v2.149.0).
   const [keyRecordsTick, setKeyRecordsTick] = useState(0);
-  const [myFingerprint, setMyFingerprint] = useState(null);
+  // This person's identity (v2.150.0): { state, identityKey, fingerprint, seq,
+  // createdAt, changedAt }. state: 'ok', 'none' (not made yet), 'stale' (from
+  // before a reset: keep it or start a new one), 'elsewhere' (keys replaced on
+  // another device), 'mismatch' (the statement served doesn't check), 'unknown'.
+  const [myIdentity, setMyIdentity] = useState(null);
+  const myFingerprint = myIdentity?.fingerprint || null;
   // Who this device is, as format-2 seals name people: { userId, nodeName } (v2.149.0).
   const sealIdentityRef = useRef(null);
-
-  useEffect(() => {
-    let live = true;
-    if (!publicKeyBase64) { setMyFingerprint(null); return undefined; }
-    crypto.keyFingerprint(publicKeyBase64).then(fp => { if (live) setMyFingerprint(fp); }).catch(() => {});
-    return () => { live = false; };
-  }, [publicKeyBase64]);
+  // Statements of ping authors, checked once each (v2.150.0): userId -> Promise<Map seq -> statement>.
+  const statementsRef = useRef(new Map());
   const rotationRunRef = useRef(null);
   // Waves this session has asked older key versions for (v2.145.4).
   const historyAskedRef = useRef(new Set());
@@ -331,7 +331,10 @@ export function E2EEProvider({ children, token, API_URL }) {
   }, [token, fetchAPI, restoreFromSessionCache]);
 
   // ============ E2EE Setup ============
-  const setupE2EE = useCallback(async (passphrase, createRecoveryKey = true, rememberDuration = 'auto') => {
+  // { identity: true } makes your fingerprint with the recovery key, for a
+  // setup that shows the person that key; automatic setup at registration
+  // doesn't, so it leaves the fingerprint to IdentityPrompt (v2.150.0).
+  const setupE2EE = useCallback(async (passphrase, createRecoveryKey = true, rememberDuration = 'auto', { identity = false } = {}) => {
     if (!token) throw new Error('Not authenticated');
 
     try {
@@ -369,6 +372,19 @@ export function E2EEProvider({ children, token, API_URL }) {
           recoveryKey = recovery.recoveryKey;  // Return to show user
         } else {
           console.warn('Recovery setup failed, but main keys are registered');
+        }
+      }
+
+      // Your identity (v2.150.0), wrapped by the recovery key just made. After
+      // a reset you may already have one: Settings offers to keep it.
+      if (recoveryKey && identity) {
+        try {
+          await createIdentityRef.current?.({
+            recoveryKey, isNewRecoveryKey: false,
+            keys: { privateKey: keyPair.privateKey, publicKey: keyPair.publicKey, publicKeyBase64: pubKeyBase64 },
+          });
+        } catch (err) {
+          if (err.code !== 'IDENTITY_EXISTS') console.warn('E2EE: identity not made at setup:', err.message);
         }
       }
 
@@ -477,36 +493,6 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
   }, [token, fetchAPI, saveToSessionCache]);
 
-  // Regenerate recovery key (requires unlocked E2EE)
-  const regenerateRecoveryKey = useCallback(async () => {
-    if (!token) throw new Error('Not authenticated');
-    if (!privateKey) throw new Error('E2EE not unlocked');
-
-    try {
-      // Generate new recovery backup using current private key
-      const recovery = await crypto.createRecoveryBackup(privateKey);
-
-      // Store on server
-      const res = await fetchAPI('/e2ee/recovery/regenerate', {
-        method: 'POST',
-        body: JSON.stringify({
-          encryptedPrivateKey: recovery.encryptedPrivateKey,
-          recoverySalt: recovery.recoverySalt
-        })
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to regenerate recovery key');
-      }
-
-      // Return the new recovery key to display to user
-      return { success: true, recoveryKey: recovery.recoveryKey };
-    } catch (err) {
-      console.error('E2EE recovery regeneration error:', err);
-      throw err;
-    }
-  }, [token, privateKey, fetchAPI]);
 
   // Re-encrypt private key with new password (used after password change)
   const reencryptWithPassword = useCallback(async (newPassword) => {
@@ -753,33 +739,63 @@ export function E2EEProvider({ children, token, API_URL }) {
     return run;
   }, [privateKey, publicKey, fetchAPI]);
 
+  // Put a changed record in place: shown at once, saved behind.
+  const applyRecords = useCallback((state, records) => {
+    if (!state || records === state.records) return;
+    state.records = records;
+    setKeyRecordsTick(t => t + 1);
+    setKeyChanges(unacknowledgedChanges(records));
+    saveKeyRecords(state);
+  }, [saveKeyRecords]);
+
   /**
-   * The public key to give someone a wave key with: looked up here, never
-   * taken from a request (v2.143.0 [SECURITY]), and compared with the key
-   * seen for them before. A changed key is still used (Jared, 2026-11-20)
-   * and flagged.
-   * @returns {Promise<string|null>} base64 SPKI, or null if they have no key
+   * Look someone's keys up and judge them (v2.150.0). Someone with an identity
+   * must come with a statement, signed by it, naming the key served, no older
+   * than one seen: anything else is 'unsigned', which their own device never
+   * makes, so it is flagged and they are given no wave key (Jared,
+   * 2026-11-24). Someone without an identity yet ('legacy', an app from
+   * before v2.150.0) is judged by key as before: a change is flagged and
+   * still used (2026-11-20).
+   * @returns {Promise<{ publicKey, identityKey, statement, verdict: 'ok'|'legacy'|'unsigned' }|null>}
    */
-  const lookUpKey = useCallback(async (userId) => {
+  const inspectKey = useCallback(async (userId) => {
     const res = await fetchAPI(`/e2ee/keys/user/${encodeURIComponent(userId)}`);
     if (!res.ok) return null;
-    const { publicKey: theirKey } = await res.json();
+    const { publicKey: theirKey, identityKey = null, statement = null } = await res.json();
     if (!theirKey) return null;
     const state = await loadKeyRecords();
-    if (state) {
-      const { status, records } = noteKey(state.records, userId, theirKey);
-      if (status !== 'same') {
-        state.records = records;
-        setKeyRecordsTick(t => t + 1);
-        saveKeyRecords(state);
-        if (status === 'changed') {
-          console.warn(`E2EE: the key for ${userId} has changed`);
-          setKeyChanges(unacknowledgedChanges(records));
-        }
+    const records = state?.records || emptyKeyRecords();
+    let verdict;
+    if (identityKey) {
+      const signed = await crypto.verifyKeyStatement(identityKey, userId, statement, theirKey);
+      const out = signed ? noteIdentity(records, userId, { identity: identityKey, seq: statement.seq, key: theirKey }) : null;
+      verdict = out && out.status !== 'rollback' ? 'ok' : 'unsigned';
+      if (verdict === 'ok') applyRecords(state, out.records);
+    } else {
+      const out = noteKey(records, userId, theirKey);
+      verdict = out.status === 'downgrade' ? 'unsigned' : 'legacy';
+      if (verdict === 'legacy') {
+        applyRecords(state, out.records);
+        if (out.status === 'changed') console.warn(`E2EE: the key for ${userId} has changed`);
       }
     }
-    return theirKey;
-  }, [fetchAPI, loadKeyRecords, saveKeyRecords]);
+    if (verdict === 'unsigned') {
+      console.warn(`E2EE: the keys served for ${userId} are not signed by their identity; no wave key for them`);
+      applyRecords(state, markUnsigned(state?.records || records, userId));
+    }
+    return { publicKey: theirKey, identityKey, statement, verdict };
+  }, [fetchAPI, loadKeyRecords, applyRecords]);
+
+  /**
+   * The public key to give someone a wave key with: looked up here, never
+   * taken from a request (v2.143.0 [SECURITY]), and judged by inspectKey.
+   * @returns {Promise<string|null>} base64 SPKI, or null: no key, or keys not
+   *   signed by their identity
+   */
+  const lookUpKey = useCallback(async (userId) => {
+    const info = await inspectKey(userId);
+    return info && info.verdict !== 'unsigned' ? info.publicKey : null;
+  }, [inspectKey]);
 
   const acknowledgeKeyChange = useCallback(async (personId) => {
     const state = await loadKeyRecords();
@@ -790,30 +806,34 @@ export function E2EEProvider({ children, token, API_URL }) {
     await saveKeyRecords(state);
   }, [loadKeyRecords, saveKeyRecords]);
 
-  // ============ Fingerprints and verification (v2.149.0) ============
+  // ============ Fingerprints and verification (v2.149.0, identities v2.150.0) ============
 
   /**
-   * Someone's key as people compare it: looked up the same way a wave key is
-   * given (lookUpKey), so what is shown is what this device would use.
-   * @returns {Promise<{ publicKey, fingerprint, standing }|null>} null if they
-   *   have not set up encryption
+   * Someone's fingerprint as people compare it: their identity's, looked up
+   * the same way a wave key is given, so what is shown is what this device
+   * would act on.
+   * @returns {Promise<{ publicKey, identityKey, fingerprint, standing }|null>}
+   *   null if they have not set up encryption; fingerprint null if they have
+   *   no identity yet, or their keys aren't signed by it
    */
   const describeKey = useCallback(async (userId) => {
-    const publicKey = await lookUpKey(userId);
-    if (!publicKey) return null;
+    const info = await inspectKey(userId);
+    if (!info) return null;
     const state = await loadKeyRecords();
+    const signed = info.verdict === 'ok';
     return {
-      publicKey,
-      fingerprint: await crypto.keyFingerprint(publicKey),
-      standing: keyStanding(state?.records, userId, publicKey),
+      publicKey: info.publicKey,
+      identityKey: signed ? info.identityKey : null,
+      fingerprint: signed ? await crypto.identityFingerprint(info.identityKey) : null,
+      standing: info.verdict === 'unsigned' ? 'unsigned' : keyStanding(state?.records, userId, signed ? info.identityKey : null),
     };
-  }, [lookUpKey, loadKeyRecords]);
+  }, [inspectKey, loadKeyRecords]);
 
-  /** After comparing fingerprints: this key, and only this key, is theirs. */
-  const markKeyVerified = useCallback(async (userId, publicKey) => {
+  /** After comparing fingerprints: this identity is theirs. */
+  const markKeyVerified = useCallback(async (userId, identityKey) => {
     const state = await loadKeyRecords();
     if (!state) return false;
-    const next = markVerified(state.records, userId, publicKey);
+    const next = markVerified(state.records, userId, identityKey);
     if (next === state.records) return false;
     state.records = next;
     setKeyChanges(unacknowledgedChanges(next));
@@ -830,11 +850,294 @@ export function E2EEProvider({ children, token, API_URL }) {
     await saveKeyRecords(state);
   }, [loadKeyRecords, saveKeyRecords]);
 
-  /** The standing of the key on record for someone, without a lookup. */
+  /** How someone stands on record, without a lookup. */
   const keyStandingOf = useCallback((userId) => {
     const records = keyRecordsRef.current?.records;
-    return keyStanding(records, userId, records?.people?.[userId]?.key);
+    return keyStanding(records, userId, records?.people?.[userId]?.identity || null);
   }, []);
+
+  /**
+   * One of someone's statements, by seq, checked against the identity that
+   * signed it (v2.150.0). Pings carry the seq they were signed under, so a
+   * ping from before someone replaced their keys still checks.
+   */
+  const statementOf = useCallback(async (userId, seq) => {
+    const load = () => {
+      const p = (async () => {
+        const res = await fetchAPI(`/e2ee/keys/user/${encodeURIComponent(userId)}/statements`);
+        if (!res.ok) return new Map();
+        const checked = new Map();
+        for (const st of (await res.json()).statements || []) {
+          if (await crypto.verifyKeyStatement(st.identityKey, userId, st)) checked.set(st.seq, st);
+        }
+        return checked;
+      })();
+      statementsRef.current.set(userId, p);
+      p.catch(() => statementsRef.current.delete(userId));
+      return p;
+    };
+    let found = (await (statementsRef.current.get(userId) || load())).get(seq);
+    if (!found) found = (await load()).get(seq); // a statement made since
+    return found || null;
+  }, [fetchAPI]);
+
+  // ============ Identity (v2.150.0) ============
+
+  const fetchJSON = useCallback(async (path, options) => {
+    const res = await fetchAPI(path, options);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.error || `Request failed (${res.status})`);
+      err.code = data.code;
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }, [fetchAPI]);
+
+  /** Where this person's identity stands; see myIdentity. */
+  const refreshIdentity = useCallback(async () => {
+    if (!privateKey || !publicKeyBase64) { setMyIdentity(null); return null; }
+    try {
+      const me = await getSealIdentity();
+      const res = await fetchAPI('/e2ee/identity');
+      if (res.status === 404) { const v = { state: 'none' }; setMyIdentity(v); return v; }
+      if (!res.ok) throw new Error(`identity ${res.status}`);
+      const data = await res.json();
+      const st = data.statement;
+      const valid = !!st && await crypto.verifyKeyStatement(data.identityKey, me.userId, st);
+      let state;
+      if (st && !valid) state = 'mismatch';
+      else if (valid && st.encryptionKey === publicKeyBase64) state = 'ok';
+      else if (valid && data.current) state = 'elsewhere';
+      else state = 'stale';
+      // Your own identity goes in your record too, so a change you didn't
+      // make on this device is said, with its date.
+      let changedAt = null;
+      if (state === 'ok') {
+        const rec = await loadKeyRecords();
+        if (rec) {
+          const out = noteIdentity(rec.records, me.userId, { identity: data.identityKey, seq: st.seq, key: st.encryptionKey });
+          if (out.status !== 'rollback') applyRecords(rec, out.records);
+          const e = (out.status === 'rollback' ? rec.records : out.records).people?.[me.userId];
+          if (e?.previousIdentity && e.unacknowledged) changedAt = e.changedAt;
+        }
+      }
+      const v = {
+        state, identityKey: data.identityKey, fingerprint: await crypto.identityFingerprint(data.identityKey),
+        seq: st?.seq || null, createdAt: data.createdAt, changedAt, userId: me.userId,
+      };
+      setMyIdentity(v);
+      return v;
+    } catch (err) {
+      console.warn('E2EE: identity unavailable:', err.message);
+      setMyIdentity({ state: 'unknown' });
+      return null;
+    }
+  }, [privateKey, publicKeyBase64, getSealIdentity, fetchAPI, loadKeyRecords, applyRecords]);
+
+  /** Is this the person's recovery key? Checked against the recovery wrap of their key. */
+  const checkRecoveryKey = useCallback(async (recoveryKey) => {
+    const res = await fetchAPI('/e2ee/recovery');
+    if (!res.ok) return false;
+    const { encryptedPrivateKey, recoverySalt, pending } = await res.json();
+    for (const wrap of [{ encryptedPrivateKey, recoverySalt }, pending].filter(Boolean)) {
+      try { await crypto.recoverPrivateKey(recoveryKey, wrap.encryptedPrivateKey, wrap.recoverySalt); return true; } catch { /* next */ }
+    }
+    return false;
+  }, [fetchAPI]);
+
+  /**
+   * Open your identity with your recovery key, current or waiting.
+   * @returns {Promise<{ privateKey, identityKey, nextSeq }>}
+   */
+  const openIdentity = useCallback(async (recoveryKey) => {
+    const data = await fetchJSON('/e2ee/identity');
+    for (const wrap of [data, data.pending].filter(Boolean)) {
+      let priv;
+      try { priv = await crypto.unwrapIdentity(wrap.wrappedIdentity, wrap.identitySalt, recoveryKey); } catch { continue; }
+      // The identity served must be the one this opens.
+      const probe = new TextEncoder().encode('cortex-identity-probe');
+      if (!(await crypto.verifyBytes(data.identityKey, probe, await crypto.signBytes(priv, probe)))) continue;
+      return { privateKey: priv, identityKey: data.identityKey, nextSeq: data.nextSeq };
+    }
+    throw new Error("That recovery key doesn't open your fingerprint.");
+  }, [fetchJSON]);
+
+  /** Does this recovery key open your identity? Throws if not. */
+  const checkIdentityKey = useCallback(async (recoveryKey) => { await openIdentity(recoveryKey); return true; }, [openIdentity]);
+
+  /**
+   * Sign a statement for `keys` with `identity` and send it with what goes
+   * with it. `recoveryKey` wraps the identity; `newRecovery` also wraps the
+   * encryption key with it (a new recovery key the person has saved).
+   */
+  const sendIdentity = useCallback(async ({ mode, identity, recoveryKey, newRecovery, keys, nextSeq }) => {
+    const me = await getSealIdentity();
+    const signing = await crypto.generateSigningKeypair();
+    const signingKey = await crypto.exportPublicKey(signing.publicKey);
+    const encryptedSigningKey = await crypto.wrapSigningKey(signing.privateKey, keys.privateKey, keys.publicKey, me.userId);
+    const issuedAt = new Date().toISOString();
+    const seq = nextSeq || 1;
+    const signature = await crypto.signKeyStatement(identity.privateKey,
+      { userId: me.userId, seq, encryptionKey: keys.publicKeyBase64, signingKey, issuedAt });
+    const { wrappedIdentity, identitySalt } = await crypto.wrapIdentity(identity.privateKey, recoveryKey);
+    await fetchJSON('/e2ee/identity', {
+      method: 'POST',
+      body: JSON.stringify({
+        mode, identityKey: identity.identityKey, wrappedIdentity, identitySalt,
+        signingKey, encryptedSigningKey, statement: { seq, issuedAt, signature },
+        recovery: newRecovery ? await crypto.wrapWithRecoveryKey(keys.privateKey, recoveryKey) : undefined,
+      }),
+    });
+  }, [getSealIdentity, fetchJSON]);
+
+  const newIdentity = async () => {
+    const kp = await crypto.generateSigningKeypair();
+    return { privateKey: kp.privateKey, identityKey: await crypto.exportPublicKey(kp.publicKey) };
+  };
+
+  const currentKeys = () => ({ privateKey, publicKey, publicKeyBase64 });
+
+  /**
+   * Make your identity. With the recovery key you have (checked), or with a
+   * new one the person has saved (`isNewRecoveryKey`), which then replaces it.
+   */
+  const createIdentity = useCallback(async ({ recoveryKey, isNewRecoveryKey = false, keys = null }) => {
+    const k = keys || currentKeys();
+    if (!k.privateKey) throw new Error('E2EE not unlocked');
+    if (!isNewRecoveryKey && !(await checkRecoveryKey(recoveryKey))) throw new Error("That isn't your recovery key.");
+    const info = await fetchAPI('/e2ee/identity').then(r => r.json()).catch(() => ({}));
+    await sendIdentity({ mode: 'create', identity: await newIdentity(), recoveryKey, newRecovery: isNewRecoveryKey, keys: k, nextSeq: info.nextSeq });
+    return refreshIdentity();
+  }, [privateKey, publicKey, publicKeyBase64, checkRecoveryKey, fetchAPI, sendIdentity, refreshIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** A new identity, and a new recovery key the person has saved. Everyone who verified you sees the change. */
+  const replaceIdentity = useCallback(async ({ newRecoveryKey }) => {
+    if (!privateKey) throw new Error('E2EE not unlocked');
+    const info = await fetchJSON('/e2ee/identity');
+    await sendIdentity({ mode: 'replace', identity: await newIdentity(), recoveryKey: newRecoveryKey, newRecovery: true, keys: currentKeys(), nextSeq: info.nextSeq });
+    return refreshIdentity();
+  }, [privateKey, publicKey, publicKeyBase64, fetchJSON, sendIdentity, refreshIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** After a reset: keep your identity, opened with your previous recovery key, under a new one. */
+  const keepIdentity = useCallback(async ({ oldRecoveryKey, newRecoveryKey }) => {
+    if (!privateKey) throw new Error('E2EE not unlocked');
+    const identity = await openIdentity(oldRecoveryKey);
+    await sendIdentity({ mode: 'keep', identity, recoveryKey: newRecoveryKey, newRecovery: true, keys: currentKeys(), nextSeq: identity.nextSeq });
+    return refreshIdentity();
+  }, [privateKey, publicKey, publicKeyBase64, openIdentity, sendIdentity, refreshIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Replace my keys: a new encryption keypair and signing key under the same
+   * identity, so your fingerprint and everyone's verification stay. Needs the
+   * password that unlocks encryption (it wraps the new key) and the recovery
+   * key (it opens the identity, and wraps the new key too). Everything sealed
+   * to the old keypair is re-sealed and sent in the same request.
+   */
+  const replaceKeys = useCallback(async ({ password, recoveryKey }) => {
+    if (!privateKey || !publicKey) throw new Error('E2EE not unlocked');
+    const mine = await fetchJSON('/e2ee/keys/me');
+    if (mine.publicKey !== publicKeyBase64) throw new Error('Your keys changed on another device. Lock and unlock encryption first.');
+    try { await crypto.unlockPrivateKey(password, mine.encryptedPrivateKey, mine.keyDerivationSalt); }
+    catch { throw new Error("That isn't the password that unlocks your encryption."); }
+    const identity = await openIdentity(recoveryKey);
+    const me = await getSealIdentity();
+
+    const kp = await crypto.generateUserKeypair();
+    const newKey = await crypto.exportPublicKey(kp.publicKey);
+    const salt = crypto.generateSalt();
+    const encryptedPrivateKey = await crypto.wrapPrivateKey(kp.privateKey, await crypto.deriveKeyFromPassphrase(password, salt));
+    const recovery = await crypto.wrapWithRecoveryKey(kp.privateKey, recoveryKey);
+
+    // Every wave key you hold, rewrapped for the new keypair. One that won't
+    // open is dropped; a member's device gives it again on request.
+    const { keys: rows } = await fetchJSON('/e2ee/wave-keys');
+    const address = crypto.personAddress(me.userId, me.nodeName);
+    const waveKeys = [];
+    for (const row of rows) {
+      try {
+        const waveKey = await unwrapWaveKey(row.waveId, row, row.keyVersion);
+        const opts = row.format === 2 ? { format: 2, context: crypto.waveKeyContext(row.waveId, row.keyVersion, address) } : {};
+        const { encryptedKey, nonce } = await crypto.encryptWaveKey(waveKey, kp.publicKey, kp.privateKey, opts);
+        waveKeys.push({ waveId: row.waveId, keyVersion: row.keyVersion, encryptedWaveKey: `${encryptedKey}:${nonce}`, senderPublicKey: newKey, format: row.format });
+      } catch {
+        waveKeys.push({ waveId: row.waveId, keyVersion: row.keyVersion, drop: true });
+      }
+    }
+
+    // Your record of keys seen and your contacts are sealed to the keypair too.
+    const state = await loadKeyRecords();
+    await keyRecordsSaveRef.current;
+    const keyRecords = state && state.version > 0
+      ? { ...(await crypto.encryptKeyRecords(state.records, kp.privateKey, kp.publicKey)), expectedVersion: state.version }
+      : null;
+    let contacts = null;
+    const c = await fetchJSON('/contacts/encrypted').catch(() => null);
+    if (c?.encrypted) {
+      try {
+        const list = await crypto.decryptContactList(c.encryptedData, c.nonce, privateKey, publicKey);
+        contacts = { ...(await crypto.encryptContactList(list, kp.privateKey, kp.publicKey)), expectedVersion: c.version };
+      } catch { console.warn('E2EE: contacts could not be opened, so they stay sealed to the old key'); }
+    }
+
+    const signing = await crypto.generateSigningKeypair();
+    const signingKey = await crypto.exportPublicKey(signing.publicKey);
+    const issuedAt = new Date().toISOString();
+    const seq = identity.nextSeq;
+    const signature = await crypto.signKeyStatement(identity.privateKey, { userId: me.userId, seq, encryptionKey: newKey, signingKey, issuedAt });
+    await fetchJSON('/e2ee/keys/replace', {
+      method: 'POST',
+      body: JSON.stringify({
+        publicKey: newKey, encryptedPrivateKey, salt, recovery, waveKeys, keyRecords, contacts,
+        signingKey, encryptedSigningKey: await crypto.wrapSigningKey(signing.privateKey, kp.privateKey, kp.publicKey, me.userId),
+        statement: { seq, issuedAt, signature },
+      }),
+    });
+
+    // In place: drop everything held for the old keypair.
+    keyGenerationRef.current++;
+    waveKeyCacheRef.current.clear();
+    waveKeyInFlightRef.current.clear();
+    versionKeyInFlightRef.current.clear();
+    keyListInFlightRef.current.clear();
+    keyRecordsRef.current = null;
+    setPrivateKey(kp.privateKey);
+    setPublicKey(kp.publicKey);
+    setPublicKeyBase64(newKey);
+    await saveToSessionCache(kp.privateKey, newKey);
+    return { success: true, dropped: waveKeys.filter(k => k.drop).length };
+  }, [privateKey, publicKey, publicKeyBase64, fetchJSON, openIdentity, getSealIdentity, unwrapWaveKey, loadKeyRecords, saveToSessionCache]);
+
+  // Regenerate recovery key (requires unlocked E2EE). Since v2.150.0 the new
+  // key must wrap your identity too, which only the current one opens.
+  const regenerateRecoveryKey = useCallback(async (currentRecoveryKey = null) => {
+    if (!token) throw new Error('Not authenticated');
+    if (!privateKey) throw new Error('E2EE not unlocked');
+    const recovery = await crypto.createRecoveryBackup(privateKey);
+    const body = { encryptedPrivateKey: recovery.encryptedPrivateKey, recoverySalt: recovery.recoverySalt };
+    const hasIdentity = (await fetchAPI('/e2ee/identity')).ok;
+    if (hasIdentity) {
+      if (!currentRecoveryKey) throw new Error('Enter your current recovery key: it carries your fingerprint to the new one.');
+      const identity = await openIdentity(currentRecoveryKey);
+      const me = await getSealIdentity();
+      const { wrappedIdentity, identitySalt } = await crypto.wrapIdentity(identity.privateKey, recovery.recoveryKey);
+      Object.assign(body, {
+        wrappedIdentity, identitySalt,
+        identityProof: await crypto.signIdentityRewrap(identity.privateKey, { userId: me.userId, wrappedIdentity, identitySalt }),
+      });
+    }
+    await fetchJSON('/e2ee/recovery/regenerate', { method: 'POST', body: JSON.stringify(body) });
+    return { success: true, recoveryKey: recovery.recoveryKey };
+  }, [token, privateKey, fetchAPI, fetchJSON, openIdentity, getSealIdentity]);
+
+  useEffect(() => {
+    if (privateKey && publicKeyBase64) refreshIdentity();
+  }, [privateKey, publicKeyBase64]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Made at setup, when the recovery key is in hand (see setupE2EE).
+  const createIdentityRef = useRef(null);
+  createIdentityRef.current = createIdentity;
 
   useEffect(() => {
     if (privateKey && publicKey) loadKeyRecords();
@@ -986,13 +1289,20 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
 
     if (seal?.format === 2) {
+      // v2.150.0: signed by its author's signing key, named by one of their
+      // statements. A ping whose signature doesn't check is not shown.
       if (!seal.authorId) throw new Error('A format-2 ping needs its author');
       const me = await getSealIdentity();
-      const context = crypto.pingContext(waveId, crypto.personAddress(seal.authorId, seal.authorNode || me.nodeName));
-      return crypto.decryptPing(ciphertext, nonce, waveKey, { format: 2, context });
+      const ctx = { originWaveId: waveId, authorAddress: crypto.personAddress(seal.authorId, seal.authorNode || me.nodeName) };
+      const opened = await crypto.openSignedPing(ciphertext, nonce, waveKey, ctx);
+      const statement = await statementOf(seal.authorId, opened.seq);
+      if (!statement || !(await crypto.verifyPingSignature(statement.signingKey, opened, ctx))) {
+        throw new Error('The signature on this ping does not check');
+      }
+      return opened.text;
     }
     return crypto.decryptPing(ciphertext, nonce, waveKey);
-  }, [getWaveKey, getVersionedWaveKey, requestWaveKey, getSealIdentity]);
+  }, [getWaveKey, getVersionedWaveKey, requestWaveKey, getSealIdentity, statementOf]);
 
   // ============ Audio Encryption (v2.3.0) ============
 
@@ -1345,6 +1655,8 @@ export function E2EEProvider({ children, token, API_URL }) {
     keyListInFlightRef.current.clear();
     keyRecordsRef.current = null;
     sealIdentityRef.current = null;
+    statementsRef.current.clear();
+    setMyIdentity(null);
     setKeyChanges([]);
     clearSessionCache();
     sessionRestoreAttempted.current = false;
@@ -1585,8 +1897,17 @@ export function E2EEProvider({ children, token, API_URL }) {
     keyChanges,
     acknowledgeKeyChange,
 
-    // Fingerprints and verification (v2.149.0)
+    // Fingerprints and verification (v2.149.0; of the identity since v2.150.0)
     myFingerprint,
+    myIdentity,
+    refreshIdentity,
+    checkRecoveryKey,
+    checkIdentityKey,
+    createIdentity,
+    replaceIdentity,
+    keepIdentity,
+    replaceKeys,
+    newRecoveryKey: crypto.generateRecoveryKey,
     describeKey,
     markKeyVerified,
     unmarkKeyVerified,

@@ -718,15 +718,28 @@ const noticeStyle = (accent, overlay) => ({
  */
 export function KeyChangeNotice({ people, onAcknowledge }) {
   if (!people?.length) return null;
-  const names = people.map(p => p.name).join(', ');
-  const lost = people.filter(p => p.verificationLost);
+  // v2.150.0: keys not signed by someone's fingerprint are a different thing
+  // from a change: their own app never makes them, so they get no key.
+  const unsigned = people.filter(p => p.unsigned);
+  const changed = people.filter(p => !p.unsigned);
+  const names = changed.map(p => p.name).join(', ');
+  const lost = changed.filter(p => p.verificationLost);
   return (
     <div role="status" style={noticeStyle('--accent-amber', '--overlay-amber')}>
       <span>
-        🔑 {people.length === 1 ? `${names}'s encryption key has changed` : `Encryption keys changed for ${names}`}.
-        {' '}This happens when someone resets their encryption. If you didn't expect it, check with them another way.
-        {lost.length > 0 && (
-          <> You had verified {lost.map(p => p.name).join(', ')}, so that verification no longer holds: compare fingerprints again (KEY in the people list).</>
+        {changed.length > 0 && (
+          <>
+            🔑 {changed.length === 1 ? `${names}'s fingerprint has changed` : `Fingerprints changed for ${names}`}.
+            {' '}This happens when someone loses both their password and recovery key, or replaces their fingerprint. If you didn't expect it, check with them another way.
+            {lost.length > 0 && (
+              <> You had verified {lost.map(p => p.name).join(', ')}, so that verification no longer holds: compare fingerprints again (KEY in the people list).</>
+            )}
+          </>
+        )}
+        {unsigned.length > 0 && (
+          <>
+            {changed.length > 0 && ' '}⚠ The keys this server gives for {unsigned.map(p => p.name).join(', ')} aren't signed by their fingerprint, so your app gives them no key to this {T.wave}. Their own app never does that: tell them, and your server's admin.
+          </>
         )}
       </span>
       <button

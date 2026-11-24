@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.150.0] - 2026-11-24
+
+Identity keys, phase 1b (`docs/federated-e2ee/02-identity-keys.md`, decided 2026-11-24): a fingerprint now lasts. In v2.149.0 it was the fingerprint of the encryption key, so every legitimate key change (a forgotten password with no recovery key, an account broken into) lost everyone's verification. Server and web only, no app build. **Migrates** (two tables, two columns).
+
+### Added
+- **An identity key per person, and its fingerprint.** The identity (ECDSA P-384) signs a statement naming the person's encryption key and a new signing key, with a number that only goes up. The fingerprint (SHA-256 over `cortex-id-v1` and the key, the same 8 groups) is the identity's, so keys can be replaced under it and the fingerprint, and every verification of it, stays.
+  - **Locked by the recovery key alone.** The login password unlocks the encryption key, so a password thief would otherwise take the identity too and stay verified.
+  - **Settings → Security → Your fingerprint:** create it (with your recovery key, or a new one if you've lost it), **Replace my keys** (password and recovery key: new encryption and signing keys, same fingerprint), **Replace my fingerprint** (a new identity and recovery key; everyone who verified you sees it change).
+  - **Everyone gets asked once a session** until they have one, since it needs their recovery key. A setup that shows the recovery key makes it at once; automatic setup at registration never shows that key, so it leaves it to the prompt.
+  - **After a reset** the identity is kept: enter your previous recovery key to keep your fingerprint, or start a new one.
+- **Devices check every statement** on lookup: signed by the identity served, for this person, naming the key served, no older than one already seen.
+  - **Keys not signed by someone's identity get no wave key** (Jared, 2026-11-24). A person's own app never makes them, so it means the server, or a bug. The people list says KEYS NOT SIGNED and the wave says why.
+  - Renewed keys under the same identity are quiet; a new identity is flagged, and drops a verification as before.
+  - **Your own** identity is noted in your record too: a change you didn't make on this device is shown in Settings with its date.
+- **The server checks each statement before storing it** (`server/lib/key-statements.js`): signature, person, current key, next number. Keys signed by an identity can't be overwritten without one (`/keys/register`, `/keys/rotate` → 409 `USE_REPLACE_KEYS`). A new recovery key must carry the identity, proven by its signature (403 `IDENTITY_PROOF_REQUIRED` otherwise).
+
+### Changed
+- **Verification is of the identity.** A v2.149.0 verification was of an encryption key and can't carry over (the server could make someone an identity and sign their old key with it): it shows as **compare once more**.
+- **Format 2 is redefined, still unwritten:** a format-2 ping is now signed by its author's signing key, inside the encryption (`sealSignedPing`). Today any member of an encrypted wave can post in another's name, because pings are sealed with the shared wave key; with signatures they can't. Devices read it from this release and write it from phase 1c, when the ✓ and ⚠ beside authors come too.
+- **Replace my keys re-seals everything** sealed to the old keypair in the same request, applied in one transaction: every wave key held (one that won't open is dropped and asked for again), the record of keys seen, and the contacts.
+
+### Verified
+- **Tests:** `tests/e2ee-identity.test.cjs`.
+  - The fingerprint is checked against `node:crypto`.
+  - A statement signed by client code checks with the server's code and fails for another person, number, key, time or identity.
+  - A member holding the wave key can seal a ping in someone else's name that opens (the counterfactual inside the test); only the signature stops it.
+  - Records: renewal keeps a verification, an older statement is refused, a new identity loses it, unsigned is flagged and settles, two devices merge.
+  - Server: refused statements (other identity, out of order, wrong key), create once, replace keys keeping the identity and every wave key, the recovery rewrap proof (refused without and with a forged one), a reset keeping the identity, keep and replace.
+  - Counterfactual: a copy of `server.js` without the signature check stores a statement signed by another identity.
+- **Headless Chrome on dev, two accounts:**
+  - The prompt appeared for both. Each made a fingerprint with a new recovery key, and it matches the one computed from the database.
+  - Mal's v2.149.0 verification of Zoe showed COMPARE ONCE MORE; after comparing it showed VERIFIED.
+  - Zoe replaced her keys: same fingerprint, new key in the database, the wave still readable. Mal still saw her verified, with no warning.
+  - With Zoe's key swapped in the database for one her identity never signed, Mal saw KEYS NOT SIGNED on her row and in the wave. Restored, it settled back to verified.
+  - Zoe replaced her fingerprint: Mal saw CHANGED SINCE YOU VERIFIED.
+  - After a reset, the prompt offered to keep it; her previous recovery key kept the same fingerprint.
+  - Regenerating the recovery key without the current one was refused with the reason; with it, the new key opens the identity and the old one doesn't.
+  - At 390 px the Replace my keys form fits without scrolling sideways.
+  - Not tried on a phone.
+
 ## [2.149.0] - 2026-11-23
 
 Encryption across servers, phase 1 (`docs/federated-e2ee/`): people can compare and verify each other's keys, and devices learn to read the format that phase 3 will write. Server and web only, no app build. **Migrates** (one column on two tables).

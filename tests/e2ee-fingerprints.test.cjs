@@ -2,17 +2,16 @@
 
 // Encryption across servers, phase 1 (v2.149.0, docs/federated-e2ee/).
 //
-// 1. Fingerprints: SHA-256 over "cortex-fp-v1" ‖ SPKI, first 16 bytes, as
-//    8 groups of 4 upper-case hex. Checked against node:crypto.
-// 2. Format 2: a wrapped wave key bound to its wave, version and recipient,
-//    and a ping bound to its wave and author. Devices read it from this
-//    release; nothing writes it yet. A key or ping moved to another place
-//    must not open, and format 2 must never open as format 1.
-//    Counterfactual: the same crypto.js with the binding (associated data)
-//    stripped opens a ping moved to another wave, so the test fails for the
-//    right reason.
-// 3. Verified: a mark is for one key; a change drops it and says so.
-// 4. The server stores and returns each ping's and wrapped key's format,
+// 1. Encryption-key fingerprints: SHA-256 over "cortex-fp-v1" ‖ SPKI, first
+//    16 bytes, as 8 groups of 4 upper-case hex. Checked against node:crypto.
+//    (Since v2.150.0 people compare identity fingerprints:
+//    tests/e2ee-identity.test.cjs.)
+// 2. Format 2: a wrapped wave key bound to its wave, version and recipient.
+//    A key moved to another place must not open, and format 2 must never
+//    open as format 1. Counterfactual: the same crypto.js with the binding
+//    stripped opens a key handed over as another wave's. (A format-2 ping is
+//    signed since v2.150.0; see e2ee-identity.)
+// 3. The server stores and returns each ping's and wrapped key's format,
 //    refuses an unknown one, and tells a device who it is in a seal.
 
 const { test } = require('node:test');
@@ -25,7 +24,6 @@ const { spawn } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const loadCrypto = () => import(path.join(root, 'client/crypto.js'));
-const loadRecords = () => import(path.join(root, 'client/src/utils/keyRecords.js'));
 
 test('a fingerprint is the first 128 bits of SHA-256 over the label and the key, in 8 groups', async () => {
   const c = await loadCrypto();
@@ -50,12 +48,6 @@ async function formatTwo(c) {
   const wrap = await c.encryptWaveKey(waveKey, bob.publicKey, alice.privateKey, { format: 2, context: ctx('wave-1', 3, bobAddress) });
   const open = (context, opts = { format: 2 }) => c.decryptWaveKey(wrap.encryptedKey, wrap.nonce, alice.publicKey, bob.privateKey, { ...opts, context })
     .then(() => true, () => false);
-
-  const aliceAddress = c.personAddress('user-alice', 'dev.farhold.com');
-  const ping = await c.encryptPing('the plan', waveKey, { format: 2, context: c.pingContext('wave-1', aliceAddress) });
-  const read = (context, format = 2) => c.decryptPing(ping.ciphertext, ping.nonce, waveKey, { format, context })
-    .then(t => t, () => null);
-
   return {
     keyOpens: await open(ctx('wave-1', 3, bobAddress)),
     keyOtherWave: await open(ctx('wave-2', 3, bobAddress)),
@@ -63,19 +55,14 @@ async function formatTwo(c) {
     keyOtherRecipient: await open(ctx('wave-1', 3, c.personAddress('user-carol', 'dev.farhold.com'))),
     keyOtherServer: await open(ctx('wave-1', 3, c.personAddress('user-bob', 'qa.farhold.com'))),
     keyAsFormatOne: await open(null, { format: 1 }),
-    pingReads: await read(c.pingContext('wave-1', aliceAddress)),
-    pingMoved: await read(c.pingContext('wave-2', aliceAddress)),
-    pingOtherAuthor: await read(c.pingContext('wave-1', c.personAddress('user-mallory', 'dev.farhold.com'))),
-    pingAsFormatOne: await read(null, 1),
   };
 }
 
-test('format 2 binds a wrapped key to its wave, version and recipient, and a ping to its wave and author', async () => {
+test('format 2 binds a wrapped key to its wave, version and recipient', async () => {
   const c = await loadCrypto();
   const r = await formatTwo(c);
   assert.deepEqual(r, {
     keyOpens: true, keyOtherWave: false, keyOtherVersion: false, keyOtherRecipient: false, keyOtherServer: false, keyAsFormatOne: false,
-    pingReads: 'the plan', pingMoved: null, pingOtherAuthor: null, pingAsFormatOne: null,
   });
 
   // Format 1 is unchanged: everything written so far still opens.
@@ -87,84 +74,32 @@ test('format 2 binds a wrapped key to its wave, version and recipient, and a pin
   const p1 = await c.encryptPing('old', wk);
   assert.equal(await c.decryptPing(p1.ciphertext, p1.nonce, k1), 'old');
 
-  // Format 2 without its context is refused, not quietly read as format 1.
-  await assert.rejects(c.decryptPing(p1.ciphertext, p1.nonce, k1, { format: 2 }), /seal context/);
+  // A format-2 ping isn't read as format 1, or by the format-1 reader at all.
+  await assert.rejects(c.decryptPing(p1.ciphertext, p1.nonce, k1, { format: 2 }), /openSignedPing/);
   // No field may contain the separator, so two lists can't give the same bytes.
   assert.throws(() => c.pingContext('wave\u00001', 'x@y'), /Invalid seal context/);
   assert.throws(() => c.waveKeyContext('wave-1', 0, 'x@y'), /Invalid seal context/);
   assert.notDeepEqual(c.pingContext('ab', 'c@d'), c.pingContext('a', 'bc@d'));
 });
 
-test('counterfactual: without the binding, a ping moved to another wave opens', async () => {
+test('counterfactual: without the binding, a wrapped key handed over as another wave\'s opens', async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-fmt2-cf-'));
   try {
     let src = fs.readFileSync(path.join(root, 'client/crypto.js'), 'utf8');
-    const strip = [
-      ["format === 2 ? { name: 'AES-GCM', iv: nonce, additionalData: requireContext(context) } : { name: 'AES-GCM', iv: nonce }", "{ name: 'AES-GCM', iv: nonce }"],
-    ];
-    for (const [from, to] of strip) {
-      assert.ok(src.includes(from), 'binding not found in crypto.js');
-      src = src.split(from).join(to);
-    }
+    // The wrap's context is both the HKDF info and the associated data; make it constant.
+    const from = 'async function deriveBoundWrapKey(privateKey, publicKey, context) {';
+    assert.ok(src.includes(from), 'binding not found in crypto.js');
+    src = src.split(from).join(from + "\n  context = new TextEncoder().encode('fixed');");
+    assert.ok(src.includes('additionalData: context }'), 'associated data not found in crypto.js');
+    src = src.split('additionalData: context }').join("additionalData: new TextEncoder().encode('fixed') }");
     const copy = path.join(temp, 'crypto.mjs');
     fs.writeFileSync(copy, src);
     const r = await formatTwo(await import(copy));
-    assert.equal(r.pingMoved, 'the plan', 'with the binding stripped, the moved ping should open');
-    assert.equal(r.pingOtherAuthor, 'the plan');
+    assert.equal(r.keyOtherWave, true, 'with the binding stripped, the moved key should open');
+    assert.equal(r.keyOtherRecipient, true);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
-});
-
-test('a verification is for one key: a change drops it and says so until the new key is verified', async () => {
-  const k = await loadRecords();
-  let rec = k.emptyKeyRecords();
-  rec = k.noteKey(rec, 'zoe', 'KEY-A', '2026-11-23T10:00:00Z').records;
-  assert.equal(k.keyStanding(rec, 'zoe', 'KEY-A'), 'seen');
-
-  // Only the key on record can be verified.
-  assert.equal(k.markVerified(rec, 'zoe', 'KEY-OTHER'), rec);
-  rec = k.markVerified(rec, 'zoe', 'KEY-A', '2026-11-23T10:05:00Z');
-  assert.equal(k.keyStanding(rec, 'zoe', 'KEY-A'), 'verified');
-  assert.equal(k.keyStanding(rec, 'zoe', 'KEY-B'), 'unknown');
-
-  // The key changes: the verification does not carry over.
-  const changed = k.noteKey(rec, 'zoe', 'KEY-B', '2026-11-23T11:00:00Z');
-  assert.equal(changed.status, 'changed');
-  rec = changed.records;
-  assert.equal(k.keyStanding(rec, 'zoe', 'KEY-B'), 'lost');
-  assert.deepEqual(k.unacknowledgedChanges(rec), [{ personId: 'zoe', changedAt: '2026-11-23T11:00:00Z', verificationLost: true }]);
-
-  // Seeing the flag doesn't verify anything; it still says the verification is gone.
-  rec = k.acknowledgeKeyChange(rec, 'zoe');
-  assert.equal(k.keyStanding(rec, 'zoe', 'KEY-B'), 'lost');
-
-  // Verifying the new key clears it; a third key loses it again.
-  rec = k.markVerified(rec, 'zoe', 'KEY-B', '2026-11-23T11:10:00Z');
-  assert.equal(k.keyStanding(rec, 'zoe', 'KEY-B'), 'verified');
-  rec = k.noteKey(rec, 'zoe', 'KEY-C', '2026-11-23T12:00:00Z').records;
-  assert.equal(k.keyStanding(rec, 'zoe', 'KEY-C'), 'lost');
-
-  // A change for someone never verified is only 'changed'.
-  let other = k.noteKey(k.emptyKeyRecords(), 'wash', 'W1').records;
-  other = k.noteKey(other, 'wash', 'W2').records;
-  assert.equal(k.keyStanding(other, 'wash', 'W2'), 'changed');
-
-  // Unverifying.
-  let u = k.markVerified(k.emptyKeyRecords(), 'kaylee', 'K1', '2026-11-23T09:00:00Z');
-  u = k.unmarkVerified(u, 'kaylee', '2026-11-23T09:30:00Z');
-  assert.equal(k.keyStanding(u, 'kaylee', 'K1'), 'seen');
-});
-
-test('two devices: the later of a verification and an unverification wins', async () => {
-  const k = await loadRecords();
-  const base = k.noteKey(k.emptyKeyRecords(), 'zoe', 'KEY-A', '2026-11-23T10:00:00Z').records;
-  const phone = k.markVerified(base, 'zoe', 'KEY-A', '2026-11-23T10:05:00Z');
-  const laptop = k.unmarkVerified(k.markVerified(base, 'zoe', 'KEY-A', '2026-11-23T10:01:00Z'), 'zoe', '2026-11-23T10:02:00Z');
-  assert.equal(k.keyStanding(k.mergeKeyRecords(phone, laptop), 'zoe', 'KEY-A'), 'verified');
-  assert.equal(k.keyStanding(k.mergeKeyRecords(laptop, phone), 'zoe', 'KEY-A'), 'verified');
-  const later = k.unmarkVerified(phone, 'zoe', '2026-11-23T10:09:00Z');
-  assert.equal(k.keyStanding(k.mergeKeyRecords(phone, later), 'zoe', 'KEY-A'), 'seen');
 });
 
 test('the server keeps each ping and wrapped key format, refuses unknown ones, and names the device in a seal', async () => {
