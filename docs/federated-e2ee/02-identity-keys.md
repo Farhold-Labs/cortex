@@ -1,8 +1,8 @@
 # Identity keys — a fingerprint that lasts
 
-Status: **proposed** (2026-11-24), for Jared's review. Revises `01-design.md`:
-the fingerprints of phase 1 (v2.149.0), and format 2 before anything writes
-it. Not built.
+Status: **decided** (2026-11-24). Revises `01-design.md`: the fingerprints of
+phase 1 (v2.149.0), and format 2 before anything writes it. Phase 1b being
+built.
 
 ## Why
 
@@ -201,14 +201,14 @@ pings are sealed with the shared wave key. With signatures they can't, and the
 - **2 and 3 as in `01-design.md`,** with statements carried by the federation
   key lookup and checked by devices on other servers.
 
-## Questions for Jared
+## Decisions (Jared, 2026-11-24)
 
 1. **Keys not signed by the person's identity** (row 5 above): refuse to give
-   them the wave key, or give it and flag? Recommended: **refuse**. Decision 1
+   them the wave key, or give it and flag? **Refuse.** Decision 1
    of 2026-11-20 (give and flag) was about a person's key changing, which may
    be legitimate. An unsigned key never is.
 2. **Existing people without their recovery key:** offer "make a new recovery
-   key" (the identity is wrapped by the new one)? Recommended: **yes**. The
+   key" (the identity is wrapped by the new one)? **Yes.** The
    alternative is that they have no identity until they reset.
 
 ## What doesn't change
