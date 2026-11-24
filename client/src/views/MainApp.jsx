@@ -1061,7 +1061,9 @@ function MainApp({ sharePingId }) {
       }
       // If the event is for the currently viewed wave, trigger a reload
       // Extract waveId from different event structures
-      const eventWaveId = data.waveId || data.data?.wave_id || data.data?.waveId;
+      // A ping from another server arrives as `ping`, not `data` (v2.153.0:
+      // the open wave never reloaded for one).
+      const eventWaveId = data.waveId || data.data?.wave_id || data.data?.waveId || data.ping?.waveId || data.ping?.wave_id;
       if (selectedWave && eventWaveId === selectedWave.id) {
         console.log(`🔄 Reloading wave ${selectedWave.id} due to ${data.type} event`);
         setWaveReloadTrigger(prev => prev + 1);
@@ -1103,8 +1105,9 @@ function MainApp({ sharePingId }) {
     } else if (data.type === 'wave_key_request') {
       // Another participant needs us to re-encrypt the wave key for them (v2.47.3).
       // v2.143.0: by who they are; the device looks their key up itself.
-      if (e2eeRef.current.isUnlocked && data.waveId && data.requestId && data.requesterId) {
-        e2eeRef.current.grantWaveKey(data.waveId, data.requestId, data.requesterId, data.versions);
+      // v2.153.0: or someone on another server (`remote: { nodeName, userId }`).
+      if (e2eeRef.current.isUnlocked && data.waveId && data.requestId && (data.requesterId || data.remote)) {
+        e2eeRef.current.grantWaveKey(data.waveId, data.requestId, data.requesterId || null, data.versions, data.remote || null);
       }
     } else if (data.type === 'wave_rekey_needed') {
       // Someone who held this wave's key has left, and we can renew it (v2.143.0).

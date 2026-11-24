@@ -131,6 +131,12 @@ export function E2EEProvider({ children, token, API_URL }) {
   const sealIdentityRef = useRef(null);
   // Statements of ping authors, checked once each (v2.150.0): userId -> Promise<Map seq -> statement>.
   const statementsRef = useRef(new Map());
+  // Across servers (v2.153.0): a wave's id on its own server, by local id;
+  // people elsewhere, by `${userId}@${node}` -> Promise<info|null>; and the
+  // wrapper check, defined below the lookups it uses.
+  const originIdsRef = useRef(new Map());
+  const remoteInfoRef = useRef(new Map());
+  const checkWrapperRef = useRef(null);
   // Signed pings (v2.151.0): pingId -> { status: 'signed'|'forged'|'replay', identityKey, authorId },
   // `${waveId}:${messageId}` -> the ping it first appeared as, and this
   // person's signing key, ready: Promise<{ privateKey, seq }|null>.
@@ -601,8 +607,13 @@ export function E2EEProvider({ children, token, API_URL }) {
     const [encKeyBase64, nonceBase64] = row.encryptedWaveKey.split(':');
     const senderPubKey = await crypto.importPublicKey(row.senderPublicKey);
     if (row.format !== 2) return crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey);
+    // v2.153.0: bound to the wave's id on its own server, and the wrapper's
+    // key must be one their fingerprint signed.
+    if (row.originWaveId) originIdsRef.current.set(waveId, row.originWaveId);
+    const origin = row.originWaveId || originIdsRef.current.get(waveId) || waveId;
+    if (checkWrapperRef.current) await checkWrapperRef.current(row);
     const me = await getSealIdentity();
-    const context = crypto.waveKeyContext(waveId, keyVersion, crypto.personAddress(me.userId, me.nodeName));
+    const context = crypto.waveKeyContext(origin, keyVersion, crypto.personAddress(me.userId, me.nodeName));
     return crypto.decryptWaveKey(encKeyBase64, nonceBase64, senderPubKey, privateKey, { format: 2, context });
   }, [privateKey, getSealIdentity]);
 
@@ -635,14 +646,15 @@ export function E2EEProvider({ children, token, API_URL }) {
           throw new Error(err.error || 'Failed to fetch wave key');
         }
 
-        const { encrypted, encryptedWaveKey, senderPublicKey, keyVersion, format } = await res.json();
+        const { encrypted, encryptedWaveKey, senderPublicKey, keyVersion, format, originWaveId, senderUserId, senderNode } = await res.json();
 
         if (!encrypted) {
           return null;  // Wave not encrypted
         }
+        if (originWaveId) originIdsRef.current.set(waveId, originWaveId);
 
         // The stored key is "encryptedKey:nonce", wrapped by senderPublicKey.
-        const waveKey = await unwrapWaveKey(waveId, { encryptedWaveKey, senderPublicKey, format }, keyVersion);
+        const waveKey = await unwrapWaveKey(waveId, { encryptedWaveKey, senderPublicKey, format, originWaveId, senderUserId, senderNode }, keyVersion);
 
         // Cache it (with LRU eviction) — unless the cache was cleared meanwhile
         if (generation === keyGenerationRef.current) {
@@ -685,7 +697,10 @@ export function E2EEProvider({ children, token, API_URL }) {
       if (!list) {
         list = (async () => {
           const res = await fetchAPI(`/waves/${waveId}/keys/all`);
-          return res.ok ? (await res.json()).keys || [] : null;
+          if (!res.ok) return null;
+          const body = await res.json();
+          if (body.originWaveId) originIdsRef.current.set(waveId, body.originWaveId);
+          return body.keys || [];
         })();
         keyListInFlightRef.current.set(waveId, list);
         list.finally(() => {
@@ -784,33 +799,60 @@ export function E2EEProvider({ children, token, API_URL }) {
    * still used (2026-11-20).
    * @returns {Promise<{ publicKey, identityKey, statement, verdict: 'ok'|'legacy'|'unsigned' }|null>}
    */
-  const inspectKey = useCallback(async (userId) => {
-    const res = await fetchAPI(`/e2ee/keys/user/${encodeURIComponent(userId)}`);
-    if (!res.ok) return null;
-    const { publicKey: theirKey, identityKey = null, statement = null } = await res.json();
+  /**
+   * Someone on another server, through this server (v2.153.0): their keys,
+   * statements and the name their server uses in seals. One request per
+   * person per session unless `fresh`.
+   */
+  const remoteInfo = useCallback((userId, nodeName, { fresh = false } = {}) => {
+    const id = `${userId}@${nodeName}`;
+    if (!fresh && remoteInfoRef.current.has(id)) return remoteInfoRef.current.get(id);
+    const p = (async () => {
+      const res = await fetchAPI(`/e2ee/keys/remote?node=${encodeURIComponent(nodeName)}&userId=${encodeURIComponent(userId)}`);
+      return res.ok ? res.json() : null;
+    })();
+    remoteInfoRef.current.set(id, p);
+    p.catch(() => remoteInfoRef.current.delete(id));
+    return p;
+  }, [fetchAPI]);
+
+  const inspectKey = useCallback(async (userId, nodeName = null) => {
+    let body;
+    if (nodeName) {
+      body = await remoteInfo(userId, nodeName, { fresh: true });
+      if (!body) return null;
+    } else {
+      const res = await fetchAPI(`/e2ee/keys/user/${encodeURIComponent(userId)}`);
+      if (!res.ok) return null;
+      body = await res.json();
+    }
+    const { publicKey: theirKey, identityKey = null, statement = null, sealNodeName = null } = body;
     if (!theirKey) return null;
+    // Records of people elsewhere are kept per address, so a statement
+    // can't stand in for someone on another server (02-identity-keys.md).
+    const recordId = nodeName ? `${userId}@${nodeName}` : userId;
     const state = await loadKeyRecords();
     const records = state?.records || emptyKeyRecords();
     let verdict;
     if (identityKey) {
       const signed = await crypto.verifyKeyStatement(identityKey, userId, statement, theirKey);
-      const out = signed ? noteIdentity(records, userId, { identity: identityKey, seq: statement.seq, key: theirKey }) : null;
+      const out = signed ? noteIdentity(records, recordId, { identity: identityKey, seq: statement.seq, key: theirKey }) : null;
       verdict = out && out.status !== 'rollback' ? 'ok' : 'unsigned';
       if (verdict === 'ok') applyRecords(state, out.records);
     } else {
-      const out = noteKey(records, userId, theirKey);
+      const out = noteKey(records, recordId, theirKey);
       verdict = out.status === 'downgrade' ? 'unsigned' : 'legacy';
       if (verdict === 'legacy') {
         applyRecords(state, out.records);
-        if (out.status === 'changed') console.warn(`E2EE: the key for ${userId} has changed`);
+        if (out.status === 'changed') console.warn(`E2EE: the key for ${recordId} has changed`);
       }
     }
     if (verdict === 'unsigned') {
-      console.warn(`E2EE: the keys served for ${userId} are not signed by their identity; no wave key for them`);
-      applyRecords(state, markUnsigned(state?.records || records, userId));
+      console.warn(`E2EE: the keys served for ${recordId} are not signed by their identity; no wave key for them`);
+      applyRecords(state, markUnsigned(state?.records || records, recordId));
     }
-    return { publicKey: theirKey, identityKey, statement, verdict };
-  }, [fetchAPI, loadKeyRecords, applyRecords]);
+    return { publicKey: theirKey, identityKey, statement, verdict, sealNodeName, nodeName };
+  }, [fetchAPI, remoteInfo, loadKeyRecords, applyRecords]);
 
   /**
    * The public key to give someone a wave key with: looked up here, never
@@ -818,10 +860,39 @@ export function E2EEProvider({ children, token, API_URL }) {
    * @returns {Promise<string|null>} base64 SPKI, or null: no key, or keys not
    *   signed by their identity
    */
-  const lookUpKey = useCallback(async (userId) => {
-    const info = await inspectKey(userId);
+  const lookUpKey = useCallback(async (userId, nodeName = null) => {
+    const info = await inspectKey(userId, nodeName);
     return info && info.verdict !== 'unsigned' ? info.publicKey : null;
   }, [inspectKey]);
+
+  /**
+   * Who to wrap a wave key for (v2.153.0): their key, looked up and judged
+   * by inspectKey, and their address as their server names them in seals.
+   * @returns {Promise<{ publicKey, address }|null>}
+   */
+  const recipientOf = useCallback(async (userId, nodeName = null) => {
+    const info = await inspectKey(userId, nodeName);
+    if (!info || info.verdict === 'unsigned') return null;
+    const me = await getSealIdentity();
+    const node = nodeName ? (info.sealNodeName || nodeName) : me.nodeName;
+    return { publicKey: info.publicKey, address: crypto.personAddress(userId, node) };
+  }, [inspectKey, getSealIdentity]);
+
+  /** A wave key wrapped for one person, bound to its wave, version and them (format 2). */
+  const wrapFor = useCallback(async (waveKey, originWaveId, keyVersion, recipient) => {
+    const { encryptedKey, nonce } = await crypto.encryptWaveKey(waveKey, await crypto.importPublicKey(recipient.publicKey), privateKey,
+      { format: 2, context: crypto.waveKeyContext(originWaveId, keyVersion, recipient.address) });
+    return `${encryptedKey}:${nonce}`;
+  }, [privateKey]);
+
+  /** The wave's id on its own server (v2.153.0). */
+  const originOf = useCallback(async (waveId) => {
+    if (originIdsRef.current.has(waveId)) return originIdsRef.current.get(waveId);
+    const res = await fetchAPI(`/waves/${waveId}/keys/all`);
+    const origin = res.ok ? ((await res.json()).originWaveId || waveId) : waveId;
+    originIdsRef.current.set(waveId, origin);
+    return origin;
+  }, [fetchAPI]);
 
   const acknowledgeKeyChange = useCallback(async (personId) => {
     const state = await loadKeyRecords();
@@ -882,12 +953,23 @@ export function E2EEProvider({ children, token, API_URL }) {
     return keyStanding(records, userId, records?.people?.[userId]?.identity || null);
   }, []);
 
+  /** Someone elsewhere's statements, each checked, by seq (v2.153.0). */
+  const remoteStatements = useCallback(async (userId, nodeName) => {
+    const info = await remoteInfo(userId, nodeName);
+    const checked = new Map();
+    for (const st of info?.statements || []) {
+      if (await crypto.verifyKeyStatement(st.identityKey, userId, st)) checked.set(st.seq, st);
+    }
+    return checked;
+  }, [remoteInfo]);
+
   /**
    * One of someone's statements, by seq, checked against the identity that
    * signed it (v2.150.0). Pings carry the seq they were signed under, so a
    * ping from before someone replaced their keys still checks.
    */
-  const statementOf = useCallback(async (userId, seq) => {
+  const statementOf = useCallback(async (userId, seq, nodeName = null) => {
+    if (nodeName) return (await remoteStatements(userId, nodeName)).get(seq) || null;
     const load = () => {
       const p = (async () => {
         const res = await fetchAPI(`/e2ee/keys/user/${encodeURIComponent(userId)}/statements`);
@@ -905,7 +987,40 @@ export function E2EEProvider({ children, token, API_URL }) {
     let found = (await (statementsRef.current.get(userId) || load())).get(seq);
     if (!found) found = (await load()).get(seq); // a statement made since
     return found || null;
-  }, [fetchAPI]);
+  }, [fetchAPI, remoteStatements]);
+
+  /** A local person's checked statements, all of them (v2.153.0). */
+  const localStatements = useCallback(async (userId) => {
+    await statementOf(userId, 1).catch(() => null);
+    return (await statementsRef.current.get(userId)?.catch?.(() => null)) || new Map();
+  }, [statementOf]);
+
+  /**
+   * v2.153.0: a format-2 wave key must name who wrapped it, and their key
+   * must be one their fingerprint signed. Someone without a fingerprint yet
+   * (legacy) can't be checked and is accepted, as a key lookup would be.
+   */
+  const wrapperChecksRef = useRef(new Map());
+  const checkWrapper = useCallback(async (row) => {
+    if (!row.senderUserId) throw new Error('A bound wave key must say who wrapped it');
+    const id = `${row.senderUserId}@${row.senderNode || ''}:${row.senderPublicKey}`;
+    if (!wrapperChecksRef.current.has(id)) {
+      wrapperChecksRef.current.set(id, (async () => {
+        const statements = row.senderNode ? await remoteStatements(row.senderUserId, row.senderNode) : await localStatements(row.senderUserId);
+        if (statements.size === 0) return true;
+        // Signed by the fingerprint on record for them, if there is one: a
+        // server inventing an identity for someone doesn't get past this.
+        const e = keyRecordsRef.current?.records?.people?.[row.senderNode ? `${row.senderUserId}@${row.senderNode}` : row.senderUserId];
+        const known = e?.identity ? new Set([e.identity, e.previousIdentity].filter(Boolean)) : null;
+        return [...statements.values()].some(st => st.encryptionKey === row.senderPublicKey && (!known || known.has(st.identityKey)));
+      })());
+    }
+    if (!(await wrapperChecksRef.current.get(id))) {
+      wrapperChecksRef.current.delete(id);
+      throw new Error("This wave key was wrapped with a key its sender's fingerprint never signed");
+    }
+  }, [remoteStatements, localStatements]);
+  checkWrapperRef.current = checkWrapper;
 
   // A page of pings decrypts at once; redraw marks once for all of them.
   const noteVerdict = useCallback((pingId, verdict) => {
@@ -929,6 +1044,7 @@ export function E2EEProvider({ children, token, API_URL }) {
   const pingMark = useCallback((ping) => {
     const v = ping?.id ? verdictsRef.current.get(ping.id) : null;
     if (!v) return null;
+    if (v.status === 'unchecked') return null;
     if (v.status !== 'signed') return { mark: 'warn', reason: v.status };
     const e = keyRecordsRef.current?.records?.people?.[v.authorId];
     if (e?.verifiedIdentity && e.verifiedIdentity === v.identityKey) return { mark: 'verified' };
@@ -1148,7 +1264,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     for (const row of rows) {
       try {
         const waveKey = await unwrapWaveKey(row.waveId, row, row.keyVersion);
-        const opts = row.format === 2 ? { format: 2, context: crypto.waveKeyContext(row.waveId, row.keyVersion, address) } : {};
+        const opts = row.format === 2 ? { format: 2, context: crypto.waveKeyContext(row.originWaveId || row.waveId, row.keyVersion, address) } : {};
         const { encryptedKey, nonce } = await crypto.encryptWaveKey(waveKey, kp.publicKey, kp.privateKey, opts);
         waveKeys.push({ waveId: row.waveId, keyVersion: row.keyVersion, encryptedWaveKey: `${encryptedKey}:${nonce}`, senderPublicKey: newKey, format: row.format });
       } catch {
@@ -1243,34 +1359,36 @@ export function E2EEProvider({ children, token, API_URL }) {
    * a newcomer can read the pings from before they joined; it used to send
    * only the current one).
    */
-  const grantWaveKey = useCallback(async (waveId, requestId, requesterId, versions = null) => {
-    if (!privateKey || !publicKeyBase64 || !requesterId) return;
+  const grantWaveKey = useCallback(async (waveId, requestId, requesterId, versions = null, remote = null) => {
+    if (!privateKey || !publicKeyBase64 || (!requesterId && !remote?.userId)) return;
     try {
-      const requesterPublicKey = await lookUpKey(requesterId);
-      if (!requesterPublicKey) {
-        console.warn(`E2EE: Cannot grant wave key for ${waveId} — they have no key`);
+      // v2.153.0: someone on another server is looked up through this one
+      // and given keys bound to them, through the wave's server.
+      const recipient = await recipientOf(remote ? remote.userId : requesterId, remote ? remote.nodeName : null);
+      if (!recipient) {
+        console.warn(`E2EE: Cannot grant wave key for ${waveId} — they have no key, or it isn't signed`);
         return;
       }
       const listRes = await fetchAPI(`/waves/${waveId}/keys/all`);
       if (!listRes.ok) return;
-      const mine = ((await listRes.json()).keys || []).map(k => k.keyVersion);
+      const listed = await listRes.json();
+      const origin = listed.originWaveId || waveId;
+      originIdsRef.current.set(waveId, origin);
+      const mine = (listed.keys || []).map(k => k.keyVersion);
       const wanted = Array.isArray(versions) && versions.length ? mine.filter(v => versions.includes(v)) : mine;
       const keys = [];
-      let senderPublicKey = null;
       for (const keyVersion of wanted) {
         const waveKey = await getVersionedWaveKey(waveId, keyVersion);
         if (!waveKey) continue;
-        const wrapped = await crypto.addParticipantToWave(waveKey, requesterPublicKey, privateKey, publicKeyBase64);
-        senderPublicKey = wrapped.senderPublicKey;
-        keys.push({ keyVersion, encryptedWaveKey: `${wrapped.encryptedWaveKey}:${wrapped.nonce}` });
+        keys.push({ keyVersion, encryptedWaveKey: await wrapFor(waveKey, origin, keyVersion, recipient), format: 2 });
       }
       if (keys.length === 0) {
         console.warn(`E2EE: Cannot grant wave key for ${waveId} — no key available`);
         return;
       }
-      const res = await fetchAPI(`/waves/${waveId}/key-grant`, {
+      const res = await fetchAPI(`/waves/${waveId}/${remote ? 'key-grant-remote' : 'key-grant'}`, {
         method: 'POST',
-        body: JSON.stringify({ requestId, keys, senderPublicKey })
+        body: JSON.stringify({ requestId, keys, senderPublicKey: publicKeyBase64 })
       });
       if (res.ok) {
         console.log(`E2EE: ${keys.length} wave key version(s) granted for request ${requestId}`);
@@ -1281,7 +1399,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     } catch (err) {
       console.warn('Wave key grant error:', err);
     }
-  }, [privateKey, publicKeyBase64, fetchAPI, getVersionedWaveKey, lookUpKey]);
+  }, [privateKey, publicKeyBase64, fetchAPI, getVersionedWaveKey, recipientOf, wrapFor]);
 
   const createWaveWithEncryption = useCallback(async (participants) => {
     if (!privateKey || !publicKeyBase64) {
@@ -1342,14 +1460,14 @@ export function E2EEProvider({ children, token, API_URL }) {
     if (signer) {
       const me = await getSealIdentity();
       const sealed = await crypto.sealSignedPing(content, waveKey, {
-        originWaveId: waveId, authorAddress: crypto.personAddress(me.userId, me.nodeName),
+        originWaveId: await originOf(waveId), authorAddress: crypto.personAddress(me.userId, me.nodeName),
         seq: signer.seq, signingPrivateKey: signer.privateKey,
       });
       return { ciphertext: sealed.ciphertext, nonce: sealed.nonce, keyVersion: version, format: 2 };
     }
     const { ciphertext, nonce } = await crypto.encryptPing(content, waveKey);
     return { ciphertext, nonce, keyVersion: version };
-  }, [getWaveKey, getSigner, getSealIdentity]);
+  }, [getWaveKey, getSigner, getSealIdentity, originOf]);
 
   // `seal` (v2.149.0): { format, authorId } from the ping. Format 2 is bound
   // to the wave and its author, so a ping moved to another wave or credited to
@@ -1394,9 +1512,24 @@ export function E2EEProvider({ children, token, API_URL }) {
       // statements. A ping whose signature doesn't check is not shown.
       if (!seal.authorId) throw new Error('A format-2 ping needs its author');
       const me = await getSealIdentity();
-      const ctx = { originWaveId: waveId, authorAddress: crypto.personAddress(seal.authorId, seal.authorNode || me.nodeName) };
+      // v2.153.0: the wave's id on its own server, and someone elsewhere
+      // named as their server names them in seals.
+      const remoteAuthor = seal.authorNode ? await remoteInfo(seal.authorId, seal.authorNode).catch(() => null) : null;
+      const authorServer = seal.authorNode ? (remoteAuthor?.sealNodeName || seal.authorNode) : me.nodeName;
+      const ctx = { originWaveId: await originOf(waveId), authorAddress: crypto.personAddress(seal.authorId, authorServer) };
       const opened = await crypto.openSignedPing(ciphertext, nonce, waveKey, ctx);
-      const statement = await statementOf(seal.authorId, opened.seq);
+      const statement = await statementOf(seal.authorId, opened.seq, seal.authorNode || null);
+      // v2.153.0: nothing known of the author's keys at all (their server
+      // gone, or never reachable) can't be checked either way: shown like an
+      // unsigned ping, with no mark. Keys known and a signature that doesn't
+      // check is a forgery.
+      if (!statement) {
+        const known = seal.authorNode ? await remoteStatements(seal.authorId, seal.authorNode).catch(() => new Map()) : await localStatements(seal.authorId);
+        if (known.size === 0) {
+          noteVerdict(seal.pingId, { status: 'unchecked', identityKey: null, authorId: seal.authorId });
+          return opened.text;
+        }
+      }
       const signed = !!statement && await crypto.verifyPingSignature(statement.signingKey, opened, ctx);
       // v2.151.0: what's known about who wrote it, for the mark beside their
       // name. A message id is one ping: the same one again under another ping
@@ -1411,7 +1544,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       return opened.text;
     }
     return crypto.decryptPing(ciphertext, nonce, waveKey);
-  }, [getWaveKey, getVersionedWaveKey, requestWaveKey, getSealIdentity, statementOf, noteVerdict]);
+  }, [getWaveKey, getVersionedWaveKey, requestWaveKey, getSealIdentity, statementOf, noteVerdict, remoteInfo, originOf, remoteStatements, localStatements]);
 
   // ============ Audio Encryption (v2.3.0) ============
 
@@ -1639,42 +1772,57 @@ export function E2EEProvider({ children, token, API_URL }) {
   // Only the wave's owner, admins and moderators may (Jared, 2026-11-20); the
   // server says which waves, and checks the new key reaches exactly the
   // people still in the wave.
-  const rotateWaveKey = useCallback(async (waveId) => {
+  // onlyIfNeeded (v2.153.0): for pending renewals, re-checked just before
+  // renewing, so two pages or devices that both saw it pending renew once.
+  const rotateWaveKey = useCallback(async (waveId, { onlyIfNeeded = false } = {}) => {
     if (!privateKey || !publicKeyBase64) {
       throw new Error('E2EE not unlocked');
     }
 
     for (let attempt = 0; attempt < 2; attempt++) {
-      const membersRes = await fetchAPI(`/waves/${waveId}/participants/keys`);
-      if (!membersRes.ok) throw new Error('Failed to list the people in this wave');
+      const [membersRes, keysRes, waveRes] = await Promise.all([
+        fetchAPI(`/waves/${waveId}/participants/keys`), fetchAPI(`/waves/${waveId}/keys/all`), fetchAPI(`/waves/${waveId}`),
+      ]);
+      if (!membersRes.ok || !keysRes.ok) throw new Error('Failed to list the people in this wave');
       const { participants = [] } = await membersRes.json();
+      const { currentKeyVersion = 1, originWaveId } = await keysRes.json();
+      const waveInfo = waveRes.ok ? await waveRes.json() : {};
+      if (onlyIfNeeded && waveRes.ok && !waveInfo.rekeyNeeded) return { success: true, skipped: true };
+      const travellers = waveInfo.travellers || [];
+      const origin = originWaveId || waveId;
+      const nextVersion = currentKeyVersion + 1;
       const me = participants.find(p => p.publicKey === publicKeyBase64)?.userId;
+      const sealMe = await getSealIdentity();
 
-      // Everyone else's key looked up and checked here, not taken from the list.
-      const others = await Promise.all(participants
-        .filter(p => p.publicKey && p.userId !== me)
-        .map(async (p) => ({ userId: p.userId, publicKey: await lookUpKey(p.userId) })));
-      others.push({ userId: 'self', publicKey: publicKeyBase64 });
-
-      const { waveKey, keyDistribution } = await crypto.setupWaveEncryption(
-        others.filter(p => p.publicKey),
-        privateKey,
-        publicKeyBase64
-      );
-      const formattedDistribution = keyDistribution
-        .filter(k => !k.error)
-        .map(({ userId, encryptedWaveKey, nonce, senderPublicKey }) => ({
-          userId: userId === 'self' ? null : userId,
-          encryptedWaveKey: `${encryptedWaveKey}:${nonce}`,
-          senderPublicKey
-        }));
+      // v2.153.0: bound to the new version, for everyone here and, through
+      // their servers, everyone elsewhere whose signed keys can be found.
+      // Someone left out asks for it later.
+      const waveKey = await crypto.generateWaveKey();
+      const keyDistribution = [{
+        userId: null, senderPublicKey: publicKeyBase64, format: 2,
+        encryptedWaveKey: await wrapFor(waveKey, origin, nextVersion, { publicKey: publicKeyBase64, address: crypto.personAddress(sealMe.userId, sealMe.nodeName) }),
+      }];
+      for (const p of participants) {
+        if (!p.publicKey || p.userId === me) continue;
+        const recipient = await recipientOf(p.userId);
+        if (!recipient) continue;
+        keyDistribution.push({ userId: p.userId, senderPublicKey: publicKeyBase64, format: 2, encryptedWaveKey: await wrapFor(waveKey, origin, nextVersion, recipient) });
+      }
+      for (const t of travellers) {
+        if (!t.userId || !t.nodeName) continue;
+        const recipient = await recipientOf(t.userId, t.nodeName).catch(() => null);
+        if (!recipient) continue;
+        keyDistribution.push({ remote: { nodeName: t.nodeName, userId: t.userId }, senderPublicKey: publicKeyBase64, format: 2,
+          encryptedWaveKey: await wrapFor(waveKey, origin, nextVersion, recipient) });
+      }
 
       const res = await fetchAPI(`/waves/${waveId}/key/rotate`, {
         method: 'POST',
-        body: JSON.stringify({ keyDistribution: formattedDistribution })
+        body: JSON.stringify({ keyDistribution, keyVersion: nextVersion, ...(onlyIfNeeded ? { ifNeeded: true } : {}) })
       });
       if (res.ok) {
-        const { newKeyVersion } = await res.json();
+        const { newKeyVersion, skipped } = await res.json();
+        if (skipped) return { success: true, skipped: true, newKeyVersion };
         keyGenerationRef.current++;
         waveKeyCacheRef.current.delete(waveId);
         waveKeyInFlightRef.current.delete(waveId);
@@ -1684,9 +1832,13 @@ export function E2EEProvider({ children, token, API_URL }) {
       }
       const err = await res.json().catch(() => ({}));
       if (err.code !== 'KEY_MEMBERS_CHANGED') throw new Error(err.error || 'Failed to rotate wave key');
+      // Renewed meanwhile, by another device or page (v2.153.0): done, unless
+      // it still needs one.
+      const still = await fetchAPI(`/waves/${waveId}`).then(r => r.ok ? r.json() : null).catch(() => null);
+      if (still && !still.rekeyNeeded) return { success: true, skipped: true };
     }
     throw new Error('The people in this wave kept changing; the key will be renewed later');
-  }, [privateKey, publicKeyBase64, fetchAPI, lookUpKey]);
+  }, [privateKey, publicKeyBase64, fetchAPI, getSealIdentity, recipientOf, wrapFor]);
 
   // Renew every wave this person should, and answer key requests made while
   // this device was away: on unlock, when told, on reconnect, every ten minutes.
@@ -1700,8 +1852,8 @@ export function E2EEProvider({ children, token, API_URL }) {
         const { waves = [] } = await res.json();
         for (const { id } of waves) {
           try {
-            await rotateWaveKey(id);
-            console.log(`E2EE: renewed the key for wave ${id}`);
+            const done = await rotateWaveKey(id, { onlyIfNeeded: true });
+            if (!done?.skipped) console.log(`E2EE: renewed the key for wave ${id}`);
           } catch (err) {
             console.warn(`E2EE: could not renew the key for wave ${id}:`, err.message);
           }
@@ -1715,7 +1867,7 @@ export function E2EEProvider({ children, token, API_URL }) {
         const res = await fetchAPI('/e2ee/key-requests');
         if (res.ok) {
           const { requests = [] } = await res.json();
-          for (const r of requests) await grantWaveKey(r.waveId, r.requestId, r.requesterId, r.versions);
+          for (const r of requests) await grantWaveKey(r.waveId, r.requestId, r.requesterId, r.versions, r.remote || null);
         }
       } catch (err) {
         console.warn('E2EE: pending key requests unavailable:', err.message);
@@ -1767,6 +1919,9 @@ export function E2EEProvider({ children, token, API_URL }) {
     statementsRef.current.clear();
     verdictsRef.current.clear();
     messageIdsRef.current.clear();
+    originIdsRef.current.clear();
+    remoteInfoRef.current.clear();
+    wrapperChecksRef.current.clear();
     signerRef.current = null;
     setMyIdentity(null);
     setKeyChanges([]);
@@ -1813,26 +1968,20 @@ export function E2EEProvider({ children, token, API_URL }) {
     }
 
     try {
-      const participantPublicKey = await lookUpKey(userId);
-      if (!participantPublicKey) {
+      const recipient = await recipientOf(userId);
+      if (!recipient) {
         throw new Error('Participant does not have E2EE set up');
       }
 
-      // Encrypt wave key for the new participant
-      const { encryptedWaveKey, nonce, senderPublicKey } = await crypto.addParticipantToWave(
-        waveKey,
-        participantPublicKey,
-        privateKey,
-        publicKeyBase64
-      );
-
-      // Call the distribute endpoint
+      // Bound to the wave, its current version and them (v2.153.0).
+      const version = waveKeyCacheRef.current.get(waveId)?.version || 1;
       const distributeRes = await fetchAPI(`/waves/${waveId}/key/distribute`, {
         method: 'POST',
         body: JSON.stringify({
           userId,
-          encryptedWaveKey: `${encryptedWaveKey}:${nonce}`,
-          senderPublicKey
+          encryptedWaveKey: await wrapFor(waveKey, await originOf(waveId), version, recipient),
+          senderPublicKey: publicKeyBase64,
+          format: 2,
         })
       });
 
@@ -1846,7 +1995,7 @@ export function E2EEProvider({ children, token, API_URL }) {
       console.error('Distribute key to participant error:', err);
       throw err;
     }
-  }, [privateKey, publicKeyBase64, fetchAPI, getWaveKey, lookUpKey]);
+  }, [privateKey, publicKeyBase64, fetchAPI, getWaveKey, recipientOf, wrapFor, originOf]);
 
   // ============ Encrypted Contacts (v2.18.0) ============
 
