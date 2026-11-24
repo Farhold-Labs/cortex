@@ -4187,6 +4187,41 @@ export class DatabaseSQLite {
       }
     }
 
+    // v2.150.0 — identity keys (docs/federated-e2ee/02-identity-keys.md). A
+    // person's identity key is their fingerprint. It is wrapped only by their
+    // recovery key, never the login password, so a stolen password can't take
+    // it. It signs a statement naming their encryption and signing keys, and
+    // every statement is kept so pings signed under an earlier one still check.
+    // A reset of encryption keys keeps both tables: the identity outlives keys.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_identity_keys (
+        user_id          TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        identity_key     TEXT NOT NULL,
+        wrapped_identity TEXT NOT NULL,
+        identity_salt    TEXT NOT NULL,
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT
+      );
+      CREATE TABLE IF NOT EXISTS user_key_statements (
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        seq            INTEGER NOT NULL,
+        identity_key   TEXT NOT NULL,
+        encryption_key TEXT NOT NULL,
+        signing_key    TEXT NOT NULL,
+        issued_at      TEXT NOT NULL,
+        signature      TEXT NOT NULL,
+        created_at     TEXT NOT NULL,
+        PRIMARY KEY (user_id, seq)
+      );
+    `);
+    {
+      const cols = this.db.prepare('PRAGMA table_info(user_encryption_keys)').all().map(c => c.name);
+      if (cols.length && !cols.includes('signing_key')) {
+        this.db.exec('ALTER TABLE user_encryption_keys ADD COLUMN signing_key TEXT');
+        this.db.exec('ALTER TABLE user_encryption_keys ADD COLUMN encrypted_signing_key TEXT');
+      }
+    }
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -12620,7 +12655,8 @@ export class DatabaseSQLite {
   // Get user's encryption keys (for themselves to decrypt)
   getUserEncryptionKeys(userId) {
     const row = this.db.prepare(`
-      SELECT user_id, public_key, encrypted_private_key, key_derivation_salt, key_version, created_at, updated_at
+      SELECT user_id, public_key, encrypted_private_key, key_derivation_salt, key_version, created_at, updated_at,
+        signing_key, encrypted_signing_key
       FROM user_encryption_keys WHERE user_id = ?
     `).get(userId);
 
@@ -12633,7 +12669,9 @@ export class DatabaseSQLite {
       keyDerivationSalt: row.key_derivation_salt,
       keyVersion: row.key_version,
       createdAt: row.created_at,
-      updatedAt: row.updated_at
+      updatedAt: row.updated_at,
+      signingKey: row.signing_key || null,
+      encryptedSigningKey: row.encrypted_signing_key || null,
     };
   }
 
@@ -12968,6 +13006,128 @@ export class DatabaseSQLite {
         .run(encryptedData, nonce, now, userId);
       return current + 1;
     })();
+  }
+
+  // ============ Identity keys (v2.150.0) ============
+
+  getIdentity(userId) {
+    const row = this.db.prepare('SELECT identity_key, wrapped_identity, identity_salt, created_at, updated_at FROM user_identity_keys WHERE user_id = ?').get(userId);
+    return row ? { identityKey: row.identity_key, wrappedIdentity: row.wrapped_identity, identitySalt: row.identity_salt, createdAt: row.created_at, updatedAt: row.updated_at } : null;
+  }
+
+  getKeyStatements(userId) {
+    return this.db.prepare(`
+      SELECT seq, identity_key, encryption_key, signing_key, issued_at, signature FROM user_key_statements
+      WHERE user_id = ? ORDER BY seq ASC
+    `).all(userId).map(r => ({
+      seq: r.seq, identityKey: r.identity_key, encryptionKey: r.encryption_key,
+      signingKey: r.signing_key, issuedAt: r.issued_at, signature: r.signature,
+    }));
+  }
+
+  getLatestKeyStatement(userId) {
+    const r = this.db.prepare(`
+      SELECT seq, identity_key, encryption_key, signing_key, issued_at, signature FROM user_key_statements
+      WHERE user_id = ? ORDER BY seq DESC LIMIT 1
+    `).get(userId);
+    return r ? { seq: r.seq, identityKey: r.identity_key, encryptionKey: r.encryption_key, signingKey: r.signing_key, issuedAt: r.issued_at, signature: r.signature } : null;
+  }
+
+  nextStatementSeq(userId) {
+    return (this.db.prepare('SELECT MAX(seq) AS m FROM user_key_statements WHERE user_id = ?').get(userId)?.m || 0) + 1;
+  }
+
+  /** Every wrapped wave key this person holds, in every wave. */
+  getAllWaveKeyRowsForUser(userId) {
+    return this.db.prepare(`
+      SELECT wave_id, key_version, encrypted_wave_key, sender_public_key, format
+      FROM wave_encryption_keys WHERE user_id = ? ORDER BY wave_id, key_version
+    `).all(userId).map(r => ({
+      waveId: r.wave_id, keyVersion: r.key_version, encryptedWaveKey: r.encrypted_wave_key,
+      senderPublicKey: r.sender_public_key, format: r.format || 1,
+    }));
+  }
+
+  /**
+   * Put a statement in place, with what goes with it, in one transaction. The
+   * route has checked the signature; this checks that nothing moved meanwhile.
+   *   identity: { identityKey, wrappedIdentity, identitySalt } — set or replace it
+   *   keys: { publicKey, encryptedPrivateKey, salt } — a new encryption keypair
+   *   recovery: { encryptedPrivateKey, recoverySalt } — the recovery key's wrap
+   *   waveKeys: [{ waveId, keyVersion, encryptedWaveKey, senderPublicKey, format }]
+   *     — every wave key the person holds, rewrapped for the new keypair
+   *   keyRecords / contacts: { encryptedData, nonce, expectedVersion } re-encrypted
+   * @returns {{ ok: true, seq } | { ok: false, code }}
+   */
+  applyKeyStatement(userId, { statement, signing, identity = null, keys = null, recovery = null, waveKeys = null, keyRecords = null, contacts = null }) {
+    const now = new Date().toISOString();
+    const fail = (code) => { const e = new Error(code); e.code = code; throw e; };
+    try {
+      return this.db.transaction(() => {
+        if (statement.seq !== this.nextStatementSeq(userId)) fail('STATEMENT_STALE');
+        const current = this.db.prepare('SELECT public_key FROM user_encryption_keys WHERE user_id = ?').get(userId);
+        if (!current) fail('NO_KEYS');
+        if (keys) {
+          if (waveKeys) {
+            const held = this.db.prepare('SELECT wave_id, key_version FROM wave_encryption_keys WHERE user_id = ?').all(userId)
+              .map(r => `${r.wave_id}:${r.key_version}`).sort();
+            const sent = waveKeys.map(k => `${k.waveId}:${k.keyVersion}`).sort();
+            if (held.length !== sent.length || held.some((h, i) => h !== sent[i])) fail('WAVE_KEYS_CHANGED');
+            const upd = this.db.prepare('UPDATE wave_encryption_keys SET encrypted_wave_key = ?, sender_public_key = ?, format = ? WHERE wave_id = ? AND user_id = ? AND key_version = ?');
+            const drop = this.db.prepare('DELETE FROM wave_encryption_keys WHERE wave_id = ? AND user_id = ? AND key_version = ?');
+            for (const k of waveKeys) {
+              if (k.drop) drop.run(k.waveId, userId, k.keyVersion);
+              else upd.run(k.encryptedWaveKey, k.senderPublicKey, k.format || 1, k.waveId, userId, k.keyVersion);
+            }
+          }
+          this.db.prepare(`
+            UPDATE user_encryption_keys SET public_key = ?, encrypted_private_key = ?, key_derivation_salt = ?,
+              key_version = key_version + 1, updated_at = ? WHERE user_id = ?
+          `).run(keys.publicKey, keys.encryptedPrivateKey, keys.salt, now, userId);
+          // A waiting recovery key or keypair wraps the keys being replaced.
+          this.db.prepare("DELETE FROM credential_handovers WHERE subject_id = ? AND kind IN ('e2ee-recovery-key', 'e2ee-keypair')").run(userId);
+        } else if (current.public_key !== statement.encryptionKey) {
+          fail('NOT_CURRENT_KEY');
+        }
+        this.db.prepare('UPDATE user_encryption_keys SET signing_key = ?, encrypted_signing_key = ?, updated_at = ? WHERE user_id = ?')
+          .run(signing.signingKey, signing.encryptedSigningKey, now, userId);
+        if (identity) {
+          this.db.prepare(`
+            INSERT INTO user_identity_keys (user_id, identity_key, wrapped_identity, identity_salt, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET identity_key = excluded.identity_key, wrapped_identity = excluded.wrapped_identity,
+              identity_salt = excluded.identity_salt, created_at = excluded.created_at, updated_at = NULL
+          `).run(userId, identity.identityKey, identity.wrappedIdentity, identity.identitySalt, now);
+        }
+        if (recovery) {
+          this.db.prepare(`
+            INSERT INTO user_recovery_keys (user_id, encrypted_private_key, recovery_salt, created_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET encrypted_private_key = excluded.encrypted_private_key,
+              recovery_salt = excluded.recovery_salt, created_at = excluded.created_at
+          `).run(userId, recovery.encryptedPrivateKey, recovery.recoverySalt, now);
+          this.db.prepare("DELETE FROM credential_handovers WHERE subject_id = ? AND kind = 'e2ee-recovery-key'").run(userId);
+        }
+        if (keyRecords && this.saveUserKeyRecords(userId, keyRecords.encryptedData, keyRecords.nonce, keyRecords.expectedVersion) === null) {
+          fail('KEY_RECORDS_STALE');
+        }
+        if (contacts && !this.saveEncryptedContacts(userId, contacts.encryptedData, contacts.nonce, contacts.expectedVersion).success) {
+          fail('CONTACTS_STALE');
+        }
+        this.db.prepare(`
+          INSERT INTO user_key_statements (user_id, seq, identity_key, encryption_key, signing_key, issued_at, signature, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(userId, statement.seq, statement.identityKey, statement.encryptionKey, statement.signingKey, statement.issuedAt, statement.signature, now);
+        return { ok: true, seq: statement.seq };
+      })();
+    } catch (err) {
+      if (err.code && /^[A-Z_]+$/.test(err.code)) return { ok: false, code: err.code };
+      throw err;
+    }
+  }
+
+  setIdentityWrap(userId, wrappedIdentity, identitySalt) {
+    this.db.prepare('UPDATE user_identity_keys SET wrapped_identity = ?, identity_salt = ?, updated_at = ? WHERE user_id = ?')
+      .run(wrappedIdentity, identitySalt, new Date().toISOString(), userId);
   }
 
   // ============ Wave Key Redistribution (v2.47.3) ============

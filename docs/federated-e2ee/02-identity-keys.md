@@ -1,8 +1,8 @@
 # Identity keys — a fingerprint that lasts
 
 Status: **decided** (2026-11-24). Revises `01-design.md`: the fingerprints of
-phase 1 (v2.149.0), and format 2 before anything writes it. Phase 1b being
-built.
+phase 1 (v2.149.0), and format 2 before anything writes it. **Phase 1b built
+in v2.150.0** (see "Phase 1b as built" at the end).
 
 ## Why
 
@@ -50,10 +50,10 @@ device: it is opened with the recovery key, used, and dropped.
 The identity key signs a **key statement**:
 
 ```
-"cortex-keys-v1" ‖ address ‖ seq ‖ encryption key (SPKI) ‖ signing key (SPKI) ‖ issuedAt
+"cortex-keys-v1" ‖ user id ‖ seq ‖ encryption key (SPKI) ‖ signing key (SPKI) ‖ issuedAt
 ```
 
-- **address** is `<user id>@<server name>`, as in format 2, so a statement
+- **user id** (built: not the full address, see "as built"), so a statement
   can't be moved to another account.
 - **seq** goes up by one with each replacement. Devices remember the highest
   seq seen per person (in the encrypted record of keys seen) and refuse a
@@ -219,3 +219,47 @@ pings are sealed with the shared wave key. With signatures they can't, and the
   who knew the old one sees the change.
 - Your own server serves you the app; a server willing to serve a different
   app is out of reach of any of this (PRIVACY.md).
+
+## Phase 1b as built (v2.150.0)
+
+Where the build settled details the text above left open, or changed them:
+
+- **A statement names the user id, not the full address.** A server renaming
+  itself (or naming itself for the first time, when it enables federation)
+  would otherwise invalidate every identity on it at once, and nobody could
+  re-sign without their recovery key. Records of people on other servers are
+  kept per address, so a statement can't stand in for someone elsewhere: the
+  impostor would show the real person's fingerprint as an unverified stranger
+  and hold none of their private keys. Format-2 pings still bind the full
+  address; the rename refusal for those comes with phase 1c.
+- **The signing key is sealed under a key derived from the encryption
+  keypair** (HKDF over ECDH with itself, bound to `cortex-signing-key-wrap-v1`
+  and the user id), not wrapped twice by password and recovery key. Whatever
+  opens the encryption key opens it, so unlocking, recovery, password changes
+  and the session cache needed no change.
+- **Replace my keys** asks for the password that unlocks encryption (it wraps
+  the new key) and the recovery key (it opens the identity and wraps the new
+  key too). Everything sealed to the old keypair comes in the same request
+  and lands in one transaction: every wave key held (a row that won't open is
+  dropped and asked for again), the record of keys seen, the contacts. The
+  device made the new keys and the server keeps them wrapped by the password,
+  so there is nothing to hand over and no pending state.
+- **Keep my fingerprint** (after a reset) opens the identity with the
+  previous recovery key and wraps it under a new one, shown once, because the
+  device never knows the key setup showed. **Replace my fingerprint** also
+  makes a new recovery key.
+- **Making the identity.** A manual setup, which shows the recovery key, makes
+  it at once. Automatic setup at registration never shows its key, so it
+  doesn't: a prompt asks once a session (Settings → Security → Your
+  fingerprint always has it), with the recovery key or a new one (decision 2).
+- **A person's own identity** is noted in their own record, so a change they
+  didn't make on this device is said in Settings with its date.
+- **Statements** are all kept (`user_key_statements`), so a ping signed under
+  an earlier one still checks. `GET /api/e2ee/keys/user/:id/statements`.
+- **Rotation and wave keys.** Replacing keys doesn't renew any wave's key.
+  Someone who stole the password could read what was sent while they had it;
+  once the password is changed they can't log in, and the server gives them
+  nothing more. A wave's owner can still renew its key.
+- **Not yet:** the check that a wrapped key's wrapper is in a member's
+  statement, and the ✓ and ⚠ beside authors, come with phase 1c, when devices
+  write signed pings.

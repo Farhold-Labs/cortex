@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { uploadFile } from '../../utils/uploads.js';
 import { useWindowSize } from '../../hooks/useWindowSize.js';
-import { SUCCESS, CONFIRM, CONFIRM_DIALOG, EMPTY, UI_LABELS, formatError } from '../../../messages.js';
+import { SUCCESS, CONFIRM, CONFIRM_DIALOG, EMPTY, UI_LABELS, formatError, KEY_FINGERPRINT } from '../../../messages.js';
 import { API_URL, canAccess, FONT_SIZES, WAVE_DENSITY, DEFAULT_WAVE_DENSITY, MESSAGE_FONTS, DEFAULT_MESSAGE_FONT } from '../../config/constants.js';
 import { THEMES } from '../../config/themes.js';
 import { storage } from '../../utils/storage.js';
@@ -131,6 +131,7 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
   // E2EE Recovery Key state (v1.19.0)
   const [showE2EERecovery, setShowE2EERecovery] = useState(false);
   const [e2eeRecoveryKey, setE2eeRecoveryKey] = useState(null);
+  const [e2eeCurrentRecovery, setE2eeCurrentRecovery] = useState('');
   const [e2eeRecoveryLoading, setE2eeRecoveryLoading] = useState(false);
   const [e2eeRecoveryCopied, setE2eeRecoveryCopied] = useState(false);
   const fileInputRef = useRef(null);
@@ -2029,9 +2030,9 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
           )}
         </CollapsibleSection>
 
-        {/* Your key's fingerprint (v2.149.0) */}
+        {/* Your fingerprint (v2.149.0; your identity's since v2.150.0) */}
         {e2ee.isE2EEEnabled && (
-          <CollapsibleSection title="YOUR ENCRYPTION KEY" isOpen={openSub === 'myKey'} onToggle={() => toggleSub('myKey')} isMobile={isMobile}>
+          <CollapsibleSection title="YOUR FINGERPRINT" isOpen={openSub === 'myKey'} onToggle={() => toggleSub('myKey')} isMobile={isMobile}>
             <MyKeyFingerprint />
           </CollapsibleSection>
         )}
@@ -2116,6 +2117,22 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                     </span>
                   </div>
 
+                  {/* v2.150.0: the new key must carry your fingerprint, which only the current one opens. */}
+                  {e2ee.myIdentity && !['none', 'unknown'].includes(e2ee.myIdentity.state) && (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', color: 'var(--text-secondary)', fontSize: '0.7rem', marginBottom: '12px' }}>
+                      {KEY_FINGERPRINT.currentRecovery}
+                      <input
+                        value={e2eeCurrentRecovery}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
+                        onChange={e => setE2eeCurrentRecovery(e.target.value.toUpperCase())}
+                        style={{ fontFamily: 'monospace', padding: '8px', fontSize: '0.85rem', background: 'var(--bg-base)', border: '1px solid var(--border-primary)', color: 'var(--text-primary)', width: '100%', maxWidth: '22rem', boxSizing: 'border-box' }}
+                      />
+                      <span style={{ color: 'var(--text-dim)', lineHeight: 1.5 }}>{KEY_FINGERPRINT.currentRecoveryHint}</span>
+                    </label>
+                  )}
+
                   <button
                     onClick={async () => {
                       if (!e2ee.isUnlocked) {
@@ -2124,7 +2141,8 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
                       }
                       setE2eeRecoveryLoading(true);
                       try {
-                        const result = await e2ee.regenerateRecoveryKey();
+                        const result = await e2ee.regenerateRecoveryKey(e2eeCurrentRecovery.trim() || null);
+                        setE2eeCurrentRecovery('');
                         if (result.success) {
                           setE2eeRecoveryKey(result.recoveryKey);
                           showToast('New recovery key generated', 'success');

@@ -41,6 +41,7 @@ import { initializeApp as initializeFirebaseApp, getApps as getFirebaseApps, cer
 import { getMessaging as getFirebaseMessaging } from 'firebase-admin/messaging';
 import { plainText } from './lib/plain-text.js';
 import { isReservedHandle } from './lib/reserved-handles.js';
+import * as keyStatements from './lib/key-statements.js';
 import { canAccessMedia, validMediaTarget } from './lib/media-access.js';
 import { HlsSessions, proxyMedia, upstreamUrl } from './lib/media-proxy.js';
 import { BroadcastRecorder, recordingConfigFromEnv, recordingKey } from './lib/broadcast-recording.js';
@@ -7424,6 +7425,13 @@ app.post('/api/e2ee/keys/register', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Invalid key format (must be Base64)' });
     }
 
+    // v2.150.0: keys signed by an identity are replaced only with a new
+    // statement (POST /api/e2ee/keys/replace); unsigned keys over them would
+    // be refused by every device.
+    if (db.hasUserEncryptionKeys(req.user.userId) && db.getIdentity(req.user.userId)) {
+      return res.status(409).json({ error: 'Replace your keys from Settings → Security instead.', code: 'USE_REPLACE_KEYS' });
+    }
+
     const result = db.createUserEncryptionKeys(req.user.userId, publicKey, encryptedPrivateKey, salt);
 
     // Log E2EE setup activity
@@ -7459,7 +7467,9 @@ app.get('/api/e2ee/keys/me', authenticateToken, (req, res) => {
       encryptedPrivateKey: keys.encryptedPrivateKey,
       keyDerivationSalt: keys.keyDerivationSalt,
       keyVersion: keys.keyVersion,
-      createdAt: keys.createdAt
+      createdAt: keys.createdAt,
+      signingKey: keys.signingKey,
+      encryptedSigningKey: keys.encryptedSigningKey,
     });
   } catch (err) {
     console.error('E2EE key fetch error:', err);
@@ -7476,7 +7486,15 @@ app.get('/api/e2ee/keys/user/:id', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'User has not set up E2EE' });
     }
 
-    res.json({ publicKey });
+    // v2.150.0: their identity and its latest statement, which the device
+    // checks before giving them a wave key. Returned as stored, even when it
+    // doesn't name this key: the device must see that, not be spared it.
+    const identity = db.getIdentity(req.params.id);
+    res.json({
+      publicKey,
+      identityKey: identity?.identityKey || null,
+      statement: identity ? statementView(db.getLatestKeyStatement(req.params.id)) : null,
+    });
   } catch (err) {
     console.error('E2EE public key fetch error:', err);
     res.status(500).json({ error: 'Failed to fetch public key' });
@@ -7497,6 +7515,8 @@ app.get('/api/e2ee/status', authenticateToken, (req, res) => {
       // encryption, so a ping is bound to its author on every server.
       userId: req.user.userId,
       nodeName: db.getServerIdentity?.()?.nodeName || FEDERATION_NODE_NAME || null,
+      // v2.150.0
+      hasIdentity: !!db.getIdentity(req.user.userId),
     });
   } catch (err) {
     console.error('E2EE status check error:', err);
@@ -7570,6 +7590,9 @@ app.post('/api/e2ee/keys/rotate/confirm', authenticateToken, (req, res) => {
   try {
     const pending = db.takeHandover('e2ee-keypair', req.user.userId);
     if (!pending?.publicKey) return res.json({ confirmed: false });
+    if (db.getIdentity(req.user.userId)) {
+      return res.status(409).json({ error: 'Replace your keys from Settings → Security instead.', code: 'USE_REPLACE_KEYS' });
+    }
     const result = db.createUserEncryptionKeys(req.user.userId, pending.publicKey, pending.encryptedPrivateKey, pending.salt);
     if (db.logActivity) {
       db.logActivity(req.user.userId, 'e2ee_key_rotation', 'user', req.user.userId, {
@@ -7596,6 +7619,9 @@ app.post('/api/e2ee/keys/rotate', authenticateToken, (req, res) => {
     // Check if user already has keys
     if (!db.hasUserEncryptionKeys(req.user.userId)) {
       return res.status(400).json({ error: 'No existing keys to rotate. Use /api/e2ee/keys/register instead.' });
+    }
+    if (db.getIdentity(req.user.userId)) {
+      return res.status(409).json({ error: 'Replace your keys from Settings → Security instead.', code: 'USE_REPLACE_KEYS' });
     }
 
     // The new keypair is not put in place until the device that made it
@@ -7649,6 +7675,24 @@ app.post('/api/e2ee/keys/update', authenticateToken, (req, res) => {
   }
 });
 
+/**
+ * A new recovery key must carry the identity along (v2.150.0): the identity
+ * is wrapped only by the recovery key, so a new one has to wrap it too, and
+ * only someone holding the identity can do that. The proof is a signature by
+ * the identity over the new wrap. Without it a password thief could replace
+ * the recovery key and take the identity with it.
+ * @returns {null} no identity | {object} the wrap to keep | {false} refused
+ */
+function identityRewrap(userId, body) {
+  const identity = db.getIdentity(userId);
+  if (!identity) return null;
+  const { wrappedIdentity, identitySalt, identityProof } = body || {};
+  if (!isB64(wrappedIdentity, 4000) || !isB64(identitySalt, 64)) return false;
+  const ok = keyStatements.verifySignature(identity.identityKey,
+    keyStatements.rewrapBytes({ userId, wrappedIdentity, identitySalt }), identityProof);
+  return ok ? { wrappedIdentity, identitySalt } : false;
+}
+
 // Setup recovery key
 app.post('/api/e2ee/recovery/setup', authenticateToken, (req, res) => {
   try {
@@ -7664,7 +7708,9 @@ app.post('/api/e2ee/recovery/setup', authenticateToken, (req, res) => {
     // Replacing a recovery key the person already has waits for their
     // confirmation, like regenerating (v2.146.1).
     if (db.getRecoveryKeyInfo(req.user.userId) && db.setHandover) {
-      db.setHandover('e2ee-recovery-key', req.user.userId, { encryptedPrivateKey, recoverySalt, hint: sanitizedHint });
+      const rewrap = identityRewrap(req.user.userId, req.body);
+      if (rewrap === false) return res.status(403).json({ error: 'Enter your current recovery key to keep your fingerprint.', code: 'IDENTITY_PROOF_REQUIRED' });
+      db.setHandover('e2ee-recovery-key', req.user.userId, { encryptedPrivateKey, recoverySalt, hint: sanitizedHint, ...(rewrap || {}) });
       return res.json({ success: true, message: 'Recovery key waiting for confirmation', hasHint: !!sanitizedHint, pendingConfirm: true });
     }
     const result = db.createRecoveryKey(req.user.userId, encryptedPrivateKey, recoverySalt, sanitizedHint);
@@ -7718,9 +7764,11 @@ app.post('/api/e2ee/recovery/regenerate', authenticateToken, (req, res) => {
     if (!db.getRecoveryKeyInfo(req.user.userId)) {
       return res.status(404).json({ error: 'No existing recovery key to regenerate' });
     }
+    const rewrap = identityRewrap(req.user.userId, req.body);
+    if (rewrap === false) return res.status(403).json({ error: 'Enter your current recovery key to keep your fingerprint.', code: 'IDENTITY_PROOF_REQUIRED' });
     // The new key replaces the old one only once the person confirms they saved
     // it, or recovers with it (v2.146.1). Until then the old key still works.
-    db.setHandover('e2ee-recovery-key', req.user.userId, { encryptedPrivateKey, recoverySalt });
+    db.setHandover('e2ee-recovery-key', req.user.userId, { encryptedPrivateKey, recoverySalt, ...(rewrap || {}) });
 
     // Log recovery regeneration
     if (db.logActivity) {
@@ -7747,6 +7795,7 @@ app.post('/api/e2ee/recovery/confirm', authenticateToken, (req, res) => {
   } else {
     db.updateRecoveryKey(req.user.userId, pending.encryptedPrivateKey, pending.recoverySalt);
   }
+  if (pending.wrappedIdentity) db.setIdentityWrap(req.user.userId, pending.wrappedIdentity, pending.identitySalt);
   if (db.logActivity) db.logActivity(req.user.userId, 'e2ee_recovery_confirmed', 'user', req.user.userId, getRequestMeta(req));
   res.json({ confirmed: true });
 });
@@ -7799,6 +7848,191 @@ app.post('/api/e2ee/keys/reset', authenticateToken, (req, res) => {
     console.error('Self-service E2EE reset error:', err);
     res.status(500).json({ error: 'Failed to reset encryption keys' });
   }
+});
+
+// ============ Identity keys (v2.150.0) ============
+// docs/federated-e2ee/02-identity-keys.md. A person's fingerprint is their
+// identity key's. The identity signs a statement naming their encryption and
+// signing keys, so their keys can be replaced while the fingerprint, and
+// everyone's verification of it, stays. The server checks every statement
+// before storing it; devices check again when they read one.
+
+const B64 = keyStatements.BASE64;
+const isB64 = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max && B64.test(v);
+
+/**
+ * The statement in a request, checked: signed by `identityKey`, for this
+ * person, naming `encryptionKey` and the request's signing key, next in line.
+ * @returns {{ statement, signing } | { error }}
+ */
+function checkedStatement(userId, body, identityKey, encryptionKey) {
+  const { statement, signingKey, encryptedSigningKey } = body || {};
+  if (!keyStatements.p384Key(signingKey) || !isB64(encryptedSigningKey, 4000)) return { error: 'Invalid signing key' };
+  if (!statement || !Number.isInteger(statement.seq) || !keyStatements.isIsoTime(statement.issuedAt) || !isB64(statement.signature, 200)) {
+    return { error: 'Invalid key statement' };
+  }
+  if (statement.seq !== db.nextStatementSeq(userId)) return { error: 'Key statement out of order', code: 'STATEMENT_STALE', status: 409 };
+  const fields = { userId, seq: statement.seq, encryptionKey, signingKey, issuedAt: statement.issuedAt };
+  if (!keyStatements.verifyStatement(identityKey, fields, statement.signature)) return { error: 'Key statement signature does not check', code: 'BAD_STATEMENT' };
+  return {
+    statement: { ...fields, identityKey, signature: statement.signature },
+    signing: { signingKey, encryptedSigningKey },
+  };
+}
+
+function checkedRecovery(recovery) {
+  if (!recovery) return null;
+  if (!isB64(recovery.encryptedPrivateKey, 4000) || !isB64(recovery.recoverySalt, 64)) return false;
+  return { encryptedPrivateKey: recovery.encryptedPrivateKey, recoverySalt: recovery.recoverySalt };
+}
+
+function statementView(st) {
+  return st ? { seq: st.seq, encryptionKey: st.encryptionKey, signingKey: st.signingKey, issuedAt: st.issuedAt, signature: st.signature } : null;
+}
+
+const STATEMENT_ERRORS = {
+  STATEMENT_STALE: [409, 'Your keys changed on another device meanwhile. Try again.'],
+  NO_KEYS: [400, 'Set up encryption first.'],
+  NOT_CURRENT_KEY: [409, 'Your encryption key changed on another device meanwhile. Try again.'],
+  WAVE_KEYS_CHANGED: [409, 'You were given a wave key meanwhile. Try again.'],
+  KEY_RECORDS_STALE: [409, 'Your record of keys changed on another device meanwhile. Try again.'],
+  CONTACTS_STALE: [409, 'Your contacts changed on another device meanwhile. Try again.'],
+};
+
+function sendApplied(res, result, extra = {}) {
+  if (result.ok) return res.json({ success: true, seq: result.seq, ...extra });
+  const [status, error] = STATEMENT_ERRORS[result.code] || [409, 'Try again.'];
+  return res.status(status).json({ error, code: result.code });
+}
+
+// Your own identity: its public key, its wrap (opened only with your recovery
+// key), and whether its latest statement names the key you have now.
+app.get('/api/e2ee/identity', authenticateToken, (req, res) => {
+  const userId = req.user.userId;
+  const identity = db.getIdentity(userId);
+  const keys = db.getUserEncryptionKeys(userId);
+  const latest = db.getLatestKeyStatement(userId);
+  if (!identity) return res.status(404).json({ error: 'No identity yet', needsIdentity: true, nextSeq: db.nextStatementSeq(userId) });
+  // A recovery key waiting for confirmation wraps the identity too.
+  const pending = db.getHandover ? db.getHandover('e2ee-recovery-key', userId) : null;
+  res.json({
+    identityKey: identity.identityKey,
+    wrappedIdentity: identity.wrappedIdentity,
+    identitySalt: identity.identitySalt,
+    createdAt: identity.createdAt,
+    pending: pending?.payload?.wrappedIdentity ? { wrappedIdentity: pending.payload.wrappedIdentity, identitySalt: pending.payload.identitySalt } : null,
+    statement: statementView(latest),
+    current: !!(latest && keys && latest.identityKey === identity.identityKey && latest.encryptionKey === keys.publicKey && latest.signingKey === keys.signingKey),
+    nextSeq: db.nextStatementSeq(userId),
+  });
+});
+
+/**
+ * Make, replace or keep an identity, signing a statement for the current keys.
+ *   create:  there is none yet.
+ *   replace: a new one (the old recovery key was lost or stolen). Everyone who
+ *            verified the old one sees it change; that is the point.
+ *   keep:    the same identity, opened with the recovery key, signing new
+ *            signing keys for the current encryption key (after a reset).
+ * replace and keep come with a new recovery key, saved by the person first.
+ */
+app.post('/api/e2ee/identity', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { mode, identityKey, wrappedIdentity, identitySalt } = req.body || {};
+    if (!['create', 'replace', 'keep'].includes(mode)) return res.status(400).json({ error: 'Invalid mode' });
+    const keys = db.getUserEncryptionKeys(userId);
+    if (!keys) return res.status(400).json({ error: 'Set up encryption first.', code: 'NO_KEYS' });
+    const existing = db.getIdentity(userId);
+    if (mode === 'create' && existing) return res.status(409).json({ error: 'You already have an identity', code: 'IDENTITY_EXISTS' });
+    if (mode !== 'create' && !existing) return res.status(404).json({ error: 'No identity yet', code: 'NO_IDENTITY' });
+    const idKey = mode === 'keep' ? existing.identityKey : identityKey;
+    if (!keyStatements.p384Key(idKey) || (mode === 'keep' && identityKey && identityKey !== existing.identityKey)) {
+      return res.status(400).json({ error: 'Invalid identity key' });
+    }
+    if (!isB64(wrappedIdentity, 4000) || !isB64(identitySalt, 64)) return res.status(400).json({ error: 'Invalid identity wrap' });
+    const recovery = checkedRecovery(req.body.recovery);
+    if (recovery === false || (mode !== 'create' && !recovery)) return res.status(400).json({ error: 'A new recovery key is required' });
+    const checked = checkedStatement(userId, req.body, idKey, keys.publicKey);
+    if (checked.error) return res.status(checked.status || 400).json({ error: checked.error, code: checked.code });
+    const result = db.applyKeyStatement(userId, {
+      statement: checked.statement,
+      signing: checked.signing,
+      identity: { identityKey: idKey, wrappedIdentity, identitySalt },
+      recovery,
+    });
+    if (result.ok && db.logActivity) {
+      db.logActivity(userId, `e2ee_identity_${mode === 'create' ? 'created' : mode === 'replace' ? 'replaced' : 'kept'}`, 'user', userId, { ...getRequestMeta(req), seq: result.seq });
+    }
+    return sendApplied(res, result);
+  } catch (err) {
+    console.error('E2EE identity error:', err);
+    res.status(500).json({ error: 'Failed to save identity' });
+  }
+});
+
+// Every wrapped wave key you hold, for rewrapping when you replace your keys.
+app.get('/api/e2ee/wave-keys', authenticateToken, (req, res) => {
+  res.json({ keys: db.getAllWaveKeyRowsForUser(req.user.userId) });
+});
+
+/**
+ * Replace my keys: a new encryption keypair and signing key, signed by the
+ * identity you already have, so your fingerprint and everyone's verification
+ * of it stay. Everything sealed to the old keypair comes along re-sealed in
+ * the same request (wave keys, your record of keys seen, your contacts), and
+ * is put in place in one transaction or not at all.
+ */
+app.post('/api/e2ee/keys/replace', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const identity = db.getIdentity(userId);
+    if (!identity) return res.status(404).json({ error: 'No identity yet', code: 'NO_IDENTITY' });
+    const { publicKey, encryptedPrivateKey, salt, waveKeys, keyRecords, contacts } = req.body || {};
+    if (!keyStatements.p384Key(publicKey) || !isB64(encryptedPrivateKey, 4000) || !isB64(salt, 64)) {
+      return res.status(400).json({ error: 'Invalid keys' });
+    }
+    const recovery = checkedRecovery(req.body.recovery);
+    if (!recovery) return res.status(400).json({ error: 'Invalid recovery wrap' });
+    // Each wave key you hold, rewrapped for the new keypair, or `drop` for one
+    // that wouldn't open (a member's device gives it again on request).
+    if (!Array.isArray(waveKeys) || waveKeys.length > 20000 || !waveKeys.every(k =>
+      k && typeof k.waveId === 'string' && Number.isInteger(k.keyVersion) && (k.drop === true || (
+        typeof k.encryptedWaveKey === 'string' && k.encryptedWaveKey.length <= 1000
+        && /^[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/.test(k.encryptedWaveKey)
+        && k.senderPublicKey === publicKey && (k.format === 1 || k.format === 2))))) {
+      return res.status(400).json({ error: 'Invalid wave keys' });
+    }
+    const blob = (b) => b === null || b === undefined ? null
+      : (isB64(b.encryptedData, 1024 * 1024) && isB64(b.nonce, 32) && Number.isInteger(b.expectedVersion) ? b : false);
+    const records = blob(keyRecords);
+    const contactList = blob(contacts);
+    if (records === false || contactList === false) return res.status(400).json({ error: 'Invalid re-encrypted data' });
+    const checked = checkedStatement(userId, req.body, identity.identityKey, publicKey);
+    if (checked.error) return res.status(checked.status || 400).json({ error: checked.error, code: checked.code });
+    const result = db.applyKeyStatement(userId, {
+      statement: checked.statement,
+      signing: checked.signing,
+      keys: { publicKey, encryptedPrivateKey, salt },
+      recovery,
+      waveKeys,
+      keyRecords: records,
+      contacts: contactList,
+    });
+    if (result.ok && db.logActivity) {
+      db.logActivity(userId, 'e2ee_keys_replaced', 'user', userId, { ...getRequestMeta(req), seq: result.seq, waveKeys: waveKeys.length });
+    }
+    return sendApplied(res, result);
+  } catch (err) {
+    console.error('E2EE key replace error:', err);
+    res.status(500).json({ error: 'Failed to replace keys' });
+  }
+});
+
+// Someone's statements, oldest first, to check pings signed under earlier ones.
+app.get('/api/e2ee/keys/user/:id/statements', authenticateToken, (req, res) => {
+  const identity = db.getIdentity(req.params.id);
+  res.json({ identityKey: identity?.identityKey || null, statements: db.getKeyStatements(req.params.id).map(st => ({ ...statementView(st), identityKey: st.identityKey })) });
 });
 
 // ============ Profile Routes ============

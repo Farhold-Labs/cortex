@@ -439,7 +439,7 @@ CREATE TABLE IF NOT EXISTS user_encryption_keys (
     key_version INTEGER DEFAULT 1,         -- Incremented on key rotation
     created_at TEXT NOT NULL,
     updated_at TEXT
-);
+, signing_key TEXT, encrypted_signing_key TEXT);
 
 CREATE TABLE IF NOT EXISTS wave_encryption_keys (
     id TEXT PRIMARY KEY,
@@ -1669,6 +1669,27 @@ CREATE TABLE IF NOT EXISTS federation_key_handovers (
         attempts        INTEGER NOT NULL DEFAULT 0,
         last_error      TEXT,
         confirmed_at    TEXT
+      );
+
+CREATE TABLE IF NOT EXISTS user_identity_keys (
+        user_id          TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        identity_key     TEXT NOT NULL,
+        wrapped_identity TEXT NOT NULL,
+        identity_salt    TEXT NOT NULL,
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT
+      );
+
+CREATE TABLE IF NOT EXISTS user_key_statements (
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        seq            INTEGER NOT NULL,
+        identity_key   TEXT NOT NULL,
+        encryption_key TEXT NOT NULL,
+        signing_key    TEXT NOT NULL,
+        issued_at      TEXT NOT NULL,
+        signature      TEXT NOT NULL,
+        created_at     TEXT NOT NULL,
+        PRIMARY KEY (user_id, seq)
       );
 
 -- ============ Full-text search triggers ============
