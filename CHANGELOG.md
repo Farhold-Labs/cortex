@@ -13,8 +13,8 @@ Calls in the Android app behave like phone calls, two video calls that hung up j
 
 ### Added
 - **Call volume, not media volume** (Android app). While a call lasts the volume buttons set the call volume, as on a phone call; a phone with media turned down is no longer silent on a call. Sound goes to a connected headset or Bluetooth device, else the loudspeaker (never the earpiece), and follows a headset plugged in mid-call. Everything goes back when the call ends.
-- **The call floats when you leave the app** (Android app). Press Home or switch apps during a call and Cortex shrinks into a floating window that shows only the call, like the phone app. Tap it to go back.
-- **An ongoing-call notification** with HANG UP (Android app). It is also what keeps your microphone working while Cortex is off screen: Android silences the microphone of an app that isn't on screen unless it says it is in a call.
+- **Leave the app and the call carries on** (Android app). Press Home or switch apps during a call and Cortex goes to the background like any app. An **ongoing-call notification** with a timer and HANG UP is the way back. It is also what keeps your microphone working in the background: Android silences the microphone of an app that isn't on screen unless it says it is in a call.
+  - A floating picture-in-picture window was tried first. It was dropped after testing on a phone: the call's buttons covered the picture, and the notification already gives the call a way back.
 - These apply to every call in the app: direct calls, wave calls and voice channels.
 
 ### Fixed
@@ -35,7 +35,7 @@ Calls in the Android app behave like phone calls, two video calls that hung up j
   - LEAVE in a wave's people panel shows the in-app dialog; Cancel keeps you in the wave and Leave leaves it, with no browser dialog either way.
   - Removing a contact asks, and Cancel leaves the contacts unchanged.
 - A video call between two accounts on dev stayed up after the answer, so the farhold failures did not reproduce in a browser.
-- **Android:** the APK builds, and lint reports no errors. **Not tried on a phone:** call volume, the floating window and the notification need a device. This box has no emulator (no KVM).
+- **Android:** the APK builds, and lint reports no errors. A test build pointed at dev was tried on a phone; the floating window was removed after that test. This box has no emulator (no KVM).
 - Read on farhold (read-only, with permission): tonight's `direct_calls` rows and the API log, which had no call lines at all.
 
 ## [2.147.1] - 2026-11-23

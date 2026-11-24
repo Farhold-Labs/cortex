@@ -60,10 +60,10 @@ caller taps CALL ──► server checks contacts + blocks ──► call row: r
 ### In a call, like a phone call (v2.148.0, needs the v2.148.0 APK)
 Applies to every call in the Android app (direct, wave and voice channel), not only direct calls.
 - **Call volume.** While a call lasts, Android is in communication mode and the volume buttons set the call volume, not the media volume (`CallAudio`). Sound goes to a headset or Bluetooth device when one is connected, else the loudspeaker, never the earpiece, and it follows a headset plugged in mid-call.
-- **Floating window.** Leaving the app during a call (Home, or switching apps) shrinks it into a picture-in-picture window showing only the call, as the phone app does. Android 12+ enters it as the app leaves; 8–11 on `onUserLeaveHint`. The web layer hears `pip` and shows just the stage.
-- **Ongoing-call notification** (`OngoingCallService`, a microphone/camera foreground service): tap to go back, HANG UP to end. It is also what keeps the microphone working off screen, which Android otherwise silences.
+- **Leaving the app leaves it; the call goes on.** An **ongoing-call notification** (`OngoingCallService`, a microphone/camera foreground service) is the way back: tap to return, HANG UP to end. It is also what keeps the microphone working in the background, which Android otherwise silences.
+- **No floating window.** Picture-in-picture was built and dropped after a phone test (2026-11-23): the call's buttons covered the picture, and the notification already does the job.
 - The web layer drives it from `VoiceCallService.syncNativeCall()`; an older APK ignores it.
-- Verified only by building and lint. It needs trying on a phone.
+- Tried on a phone with a test build pointed at dev.
 
 ### Phase 3: iPhone
 CallKit and VoIP pushes need the App Store app, which doesn't exist yet. Until then an iPhone gets the in-app ring and web push (Safari 16.4+, added to the home screen).

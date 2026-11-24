@@ -11,8 +11,6 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-import com.farhold.cortex.MainActivity;
-
 import java.lang.ref.WeakReference;
 
 /**
@@ -30,13 +28,16 @@ import java.lang.ref.WeakReference;
  *   lasts, as a phone call is; off again when it ends.
  *
  * A call in progress (v2.148.0):
- * - callStarted({ name, video }): call volume and routing (CallAudio), the
- *   ongoing-call notification that keeps the microphone alive off screen
- *   (OngoingCallService), and the floating window when the app is left
- *   (MainActivity). Called again when the camera goes on or off.
- * - callEnded(): all three undone.
- * - events: `pip` { active } when the app goes into or out of its floating
- *   window; `hangUp` when HANG UP is pressed on the notification.
+ * - callStarted({ name, video }): call volume and routing (CallAudio), and the
+ *   ongoing-call notification that keeps the microphone alive while the app is
+ *   in the background (OngoingCallService). Called again when the camera goes
+ *   on or off.
+ * - callEnded(): both undone.
+ * - event `hangUp` when HANG UP is pressed on the notification.
+ *
+ * Leaving the app during a call just leaves it, as with any app; the call
+ * goes on and the notification is the way back. A floating picture-in-picture
+ * window was tried and dropped: the call's buttons covered the picture.
  */
 @CapacitorPlugin(name = "CortexCalls")
 public class CortexCallsPlugin extends Plugin {
@@ -96,15 +97,6 @@ public class CortexCallsPlugin extends Plugin {
         return true;
     }
 
-    /** The app went into or out of its floating window. */
-    public static void pictureInPictureChanged(boolean active) {
-        CortexCallsPlugin p = instance.get();
-        if (p == null) return;
-        JSObject data = new JSObject();
-        data.put("active", active);
-        p.notifyListeners("pip", data, true);
-    }
-
     @PluginMethod
     public void callStarted(PluginCall call) {
         String name = call.getString("name", "Cortex call");
@@ -114,7 +106,6 @@ public class CortexCallsPlugin extends Plugin {
             inCall = true;
             CallAudio.start(getContext(), activity);
             OngoingCallService.start(getContext(), name, video);
-            if (activity instanceof MainActivity) ((MainActivity) activity).setCallActive(true, video);
             call.resolve();
         };
         if (activity != null) activity.runOnUiThread(start); else start.run();
@@ -134,7 +125,6 @@ public class CortexCallsPlugin extends Plugin {
         inCall = false;
         CallAudio.stop(getContext(), activity);
         OngoingCallService.stop(getContext());
-        if (activity instanceof MainActivity) ((MainActivity) activity).setCallActive(false, false);
     }
 
     @Override

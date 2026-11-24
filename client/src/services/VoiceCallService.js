@@ -99,13 +99,10 @@ class VoiceCallService {
     this.authToken = null;
 
     // The Android app's side of a call in progress (v2.148.0): call volume,
-    // the ongoing-call notification, and the floating window when the app is
-    // left. `pip` is true while it floats; the call view then shows only the call.
-    this.pip = false;
+    // and the ongoing-call notification with HANG UP.
     this.nativeCallKey = null;
     onNativeCallEvents({
       onHangUp: () => { if (this.livekitToken) this.leaveCall(); },
-      onPip: (active) => { this.pip = !!active; this.notifySubscribers(); },
     });
 
     // Dock state (v2.6.1)
@@ -149,10 +146,7 @@ class VoiceCallService {
     const wasActive = this.nativeCallKey !== null;
     this.nativeCallKey = key;
     if (active) nativeCallStarted({ name, video: !this.isCameraOff });
-    else if (wasActive) {
-      nativeCallEnded();
-      this.pip = false;
-    }
+    else if (wasActive) nativeCallEnded();
   }
 
   getState() {
@@ -176,7 +170,6 @@ class VoiceCallService {
       selectedCamera: this.selectedCamera,
       selectedSpeaker: this.selectedSpeaker,
       isDocked: this.isDocked,
-      pip: this.pip,
       dockMinimized: this.dockMinimized,
       dockPosition: this.dockPosition,
       voiceChannel: this.voiceChannel,
