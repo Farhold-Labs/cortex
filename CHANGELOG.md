@@ -45,7 +45,13 @@ Encryption across servers, phase 3 (`docs/federated-e2ee/01-design.md`): an end-
   - each read the other's signed pings, live;
   - a renewal reached bob's server and he read the new ping and the old ones;
   - removing bob dropped his copy and renewed the key once, without him.
-- **Not tried on QA**: putting this branch there needs your go-ahead. Not tried on a phone.
+- **Between the real dev and QA servers** (2026-11-24, a throwaway account `e2eetest` on QA, mal on dev):
+  - QA reported protocol 3; dev's encrypted wave with the QA account was created;
+  - QA's copy was encrypted, and its key came from mal's device on dev (bound, format 2, wrapper recorded);
+  - each read the other's pings;
+  - a renewal reached QA, which read the new ping and the old;
+  - removing the QA account renewed dev's key once (2 → 3), and QA dropped its copy; mal still read the QA account's old ping.
+  - Not tried on a phone.
 
 ## [2.152.0] - 2026-11-24
 
