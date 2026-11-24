@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.151.0] - 2026-11-24
+
+Signed pings, phase 1c (`docs/federated-e2ee/02-identity-keys.md`). In an encrypted wave, every ping is sealed with the wave's shared key, so any member could post one in someone else's name and nobody could tell. Now each ping is signed by its author, and a ✓ beside their name says it was signed by the fingerprint you verified. Server and web only, no app build. **Migrates** (one small table).
+
+### Added
+- **Pings are signed.** In an encrypted wave a device with a fingerprint signs each ping and edit with its signing key, inside the encryption (format 2). A device without one yet sends format 1, as before. Messages already sent stay as they are; they can't be signed after the fact.
+- **The mark beside the author:**
+  - **✓** the ping is signed by the fingerprint you verified for them;
+  - **⚠ Not shown: its signature doesn't check** — someone sealed it in their name (only a member holding the wave key can), so the text is held back;
+  - **⚠ Not shown: a copy of an earlier ping** — the same signed ping (each carries a message id) served again as another;
+  - **⚠ Signed under a different fingerprint** from the one you verified;
+  - nothing for people you haven't verified, and for format-1 pings, so a mark on every ping doesn't teach people to ignore it.
+
+### Changed
+- **The server name in signed pings is fixed by the first one.** A signed ping names its author as `<user id>@<server name>`, so a rename (or a first name given when federation is turned on) would make every one already sent unreadable. The server now keeps the name from the first signed ping and tells devices that one (`/api/e2ee/status`), and says so at boot if it has since been renamed. The design doc said to refuse renames instead; that would have trapped a server that hadn't named itself yet.
+
+### Verified
+- **Tests:** `tests/e2ee-signed-pings.test.cjs`: after a signed ping and a rename, devices are still told the first name; before any signed ping the name follows the server. Counterfactual: without the pin, the rename changes it. Signing and checking themselves: `e2ee-identity.test.cjs`.
+- **Headless Chrome on dev, two accounts:**
+  - Zoe had no key for the test wave since her reset. Mal's device gave her one on unlock, after checking her signed keys.
+  - Mal sent a ping from the composer: stored as format 2, and the name pinned as `dev.farhold.com`. Zoe read it.
+  - After Zoe verified Mal, his name on that ping showed ✓; it hadn't before.
+  - A ping sealed in Mal's name with the wave key Zoe holds, signed by another key: held back with "its signature doesn't check". A copy of Mal's genuine ping under a new id: held back as "a copy of an earlier ping". The genuine one kept its ✓. (Both test pings deleted.)
+  - At 390 px the ✓ stays with the last word of the name, nothing scrolls sideways.
+  - Not tried on a phone.
+
 ## [2.150.1] - 2026-11-24
 
 A fingerprint couldn't be made in a browser left signed in across a password reset, with an error that didn't say why. Two causes, both fixed. Server and web only, no app build, no migration.

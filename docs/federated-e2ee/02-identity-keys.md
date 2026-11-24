@@ -2,7 +2,7 @@
 
 Status: **decided** (2026-11-24). Revises `01-design.md`: the fingerprints of
 phase 1 (v2.149.0), and format 2 before anything writes it. **Phase 1b built
-in v2.150.0** (see "Phase 1b as built" at the end).
+in v2.150.0, phase 1c in v2.151.0** (see "as built" at the end).
 
 ## Why
 
@@ -263,3 +263,26 @@ Where the build settled details the text above left open, or changed them:
 - **Not yet:** the check that a wrapped key's wrapper is in a member's
   statement, and the ✓ and ⚠ beside authors, come with phase 1c, when devices
   write signed pings.
+
+## Phase 1c as built (v2.151.0)
+
+- **Devices write signed format-2 pings** in encrypted waves (sends and
+  edits) when their fingerprint's latest statement names the keys in use;
+  otherwise format 1. Wrapped wave keys stay format 1: writing them bound
+  (and the check that a wrapper is in a member's statement) comes with phase
+  3, where keys travel between servers.
+- **The server name is pinned, not renames refused.** The first signed ping
+  fixes the name in this server's people's addresses (`e2ee_seal_name`);
+  `/api/e2ee/status` returns it from then on, and the server warns at boot
+  if it has since been renamed. Refusing renames would have trapped servers
+  that hadn't named themselves yet, which all of them get when federation is
+  turned on. Phase 3 must carry this name to other servers rather than
+  assume the federation name.
+- **A ping whose signature doesn't check is held back,** not shown with a ⚠:
+  the ⚠ line says why and names who it claims to be from. Text a member
+  forged in someone's name shouldn't be readable as if from them, warning or
+  not.
+- **An edit gets a new message id.** A replayed copy is caught by its message
+  id appearing under a second ping; an edit stays the same ping.
+- **The ✓ is shown only for people you verified,** and ⚠ for a different
+  fingerprint from the one you verified, as designed.
