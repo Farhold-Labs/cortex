@@ -362,3 +362,30 @@ export function IdentityPrompt() {
     </div>
   );
 }
+
+/**
+ * The mark beside a ping's author (v2.151.0). ✓ when the ping is signed by the
+ * fingerprint you verified; ⚠ when its signature doesn't check, it's a copy
+ * of an earlier ping, or it was signed under a fingerprint other than the one
+ * you verified. Nothing otherwise: most people are unverified, and a mark on
+ * every ping would teach people to ignore it.
+ * @param always  show a ⚠ even where the name isn't shown (a ping later in a group)
+ */
+export function PingSignatureMark({ ping, name, always = false }) {
+  const e2ee = useContext(E2EEContext);
+  // verdictTick and keyRecordsTick: redraw when a signature is checked or a verification changes.
+  void e2ee?.verdictTick; void e2ee?.keyRecordsTick;
+  const m = e2ee?.pingMark?.(ping);
+  if (!m) return null;
+  if (m.mark === 'verified') {
+    if (always) return null;
+    return <span title={K.pingVerified(name)} aria-label={K.pingVerified(name)} style={{ ...mono, color: 'var(--accent-green)', fontSize: '0.7rem' }}>✓</span>;
+  }
+  const label = K.pingWarn[m.reason]?.(name) || K.pingWarn.forged(name);
+  return (
+    <span role="note" title={label} aria-label={label}
+      style={{ ...mono, color: 'var(--accent-orange)', fontSize: '0.65rem', display: always ? 'block' : 'inline' }}>
+      ⚠ {always ? label : ''}
+    </span>
+  );
+}

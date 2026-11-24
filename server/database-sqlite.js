@@ -4222,6 +4222,17 @@ export class DatabaseSQLite {
       }
     }
 
+    // v2.151.0 — the server name in this server's people's addresses in
+    // signed (format-2) pings, fixed when the first one is sent, so a later
+    // rename can't make them unreadable.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS e2ee_seal_name (
+        id        INTEGER PRIMARY KEY CHECK (id = 1),
+        node_name TEXT NOT NULL,
+        pinned_at TEXT NOT NULL
+      );
+    `);
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -13006,6 +13017,19 @@ export class DatabaseSQLite {
         .run(encryptedData, nonce, now, userId);
       return current + 1;
     })();
+  }
+
+  // ============ Seal name (v2.151.0) ============
+
+  getPinnedSealNodeName() {
+    const row = this.db.prepare('SELECT node_name FROM e2ee_seal_name WHERE id = 1').get();
+    return row ? row.node_name : null;
+  }
+
+  /** Fix the name on first use; later calls change nothing. */
+  pinSealNodeName(nodeName) {
+    this.db.prepare('INSERT OR IGNORE INTO e2ee_seal_name (id, node_name, pinned_at) VALUES (1, ?, ?)')
+      .run(nodeName || '', new Date().toISOString());
   }
 
   // ============ Identity keys (v2.150.0) ============

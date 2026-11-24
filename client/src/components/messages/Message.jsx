@@ -16,6 +16,7 @@ import AudioPlayer from '../media/AudioPlayer.jsx';
 import VideoPlayer from '../media/VideoPlayer.jsx';
 import { T } from '../../config/terminology.js';
 import ExpiryBadge from './ExpiryBadge.jsx';
+import { PingSignatureMark } from '../ui/KeyFingerprint.jsx';
 
 const getFirstLine = (content) => {
   if (!content) return '';
@@ -399,6 +400,8 @@ const Message = ({
                   : undefined}
               >
                 {message.sender_name}
+                {/* Inside the name, so it stays with it when the name wraps (v2.151.0). */}
+                {message.format === 2 && <>{'\u00a0'}<PingSignatureMark ping={message} name={message.sender_name} /></>}
               </span>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.6rem', fontFamily: 'monospace' }}>
                 {dateStr} {timeStr}
@@ -436,6 +439,8 @@ const Message = ({
               )}
             </div>
           )}
+          {/* Why a signed ping is held back or flagged (v2.151.0) */}
+          {message.format === 2 && !isDeleted && <PingSignatureMark ping={message} name={message.sender_name} always />}
           {/* Compact parent quote for replies */}
           {parentPing && !isDeleted && (
             <div
