@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS pings (
     -- Threading fields (v2.38.0)
     threaded INTEGER DEFAULT 0,            -- 1 if message has been burst/threaded
     is_thread_reply INTEGER DEFAULT 0      -- 1 if reply was made within thread panel
-, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL, deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL, expires_at TEXT);
+, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL, deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL, expires_at TEXT, format INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS idx_pings_wave ON pings(wave_id);
 CREATE INDEX IF NOT EXISTS idx_pings_author ON pings(author_id);
 CREATE INDEX IF NOT EXISTS idx_pings_parent ON pings(parent_id);
@@ -449,7 +449,7 @@ CREATE TABLE IF NOT EXISTS wave_encryption_keys (
     sender_public_key TEXT NOT NULL,       -- Base64 SPKI of key used to encrypt
     key_version INTEGER DEFAULT 1,         -- Version of wave key
     created_at TEXT NOT NULL,
-    user_key_id TEXT,                      -- Blinded user key id (v2.27.0); also added via migration for pre-existing DBs
+    user_key_id TEXT, format INTEGER NOT NULL DEFAULT 1,                      -- Blinded user key id (v2.27.0); also added via migration for pre-existing DBs
     UNIQUE(wave_id, user_id, key_version)
 );
 CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_wave ON wave_encryption_keys(wave_id);

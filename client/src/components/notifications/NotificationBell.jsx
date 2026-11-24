@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { EMPTY } from '../../../messages.js';
 import { plainText } from '../../utils/plainText.js';
+import { pingSeal } from '../../utils/sealPing.js';
 
 const NOTIFICATION_TYPES = {
   direct_mention: { icon: '@', color: 'var(--accent-amber)', label: 'Mentioned you' },
@@ -300,7 +301,7 @@ const NotificationBell = ({ fetchAPI, onNavigateToWave, onShowInvitations, onSho
       try {
         const ping = await fetchAPI(`/pings/${notif.pingId}`);
         if (!ping.encrypted || !ping.nonce) return;
-        const plaintext = await e2ee.decryptPing(ping.content, ping.nonce, ping.waveId, ping.keyVersion);
+        const plaintext = await e2ee.decryptPing(ping.content, ping.nonce, ping.waveId, ping.keyVersion, pingSeal(ping));
         const preview = plaintext.replace(/<[^>]*>/g, '').substring(0, 100);
         setDecryptedPreviews(prev => ({ ...prev, [notif.id]: preview }));
       } catch {

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.149.0] - 2026-11-23
+
+Encryption across servers, phase 1 (`docs/federated-e2ee/`): people can compare and verify each other's keys, and devices learn to read the format that phase 3 will write. Server and web only, no app build. **Migrates** (one column on two tables).
+
+### Added
+- **Key fingerprints.** Every encryption key has a fingerprint, 32 characters in 8 groups (`3F9A 0C71 …`): the first 128 bits of SHA-256 over `cortex-fp-v1` and the key. Two people who read theirs to each other, over a call or in person, and find them the same know the server hasn't swapped either key. The server hands out public keys, so until now a swapped key was only visible as "key changed" if your device had seen the old one.
+  - **Your own:** Settings → Security → Your encryption key.
+  - **Someone else's:** the people list of an encrypted wave (KEY under each name) and their profile card.
+- **Mark as verified.** After comparing, mark someone's key as verified. The mark is for that key only.
+  - If their key changes, the mark is dropped and their entry says **changed since you verified** until you compare the new one. The wave's "key changed" notice says so too. Dismissing the notice doesn't bring the verification back.
+  - The mark is kept in the same record of keys seen as before, encrypted under your own key, so it follows you between devices and the server can neither read nor forge it.
+  - Opening the people list now looks up each member's key. A swapped key shows there straight away, not only the next time your device hands someone a wave key.
+
+### Changed
+- **Devices read encryption format 2** (nothing writes it yet). Format 1, everything written so far, binds a ping or a wrapped wave key to nothing. A server could hand someone one wave's wrapped key as another's, or move a ping between waves, and no device would notice. Format 2 binds:
+  - **a wrapped key** to its wave, key version and recipient, with HKDF instead of the raw ECDH output;
+  - **a ping** to its wave and author.
+  - An address is `<user id>@<server name>`, the id rather than the handle, because a handle can change.
+  - Pings and wrapped keys carry a `format` column (1 by default), accepted on every write and returned on every read; anything but 1 or 2 is refused. Devices must read format 2 before any device writes it, so writing comes with phase 3.
+
+### Verified
+- **Tests:** `tests/e2ee-fingerprints.test.cjs`.
+  - The fingerprint is checked against `node:crypto`.
+  - Format 2 opens in place and fails for another wave, version, recipient, server or author, and never opens as format 1.
+  - The counterfactual strips the binding from a copy of `crypto.js` and shows a ping moved to another wave then opens.
+  - Verification: kept for one key, lost on change, merged across two devices.
+  - Server: formats stored, returned and refused.
+- **Headless Chrome on dev, two accounts:**
+  - Settings shows each fingerprint as computed independently from the database.
+  - Mal's people list shows Zoe's fingerprint the same as Zoe's own Settings, and Mark as verified survives a reload.
+  - With Zoe's key swapped in the database, her entry reads "changed since you verified" as soon as the list opens (then restored).
+  - Three format-2 pings posted through the API: the one bound correctly opens in the app. The one bound to another author and the one bound to another wave show "[Unable to decrypt]". They were then deleted.
+  - At 390 px the people row fits without scrolling sideways.
+  - Not tried on a phone.
+
 ## [2.148.0] - 2026-11-23
 
 Calls in the Android app behave like phone calls, two video calls that hung up just after being answered get a likely fix and a record, and leaving or removing someone always asks first. **Needs the v2.148.0 APK** for the call changes; the rest is server and web. No migration.

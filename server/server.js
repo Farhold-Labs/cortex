@@ -7492,7 +7492,11 @@ app.get('/api/e2ee/status', authenticateToken, (req, res) => {
     res.json({
       e2eeEnabled: hasKeys,
       keyVersion: keys?.keyVersion || null,
-      createdAt: keys?.createdAt || null
+      createdAt: keys?.createdAt || null,
+      // v2.149.0: part of each person's address (id@node) in format-2
+      // encryption, so a ping is bound to its author on every server.
+      userId: req.user.userId,
+      nodeName: db.getServerIdentity?.()?.nodeName || FEDERATION_NODE_NAME || null,
     });
   } catch (err) {
     console.error('E2EE status check error:', err);
@@ -22024,6 +22028,8 @@ app.get('/api/pings/:pingId', authenticateToken, (req, res) => {
     encrypted: ping.encrypted,
     nonce: ping.nonce,
     keyVersion: ping.keyVersion,
+    authorId: ping.authorId,
+    format: ping.format || 1,
   });
 });
 
@@ -23692,11 +23698,11 @@ app.post('/api/waves', authenticateToken, async (req, res) => {
     db.createWaveKeyMetadata(wave.id);
 
     // Store encrypted keys for each participant
-    for (const { userId, encryptedWaveKey, senderPublicKey } of keyDistribution) {
+    for (const { userId, encryptedWaveKey, senderPublicKey, format } of keyDistribution) {
       if (encryptedWaveKey && senderPublicKey) {
         // If userId is null, it's the creator's own key
         const targetUserId = userId || req.user.userId;
-        db.createWaveEncryptionKey(wave.id, targetUserId, encryptedWaveKey, senderPublicKey, 1);
+        db.createWaveEncryptionKey(wave.id, targetUserId, encryptedWaveKey, senderPublicKey, 1, null, format);
       }
     }
   }
@@ -26056,6 +26062,9 @@ function encryptedPingRefusal(waveId, body) {
   if (typeof body.content !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.content) || body.content.length < 24) return fail('Encrypted content must be ciphertext');
   const version = Number(body.keyVersion);
   if (!Number.isInteger(version) || version < 1 || version > db.getWaveKeyVersion(waveId)) return fail('Unknown key version');
+  // v2.149.0: 1, or 2 for a ping bound to its wave and author. Devices read
+  // 2 from this release; none writes it yet.
+  if (body.format !== undefined && body.format !== 1 && body.format !== 2) return fail('Unknown encryption format');
   return null;
 }
 
@@ -26101,6 +26110,12 @@ function notifyRekeyNeeded(waveIds) {
   });
 }
 
+// v2.149.0: a wrapped wave key is format 1, or 2 (bound to its wave, version
+// and recipient). Absent means 1.
+function isKeyFormat(format) {
+  return format === undefined || format === null || format === 1 || format === 2;
+}
+
 // The wave key may only be wrapped by its sender's own registered key, so a
 // recipient can trust the sender key stored beside it as much as the server.
 function wrapsWithOwnKey(userId, senderPublicKey) {
@@ -26141,6 +26156,7 @@ app.get('/api/waves/:id/key', authenticateToken, (req, res) => {
       encryptedWaveKey: keyData.encryptedWaveKey,
       senderPublicKey: keyData.senderPublicKey,
       keyVersion: keyData.keyVersion,
+      format: keyData.format || 1,
       currentKeyVersion: keyData.currentKeyVersion
     });
   } catch (err) {
@@ -26177,11 +26193,12 @@ app.get('/api/waves/:id/keys/all', authenticateToken, (req, res) => {
 app.post('/api/waves/:id/key/distribute', authenticateToken, (req, res) => {
   try {
     const waveId = req.params.id;
-    const { userId, encryptedWaveKey, senderPublicKey } = req.body;
+    const { userId, encryptedWaveKey, senderPublicKey, format } = req.body;
 
     if (!userId || !encryptedWaveKey || !senderPublicKey) {
       return res.status(400).json({ error: 'Missing required fields: userId, encryptedWaveKey, senderPublicKey' });
     }
+    if (!isKeyFormat(format)) return res.status(400).json({ error: 'Unknown encryption format' });
 
     const wave = db.getWave(waveId);
     if (!wave) {
@@ -26217,7 +26234,7 @@ app.post('/api/waves/:id/key/distribute', authenticateToken, (req, res) => {
     }
 
     // Store the encrypted key for the new participant
-    db.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, currentVersion);
+    db.createWaveEncryptionKey(waveId, userId, encryptedWaveKey, senderPublicKey, currentVersion, null, format);
 
     res.json({
       success: true,
@@ -26305,7 +26322,8 @@ app.post('/api/waves/:id/key-grant', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: requestId, keys or encryptedWaveKey, senderPublicKey' });
     }
     if (offered.length > 1000 || offered.some(k => !k || !Number.isInteger(k.keyVersion) || k.keyVersion < 1
-        || typeof k.encryptedWaveKey !== 'string' || !k.encryptedWaveKey || k.encryptedWaveKey.length > 1000)) {
+        || typeof k.encryptedWaveKey !== 'string' || !k.encryptedWaveKey || k.encryptedWaveKey.length > 1000
+        || !isKeyFormat(k.format)) || !isKeyFormat(req.body.format)) {
       return res.status(400).json({ error: 'Invalid keys' });
     }
 
@@ -26340,14 +26358,14 @@ app.post('/api/waves/:id/key-grant', authenticateToken, (req, res) => {
     // requester already has (a member must not be able to swap someone's key
     // for one they made up), and nothing beyond the current version.
     const currentVersion = db.getWaveKeyVersion(waveId);
-    const keys = offered.length ? offered : [{ keyVersion: currentVersion, encryptedWaveKey }];
+    const keys = offered.length ? offered : [{ keyVersion: currentVersion, encryptedWaveKey, format: req.body.format }];
     let stored = 0;
     db.db.transaction(() => {
       for (const k of keys) {
         if (k.keyVersion > currentVersion) continue;
         if (!db.hasWaveKeyRow(waveId, granterId, k.keyVersion)) continue;
         if (db.hasWaveKeyRow(waveId, request.requester_id, k.keyVersion)) continue;
-        db.createWaveEncryptionKey(request.wave_id, request.requester_id, k.encryptedWaveKey, senderPublicKey, k.keyVersion);
+        db.createWaveEncryptionKey(request.wave_id, request.requester_id, k.encryptedWaveKey, senderPublicKey, k.keyVersion, null, k.format);
         stored++;
       }
       // Settled once they lack nothing; otherwise it waits for someone who
@@ -26402,7 +26420,8 @@ app.post('/api/waves/:id/key/rotate', authenticateToken, (req, res) => {
       if (!entry || typeof entry !== 'object') return res.status(400).json({ error: 'Invalid key distribution data' });
       if (entry.userId == null) entry.userId = req.user.userId;
       const { userId, encryptedWaveKey, senderPublicKey } = entry;
-      if (typeof userId !== 'string' || typeof encryptedWaveKey !== 'string' || !encryptedWaveKey || encryptedWaveKey.length > 1000) {
+      if (typeof userId !== 'string' || typeof encryptedWaveKey !== 'string' || !encryptedWaveKey || encryptedWaveKey.length > 1000
+          || !isKeyFormat(entry.format)) {
         return res.status(400).json({ error: 'Invalid key distribution data' });
       }
       if (!wrapsWithOwnKey(req.user.userId, senderPublicKey)) {
@@ -26505,9 +26524,9 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
     db.createWaveKeyMetadata(waveId);
 
     // Store encrypted keys for each participant (null userId = creator's own key)
-    for (const { userId, encryptedWaveKey, senderPublicKey } of keyDistribution) {
+    for (const { userId, encryptedWaveKey, senderPublicKey, format } of keyDistribution) {
       const targetUserId = userId || req.user.userId;
-      db.createWaveEncryptionKey(waveId, targetUserId, encryptedWaveKey, senderPublicKey, 1);
+      db.createWaveEncryptionKey(waveId, targetUserId, encryptedWaveKey, senderPublicKey, 1, null, format);
     }
 
     // Check if there are existing pings that need encryption
@@ -26801,6 +26820,7 @@ app.post('/api/pings', authenticateToken, (req, res) => {
     encrypted: !!req.body.encrypted,
     nonce: req.body.nonce || null,
     keyVersion: req.body.keyVersion || null,
+    format: req.body.format,
     // Media fields (v2.7.0)
     mediaType: mediaType || null,
     mediaUrl: mediaUrl || null,
@@ -26917,7 +26937,7 @@ app.put('/api/pings/:id', authenticateToken, (req, res) => {
   const plainRefusal = encryptedPingRefusal(ping.waveId, req.body);
   if (plainRefusal) return res.status(400).json(plainRefusal);
 
-  const updated = db.updateMessage(pingId, content, { encrypted, nonce, keyVersion });
+  const updated = db.updateMessage(pingId, content, { encrypted, nonce, keyVersion, format: req.body.format });
   // A file added in an edit expires with the ping too.
   if (ping.expiresAt && db.recordPingExpiryFiles) {
     db.recordPingExpiryFiles(pingId, req.user.userId, pingFilePaths({ content, encrypted, declared: req.body.attachments }));

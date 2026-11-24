@@ -3,7 +3,8 @@ import { useE2EE } from '../../../e2ee-context.jsx';
 import { useVoiceCall } from '../../hooks/useVoiceCall.js';
 import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
 import { useSystemBack } from '../../hooks/useSystemBack.js';
-import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL } from '../../../messages.js';
+import { SUCCESS, EMPTY, CONFIRM, CONFIRM_DIALOG, formatError, GHOST_PROTOCOL, KEY_FINGERPRINT } from '../../../messages.js';
+import { PersonKey, KeyStandingBadge } from '../ui/KeyFingerprint.jsx';
 import { waveAudience, BASE_URL, canAccess } from '../../config/constants.js';
 import { Avatar, GlowText, PrivacyBadge, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { PartialEncryptionBanner, KeyChangeNotice, RekeyPendingNotice } from '../../../e2ee-components.jsx';
@@ -27,7 +28,7 @@ import { effectiveTtl, nextExpiry, expireDue, ttlLabel } from '../../utils/expir
 import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
-import { sealPing } from '../../utils/sealPing.js';
+import { sealPing, pingSeal } from '../../utils/sealPing.js';
 import { useIsCongested } from '../../hooks/useNetworkStatus.js';
 import { lazyComponent } from '../../utils/lazyComponent.jsx';
 
@@ -215,7 +216,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             ping.content,
             ping.nonce,
             waveId,
-            ping.keyVersion
+            ping.keyVersion,
+            pingSeal(ping)
           );
           return { ...ping, content: plaintext, _decrypted: true };
         } catch (err) {
@@ -259,6 +261,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   // State for showing moderation menu
   const [showModMenu, setShowModMenu] = useState(null); // participant.id or null
+  const [keyPanelFor, setKeyPanelFor] = useState(null); // participant.id whose key is open (v2.149.0)
 
   // Close any open dropdown when clicking outside
   useEffect(() => {
@@ -966,8 +969,21 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
   // v2.143.0 — people here whose encryption key changed since this person's
   // devices last saw it, and renewing the key when someone who held it left.
-  const keyChangedPeople = (waveData?.participants || []).filter(p =>
-    p.id !== currentUser?.id && (e2ee.keyChanges || []).some(c => c.personId === p.id));
+  const keyChangedPeople = (waveData?.participants || [])
+    .filter(p => p.id !== currentUser?.id && (e2ee.keyChanges || []).some(c => c.personId === p.id))
+    .map(p => ({ ...p, verificationLost: (e2ee.keyChanges || []).some(c => c.personId === p.id && c.verificationLost) }));
+  // v2.149.0 — opening the people list looks up each member's key, so a mark
+  // there (verified, changed) is about the key the server hands out now, not
+  // the one last seen. A swapped key shows here even if nobody was given a
+  // wave key since.
+  const membersKeyIds = showParticipants && waveData?.encrypted && e2ee.isUnlocked
+    ? (waveData?.participants || []).filter(p => p.id !== currentUser?.id && !p.isRemote).slice(0, 100).map(p => p.id).join(',')
+    : '';
+  useEffect(() => {
+    if (!membersKeyIds) return;
+    for (const id of membersKeyIds.split(',')) e2ee.lookUpKey(id).catch(() => {});
+  }, [membersKeyIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (waveData?.encrypted && waveData?.rekeyNeeded && waveData?.canRotateKey && e2ee.isUnlocked) {
       e2ee.runPendingRotations();
@@ -1422,7 +1438,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         try {
           // Check if ping is encrypted (has nonce)
           if (ping.encrypted && ping.nonce) {
-            const decryptedContent = await e2ee.decryptPing(ping.content, ping.nonce, wave.id, ping.keyVersion);
+            const decryptedContent = await e2ee.decryptPing(ping.content, ping.nonce, wave.id, ping.keyVersion, pingSeal(ping));
             decryptedPings.push({
               id: ping.id,
               content: decryptedContent
@@ -2343,10 +2359,13 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             const hasReceivedRequest = hasReceivedRequestFrom(p.id);
             const userBlocked = isBlocked(p.id);
             const userMuted = isMuted(p.id);
+            // v2.149.0: in an encrypted wave, each member's key can be compared and verified.
+            const showKeys = waveData?.encrypted && e2ee.isE2EEEnabled && !isCurrentUser && !p.isRemote;
+            const keyOpen = showKeys && keyPanelFor === p.id;
 
             return (
+              <React.Fragment key={p.id}>
               <div
-                key={p.id}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -2377,6 +2396,18 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                       {userBlocked && <span style={{ color: 'var(--accent-orange)', marginLeft: '4px', fontSize: '0.65rem' }}>⊘ BLOCKED</span>}
                       {userMuted && !userBlocked && <span style={{ color: 'var(--text-dim)', marginLeft: '4px', fontSize: '0.65rem' }}>🔇 MUTED</span>}
                     </div>
+                    {showKeys && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setKeyPanelFor(keyOpen ? null : p.id); }}
+                        aria-expanded={keyOpen}
+                        title="Encryption key fingerprint"
+                        style={{
+                          display: 'block', maxWidth: '100%', marginTop: '2px', padding: isMobile ? '4px 0' : 0,
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          fontFamily: 'monospace', fontSize: '0.6rem', color: 'var(--text-dim)', textAlign: 'left',
+                        }}
+                      >{keyOpen ? '▾' : '▸'} {KEY_FINGERPRINT.showKey}<KeyStandingBadge short standing={e2ee.keyStandingOf(p.id)} /></button>
+                    )}
                   </div>
                 </div>
 
@@ -2548,6 +2579,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                   </div>
                 )}
               </div>
+              {keyOpen && (
+                <div style={{ padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderTop: 'none' }}>
+                  <PersonKey userId={p.id} name={p.name} isMobile={isMobile} />
+                </div>
+              )}
+              </React.Fragment>
             );
           })}
         </div>

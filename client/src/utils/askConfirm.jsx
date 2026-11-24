@@ -22,7 +22,7 @@ function ConfirmDialog({ title, message, confirmLabel, onDone }) {
         padding: '16px', fontFamily: 'monospace',
       }}>
         <div style={{ color: 'var(--accent-orange)', fontSize: '0.95rem', marginBottom: '8px' }}>{title}</div>
-        <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', lineHeight: 1.5 }}>{message}</div>
+        <div style={{ color: 'var(--text-primary)', fontSize: '0.85rem', lineHeight: 1.5, whiteSpace: 'pre-line' }}>{message}</div>
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '16px', flexWrap: 'wrap' }}>
           <button autoFocus onClick={() => onDone(false)} style={{
             padding: '10px 16px', minHeight: '44px', background: 'transparent', border: '1px solid var(--border-primary)',

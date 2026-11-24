@@ -5,6 +5,7 @@ import { SUCCESS, CONFIRM_DIALOG, FEDERATION, formatError } from '../../../messa
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { T } from '../../config/terminology.js';
 import { PING_TTLS, ttlLabel } from '../../utils/expiry.js';
+import { pingSeal } from '../../utils/sealPing.js';
 
 const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast, onUpdate, participants = [], showParticipants, setShowParticipants, federationEnabled, currentUserId, onFederate, isMobile, isAdmin = false, canOpenToServer = false }) => {
   const e2ee = useE2EE();
@@ -386,7 +387,7 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
         try {
           // Check if ping is encrypted (has nonce)
           if (ping.encrypted && ping.nonce) {
-            const decryptedContent = await e2ee.decryptPing(ping.content, ping.nonce, wave.id, ping.keyVersion);
+            const decryptedContent = await e2ee.decryptPing(ping.content, ping.nonce, wave.id, ping.keyVersion, pingSeal(ping));
             decryptedPings.push({
               id: ping.id,
               content: decryptedContent
