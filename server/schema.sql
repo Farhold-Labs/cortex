@@ -449,7 +449,7 @@ CREATE TABLE IF NOT EXISTS wave_encryption_keys (
     sender_public_key TEXT NOT NULL,       -- Base64 SPKI of key used to encrypt
     key_version INTEGER DEFAULT 1,         -- Version of wave key
     created_at TEXT NOT NULL,
-    user_key_id TEXT, format INTEGER NOT NULL DEFAULT 1,                      -- Blinded user key id (v2.27.0); also added via migration for pre-existing DBs
+    user_key_id TEXT, format INTEGER NOT NULL DEFAULT 1, sender_user_id TEXT, sender_node TEXT,                      -- Blinded user key id (v2.27.0); also added via migration for pre-existing DBs
     UNIQUE(wave_id, user_id, key_version)
 );
 CREATE INDEX IF NOT EXISTS idx_wave_encryption_keys_wave ON wave_encryption_keys(wave_id);
@@ -1709,6 +1709,20 @@ CREATE TABLE IF NOT EXISTS remote_user_keys (
         fetched_at     TEXT NOT NULL,
         changed_at     TEXT,
         PRIMARY KEY (node_name, user_id)
+      );
+
+CREATE TABLE IF NOT EXISTS remote_wave_key_requests (
+        id         TEXT PRIMARY KEY,
+        wave_id    TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        node_name  TEXT NOT NULL,
+        user_id    TEXT NOT NULL,
+        handle     TEXT,
+        versions   TEXT NOT NULL DEFAULT '[]',
+        status     TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        granted_at TEXT,
+        granted_by TEXT,
+        UNIQUE (wave_id, node_name, user_id)
       );
 
 -- ============ Full-text search triggers ============

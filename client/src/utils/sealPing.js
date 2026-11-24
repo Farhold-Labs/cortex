@@ -30,5 +30,9 @@ export async function sealPing(e2ee, wave, text) {
  * its id, under which what's known about its signature is kept (v2.151.0).
  */
 export function pingSeal(ping) {
-  return { format: ping?.format || 1, authorId: ping?.authorId || ping?.author_id || null, pingId: ping?.id || null };
+  return {
+    format: ping?.format || 1, authorId: ping?.authorId || ping?.author_id || null, pingId: ping?.id || null,
+    // v2.153.0: the author's server, for a ping from someone elsewhere.
+    authorNode: ping?.isRemote ? (ping.authorNode || null) : null,
+  };
 }
