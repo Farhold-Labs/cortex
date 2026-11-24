@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified
+- **Encrypted waves with a third server** (the test `docs/federated-e2ee/01-design.md` asked for in phase 3), on three real servers and browsers on one machine. The wave was on A, which was allied with B and C; B and C were not allied with each other.
+  - **Keys:** the wave was made in the app, and B's and C's keys were format 2, wrapped by the owner on A.
+  - **Reading:** everyone read every ping, and none was flagged ⚠.
+  - **Separation:** B and C learnt nothing about each other's people. Neither listed the other as an ally, neither cached the other's keys, a lookup across answered `NO_KEYS`, and neither server's log mentions the other.
+  - **Removal:** removing B's person renewed the key once. A and C got version 2, B's copy was dropped with its keys, and C's person read what was sent afterwards.
+  - Not tried between the real servers: dev, QA and port1 are all paired with each other, and testing there would mean unpairing two of them.
+
 ## [2.153.1] - 2026-11-24
 
 Encryption across servers: the last unbound wave keys. Since v2.153.0 every wave key a device hands over is bound to its wave, version and holder (format 2), except the first version: at creation the wave's id didn't exist yet, so those keys stayed format 1, and so did the keys made when encryption is turned on for an existing wave. Server and web only, no app build, no migration.
