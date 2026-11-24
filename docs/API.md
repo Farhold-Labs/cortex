@@ -1597,6 +1597,14 @@ Load older messages for a wave (pagination).
 
 ---
 
+#### POST /api/waves/reserve-id
+
+An id for a wave you are about to create (v2.153.1), so an encrypted wave's keys can be bound to it before it exists. Nothing is stored: the reservation is signed for you and lasts 10 minutes.
+
+**Authentication:** Required
+
+**Response:** `{ "waveId": "wave-…", "reservation": "<expiry>.<signature>", "expiresAt": "…" }`
+
 #### POST /api/waves
 
 Create a new wave.
@@ -1622,6 +1630,8 @@ Create a new wave.
 - `"group"` - All group members (requires `groupId`) (◈)
 - `"crossServer"` - Cross-server federation (◇)
 - `"public"` - Visible to all users (○)
+
+**Encrypted waves:** `encrypted: true` with `keyDistribution` (`[{ userId, encryptedWaveKey, senderPublicKey, format }]`, `userId` null for the creator). Keys are stored only for the wave's people (a crew wave's whole crew) and those invited; one for someone refused is dropped (v2.153.1). To bind the keys to the wave (format 2), first reserve its id and send `waveId` and `waveIdReservation` with the request: `400 INVALID_WAVE_RESERVATION` unless the server signed that id for you in the last 10 minutes, `409 WAVE_ID_USED` if a wave already has it.
 
 **Response (201 Created):**
 

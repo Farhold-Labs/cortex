@@ -2047,8 +2047,9 @@ function MainApp({ sharePingId }) {
       // When server requires encryption and E2EE is unlocked, generate key distribution
       if (forceWaveEncryption && e2ee.isUnlocked) {
         try {
-          const { keyDistribution } = await e2ee.createWaveWithEncryption(data.participants || []);
-          body = { ...data, encrypted: true, keyDistribution };
+          // v2.153.1: with the id its keys are bound to, when the server reserved one.
+          const { keyDistribution, waveId, waveIdReservation } = await e2ee.createWaveWithEncryption(data.participants || []);
+          body = { ...data, encrypted: true, keyDistribution, ...(waveId ? { waveId, waveIdReservation } : {}) };
         } catch (encErr) {
           console.warn('E2EE key generation failed, creating wave unencrypted:', encErr);
           // Graceful degradation: redistribution will handle key delivery when E2EE is ready

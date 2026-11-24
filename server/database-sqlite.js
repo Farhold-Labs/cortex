@@ -7515,7 +7515,8 @@ export class DatabaseSQLite {
   createWave(data) {
     const now = new Date().toISOString();
     const wave = {
-      id: `wave-${uuidv4()}`,
+      // v2.153.1: an id reserved beforehand (checked by the route), or a new one.
+      id: data.id || `wave-${uuidv4()}`,
       title: data.title.slice(0, 200),
       privacy: data.privacy || 'private',
       groupId: data.groupId || null,
