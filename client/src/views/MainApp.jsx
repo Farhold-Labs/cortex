@@ -1103,8 +1103,9 @@ function MainApp({ sharePingId }) {
     } else if (data.type === 'wave_key_request') {
       // Another participant needs us to re-encrypt the wave key for them (v2.47.3).
       // v2.143.0: by who they are; the device looks their key up itself.
-      if (e2eeRef.current.isUnlocked && data.waveId && data.requestId && data.requesterId) {
-        e2eeRef.current.grantWaveKey(data.waveId, data.requestId, data.requesterId, data.versions);
+      // v2.153.0: or someone on another server (`remote: { nodeName, userId }`).
+      if (e2eeRef.current.isUnlocked && data.waveId && data.requestId && (data.requesterId || data.remote)) {
+        e2eeRef.current.grantWaveKey(data.waveId, data.requestId, data.requesterId || null, data.versions, data.remote || null);
       }
     } else if (data.type === 'wave_rekey_needed') {
       // Someone who held this wave's key has left, and we can renew it (v2.143.0).

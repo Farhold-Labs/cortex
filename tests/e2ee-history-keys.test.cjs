@@ -58,8 +58,8 @@ function editFile(dir, file, pairs) {
 // The old request rule: having any key at all ended it.
 function oldRequestRule(dir) {
   editFile(dir, 'server.js', [
-    ['    const missing = db.missingWaveKeyVersions(waveId, requesterId);\n    if (missing.length === 0) {',
-     '    const missing = db.missingWaveKeyVersions(waveId, requesterId);\n    if (db.getWaveKeyForUser(waveId, requesterId)) {'],
+    ['      : db.missingWaveKeyVersions(waveId, requesterId);\n    if (missing.length === 0) {',
+     '      : db.missingWaveKeyVersions(waveId, requesterId);\n    if (db.getWaveKeyForUser(waveId, requesterId)) {'],
   ]);
 }
 
