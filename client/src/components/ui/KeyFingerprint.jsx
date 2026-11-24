@@ -168,7 +168,7 @@ function MyIdentity({ e2ee }) {
   }
 
   if (id.state !== 'ok') {
-    const text = id.state === 'elsewhere' ? K.elsewhere : id.state === 'mismatch' ? K.mismatch : K.unknown;
+    const text = id.state === 'elsewhere' || id.state === 'outdated' ? K.elsewhere : id.state === 'mismatch' ? K.mismatch : K.unknown;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {id.fingerprint && <FingerprintText fingerprint={id.fingerprint} size="1rem" />}
@@ -342,7 +342,7 @@ export function IdentityPrompt() {
   const [later, setLater] = useState(() => { try { return sessionStorage.getItem(PROMPT_LATER) === '1'; } catch { return false; } });
   const [shown, setShown] = useState(false);
   const state = e2ee?.myIdentity?.state;
-  useEffect(() => { if (state === 'none' || state === 'stale') setShown(true); }, [state]);
+  useEffect(() => { if (state === 'none' || state === 'stale' || state === 'outdated') setShown(true); }, [state]);
   if (!e2ee?.isUnlocked || later || !shown) return null;
   const close = () => {
     try { sessionStorage.setItem(PROMPT_LATER, '1'); } catch { /* the next session asks again */ }
