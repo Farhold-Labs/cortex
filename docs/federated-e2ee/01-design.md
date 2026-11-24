@@ -1,6 +1,6 @@
 # Encryption across servers — design
 
-Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below), **phase 2 in v2.152.0** ("Phase 2 as built"). **Fingerprints and format 2 are being revised** by `02-identity-keys.md` (decided 2026-11-24): the fingerprint becomes that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
+Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below), **phase 2 in v2.152.0** ("Phase 2 as built"), **phase 3 in v2.153.0** ("Phase 3 as built"): encrypted waves now include people on other servers. **Fingerprints and format 2 are being revised** by `02-identity-keys.md` (decided 2026-11-24): the fingerprint becomes that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
 public key comes from their home server over signed federation; members can
 see and compare key fingerprints, with a change flagged) and 2026-11-20 (the
 five questions) are recorded at the end and folded into the text. Not built.
@@ -406,3 +406,39 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
 - **Not yet:** devices don't look up people elsewhere, and nothing lifts the
   refusal. Both are phase 3, which must also tell other servers the pinned
   seal name (v2.151.0) rather than assume the federation name.
+
+### Phase 3 as built (v2.153.0)
+
+- **The refusal is lifted for protocol-3 servers.** Creating an encrypted wave
+  with people elsewhere, inviting them, and answering an invitation check every
+  server involved (`encryptedServersRefusal()`), re-reading its identity page
+  when what we last heard is below 3. `/encrypt` on a wave that already has
+  people elsewhere is still refused: their copies hold its plain history.
+- **The copy** is made encrypted at the version the answer gives, and its
+  server asks for the key at once (a device otherwise asks only when a ping
+  fails to open). A copy follows the wave's version (`setWaveKeyVersion`) and
+  is never renewed where it is (`canRotateWaveKey` false on copies).
+- **Requests and grants** as designed, with one simplification: only the
+  wave's own server's members answer requests from elsewhere (it is allied
+  with every server in the wave); requests are not relayed to third servers.
+  `remote_wave_key_requests` on the wave's server; `/api/waves/:id/key-grant-remote`
+  for its members' devices.
+- **Rotation**: entries `{ remote: { nodeName, userId } }` for people
+  elsewhere, checked against the wave's listed people there; each server in
+  the wave is sent its own people's keys and the new version, possibly none.
+  Someone left out (no keys, or keys not signed) asks. The device sends the
+  version it bound the keys to (`keyVersion`), and `ifNeeded` for a pending
+  renewal, which the server skips if no longer needed.
+- **Who wrapped a key** is stored with it (`sender_user_id`, `sender_node`),
+  and devices check format-2 keys against the wrapper's statements, signed by
+  the fingerprint on record for them if there is one. Membership of the
+  wrapper isn't checked by devices: the wave's server checks the giver holds
+  the version, and the copy's server takes keys only from the wave's server.
+- **Seals** use the wave's id on its own server (`originWaveId` in key
+  responses) and each person's server's pinned seal name (from key lookups).
+- **Keys made at creation and at `/encrypt` stay format 1**: the wave's id
+  doesn't exist yet at creation. Every other wrap is format 2.
+- **Tested** with two real servers and real browsers on one machine, not on
+  dev and QA: deploying the branch to QA was held for Jared's go-ahead. A
+  third server not allied with one of the others was not tried: dev, QA and
+  port1 are all paired with each other.

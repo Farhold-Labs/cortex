@@ -227,14 +227,30 @@ async function run({ copyByIdAlone = false, noMemberCheck = false } = {}) {
     const rotated = peer.of('wave_key_rotated')[0];
     r.rotation = { badRemote: badRemote.body?.code, stale: staleVersion.body?.code, status: rot.status, version: rotated?.keyVersion, to: (rotated?.keys || []).map(k => k.userId) };
 
-    // zed leaves on peer: the wave needs a new key
+    // A pending renewal is skipped when none is needed (another device made it)
+    const notNeeded = await api('POST', `/api/waves/${waveId}/key/rotate`, { token: alice, body: { ifNeeded: true, keyVersion: 3, keyDistribution: [
+      { userId: null, encryptedWaveKey: wrapped(), senderPublicKey: aliceEnc.publicKey, format: 2 },
+    ] } });
+    r.skipped = { skipped: notNeeded.body?.skipped, version: notNeeded.body?.newKeyVersion };
+
+    // zed leaves on peer: the wave needs a new key; told twice, it is marked once
     await inbox('peer.example', 'wave_member_left', { originWaveId: waveId, handle: 'zed', remaining: 0 });
     r.rekey = (await api('GET', `/api/waves/${waveId}`, { token: alice })).body?.rekeyNeeded;
+    raw('UPDATE wave_key_metadata SET rekey_needed_at = NULL WHERE wave_id = ?', waveId);
+    await inbox('peer.example', 'wave_member_left', { originWaveId: waveId, handle: 'zed', remaining: 0 });
+    r.rekeyAgain = (await api('GET', `/api/waves/${waveId}`, { token: alice })).body?.rekeyNeeded;
+    // zed's keys can still be looked up for his old pings in it
+    raw("INSERT INTO remote_pings (id, wave_id, origin_wave_id, origin_node, author_id, author_node, content, created_at) VALUES ('zp1', ?, ?, 'peer.example', 'u-zed', 'peer.example', 'x', ?)", waveId, waveId, now);
+    const afterLeaving = await api('GET', '/api/e2ee/keys/remote?node=peer.example&userId=u-zed', { token: alice });
+    r.zedStillChecked = { status: afterLeaving.status, key: afterLeaving.body?.publicKey === peer.zedKey };
 
     // ===== host holds a copy of peer's wave =====
     await inbox('peer.example', 'wave_invite', { wave: { id: 'their-wave', title: 'Their wave', encrypted: true }, participants: [], invitedUserHandle: 'bob', invitedBy: { id: 'u-zed', handle: 'zed', displayName: 'Zed' }, memberCount: 1 });
     const inv = ((await api('GET', '/api/wave-invitations', { token: bob })).body?.invitations || [])[0];
+    peer.got.length = 0;
     const acc = await api('POST', `/api/wave-invitations/${inv.id}/accept`, { token: bob });
+    await settle();
+    r.askedAtAccept = peer.of('wave_key_request').map(p => `${p.user?.id}:${(p.versions || []).join(',')}`);
     const copyId = acc.body?.wave?.id;
     r.copy = { status: acc.status, encrypted: acc.body?.wave?.encrypted,
       version: raw('SELECT current_key_version AS v FROM wave_key_metadata WHERE wave_id = ?', copyId)[0]?.v,
@@ -292,7 +308,11 @@ test('phase 3: encrypted waves with people on other servers, keys through the wa
   assert.deepEqual(r.granted, { status: 200, to: 'u-zed', versions: [1], sender: 'u-alice', senderNode: 'host.example', settled: 0 });
   assert.equal(r.wrongSender, 'SENDER_KEY_MISMATCH');
   assert.deepEqual(r.rotation, { badRemote: 'BAD_REMOTE_KEY', stale: 'KEY_MEMBERS_CHANGED', status: 200, version: 2, to: ['u-zed'] });
+  assert.deepEqual(r.skipped, { skipped: true, version: 2 }, 'nothing pending: a pending renewal is skipped');
   assert.equal(r.rekey, true, 'someone elsewhere leaving needs a new key');
+  assert.equal(r.rekeyAgain, false, 'told again after they were gone, it is not marked again');
+  assert.deepEqual(r.zedStillChecked, { status: 200, key: true }, 'his old pings can still be checked');
+  assert.deepEqual(r.askedAtAccept, ['u-bob:1,2'], 'accepting an encrypted wave asks for its keys at once');
   assert.deepEqual(r.copy, { status: 200, encrypted: true, version: 2, flag: 1 });
   assert.deepEqual(r.ask, { status: 200, versions: [1, 2], forwarded: { wave: 'their-wave', user: 'u-bob', versions: [1, 2] } });
   assert.equal(r.fromFar, 0, 'keys only from the wave\'s own server');

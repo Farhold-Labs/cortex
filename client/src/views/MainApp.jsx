@@ -1061,7 +1061,9 @@ function MainApp({ sharePingId }) {
       }
       // If the event is for the currently viewed wave, trigger a reload
       // Extract waveId from different event structures
-      const eventWaveId = data.waveId || data.data?.wave_id || data.data?.waveId;
+      // A ping from another server arrives as `ping`, not `data` (v2.153.0:
+      // the open wave never reloaded for one).
+      const eventWaveId = data.waveId || data.data?.wave_id || data.data?.waveId || data.ping?.waveId || data.ping?.wave_id;
       if (selectedWave && eventWaveId === selectedWave.id) {
         console.log(`🔄 Reloading wave ${selectedWave.id} due to ${data.type} event`);
         setWaveReloadTrigger(prev => prev + 1);

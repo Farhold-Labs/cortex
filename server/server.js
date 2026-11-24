@@ -8109,18 +8109,20 @@ async function remoteUserKeys(nodeName, userId, { force = false } = {}) {
   const cached = db.getRemoteUserKeys(nodeName, userId);
   if (cached?.fetchedAt && !force && Date.now() - Date.parse(cached.fetchedAt) < REMOTE_KEYS_FRESH_MS) return cached;
   const node = db.getFederationNodeByName(nodeName);
-  if (!node || node.status !== 'active' || (node.protocolVersion || 1) < 3) return null;
+  // v2.153.0: when their server won't or can't answer (they left the wave,
+  // or it is down), what was cached still lets old pings be checked.
+  if (!node || node.status !== 'active' || (node.protocolVersion || 1) < 3) return cached || null;
   let data;
   try {
     const resp = await sendSignedFederationRequest(node, 'POST', '/api/federation/e2ee-keys', { userIds: [userId] });
-    if (!resp.ok) return null;
+    if (!resp.ok) return cached || null;
     data = await resp.json();
   } catch (err) {
     console.warn(`[e2ee] key lookup on ${nodeName} failed: ${err.message}`);
-    return null;
+    return cached || null;
   }
   const person = (data?.people || []).find(x => x?.userId === userId);
-  if (!person || !keyStatements.p384Key(person.publicKey)) return null;
+  if (!person || !keyStatements.p384Key(person.publicKey)) return cached || null;
   const statements = Array.isArray(person.statements) ? person.statements.slice(0, 200).filter(validRemoteStatement) : [];
   db.putRemoteUserKeys(nodeName, {
     userId,
@@ -8139,7 +8141,12 @@ app.get('/api/e2ee/keys/remote', authenticateToken, async (req, res) => {
   const nodeName = String(req.query.node || '');
   const userId = String(req.query.userId || '');
   if (!nodeName || nodeName.length > 255 || !userId || userId.length > 100) return res.status(400).json({ error: 'node and userId required' });
-  if (!e2eeSharingNodesFor(req.user.userId).has(nodeName)) {
+  // Someone you share an encrypted wave's server with, or whose pings are in
+  // a wave you can read (v2.153.0: so their old pings still check after they
+  // or their server have left).
+  const wroteHere = () => db.db.prepare('SELECT DISTINCT wave_id FROM remote_pings WHERE author_node = ? AND author_id = ? LIMIT 50')
+    .all(nodeName, userId).some(r => canAccessWaveFromCache(r.wave_id, req.user.userId));
+  if (!e2eeSharingNodesFor(req.user.userId).has(nodeName) && !wroteHere()) {
     return res.status(404).json({ error: 'You share no encrypted conversation with that server', code: 'NOT_SHARED' });
   }
   const keys = await remoteUserKeys(nodeName, userId);
@@ -20856,10 +20863,12 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         const ours = db.getWave(originWaveId);
         if (!ours || ours.federationState !== 'origin') break;
         if (!db.getWaveFederationNodes(ours.id).some(n => n.nodeName === sourceNode.nodeName)) break;
-        db.removeWaveRemoteMember(ours.id, sourceNode.nodeName, handle);
+        const wasListed = db.removeWaveRemoteMember(ours.id, sourceNode.nodeName, handle);
         if (remaining === 0) db.removeWaveFederationNode(ours.id, sourceNode.nodeName);
-        // v2.153.0: they held the key; it is renewed without them.
-        if (db.isWaveEncrypted(ours.id)) { db.markWaveRekeyNeeded(ours.id); notifyRekeyNeeded([ours.id]); }
+        // v2.153.0: they held the key; it is renewed without them. Only if they
+        // were still listed: when the owner removed them here, their server's
+        // report that they left arrives after, and must not renew it again.
+        if (wasListed && db.isWaveEncrypted(ours.id)) { db.markWaveRekeyNeeded(ours.id); notifyRekeyNeeded([ours.id]); }
         broadcastToWave(ours.id, { type: 'wave_updated', wave: { id: ours.id } });
         break;
       }
@@ -24685,8 +24694,9 @@ app.delete('/api/waves/:id/travellers/:address', authenticateToken, async (req, 
   if (answer.status < 200 || answer.status >= 300) {
     return res.status(502).json({ error: `${parsed.nodeName} did not take the removal. Try again later.`, code: 'NODE_UNREACHABLE' });
   }
-  db.removeWaveRemoteMember(wave.id, parsed.nodeName, parsed.handle);
-  if (db.isWaveEncrypted(wave.id)) { db.markWaveRekeyNeeded(wave.id); notifyRekeyNeeded([wave.id]); } // v2.153.0
+  if (db.removeWaveRemoteMember(wave.id, parsed.nodeName, parsed.handle) && db.isWaveEncrypted(wave.id)) {
+    db.markWaveRekeyNeeded(wave.id); notifyRekeyNeeded([wave.id]); // v2.153.0
+  }
   if (answer.body?.remaining === 0) db.removeWaveFederationNode(wave.id, parsed.nodeName);
   broadcastToWave(wave.id, { type: 'wave_updated', wave: { id: wave.id } });
   if (db.logActivity) db.logActivity(req.user.userId, 'remove_traveller', 'wave', wave.id, getRequestMeta(req), { nodeName: parsed.nodeName });
@@ -26110,6 +26120,18 @@ async function acceptFederatedInvitation(req, res, invitation) {
   broadcastToUser(user.id, { type: 'wave_invitations_changed' });
   if (db.logActivity) db.logActivity(user.id, 'accept_wave_invitation', 'wave', localWave.id, getRequestMeta(req));
 
+  // v2.153.0: an encrypted wave's key is asked for at once, so it is here
+  // before the first ping is (a device otherwise asks only when one fails to
+  // open). Members' devices on the wave's server answer.
+  if (origin.encrypted === true) {
+    const own = db.getUserPublicKey(user.id);
+    const missing = copyMissingKeyVersions(localWave.id, user.id);
+    if (own && missing.length) {
+      db.upsertWaveKeyRequest(localWave.id, user.id, own);
+      forwardKeyRequest(localWave, user, missing);
+    }
+  }
+
   // Its history, now that this server is one of the wave's.
   if (created) {
     pullFederatedHistory(localWave, originNode, { maxPages: 50 })
@@ -27181,6 +27203,12 @@ app.post('/api/waves/:id/key/rotate', authenticateToken, (req, res) => {
       }
       if (seen.has(userId)) return res.status(400).json({ error: 'Invalid key distribution data' });
       seen.add(userId);
+    }
+    // v2.153.0: a renewal a device makes because one was pending is skipped
+    // if another device or page has made it meanwhile, decided here, where
+    // it can't race.
+    if (req.body.ifNeeded === true && !waveNeedsRekey(wave)) {
+      return res.json({ success: true, skipped: true, newKeyVersion: db.getWaveKeyVersion(waveId) });
     }
     // v2.153.0: keys bound to their version (format 2) were made for exactly
     // the next one; another rotation meanwhile would leave them unreadable.
