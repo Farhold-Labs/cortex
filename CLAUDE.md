@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.153.1**. Last brought current 2026-10-30.
+Current version: **2.154.0**. Last brought current 2026-10-30.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2153001 / versionName "2.153.1"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2153001 / MARKETING_VERSION 2.153.1
+client/android/app/build.gradle                  versionCode 2154000 / versionName "2.154.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2154000 / MARKETING_VERSION 2.154.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -365,7 +365,7 @@ Node-to-node, **push-only and opt-in**. There is no discovery, join or subscribe
 
 **Encryption across servers, phase 2 (v2.152.0):** protocol 3 (`/identity`, every envelope), `POST /api/federation/e2ee-keys` answered only for people sharing an encrypted wave with the asker (`e2eeSharingNodesFor()`), a day's cache (`remote_user_keys`, `remoteUserKeys()`), `e2ee_key_changed` pushed on every key change (`announceKeyChange()`), encryption fields on federated pings, and plain text into an encrypted wave dropped (`federatedCiphertextRefusal()`). A new path that changes someone's keys must call `announceKeyChange`.
 
-**Encrypted waves across servers (v2.153.0, phase 3).** Allowed when every server involved speaks protocol 3 (`encryptedServersRefusal()`, else 409 `ENCRYPTED_SERVER_NOT_READY`); `/encrypt` on a wave with people elsewhere is still refused (`ENCRYPTED_NO_TRAVELLERS`). A copy is encrypted at the wave's version and never renewed where it is. Keys travel only through the wave's own server: `wave_key_request` → members' devices → `/key-grant-remote` → `wave_key_grant`; renewals send each server its own people's keys (`wave_key_rotated`). A copy's server takes keys only from the wave's server (`getWaveByOrigin(sourceNode, …)`), only for people in the copy, never over an existing key. Wrapped keys carry who wrapped them, and devices check it. Never store a key from another server without those three checks. Since v2.153.1 the first keys are format 2 too: the device reserves the wave's id (`POST /api/waves/reserve-id`, `lib/wave-id-reservation.js`, signed for that person) and creates the wave under it; never let a client name a wave id without a reservation.
+**Encrypted waves across servers (v2.153.0, phase 3).** Allowed when every server involved speaks protocol 3 (`encryptedServersRefusal()`, else 409 `ENCRYPTED_SERVER_NOT_READY`); `/encrypt` on a wave with people elsewhere is still refused (`ENCRYPTED_NO_TRAVELLERS`). A copy is encrypted at the wave's version and never renewed where it is. Keys travel only through the wave's own server: `wave_key_request` → members' devices → `/key-grant-remote` → `wave_key_grant`; renewals send each server its own people's keys (`wave_key_rotated`). A copy's server takes keys only from the wave's server (`getWaveByOrigin(sourceNode, …)`), only for people in the copy, never over an existing key. Wrapped keys carry who wrapped them, and devices check it. Never store a key from another server without those three checks. Since v2.154.0 the wave's server relays each key request to its other servers (`relayKeyRequest`, `wave_key_request_relay`); one allied with the asker's server offers it, and the grant comes back through the wave's server (`wave_key_grant_relay`), which accepts it only from a server in the wave. Copies are told the wave's servers (`wave_servers`, `federated_wave_servers`) and count them in `e2eeSharingNodesFor()`; announce changes with `announceWaveServers()`. Since v2.153.1 the first keys are format 2 too: the device reserves the wave's id (`POST /api/waves/reserve-id`, `lib/wave-id-reservation.js`, signed for that person) and creates the wave under it; never let a client name a wave id without a reservation.
 
 **Groups and travellers (v2.138.0).** A group wave stays a group wave with people elsewhere: its group is its people here, its travellers are `wave_remote_members` on its own server (recorded on accept and when they post). `isFederatedWave()` is the test for "has people on other servers", never `privacy === 'crossServer'` alone. Removing a traveller goes through their server (`/api/federation/wave-members/remove`); leaving a copy tells the origin (`wave_member_left`); an empty copy is deleted (`dropEmptyFederatedCopy`). On a copy, `createdBy` is only whoever accepted first and must not be treated as its owner. Remote mutes live in `remote_mutes`; read mute lists through `db.mutedIdsFor()`.
 

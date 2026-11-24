@@ -7595,7 +7595,8 @@ app.get('/api/e2ee/key-requests', authenticateToken, (req, res) => {
     }
     // v2.153.0: from people on other servers, in this server's waves.
     for (const r of db.pendingRemoteWaveKeyRequests()) {
-      if (!canAccessWaveFromCache(r.waveId, me) || !remoteWaveMember(r.waveId, r.nodeName, r.userId)) continue;
+      // v2.154.0: or passed on by the wave's own server, which checked them.
+      if (!canAccessWaveFromCache(r.waveId, me) || (!r.originRequestId && !remoteWaveMember(r.waveId, r.nodeName, r.userId))) continue;
       const mine = new Set(db.getAllWaveKeysForUser(r.waveId, me).map(k => k.keyVersion));
       const versions = r.versions.filter(v => mine.has(v));
       if (versions.length) requests.push({ requestId: r.id, waveId: r.waveId, remote: { nodeName: r.nodeName, userId: r.userId, handle: r.handle }, versions });
@@ -8070,6 +8071,8 @@ function e2eeSharingNodesFor(userId) {
     const wave = db.getWave(waveId);
     if (!wave || !canAccessWaveFromCache(waveId, userId)) continue;
     if (wave.federationState === 'participant' && wave.originNode) nodes.add(wave.originNode);
+    // v2.154.0: and the other servers in it, as its own server says.
+    if (wave.federationState === 'participant') for (const n of db.getFederatedWaveServers(waveId)) nodes.add(n);
     for (const n of db.getWaveFederationNodes(waveId)) nodes.add(n.nodeName);
     for (const r of db.db.prepare('SELECT DISTINCT node_name FROM remote_wave_invitations WHERE wave_id = ?').all(waveId)) nodes.add(r.node_name);
   }
@@ -20865,7 +20868,7 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         if (!ours || ours.federationState !== 'origin') break;
         if (!db.getWaveFederationNodes(ours.id).some(n => n.nodeName === sourceNode.nodeName)) break;
         const wasListed = db.removeWaveRemoteMember(ours.id, sourceNode.nodeName, handle);
-        if (remaining === 0) db.removeWaveFederationNode(ours.id, sourceNode.nodeName);
+        if (remaining === 0) { db.removeWaveFederationNode(ours.id, sourceNode.nodeName); announceWaveServers(ours.id); }
         // v2.153.0: they held the key; it is renewed without them. Only if they
         // were still listed: when the owner removed them here, their server's
         // report that they left arrives after, and must not renew it again.
@@ -21309,6 +21312,96 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         for (const uid of waveMemberIds(ours)) {
           broadcastToUser(uid, { type: 'wave_key_request', requestId, waveId: ours.id, remote: { nodeName: sourceNode.nodeName, userId: rqId, handle }, versions });
         }
+        // v2.154.0: and to the wave's other servers, whose members can answer too.
+        relayKeyRequest(ours, requestId, { id: rqId, handle, nodeName: sourceNode.nodeName }, versions);
+        break;
+      }
+
+      case 'wave_key_request_relay': {
+        // v2.154.0 (copy side): the wave's own server passes on a request, so
+        // members here can answer it. Only from that server, only for someone
+        // on a server we are allied with (we look them up there; their device
+        // looks up whoever wraps the key here).
+        const { originWaveId: rWave, requestId: rId, user: rUser, versions: rVersions, servers: rServers } = payload || {};
+        const copy = typeof rWave === 'string' && db.getWaveByOrigin(sourceNode.nodeName, rWave);
+        if (!copy || !db.isWaveEncrypted(copy.id) || typeof rId !== 'string' || !rId || rId.length > 100) break;
+        storeWaveServers(copy, sourceNode.nodeName, rServers);
+        const node = typeof rUser?.nodeName === 'string' ? rUser.nodeName.slice(0, 255) : null;
+        const uid = typeof rUser?.id === 'string' ? rUser.id.slice(0, 100) : null;
+        if (!node || !uid || node === currentNodeName()) break;
+        const ally = db.getFederationNodeByName(node);
+        if (!ally || ally.status !== 'active' || (ally.protocolVersion || 1) < 3) break;
+        const current = db.getWaveKeyVersion(copy.id);
+        const versions = (Array.isArray(rVersions) ? rVersions : []).filter(v => Number.isInteger(v) && v >= 1 && v <= current).slice(0, 1000);
+        if (!versions.length) break;
+        const handle = typeof rUser.handle === 'string' ? rUser.handle.slice(0, 100) : null;
+        const requestId = db.upsertRemoteWaveKeyRequest(copy.id, node, uid, handle, versions, rId);
+        for (const m of waveMemberIds(copy)) {
+          broadcastToUser(m, { type: 'wave_key_request', requestId, waveId: copy.id, remote: { nodeName: node, userId: uid, handle }, versions });
+        }
+        break;
+      }
+
+      case 'wave_key_request_settled': {
+        // v2.154.0 (copy side): someone gave it; stop offering it here.
+        const copy = typeof payload?.originWaveId === 'string' && db.getWaveByOrigin(sourceNode.nodeName, payload.originWaveId);
+        if (copy && typeof payload.requestId === 'string') db.settleRelayedWaveKeyRequests(copy.id, payload.requestId);
+        break;
+      }
+
+      case 'wave_servers': {
+        // v2.154.0 (copy side): the servers this wave is on, from its own server.
+        const copy = typeof payload?.originWaveId === 'string' && db.getWaveByOrigin(sourceNode.nodeName, payload.originWaveId);
+        if (copy && db.isWaveEncrypted(copy.id)) storeWaveServers(copy, sourceNode.nodeName, payload.servers);
+        break;
+      }
+
+      case 'wave_key_grant_relay': {
+        // v2.154.0 (origin side): a member on another server in the wave gave a
+        // key for a request we passed on. Its server checked they hold those
+        // versions; we check the request and pass the keys to the asker's
+        // server (or store them, for someone here), as for a grant made here.
+        const { originWaveId: gWave, requestId: gId, keys: gKeys, senderPublicKey: gSender, sender: gWho } = payload || {};
+        const ours = typeof gWave === 'string' && db.getWave(gWave);
+        if (!ours || ours.federationState !== 'origin' || !db.isWaveEncrypted(ours.id)) break;
+        if (!db.getWaveFederationNodes(ours.id).some(n => n.nodeName === sourceNode.nodeName)) break;
+        if (typeof gId !== 'string' || !keyStatements.p384Key(gSender) || !validWrappedKeys(gKeys) || typeof gWho?.userId !== 'string') break;
+        // Whoever wrapped it is one of the sender's own people.
+        const sender = { userId: gWho.userId.slice(0, 100), nodeName: sourceNode.nodeName };
+        const current = db.getWaveKeyVersion(ours.id);
+        const remoteReq = db.getRemoteWaveKeyRequest(gId);
+        if (remoteReq) {
+          if (remoteReq.waveId !== ours.id || remoteReq.status !== 'pending' || remoteReq.nodeName === sourceNode.nodeName) break;
+          if (!remoteWaveMember(ours.id, remoteReq.nodeName, remoteReq.userId)) break;
+          const asked = new Set(remoteReq.versions);
+          const give = gKeys.filter(k => k.keyVersion <= current && asked.has(k.keyVersion))
+            .map(k => ({ keyVersion: k.keyVersion, encryptedWaveKey: k.encryptedWaveKey, format: k.format === 2 ? 2 : 1 }));
+          if (!give.length) break;
+          sendWaveKeysTo(remoteReq.nodeName, 'wave_key_grant', { originWaveId: ours.id, userId: remoteReq.userId, keys: give, senderPublicKey: gSender, sender });
+          if (give.length === remoteReq.versions.length) {
+            db.settleRemoteWaveKeyRequest(remoteReq.id, sender.userId);
+            announceRequestSettled(ours.id, remoteReq.id);
+          }
+          console.log(`🔑 Relayed grant from ${sourceNode.nodeName}: ${give.length} version(s) of ${ours.id} to ${remoteReq.userId}@${remoteReq.nodeName}`);
+          break;
+        }
+        const localReq = db.getWaveKeyRequest(gId);
+        if (!localReq || localReq.wave_id !== ours.id || localReq.status !== 'pending') break;
+        if (!canAccessWaveFromCache(ours.id, localReq.requester_id)) break;
+        let stored = 0;
+        db.db.transaction(() => {
+          for (const k of gKeys) {
+            if (k.keyVersion > current || db.hasWaveKeyRow(ours.id, localReq.requester_id, k.keyVersion)) continue;
+            db.createWaveEncryptionKey(ours.id, localReq.requester_id, k.encryptedWaveKey, gSender, k.keyVersion, null, k.format === 2 ? 2 : 1, { userId: sender.userId, node: sender.nodeName });
+            stored++;
+          }
+          if (db.missingWaveKeyVersions(ours.id, localReq.requester_id).length === 0) db.grantWaveKeyRequest(localReq.id, null);
+        })();
+        if (stored) {
+          if (db.getWaveKeyRequest(localReq.id)?.status !== 'pending') announceRequestSettled(ours.id, localReq.id);
+          broadcastToUser(localReq.requester_id, { type: 'wave_key_granted', waveId: ours.id, requestId: localReq.id });
+        }
+        console.log(`🔑 Relayed grant from ${sourceNode.nodeName}: ${stored} version(s) of ${ours.id} for someone here`);
         break;
       }
 
@@ -21642,8 +21735,11 @@ app.post('/api/federation/wave-invitations/answer', federationInboxLimiter, auth
       encrypted: !!encryptedWave,
       keyVersion: encryptedWave ? db.getWaveKeyVersion(wave.id) : null,
       sealNodeName: sealNodeName() || null,
+      // v2.154.0: the servers in it, so allied ones answer each other's key lookups.
+      servers: encryptedWave ? waveServersOf(wave.id) : undefined,
     },
   });
+  if (encryptedWave) setImmediate(() => announceWaveServers(wave.id));
 });
 
 // Federation catch-up/backfill (origin side): serve a page of a wave's ping
@@ -24722,7 +24818,7 @@ app.delete('/api/waves/:id/travellers/:address', authenticateToken, async (req, 
   if (db.removeWaveRemoteMember(wave.id, parsed.nodeName, parsed.handle) && db.isWaveEncrypted(wave.id)) {
     db.markWaveRekeyNeeded(wave.id); notifyRekeyNeeded([wave.id]); // v2.153.0
   }
-  if (answer.body?.remaining === 0) db.removeWaveFederationNode(wave.id, parsed.nodeName);
+  if (answer.body?.remaining === 0) { db.removeWaveFederationNode(wave.id, parsed.nodeName); announceWaveServers(wave.id); }
   broadcastToWave(wave.id, { type: 'wave_updated', wave: { id: wave.id } });
   if (db.logActivity) db.logActivity(req.user.userId, 'remove_traveller', 'wave', wave.id, getRequestMeta(req), { nodeName: parsed.nodeName });
   res.json({ success: true, removed: !!answer.body?.removed, remainingThere: answer.body?.remaining ?? null });
@@ -26141,6 +26237,7 @@ async function acceptFederatedInvitation(req, res, invitation) {
   }
   participation.addParticipant(localWave.id, user.id);
   db.addWaveFederationNode(localWave.id, originNode.nodeName);
+  if (origin.encrypted === true) storeWaveServers(localWave, originNode.nodeName, origin.servers); // v2.154.0
   db.deleteFederatedWaveInvitation(invitation.id);
   broadcastToUser(user.id, { type: 'wave_invitations_changed' });
   if (db.logActivity) db.logActivity(user.id, 'accept_wave_invitation', 'wave', localWave.id, getRequestMeta(req));
@@ -26980,6 +27077,10 @@ app.post('/api/waves/:id/key-request', authenticateToken, (req, res) => {
 
     // v2.153.0: and to the wave's own server, whose members can give it.
     if (wave.federationState === 'participant') forwardKeyRequest(wave, requester, missing);
+    // v2.154.0: on the wave's own server, to the other servers in it.
+    else if (wave.federationState === 'origin' && currentNodeName()) {
+      relayKeyRequest(wave, requestId, { id: requesterId, handle: requester?.handle || null, nodeName: currentNodeName() }, missing);
+    }
 
     console.log(`Wave key request: user ${requester?.handle} requesting key for wave ${waveId}`);
     res.json({ success: true, requestId, versions: missing });
@@ -27055,6 +27156,8 @@ app.post('/api/waves/:id/key-grant', authenticateToken, (req, res) => {
       if (db.missingWaveKeyVersions(waveId, request.requester_id).length === 0) db.grantWaveKeyRequest(requestId, granterId);
     })();
     if (stored === 0) return res.json({ success: true, stored: 0 });
+    // v2.154.0: the other servers stop offering it.
+    if (db.getWave(waveId)?.federationState === 'origin' && db.getWaveKeyRequest(requestId)?.status !== 'pending') announceRequestSettled(waveId, requestId);
 
     // Notify the requester they can now decrypt the wave
     broadcastToUser(request.requester_id, {
@@ -27109,6 +27212,55 @@ function remoteWaveMember(waveId, nodeName, userId) {
   return db.listWaveRemoteMembers(waveId).find(m => m.node_name === nodeName && m.remote_user_id === userId) || null;
 }
 
+// ---- Key requests relayed to every server in the wave (v2.154.0) ----
+//
+// Until v2.154.0 only members on the wave's own server answered; with all of
+// them offline, a newcomer waited. Now the wave's server passes each request
+// to the other servers in the wave:
+//   origin ──wave_key_request_relay──▶ other servers ──WS──▶ their members' devices
+//   device ──/key-grant-remote (copy)──▶ its server ──wave_key_grant_relay──▶ origin
+//   origin ──wave_key_grant──▶ the asker's server (or stores it, for its own people)
+// Keys still travel only through the wave's server. A server offers a relayed
+// request only when it is allied with the asker's server: its devices look the
+// asker up there, and the asker's device looks up whoever wrapped the key. No
+// server passes on another server's people's public keys (decision 2).
+//
+// Each server in an encrypted wave is told which servers are in it
+// (wave_servers), so allied servers answer each other's key lookups for people
+// in it: until then a copy knew only the wave's server, and devices could not
+// check the signatures of people on a third server.
+
+function waveServersOf(waveId) {
+  return [...new Set([currentNodeName(), ...db.getWaveFederationNodes(waveId).map(n => n.nodeName)].filter(Boolean))];
+}
+
+/** On a copy: the servers its wave is on, as the wave's own server says. */
+function storeWaveServers(copy, originNode, list) {
+  if (!Array.isArray(list)) return;
+  const me = currentNodeName();
+  const names = list.filter(n => typeof n === 'string' && n.length > 0 && n.length <= 255 && n !== me).slice(0, 200);
+  db.setFederatedWaveServers(copy.id, [...new Set([originNode, ...names])]);
+}
+
+function announceWaveServers(waveId) {
+  if (!db.isWaveEncrypted(waveId)) return;
+  const servers = waveServersOf(waveId);
+  for (const n of db.getWaveFederationNodes(waveId)) sendWaveKeysTo(n.nodeName, 'wave_servers', { originWaveId: waveId, servers });
+}
+
+/** Pass a key request (`requestId` as this server knows it) to the wave's other servers. */
+function relayKeyRequest(wave, requestId, user, versions) {
+  const servers = waveServersOf(wave.id);
+  for (const n of db.getWaveFederationNodes(wave.id)) {
+    if (n.nodeName === user.nodeName) continue;
+    sendWaveKeysTo(n.nodeName, 'wave_key_request_relay', { originWaveId: wave.id, requestId, user, versions, servers });
+  }
+}
+
+function announceRequestSettled(waveId, requestId) {
+  for (const n of db.getWaveFederationNodes(waveId)) sendWaveKeysTo(n.nodeName, 'wave_key_request_settled', { originWaveId: waveId, requestId });
+}
+
 /** Send keys to one server for its own people in a wave (grant or rotation). */
 async function sendWaveKeysTo(nodeName, type, payload) {
   const node = db.getFederationNodeByName(nodeName);
@@ -27139,7 +27291,8 @@ app.post('/api/waves/:id/key-grant-remote', authenticateToken, async (req, res) 
     const granterId = req.user.userId;
     const { requestId, senderPublicKey, keys } = req.body || {};
     const wave = db.getWave(waveId);
-    if (!wave || wave.federationState !== 'origin' || !db.isWaveEncrypted(waveId)) return res.status(404).json({ error: 'Wave not found' });
+    const isCopy = wave?.federationState === 'participant';
+    if (!wave || (wave.federationState !== 'origin' && !isCopy) || !db.isWaveEncrypted(waveId)) return res.status(404).json({ error: 'Wave not found' });
     if (!canAccessWaveFromCache(waveId, granterId)) return res.status(403).json({ error: 'Access denied' });
     if (!validWrappedKeys(keys)) return res.status(400).json({ error: 'Invalid keys' });
     if (!wrapsWithOwnKey(granterId, senderPublicKey)) {
@@ -27148,6 +27301,24 @@ app.post('/api/waves/:id/key-grant-remote', authenticateToken, async (req, res) 
     const request = db.getRemoteWaveKeyRequest(requestId);
     if (!request || request.waveId !== waveId) return res.status(404).json({ error: 'Key request not found' });
     if (request.status !== 'pending') return res.json({ success: true, message: 'Request already fulfilled' });
+
+    // v2.154.0: a request the wave's own server passed on, answered here; the
+    // keys go back through it. Only versions the granter holds here.
+    if (isCopy) {
+      if (!request.originRequestId) return res.status(404).json({ error: 'Key request not found' });
+      const copyVersion = db.getWaveKeyVersion(waveId);
+      const asked = new Set(request.versions);
+      const give = keys.filter(k => k.keyVersion <= copyVersion && asked.has(k.keyVersion) && db.hasWaveKeyRow(waveId, granterId, k.keyVersion))
+        .map(k => ({ keyVersion: k.keyVersion, encryptedWaveKey: k.encryptedWaveKey, format: k.format === 2 ? 2 : 1 }));
+      if (!give.length) return res.json({ success: true, stored: 0 });
+      const sent = await sendWaveKeysTo(wave.originNode, 'wave_key_grant_relay', {
+        originWaveId: wave.originWaveId, requestId: request.originRequestId, keys: give, senderPublicKey,
+        sender: { userId: granterId },
+      });
+      if (give.length === request.versions.length) db.settleRemoteWaveKeyRequest(request.id, granterId);
+      console.log(`Wave key granted through ${wave.originNode}: ${give.length} version(s) of ${waveId} to ${request.userId}@${request.nodeName}`);
+      return res.json({ success: true, stored: give.length, sent });
+    }
     if (!remoteWaveMember(waveId, request.nodeName, request.userId)) {
       return res.status(403).json({ error: `They are no longer in this ${T_WAVE()}`, code: 'NOT_A_MEMBER' });
     }
@@ -27161,7 +27332,10 @@ app.post('/api/waves/:id/key-grant-remote', authenticateToken, async (req, res) 
       originWaveId: waveId, userId: request.userId, keys: give, senderPublicKey,
       sender: { userId: granterId, nodeName: sealNodeName() || null },
     });
-    if (give.length === request.versions.length) db.settleRemoteWaveKeyRequest(request.id, granterId);
+    if (give.length === request.versions.length) {
+      db.settleRemoteWaveKeyRequest(request.id, granterId);
+      announceRequestSettled(waveId, request.id); // v2.154.0
+    }
     console.log(`Wave key granted across servers: ${give.length} version(s) of ${waveId} to ${request.userId}@${request.nodeName}`);
     res.json({ success: true, stored: give.length, sent });
   } catch (err) {

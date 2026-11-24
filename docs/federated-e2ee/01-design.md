@@ -422,7 +422,7 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
   wave's own server's members answer requests from elsewhere (it is allied
   with every server in the wave); requests are not relayed to third servers.
   `remote_wave_key_requests` on the wave's server; `/api/waves/:id/key-grant-remote`
-  for its members' devices.
+  for its members' devices. *Relayed since v2.154.0* (below).
 - **Rotation**: entries `{ remote: { nodeName, userId } }` for people
   elsewhere, checked against the wave's listed people there; each server in
   the wave is sent its own people's keys and the new version, possibly none.
@@ -447,6 +447,22 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
   the other server, pings both ways, renewal, removal. A third server not
   allied with one of the others was not tried then: dev, QA and port1 are all
   paired with each other.
+- **Requests relayed (v2.154.0).** With every member on the wave's server
+  offline, a newcomer waited. Now the wave's server passes each request
+  (`wave_key_request_relay`) to the wave's other servers; one allied with the
+  asker's server offers it to its members, and a grant goes back through the
+  wave's server (`wave_key_grant_relay`), which checks the request and passes
+  `wave_key_grant` on (or stores it, for its own person). Keys still travel
+  only through the wave's server, and no server passes on another's people's
+  public keys (decision 2): the granting device looks the asker up on the
+  asker's own server, which is why only an allied server offers it. Each
+  server in the wave is told which servers are in it (`wave_servers`,
+  `federated_wave_servers`), so allied servers answer each other's lookups for
+  people in it; before, a copy knew only the wave's server, and devices could
+  not check the signatures of people on a third server even when allied with
+  it. Tried in browsers on three local servers (B and C allied): with the
+  owner offline, B's member gave C's newcomer the key, wrapped by them and
+  checked by C's device.
 - **Third server, tried 2026-11-24 (v2.153.1)** with three real servers and
   real browsers on one machine: the wave on A, allied with B and C, which are
   not allied with each other. The wave was made in the app; B's and C's keys

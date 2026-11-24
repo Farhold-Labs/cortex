@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.154.0] - 2026-11-24
+
+Encryption across servers: key requests relayed. Since v2.153.0 a newcomer on another server got the key only from a member's device on the wave's own server, so with all of them offline the newcomer waited, even with members online elsewhere. Server and web only, no app build. **Migrates** (one column, one table).
+
+### Added
+- **Key requests go to every server in the wave.** The wave's server passes each request, whether from its own people or another server's, to the wave's other servers (`wave_key_request_relay`). A server offers it to its members only if it is allied with the asker's server. Its devices look the asker up there, and the asker's device looks up whoever wrapped the key. A member's grant goes back through the wave's server (`wave_key_grant_relay`), which checks the request and passes the keys on, or stores them for its own person. Once it's settled, the other servers stop offering it.
+  - Keys still travel only through the wave's own server, and no server passes on another server's people's public keys.
+- **Every server in an encrypted wave is told which servers are in it** (`wave_servers`, and in the answer to an invitation). So allied servers in the same wave now answer each other's key lookups for people in it. Before, a copy knew only the wave's server: devices couldn't check the signatures of people on a third server even when allied with it, and pings from them showed without a mark.
+
+### Security
+- **[SECURITY] A relayed grant is accepted only from a server in the wave, and a relayed request only from the wave's own server.** A relayed request is offered only for someone on an allied server. A grant still settles nothing beyond the versions asked, never replaces a key someone holds, and names who wrapped it, with the server it came from.
+
 ### Verified
+- **Tests:** `tests/e2ee-key-relay.test.cjs`, one real server and three fake allies.
+  - **As the wave's server:**
+    - the servers are sent at acceptance and announced;
+    - a request is relayed to the other server only;
+    - a grant from a server not in the wave goes nowhere;
+    - a grant from a server in the wave reaches the asker's server, named by its own server, and settles everywhere;
+    - a newcomer here is relayed and stored with who wrapped it, never overwritten.
+  - **As a copy's server:**
+    - the wave's servers are stored, and a server in the wave may look up people here while one not in it may not;
+    - only the wave's server's relays, for allied servers, are offered;
+    - a member's grant goes back with only the versions held;
+    - a settle notice stops the offer.
+- **Counterfactuals:**
+  - without the in-the-wave check, a grant from a server not in the wave is passed on;
+  - finding the copy by wave id alone, a relayed request from another server is offered.
+- **In browsers** (headless Chrome, three local servers, B and C allied):
+  - with the owner on A offline, C's newcomer got the key from B's member, through A, format 2;
+  - the newcomer read the owner's earlier ping, and B's member read the newcomer's, with no ⚠;
+  - each server now holds the other's person's keys.
+- Full suite: 790 tests pass.
+- **Found, not fixed here:** a server joining a wave late gets its history only from pings posted on the wave's own server. Those posted by people on other servers aren't served by the history route, encrypted or not.
+
 - **Encrypted waves with a third server** (the test `docs/federated-e2ee/01-design.md` asked for in phase 3), on three real servers and browsers on one machine. The wave was on A, which was allied with B and C; B and C were not allied with each other.
   - **Keys:** the wave was made in the app, and B's and C's keys were format 2, wrapped by the owner on A.
   - **Reading:** everyone read every ping, and none was flagged ⚠.
