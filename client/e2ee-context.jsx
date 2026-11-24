@@ -131,6 +131,14 @@ export function E2EEProvider({ children, token, API_URL }) {
   const sealIdentityRef = useRef(null);
   // Statements of ping authors, checked once each (v2.150.0): userId -> Promise<Map seq -> statement>.
   const statementsRef = useRef(new Map());
+  // Signed pings (v2.151.0): pingId -> { status: 'signed'|'forged'|'replay', identityKey, authorId },
+  // `${waveId}:${messageId}` -> the ping it first appeared as, and this
+  // person's signing key, ready: Promise<{ privateKey, seq }|null>.
+  const verdictsRef = useRef(new Map());
+  const messageIdsRef = useRef(new Map());
+  const signerRef = useRef(null);
+  const [verdictTick, setVerdictTick] = useState(0);
+  const verdictTimerRef = useRef(null);
   const rotationRunRef = useRef(null);
   // Waves this session has asked older key versions for (v2.145.4).
   const historyAskedRef = useRef(new Set());
@@ -899,6 +907,37 @@ export function E2EEProvider({ children, token, API_URL }) {
     return found || null;
   }, [fetchAPI]);
 
+  // A page of pings decrypts at once; redraw marks once for all of them.
+  const noteVerdict = useCallback((pingId, verdict) => {
+    if (!pingId) return;
+    const prev = verdictsRef.current.get(pingId);
+    if (prev && prev.status === verdict.status && prev.identityKey === verdict.identityKey) return;
+    verdictsRef.current.set(pingId, verdict);
+    if (!verdictTimerRef.current) {
+      verdictTimerRef.current = setTimeout(() => { verdictTimerRef.current = null; setVerdictTick(t => t + 1); }, 150);
+    }
+  }, []);
+
+  /**
+   * The mark beside a ping's author (v2.151.0, docs/federated-e2ee/02):
+   *   { mark: 'verified' }  signed by the identity you verified
+   *   { mark: 'warn', reason: 'forged'|'replay'|'changed' }  the signature
+   *     doesn't check, it's a copy of an earlier ping, or it was signed by an
+   *     identity other than the one you verified
+   *   null  nothing to say: unverified author, or a format-1 ping
+   */
+  const pingMark = useCallback((ping) => {
+    const v = ping?.id ? verdictsRef.current.get(ping.id) : null;
+    if (!v) return null;
+    if (v.status !== 'signed') return { mark: 'warn', reason: v.status };
+    const e = keyRecordsRef.current?.records?.people?.[v.authorId];
+    if (e?.verifiedIdentity && e.verifiedIdentity === v.identityKey) return { mark: 'verified' };
+    if ((e?.verifiedIdentity && e.verifiedIdentity !== v.identityKey) || (e?.verificationLost && e.identity !== v.identityKey)) {
+      return { mark: 'warn', reason: 'changed' };
+    }
+    return null;
+  }, []);
+
   // ============ Identity (v2.150.0) ============
 
   const fetchJSON = useCallback(async (path, options) => {
@@ -915,6 +954,7 @@ export function E2EEProvider({ children, token, API_URL }) {
 
   /** Where this person's identity stands; see myIdentity. */
   const refreshIdentity = useCallback(async () => {
+    signerRef.current = null; // keys or identity may have changed
     if (!privateKey || !publicKeyBase64) { setMyIdentity(null); return null; }
     try {
       const me = await getSealIdentity();
@@ -959,6 +999,32 @@ export function E2EEProvider({ children, token, API_URL }) {
       return null;
     }
   }, [privateKey, publicKeyBase64, getSealIdentity, fetchAPI, loadKeyRecords, applyRecords]);
+
+  /**
+   * This person's signing key, for signing pings (v2.151.0): only when their
+   * identity's latest statement names the keys this page holds, so what they
+   * sign is what everyone else's devices will check.
+   */
+  const getSigner = useCallback(() => {
+    if (!privateKey || !publicKey || !publicKeyBase64) return Promise.resolve(null);
+    if (!signerRef.current) {
+      signerRef.current = (async () => {
+        const me = await getSealIdentity();
+        const [keysRes, idRes] = await Promise.all([fetchAPI('/e2ee/keys/me'), fetchAPI('/e2ee/identity')]);
+        if (!keysRes.ok || !idRes.ok) return null;
+        const keys = await keysRes.json();
+        const id = await idRes.json();
+        const st = id.statement;
+        if (!keys.encryptedSigningKey || keys.publicKey !== publicKeyBase64 || !st
+          || st.encryptionKey !== publicKeyBase64 || st.signingKey !== keys.signingKey
+          || !(await crypto.verifyKeyStatement(id.identityKey, me.userId, st))) return null;
+        const signing = await crypto.unwrapSigningKey(keys.encryptedSigningKey, privateKey, publicKey, me.userId);
+        return { privateKey: signing, seq: st.seq };
+      })();
+      signerRef.current.catch(() => { signerRef.current = null; });
+    }
+    return signerRef.current;
+  }, [privateKey, publicKey, publicKeyBase64, getSealIdentity, fetchAPI]);
 
   /** Is this the person's recovery key? Checked against the recovery wrap of their key. */
   const checkRecoveryKey = useCallback(async (recoveryKey) => {
@@ -1270,9 +1336,20 @@ export function E2EEProvider({ children, token, API_URL }) {
       throw new Error('Your encryption key is being redistributed — please try again in a moment');
     }
 
+    // v2.151.0: signed (format 2) when this person has a fingerprint whose
+    // statement names the keys in use; otherwise format 1, as before.
+    const signer = await getSigner().catch(() => null);
+    if (signer) {
+      const me = await getSealIdentity();
+      const sealed = await crypto.sealSignedPing(content, waveKey, {
+        originWaveId: waveId, authorAddress: crypto.personAddress(me.userId, me.nodeName),
+        seq: signer.seq, signingPrivateKey: signer.privateKey,
+      });
+      return { ciphertext: sealed.ciphertext, nonce: sealed.nonce, keyVersion: version, format: 2 };
+    }
     const { ciphertext, nonce } = await crypto.encryptPing(content, waveKey);
     return { ciphertext, nonce, keyVersion: version };
-  }, [getWaveKey]);
+  }, [getWaveKey, getSigner, getSealIdentity]);
 
   // `seal` (v2.149.0): { format, authorId } from the ping. Format 2 is bound
   // to the wave and its author, so a ping moved to another wave or credited to
@@ -1320,13 +1397,21 @@ export function E2EEProvider({ children, token, API_URL }) {
       const ctx = { originWaveId: waveId, authorAddress: crypto.personAddress(seal.authorId, seal.authorNode || me.nodeName) };
       const opened = await crypto.openSignedPing(ciphertext, nonce, waveKey, ctx);
       const statement = await statementOf(seal.authorId, opened.seq);
-      if (!statement || !(await crypto.verifyPingSignature(statement.signingKey, opened, ctx))) {
-        throw new Error('The signature on this ping does not check');
-      }
+      const signed = !!statement && await crypto.verifyPingSignature(statement.signingKey, opened, ctx);
+      // v2.151.0: what's known about who wrote it, for the mark beside their
+      // name. A message id is one ping: the same one again under another ping
+      // is the server replaying it.
+      const seen = `${waveId}:${opened.messageId}`;
+      const first = signed ? (messageIdsRef.current.get(seen) || seal.pingId) : null;
+      if (signed && seal.pingId) messageIdsRef.current.set(seen, first);
+      const status = !signed ? 'forged' : (seal.pingId && first !== seal.pingId ? 'replay' : 'signed');
+      noteVerdict(seal.pingId, { status, identityKey: statement?.identityKey || null, authorId: seal.authorId });
+      if (status === 'forged') throw new Error('The signature on this ping does not check');
+      if (status === 'replay') throw new Error('This ping is a copy of an earlier one');
       return opened.text;
     }
     return crypto.decryptPing(ciphertext, nonce, waveKey);
-  }, [getWaveKey, getVersionedWaveKey, requestWaveKey, getSealIdentity, statementOf]);
+  }, [getWaveKey, getVersionedWaveKey, requestWaveKey, getSealIdentity, statementOf, noteVerdict]);
 
   // ============ Audio Encryption (v2.3.0) ============
 
@@ -1680,6 +1765,9 @@ export function E2EEProvider({ children, token, API_URL }) {
     keyRecordsRef.current = null;
     sealIdentityRef.current = null;
     statementsRef.current.clear();
+    verdictsRef.current.clear();
+    messageIdsRef.current.clear();
+    signerRef.current = null;
     setMyIdentity(null);
     setKeyChanges([]);
     clearSessionCache();
@@ -1937,6 +2025,10 @@ export function E2EEProvider({ children, token, API_URL }) {
     unmarkKeyVerified,
     keyStandingOf,
     keyRecordsTick,
+
+    // Signed pings (v2.151.0)
+    pingMark,
+    verdictTick,
 
     // Legacy wave migration
     getWaveEncryptionStatus,

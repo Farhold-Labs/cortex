@@ -1692,6 +1692,12 @@ CREATE TABLE IF NOT EXISTS user_key_statements (
         PRIMARY KEY (user_id, seq)
       );
 
+CREATE TABLE IF NOT EXISTS e2ee_seal_name (
+        id        INTEGER PRIMARY KEY CHECK (id = 1),
+        node_name TEXT NOT NULL,
+        pinned_at TEXT NOT NULL
+      );
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);

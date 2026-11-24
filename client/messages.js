@@ -463,6 +463,13 @@ export const KEY_FINGERPRINT = {
   },
   identityDone: 'Your fingerprint is set up.',
   later: 'LATER',
+  // Beside a ping's author (v2.151.0)
+  pingVerified: (name) => `Signed by ${name}: the fingerprint you verified`,
+  pingWarn: {
+    forged: (name) => `Not shown: its signature doesn't check, so it may not be from ${name}`,
+    replay: () => 'Not shown: a copy of an earlier ping, sent again by the server',
+    changed: (name) => `Signed under a different fingerprint from the one you verified for ${name}`,
+  },
   currentRecovery: 'Your current recovery key',
   currentRecoveryHint: "It carries your fingerprint over to the new one. If you've lost it, replace your fingerprint instead (under Your fingerprint): that makes a new recovery key too.",
 };
