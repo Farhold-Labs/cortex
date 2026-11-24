@@ -1,6 +1,6 @@
 # Encryption across servers — design
 
-Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0.** Jared's decisions of 2026-11-07 (a person's
+Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below). Jared's decisions of 2026-11-07 (a person's
 public key comes from their home server over signed federation; members can
 see and compare key fingerprints, with a change flagged) and 2026-11-20 (the
 five questions) are recorded at the end and folded into the text. Not built.
@@ -322,6 +322,39 @@ New signed federation traffic:
      from there.
 
 Each phase is its own release. 1 and 2 can be built in either order.
+
+### Phase 1 as built (v2.149.0)
+
+- **Fingerprints** as specified, in Settings → Security → Your encryption key
+  (there is no separate Encryption category), on the people list of an
+  encrypted wave (a KEY line under each name, opening to the fingerprint and
+  Mark as verified) and on profile cards. Opening the people list looks up
+  every member's key, so the marks there are about the key the server hands
+  out now. Opening someone's key counts as seeing a change.
+- **Verified** is per key: `verifiedKey` in the record of keys seen. A change
+  drops it and sets `verificationLost`, shown as "changed since you verified"
+  until the new key is verified. Seeing the flag does not clear that.
+- **Format 2, read only.** `format` on `pings` and `wave_encryption_keys`
+  (default 1), accepted on every write, returned on every read. Details that
+  the text above left open, now fixed because format 2 bytes depend on them:
+  - **An address is `<user id on the home server>@<home server name>`**, not
+    the handle: a handle can be changed, and a binding to it would make every
+    format-2 ping by that person unreadable afterwards. Remote pings already
+    carry `author_id` and `author_node`.
+  - **‖ is one 0x00 byte**; no field may contain it (`sealContext()` refuses),
+    so two different lists of fields never give the same bytes.
+  - The key version in the wrap context is its decimal string.
+- **Left for phase 3**, where they first matter:
+  - the origin wave id of an encrypted *copy* (phase 1 has none: encrypted
+    waves and other servers are still refused), so devices use the wave id
+    they asked for;
+  - the check that a wrapped key's wrapper is a member of the wave. On one
+    server the wrapper must already be the giver's own registered key
+    (v2.143.0); across servers it needs the wrapper's address on the row.
+  - **A server's name is part of every address.** Renaming is already refused
+    while it has allies (v2.147.0); before devices write format 2, a server
+    holding format-2 pings must refuse a rename (or a first name) outright,
+    or those pings stop opening.
 
 ## Decisions (Jared)
 

@@ -719,11 +719,15 @@ const noticeStyle = (accent, overlay) => ({
 export function KeyChangeNotice({ people, onAcknowledge }) {
   if (!people?.length) return null;
   const names = people.map(p => p.name).join(', ');
+  const lost = people.filter(p => p.verificationLost);
   return (
     <div role="status" style={noticeStyle('--accent-amber', '--overlay-amber')}>
       <span>
         🔑 {people.length === 1 ? `${names}'s encryption key has changed` : `Encryption keys changed for ${names}`}.
         {' '}This happens when someone resets their encryption. If you didn't expect it, check with them another way.
+        {lost.length > 0 && (
+          <> You had verified {lost.map(p => p.name).join(', ')}, so that verification no longer holds: compare fingerprints again (KEY in the people list).</>
+        )}
       </span>
       <button
         onClick={onAcknowledge}

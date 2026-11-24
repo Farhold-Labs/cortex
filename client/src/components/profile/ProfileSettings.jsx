@@ -10,6 +10,7 @@ import { applyCustomTheme, removeCustomTheme } from '../../hooks/useTheme.js';
 import { subscribeToPush, unsubscribeFromPush, forceResetPushState } from '../../utils/pwa.js';
 import { Avatar, GlowText, LoadingSpinner } from '../ui/SimpleComponents.jsx';
 import { E2EEStatusIndicator } from '../../../e2ee-components.jsx';
+import { MyKeyFingerprint } from '../ui/KeyFingerprint.jsx';
 import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import MyReportsPanel from '../reports/MyReportsPanel.jsx';
 import AboutPanel from '../settings/AboutPanel.jsx';
@@ -2027,6 +2028,13 @@ const ProfileSettings = ({ user, fetchAPI, showToast, onUserUpdate, onLogout, fe
             </div>
           )}
         </CollapsibleSection>
+
+        {/* Your key's fingerprint (v2.149.0) */}
+        {e2ee.isE2EEEnabled && (
+          <CollapsibleSection title="YOUR ENCRYPTION KEY" isOpen={openSub === 'myKey'} onToggle={() => toggleSub('myKey')} isMobile={isMobile}>
+            <MyKeyFingerprint />
+          </CollapsibleSection>
+        )}
 
         {/* E2EE Recovery Key Sub-section */}
         {e2ee.isE2EEEnabled && (
