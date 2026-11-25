@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.156.2] - 2026-11-25
+
+Connecting Plex by signing in now picks an address Cortex can reach. Server and web client only, no app build, no migration.
+
+### Fixed
+- **Signing in to Plex offered the home-network address of the Plex server.** plex.tv lists every address a server has: LAN, public and relay. Cortex took the LAN one first. That was the right choice when the browser talked to Plex. Now every request goes through Cortex, and a hosted Cortex (farhold, at Bluehost) can't reach a 192.168.x.x address. The connection test timed out, and the only way round was to paste a token by hand with the public address.
+  - Now each address is tried from the Cortex server (`/identity`, 5 s, all at once). The first that answers wins, in the order public, relay, LAN (`lib/plex-connection-pick.js`). A Cortex on the same LAN as its Plex, with no remote access set up, still gets the LAN address.
+  - If nothing answers, the public address is offered, and the picker marks it "Cortex can't reach it".
+  - Adding a connection that times out or can't be reached now says so (502, "use an address reachable from the internet"), instead of a bare "Failed to connect" and a stack trace in the error log.
+- `tests/plex-connection-pick.test.cjs` (5): public over LAN, LAN when only it answers, relay, nothing answering and non-http addresses ignored, and the old preference picking the unreachable address.
+- Not tried against a real plex.tv sign-in: that needs a Plex account. The picker is tested with simulated answers.
+
 ## [2.156.1] - 2026-11-25
 
 Jellyfin and Plex access tokens are now encrypted at rest. Server only, no app build. Stored tokens are converted at boot; the schema is unchanged.

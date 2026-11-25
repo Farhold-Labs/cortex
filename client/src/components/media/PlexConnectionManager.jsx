@@ -568,6 +568,7 @@ const PlexConnectionManager = ({ fetchAPI, showToast, isMobile, hideTitle = fals
                               {server.connection?.uri}
                               {server.connection?.local && ' (local)'}
                               {server.connection?.relay && ' (relay)'}
+                              {server.connection?.reachable === false && ' (Cortex can\'t reach it)'}
                             </div>
                           </div>
                           <button
