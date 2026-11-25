@@ -14854,6 +14854,19 @@ export class DatabaseSQLite {
   /**
    * Update Jellyfin connection
    */
+  // Stored Jellyfin or Plex access tokens, for converting their encryption
+  // (v2.156.1). Only the token column is ever read or written here.
+  mediaTokenRows(provider) {
+    const table = provider === 'plex' ? 'plex_connections' : 'jellyfin_connections';
+    return this.db.prepare(`SELECT id, access_token AS token FROM ${table}`).all();
+  }
+
+  saveMediaTokens(provider, convert) {
+    const table = provider === 'plex' ? 'plex_connections' : 'jellyfin_connections';
+    const save = this.db.prepare(`UPDATE ${table} SET access_token = ? WHERE id = ?`);
+    return this.db.transaction(() => convert(this.mediaTokenRows(provider), (id, value) => save.run(value, id)))();
+  }
+
   updateJellyfinConnection(connectionId, updates) {
     const allowedFields = ['access_token', 'jellyfin_user_id', 'server_name', 'status', 'last_connected'];
     const sets = [];
