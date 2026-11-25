@@ -29,6 +29,9 @@ import { mediaEmbedHtml } from '../../utils/embed.js';
 import MessageComposer from '../compose/MessageComposer.jsx';
 import { T } from '../../config/terminology.js';
 import { sealPing, pingSeal } from '../../utils/sealPing.js';
+import { parseRollCommand, rollFallback } from '../../utils/diceCommand.js';
+import { rememberRoll } from '../../utils/rolls.js';
+import { DiceTray, TableSettingsModal, RollLogModal } from '../ttrpg/TtrpgModals.jsx';
 import { useIsCongested } from '../../hooks/useNetworkStatus.js';
 import { lazyComponent } from '../../utils/lazyComponent.jsx';
 
@@ -144,6 +147,27 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const broadcastsEnabled = (() => {
     try { return JSON.parse(localStorage.getItem('farhold_instance_features') || '{}').broadcasts === true; } catch { return false; }
   })();
+  // Tabletop role-playing (v2.158.0): opt-in instance feature; a wave is a table when set up as one.
+  const ttrpgEnabled = (() => {
+    try { return JSON.parse(localStorage.getItem('farhold_instance_features') || '{}').ttrpg === true; } catch { return false; }
+  })();
+  const [table, setTable] = useState(null);
+  const [tableCanManage, setTableCanManage] = useState(false);
+  const [ttrpgModal, setTtrpgModal] = useState(null); // 'dice' | 'settings' | 'log' | null
+  const loadTable = useCallback(async () => {
+    if (!ttrpgEnabled || !wave?.id) { setTable(null); setTableCanManage(false); return; }
+    try {
+      const data = await fetchAPI(`/waves/${encodeURIComponent(wave.id)}/table`);
+      setTable(data.table || null);
+      setTableCanManage(!!data.canManage);
+    } catch { setTable(null); setTableCanManage(false); }
+  }, [ttrpgEnabled, wave?.id, fetchAPI]);
+  useEffect(() => { loadTable(); }, [loadTable]);
+  useEffect(() => {
+    const onChanged = (e) => { if (e.detail?.waveId === wave?.id) loadTable(); };
+    window.addEventListener('cortex:wave-table-updated', onChanged);
+    return () => window.removeEventListener('cortex:wave-table-updated', onChanged);
+  }, [wave?.id, loadTable]);
   const [showMediaRecorder, setShowMediaRecorder] = useState(null); // 'audio' | 'video' | null (v2.7.0)
   const [uploadingMedia, setUploadingMedia] = useState(false); // Media upload in progress
   const [mediaUploadStatus, setMediaUploadStatus] = useState(''); // Status message during upload
@@ -1105,10 +1129,37 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     setLoadingMore(false);
   };
 
-  const handleSendMessage = async (messageContent) => {
-    const content = messageContent || newMessage;
-    if (!content.trim()) return;
+  const handleSendMessage = async (messageContent, { roll: chosenRoll = null } = {}) => {
+    let content = messageContent || newMessage;
+    if (!chosenRoll && !content.trim()) return;
     const isReply = replyingTo !== null;
+
+    // Dice (v2.158.0): /roll and the dice tray. The server rolls; the ping
+    // carries the label (sealed like any ping) and points at the roll.
+    let rollToPost = chosenRoll;
+    if (!rollToPost && ttrpgEnabled) {
+      const command = parseRollCommand(content);
+      if (command) {
+        if (!table) { showToast(`This ${T.wave} isn't a table. Its owner can make it one: ⋮ → Make this a table`, 'error'); return; }
+        if (command.error) { showToast(command.error, 'error'); return; }
+        rollToPost = command;
+      }
+    }
+    let rollId = null;
+    if (rollToPost) {
+      try {
+        const { roll } = await fetchAPI(`/waves/${encodeURIComponent(wave.id)}/rolls`, {
+          method: 'POST',
+          body: { expression: rollToPost.expression, ...(rollToPost.visibility ? { visibility: rollToPost.visibility } : {}) },
+        });
+        rememberRoll(roll);
+        rollId = roll.id;
+        content = rollToPost.label || rollFallback(roll.expression);
+      } catch (err) {
+        showToast(err.message || 'Could not roll', 'error');
+        return;
+      }
+    }
 
     // Suppress WebSocket-triggered reloads during this operation
     userActionInProgressRef.current = true;
@@ -1121,6 +1172,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
 
       // E2EE: Encrypt message if wave is encrypted and E2EE is unlocked
       let messageBody = { wave_id: wave.id, parent_id: replyingTo?.id || null, content };
+      if (rollId) messageBody.rollId = rollId;
       // The server applies the wave's timer itself; only a shorter choice is sent.
       if (pingExpiry) messageBody.expiresIn = pingExpiry;
       // An encrypted ping's files are named here, from the plaintext, so they
@@ -1874,6 +1926,28 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     >
                       <span>●</span>
                       <span>Go live</span>
+                    </div>
+                  )}
+
+                  {/* Tabletop role-playing (v2.158.0) */}
+                  {ttrpgEnabled && table && (
+                    <div
+                      onClick={() => { setShowWaveMenu(false); setTtrpgModal('log'); }}
+                      style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-purple)', background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>🎲</span><span>Roll log</span>
+                    </div>
+                  )}
+                  {ttrpgEnabled && tableCanManage && (waveData?.federationState || 'local') === 'local' && waveData?.privacy !== 'crossServer' && (
+                    <div
+                      onClick={() => { setShowWaveMenu(false); setTtrpgModal('settings'); }}
+                      style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-purple)', background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>⚔</span><span>{table ? 'Table settings' : 'Make this a table'}</span>
                     </div>
                   )}
 
@@ -2931,6 +3005,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           onVideoRecord={() => setShowMediaRecorder(showMediaRecorder === 'video' ? null : 'video')}
           plexConnections={plexConnections}
           onPlexClick={() => setShowPlexBrowser(true)}
+          onDiceClick={table ? () => setTtrpgModal('dice') : undefined}
           fetchAPI={fetchAPI}
           expiry={pingExpiry}
           waveTtl={waveData?.pingTtl || null}
@@ -3040,6 +3115,19 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           showToast={showToast}
           isMobile={isMobile}
         />
+      )}
+
+      {/* Tabletop role-playing (v2.158.0) */}
+      {ttrpgModal === 'dice' && table && (
+        <DiceTray table={table} isMobile={isMobile} onClose={() => setTtrpgModal(null)}
+          onRoll={(roll) => handleSendMessage('', { roll })} />
+      )}
+      {ttrpgModal === 'settings' && (
+        <TableSettingsModal waveId={wave.id} table={table} participants={participants} currentUserId={currentUser?.id}
+          fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} onClose={() => setTtrpgModal(null)} onSaved={loadTable} />
+      )}
+      {ttrpgModal === 'log' && table && (
+        <RollLogModal waveId={wave.id} participants={participants} fetchAPI={fetchAPI} isMobile={isMobile} onClose={() => setTtrpgModal(null)} />
       )}
 
       {showGoLive && (

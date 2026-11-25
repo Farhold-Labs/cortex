@@ -12,6 +12,7 @@ import { Avatar, PrivacyBadge } from '../ui/SimpleComponents.jsx';
 import ImageLightbox from '../ui/ImageLightbox.jsx';
 import MessageWithEmbeds from './MessageWithEmbeds.jsx';
 import EventCard from '../calendar/EventCard.jsx';
+import RollCard from '../ttrpg/RollCard.jsx';
 import AudioPlayer from '../media/AudioPlayer.jsx';
 import VideoPlayer from '../media/VideoPlayer.jsx';
 import { T } from '../../config/terminology.js';
@@ -601,6 +602,15 @@ const Message = ({
                   waveEncrypted={waveEncrypted}
                   showToast={showToast}
                   onOpen={onOpenEvent}
+                />
+              ) : message.roll_id ? (
+                /* Dice roll (v2.158.0): the ping's text is the roll's label. */
+                <RollCard
+                  waveId={message.wave_id || message.waveId}
+                  rollId={message.roll_id}
+                  label={message.content}
+                  fetchAPI={fetchAPI}
+                  isMobile={isMobile}
                 />
               ) : message.content && (
                 <MessageWithEmbeds

@@ -30,6 +30,7 @@ import * as pushSubscriptionCrypto from './lib/push-subscription-crypto.js';
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import { encryptMediaToken, decryptMediaToken, convertLegacy as convertLegacyMediaTokens } from './lib/media-token-crypto.js';
 import { pickConnection } from './lib/plex-connection-pick.js';
+import { rollDice, DiceError } from './lib/dice.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import * as waveRoles from './lib/wave-roles.js';
 import * as communityAuthz from './lib/communities/authorize.js';
@@ -8859,7 +8860,8 @@ const INSTANCE_FEATURES = ['videoFeed', 'crawlBar', 'calendar', 'publicPortal', 
 // a public watch link is an internet-facing surface.
 // `voiceChannels` (v2.118.0) too: people sit in a voice channel for hours, and
 // LiveKit bills every participant-minute.
-const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents', 'communities', 'broadcasts', 'voiceChannels'];
+// `ttrpg` (v2.158.0): tabletop role-playing, for groups that ask for it.
+const INSTANCE_OPT_IN_FEATURES = ['publicServerEvents', 'communities', 'broadcasts', 'voiceChannels', 'ttrpg'];
 const ALL_INSTANCE_FEATURES = [...INSTANCE_FEATURES, ...INSTANCE_OPT_IN_FEATURES];
 
 // Branding fields surfaced publicly (pre-login), so keep them free of anything sensitive.
@@ -27903,6 +27905,137 @@ app.all('/api/droplets/:id/reparent', (req, res, next) => {
 // Note: /api/droplets/* aliases above rewrite to these routes
 
 // Create ping
+// ============ Tabletop role-playing (v2.158.0, docs/ttrpg/README.md) ============
+//
+// A table is a wave with the game switched on: a system and its GMs. The
+// server rolls the dice (a roll made on a device can be faked) and keeps every
+// roll; a roll goes on one ping, which carries the label, encrypted in an
+// encrypted wave. So the server learns "1d20+5 = 17", never what for.
+// Who sees a result is decided here on every read (rollView), never left to
+// the client to hide. Tables are local to one server until phase 4.
+const TTRPG_SYSTEMS = ['dnd5e-2024', 'generic'];
+const ROLL_VISIBILITIES = ['public', 'gm', 'gm_secret'];
+const TTRPG_MAX_GMS = 10;
+const diceLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_DICE_MAX) || 60,
+  // Runs after authenticateToken, so there is always a person to count.
+  keyGenerator: (req) => `dice:${req.user.userId}`,
+  message: { error: 'Too many rolls. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Everyone sees a public roll; the roller and the table's GMs see the rest.
+// Others get that a roll happened: the dice for "to the GM", nothing for a GM secret.
+function rollView(roll, viewerId, table) {
+  const isGm = !!table && table.gms.includes(viewerId);
+  if (roll.visibility === 'public' || roll.rollerId === viewerId || isGm) return { ...roll, hidden: false };
+  return {
+    id: roll.id, waveId: roll.waveId, rollerId: roll.rollerId, visibility: roll.visibility, pingId: roll.pingId,
+    createdAt: roll.createdAt, hidden: true, expression: roll.visibility === 'gm' ? roll.expression : null,
+  };
+}
+
+function tableView(table, userId, wave) {
+  return {
+    system: table.system, defaultVisibility: table.defaultVisibility, gms: table.gms,
+    isGm: table.gms.includes(userId), canManage: canManageWave(wave, userId),
+  };
+}
+
+// The checks every TTRPG route shares: the feature, the wave, reading it, and
+// (until phase 4) a wave on this server only. Returns the wave or null (answered).
+function ttrpgWave(req, res) {
+  if (!requireFeature('ttrpg', res)) return null;
+  const wave = db.getWave(req.params.id);
+  if (!wave) { res.status(404).json({ error: 'Wave not found' }); return null; }
+  if (!canAccessWaveFromCache(wave.id, req.user.userId)) { res.status(403).json({ error: 'Access denied' }); return null; }
+  return wave;
+}
+
+app.get('/api/waves/:id/table', authenticateToken, (req, res) => {
+  const wave = ttrpgWave(req, res);
+  if (!wave) return;
+  const table = db.getWaveTable(wave.id);
+  res.json({ table: table ? tableView(table, req.user.userId, wave) : null, canManage: canManageWave(wave, req.user.userId) });
+});
+
+app.put('/api/waves/:id/table', authenticateToken, (req, res) => {
+  const wave = ttrpgWave(req, res);
+  if (!wave) return;
+  if (!canManageWave(wave, req.user.userId)) return res.status(403).json({ error: 'Only the wave\'s owner and admins can set up a table' });
+  if (isFederatedWave(wave)) {
+    return res.status(409).json({ error: 'Tables are for waves on one server for now', code: 'TTRPG_LOCAL_ONLY' });
+  }
+  const system = TTRPG_SYSTEMS.includes(req.body.system) ? req.body.system : null;
+  const defaultVisibility = ['public', 'gm'].includes(req.body.defaultVisibility) ? req.body.defaultVisibility : null;
+  if (!system || !defaultVisibility) return res.status(400).json({ error: 'A game system and a default roll visibility are required' });
+  let gms = Array.isArray(req.body.gms) ? [...new Set(req.body.gms.filter(g => typeof g === 'string'))] : [];
+  if (!gms.length) gms = [wave.createdBy];
+  if (gms.length > TTRPG_MAX_GMS) return res.status(400).json({ error: `At most ${TTRPG_MAX_GMS} GMs` });
+  // A GM must be someone who can read the table.
+  if (gms.some(g => !db.findUserById(g) || !canAccessWaveFromCache(wave.id, g))) {
+    return res.status(400).json({ error: 'Every GM must be someone in this wave', code: 'GM_NOT_IN_WAVE' });
+  }
+  const table = db.setWaveTable(wave.id, { system, defaultVisibility, gms }, req.user.userId);
+  broadcastToWave(wave.id, { type: 'wave_table_updated', waveId: wave.id });
+  res.json({ table: tableView(table, req.user.userId, wave) });
+});
+
+app.delete('/api/waves/:id/table', authenticateToken, (req, res) => {
+  const wave = ttrpgWave(req, res);
+  if (!wave) return;
+  if (!canManageWave(wave, req.user.userId)) return res.status(403).json({ error: 'Only the wave\'s owner and admins can change the table' });
+  db.removeWaveTable(wave.id);
+  broadcastToWave(wave.id, { type: 'wave_table_updated', waveId: wave.id });
+  res.json({ success: true });
+});
+
+// Roll. The result is kept whether or not it is ever posted: the GM's log shows every roll.
+app.post('/api/waves/:id/rolls', authenticateToken, diceLimiter, (req, res) => {
+  const wave = ttrpgWave(req, res);
+  if (!wave) return;
+  const table = db.getWaveTable(wave.id);
+  if (!table) return res.status(409).json({ error: 'This wave isn\'t a table', code: 'NOT_A_TABLE' });
+  if (isFederatedWave(wave)) return res.status(409).json({ error: 'Tables are for waves on one server for now', code: 'TTRPG_LOCAL_ONLY' });
+  if (!canPostToWave(wave, req.user.userId)) return res.status(403).json({ error: 'You can\'t post in this wave', code: 'POSTING_RESTRICTED' });
+  const visibility = req.body.visibility == null ? table.defaultVisibility : req.body.visibility;
+  if (!ROLL_VISIBILITIES.includes(visibility)) return res.status(400).json({ error: 'Unknown roll visibility' });
+  if (visibility === 'gm_secret' && !table.gms.includes(req.user.userId)) {
+    return res.status(403).json({ error: 'Only a GM can roll in secret', code: 'GM_ONLY' });
+  }
+  let roll;
+  try {
+    roll = rollDice(req.body.expression);
+  } catch (err) {
+    if (err instanceof DiceError) return res.status(400).json({ error: err.message, code: err.code });
+    throw err;
+  }
+  const stored = db.createDiceRoll({ waveId: wave.id, rollerId: req.user.userId, roll, visibility });
+  res.status(201).json({ roll: rollView(stored, req.user.userId, table) });
+});
+
+// Rolls by id (the cards in a wave), or the log: newest first, optionally one person's.
+app.get('/api/waves/:id/rolls', authenticateToken, (req, res) => {
+  const wave = ttrpgWave(req, res);
+  if (!wave) return;
+  const table = db.getWaveTable(wave.id);
+  let rolls;
+  if (typeof req.query.ids === 'string' && req.query.ids) {
+    const ids = [...new Set(req.query.ids.split(','))].slice(0, 100);
+    rolls = db.getDiceRollsByIds(wave.id, ids);
+  } else {
+    const limit = parseInt(req.query.limit) || 50;
+    rolls = db.listDiceRolls(wave.id, {
+      rollerId: typeof req.query.roller === 'string' ? req.query.roller : null,
+      before: typeof req.query.before === 'string' ? req.query.before : null,
+      limit,
+    });
+  }
+  res.json({ rolls: rolls.map(r => rollView(r, req.user.userId, table)) });
+});
+
 app.post('/api/pings', authenticateToken, (req, res) => {
   const waveId = sanitizeInput(req.body.wave_id || req.body.thread_id);
   const content = req.body.content || '';
@@ -27953,7 +28086,15 @@ app.post('/api/pings', authenticateToken, (req, res) => {
   const expiry = resolvePingExpiry(wave, req.body.expiresIn);
   if (expiry.error) return res.status(400).json({ error: expiry.error, code: 'INVALID_EXPIRY' });
 
-  const ping = db.createMessage({
+  // v2.158.0 — a dice roll goes on its roller's ping, in its own wave, once.
+  const rollId = typeof req.body.rollId === 'string' && req.body.rollId ? req.body.rollId : null;
+  if (rollId) {
+    if (!isFeatureEnabled('ttrpg') || isFederatedWave(wave)) {
+      return res.status(409).json({ error: 'Dice rolls aren\'t available here', code: 'TTRPG_LOCAL_ONLY' });
+    }
+  }
+
+  const createPing = () => db.createMessage({
     waveId,
     parentId,
     authorId: req.user.userId,
@@ -27971,6 +28112,26 @@ app.post('/api/pings', authenticateToken, (req, res) => {
     isThreadReply: !!req.body.isThreadReply,
     expiresAt: expiry.expiresAt,
   });
+  let ping;
+  if (rollId) {
+    try {
+      ping = db.db.transaction(() => {
+        const created = createPing();
+        if (!db.claimDiceRoll(rollId, { pingId: created.id, rollerId: req.user.userId, waveId })) {
+          throw Object.assign(new Error('roll unavailable'), { code: 'ROLL_UNAVAILABLE' });
+        }
+        db.setPingRoll(created.id, rollId);
+        return { ...created, roll_id: rollId };
+      })();
+    } catch (err) {
+      if (err.code === 'ROLL_UNAVAILABLE') {
+        return res.status(409).json({ error: 'That roll isn\'t yours to post, or is already posted', code: 'ROLL_UNAVAILABLE' });
+      }
+      throw err;
+    }
+  } else {
+    ping = createPing();
+  }
 
   // Its files go when it does.
   if (ping.expiresAt && db.recordPingExpiryFiles) {

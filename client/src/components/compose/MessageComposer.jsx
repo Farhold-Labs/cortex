@@ -33,6 +33,8 @@ const MessageComposer = forwardRef(({
   onVideoRecord,
   plexConnections = [],
   onPlexClick,
+  // Dice tray (v2.158.0): offered only at a table.
+  onDiceClick,
   compact = false,
   fetchAPI,
   // Expiring pings (v2.122.0). Offered only when the caller passes
@@ -469,6 +471,13 @@ const MessageComposer = forwardRef(({
               position: 'absolute', bottom: '100%', left: 0, marginBottom: '4px',
               background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', zIndex: 100, minWidth: '148px',
             }}>
+              {onDiceClick && (
+                <button onClick={() => { setShowAttachMenu(false); onDiceClick(); }}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--accent-purple)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 700 }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >🎲 Roll Dice</button>
+              )}
               {showGifButton && onGifClick && (
                 <button onClick={() => { setShowAttachMenu(false); onGifClick(); }}
                   style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--accent-teal)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 700 }}
