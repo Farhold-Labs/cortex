@@ -4369,6 +4369,42 @@ export class DatabaseSQLite {
       );
     `);
 
+    // v2.158.0: tabletop role-playing (docs/ttrpg/README.md). A table is a wave
+    // with the game switched on; its GMs are chosen per table. A roll is made by
+    // the server and kept: nobody can edit or delete one, and it goes on one ping.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS wave_tables (
+        wave_id            TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+        system             TEXT NOT NULL,
+        default_visibility TEXT NOT NULL,
+        updated_by         TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at         TEXT NOT NULL,
+        updated_at         TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS wave_table_gms (
+        wave_id TEXT NOT NULL REFERENCES wave_tables(wave_id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY (wave_id, user_id)
+      );
+      CREATE TABLE IF NOT EXISTS dice_rolls (
+        id          TEXT PRIMARY KEY,
+        wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        roller_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expression  TEXT NOT NULL,
+        result      TEXT NOT NULL,
+        total       INTEGER NOT NULL,
+        visibility  TEXT NOT NULL,
+        ping_id     TEXT UNIQUE,
+        created_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_dice_rolls_wave ON dice_rolls(wave_id, created_at);
+    `);
+    if (!this.db.prepare(`SELECT name FROM pragma_table_info('pings') WHERE name = 'roll_id'`).get()) {
+      console.log('📝 Adding pings.roll_id (v2.158.0)...');
+      this.db.exec(`ALTER TABLE pings ADD COLUMN roll_id TEXT REFERENCES dice_rolls(id) ON DELETE SET NULL;`);
+      console.log('✅ pings.roll_id added');
+    }
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -8942,6 +8978,8 @@ export class DatabaseSQLite {
         // Media fields (v2.7.0)
         // Event card (v2.72.0) — the client renders the card from this id.
         event_id: d.event_id || null,
+        // Dice roll (v2.158.0) — the card asks for the roll, which says what this reader may see.
+        roll_id: d.roll_id || null,
         // Pinned pings (v2.74.0) — wave-wide, so this ships to every participant.
         pinned_at: d.pinned_at || null,
         pinned_by: d.pinned_by || null,
@@ -9032,7 +9070,7 @@ export class DatabaseSQLite {
       SELECT d.id, d.wave_id, d.parent_id, d.author_id, d.content,
              d.created_at, d.edited_at, d.deleted, d.deleted_at, d.encrypted, d.nonce, d.key_version, d.format,
              d.broken_out_to, d.media_type, d.media_url, d.media_duration, d.media_encrypted,
-             d.threaded, d.is_thread_reply, d.event_id, d.pinned_at, d.pinned_by,
+             d.threaded, d.is_thread_reply, d.event_id, d.roll_id, d.pinned_at, d.pinned_by,
              d.expires_at,
              (SELECT COUNT(*) FROM pings WHERE parent_id = d.id) as reply_count,
              u.display_name as user_display_name, u.avatar as user_avatar, u.avatar_url as user_avatar_url, u.handle as user_handle,
@@ -9097,6 +9135,8 @@ export class DatabaseSQLite {
         // Media fields (v2.7.0)
         // Event card (v2.72.0) — the client renders the card from this id.
         event_id: d.event_id || null,
+        // Dice roll (v2.158.0) — the card asks for the roll, which says what this reader may see.
+        roll_id: d.roll_id || null,
         // Pinned pings (v2.74.0) — wave-wide, so this ships to every participant.
         pinned_at: d.pinned_at || null,
         pinned_by: d.pinned_by || null,
@@ -9290,6 +9330,80 @@ export class DatabaseSQLite {
 
   // Backward compatibility aliases
   createMessage(data) { return this.createPing(data); }
+
+  // === Tabletop role-playing (v2.158.0, docs/ttrpg/README.md) ===
+
+  getWaveTable(waveId) {
+    const row = this.db.prepare('SELECT * FROM wave_tables WHERE wave_id = ?').get(waveId);
+    if (!row) return null;
+    const gms = this.db.prepare('SELECT user_id FROM wave_table_gms WHERE wave_id = ? ORDER BY user_id').all(waveId).map(r => r.user_id);
+    return { waveId, system: row.system, defaultVisibility: row.default_visibility, gms, updatedBy: row.updated_by, createdAt: row.created_at, updatedAt: row.updated_at };
+  }
+
+  setWaveTable(waveId, { system, defaultVisibility, gms }, userId) {
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO wave_tables (wave_id, system, default_visibility, updated_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(wave_id) DO UPDATE SET system = excluded.system, default_visibility = excluded.default_visibility,
+          updated_by = excluded.updated_by, updated_at = excluded.updated_at
+      `).run(waveId, system, defaultVisibility, userId, now, now);
+      this.db.prepare('DELETE FROM wave_table_gms WHERE wave_id = ?').run(waveId);
+      const add = this.db.prepare('INSERT OR IGNORE INTO wave_table_gms (wave_id, user_id) VALUES (?, ?)');
+      for (const gm of gms) add.run(waveId, gm);
+    })();
+    return this.getWaveTable(waveId);
+  }
+
+  // The rolls stay: they're the record of the game, and a table switched on again sees them.
+  removeWaveTable(waveId) {
+    return this.db.prepare('DELETE FROM wave_tables WHERE wave_id = ?').run(waveId).changes > 0;
+  }
+
+  createDiceRoll({ waveId, rollerId, roll, visibility }) {
+    const row = {
+      id: `roll-${crypto.randomUUID()}`, wave_id: waveId, roller_id: rollerId, expression: roll.expression,
+      result: JSON.stringify({ terms: roll.terms, crit: roll.crit }), total: roll.total, visibility,
+      ping_id: null, created_at: new Date().toISOString(),
+    };
+    this.db.prepare(`
+      INSERT INTO dice_rolls (id, wave_id, roller_id, expression, result, total, visibility, ping_id, created_at)
+      VALUES (@id, @wave_id, @roller_id, @expression, @result, @total, @visibility, @ping_id, @created_at)
+    `).run(row);
+    return this.diceRollFromRow(row);
+  }
+
+  diceRollFromRow(r) {
+    const result = JSON.parse(r.result);
+    return { id: r.id, waveId: r.wave_id, rollerId: r.roller_id, expression: r.expression, terms: result.terms,
+      crit: result.crit || null, total: r.total, visibility: r.visibility, pingId: r.ping_id || null, createdAt: r.created_at };
+  }
+
+  getDiceRollsByIds(waveId, ids) {
+    if (!ids.length) return [];
+    return this.db.prepare(`SELECT * FROM dice_rolls WHERE wave_id = ? AND id IN (${ids.map(() => '?').join(',')})`)
+      .all(waveId, ...ids).map(r => this.diceRollFromRow(r));
+  }
+
+  listDiceRolls(waveId, { rollerId = null, before = null, limit = 50 } = {}) {
+    const where = ['wave_id = ?']; const params = [waveId];
+    if (rollerId) { where.push('roller_id = ?'); params.push(rollerId); }
+    if (before) { where.push('created_at < ?'); params.push(before); }
+    return this.db.prepare(`SELECT * FROM dice_rolls WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params, Math.min(Math.max(1, limit), 200)).map(r => this.diceRollFromRow(r));
+  }
+
+  // A roll goes on one ping, its roller's, in its own wave: claimed atomically,
+  // so two pings can't both take it.
+  claimDiceRoll(rollId, { pingId, rollerId, waveId }) {
+    return this.db.prepare('UPDATE dice_rolls SET ping_id = ? WHERE id = ? AND roller_id = ? AND wave_id = ? AND ping_id IS NULL')
+      .run(pingId, rollId, rollerId, waveId).changes === 1;
+  }
+
+  setPingRoll(pingId, rollId) {
+    this.db.prepare('UPDATE pings SET roll_id = ? WHERE id = ?').run(rollId, pingId);
+  }
   createDroplet(data) { return this.createPing(data); }
 
   getPing(pingId) {
@@ -9333,6 +9447,7 @@ export class DatabaseSQLite {
       // Media fields (v2.7.0)
       // Event card (v2.72.0) — the client renders the card from this id.
       event_id: d.event_id || null,
+      roll_id: d.roll_id || null,
       media_type: d.media_type,
       media_url: d.media_url,
       media_duration: d.media_duration,

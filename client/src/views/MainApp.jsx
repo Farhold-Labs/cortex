@@ -7,6 +7,7 @@ import { VERSION, API_URL, BASE_URL, canAccess, FONT_SIZES, MESSAGE_FONTS, DEFAU
 import { setTerminology } from '../config/terminology.js';
 import { getRandomTagline, SUCCESS, NOTIFICATION, formatError, GHOST_PROTOCOL } from '../../messages.js';
 import { normaliseParty, applyPlayback } from '../utils/watchParty.js';
+import { forgetWaveRolls } from '../utils/rolls.js';
 import { storage } from '../utils/storage.js';
 import { plainText } from '../utils/plainText.js';
 import { startAttachmentSession, stopAttachmentSession } from '../utils/attachments.js';
@@ -1363,6 +1364,10 @@ function MainApp({ sharePingId }) {
         }
         return next;
       });
+    } else if (data.type === 'wave_table_updated') {
+      // A table's GMs decide who sees which rolls (v2.158.0): ask again.
+      forgetWaveRolls(data.waveId);
+      window.dispatchEvent(new CustomEvent('cortex:wave-table-updated', { detail: { waveId: data.waveId } }));
     } else if (data.type === 'watch_party_started' || data.type === 'watch_party_state') {
       // A party started, or the state asked for on joining (v2.155.3: one shape).
       const party = normaliseParty(data.party, data.waveId);

@@ -1,6 +1,6 @@
 # Tabletop role-playing: dice, sheets, then maps
 
-Proposed 2026-11-25. **Nothing built yet.**
+Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0.**
 
 ## Why
 
@@ -27,6 +27,10 @@ What's missing is the game itself: fair dice, character sheets, the GM's tools a
 | In what order | **Dice, then sheets, then the GM's tools, then maps.** Maps come last. |
 | Encryption | **Campaigns can be encrypted waves.** Dice rolls are visible to the server: accepted. Everything else (the narration, sheets, notes) stays end-to-end encrypted. |
 | Across servers | **Wanted, not required.** The design leaves room for it (below). It's built in its own phase. |
+| Which 5e (2026-11-25) | **The 2024 rules**, so the 5e template uses SRD 5.2. |
+| What the group uses now | **D&D Beyond.** Its sheets are what phase 2 has to replace well enough. |
+| Who sees a roll | **A table setting, defaulting to the GM and the roller.** Anyone can still choose for a single roll. |
+| Fog of war | **Drawn on the player's screen is enough.** |
 
 ## The one rule: the server rolls the dice
 
@@ -54,12 +58,12 @@ Built to cover 5e and to stretch to other systems:
 | `1d6!` | Exploding dice (later, for other systems) |
 | `4dF` | Fudge or Fate dice (later) |
 
-Limits: at most 100 dice per roll, at most 1000 sides per die, a rate limit per person, and an expression of at most 100 characters. The parser is its own module with its own tests (`server/lib/dice.js`). The client uses a copy of it only to preview a roll, never to decide one.
+Limits: at most 100 dice per roll, at most 1000 sides per die, 20 groups, a rate limit per person, and an expression of at most 100 characters. Spaces are allowed only around `+` and `-`, so `1d20 5` is refused rather than read as a d205. The parser is its own module with its own tests (`server/lib/dice.js`). The device only splits a typed command into dice and label (`client/src/utils/diceCommand.js`), because the label must never reach the roll request; it never decides a roll.
 
 ### Who sees a roll
 
-- **Public** (the default): everyone in the wave.
-- **To the GM:** the roller and the table's GMs see the result. Everyone else sees "🎲 rolled for the GM".
+- **Public:** everyone in the wave.
+- **To the GM** (the default, which a table can change to public): the roller and the table's GMs see the result. Everyone else sees "🎲 Rolled 1d20+5 for the GM", the dice without the result.
 - **GM secret:** a GM rolls, and only the GMs see the result.
 
 The server enforces this on every read. A hidden result is never sent to someone who may not see it, not even to a client that would hide it.
@@ -70,7 +74,10 @@ A **table** is a wave with the TTRPG setting turned on: the game system (`dnd5e`
 
 ## Phases
 
-### Phase 1: tables and dice (server and web client only)
+### Phase 1: tables and dice (server and web client only) — built in v2.158.0
+
+As built: the ⋮ menu of a wave offers its owner and admins **Make this a table** (game, default visibility, GMs) and everyone at a table **Roll log**. The composer's ⋮ menu has **🎲 Roll Dice**, a tray of d4 to d%, modifier, ADV and DIS, a label and who sees it. Typed commands: `/roll` (or `/r`), `/gmroll`, `/publicroll`, `/secretroll` (GMs). Commands are read in a wave's main message box; the thread panel and focus view send them as text. Not yet: exploding and Fate dice.
+
 - The `ttrpg` instance feature; the table setting on a wave (system, GMs).
 - `/roll <notation> [label]` in the composer, plus a dice button that opens a small tray of d4 to d20 and d100, with modifier, advantage and disadvantage.
 - The `dice_rolls` table, `POST /api/waves/:id/rolls`, `pings.roll_id`, and the checks above.
@@ -120,7 +127,4 @@ A **table** is a wave with the TTRPG setting turned on: the game system (`dnd5e`
 
 ## Open questions
 
-1. **2014 or 2024 rules?** This decides whether the 5e template uses SRD 5.1 or SRD 5.2. The two differ in skills, backgrounds, species and spells.
-2. **What does the group use now?** A Discord bot such as Avrae, D&D Beyond, paper sheets, Roll20 or Foundry? Whatever they would miss is what phase 2 must cover.
-3. **The default roll visibility at a table:** public, as at a real table? Or to the GM, as some groups play?
-4. **Fog of war,** before phase 5: is a drawn cover enough, or must hidden areas never reach a player's device?
+All four were answered on 2026-11-25 (see Decisions). For phase 2: which D&D Beyond features the group leans on most (its character builder, spell lists, inventory, conditions) decides what the 5e sheet does first.
