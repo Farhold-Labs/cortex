@@ -1,13 +1,13 @@
 # Cortex - Outstanding Features & Future Roadmap
 
 **Last Updated:** October 2026
-**Current Version:** v2.132.0
+**Current Version:** v2.155.0
 
 This document tracks planned but not-yet-implemented features. For completed features, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Completed Features (v1.5.0 - v2.132.0)
+## Completed Features (v1.5.0 - v2.155.0)
 
 | Feature | Version |
 |---------|---------|
@@ -170,6 +170,17 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Encrypted Waves: Newcomers Read the History (Older Key Versions Shared) | v2.145.4 |
 | Encrypted Waves: Key Requests Answered When a Member Comes Back Online | v2.145.5 |
 | Android App Rings for Calls Over the Lock Screen; Client Versions for Admins | v2.146.0 |
+| Nothing Retired Until Its Replacement Arrives (refresh tokens, recovery codes, keys) | v2.146.1 |
+| A Server's Federation Key Replaced by Handshake | v2.147.0 |
+| Android Calls Behave Like Phone Calls (call volume, ongoing-call notification) | v2.148.0 |
+| Encryption Fingerprints: Compare and Verify Keys | v2.149.0 |
+| Identity Keys: Fingerprints That Last Across Key Changes | v2.150.0–v2.150.1 |
+| Signed Pings: ✓ for Verified Authors, Forgeries Held Back | v2.151.0 |
+| Encryption Plumbing Between Servers (protocol 3, key lookups) | v2.152.0 |
+| Encrypted Waves Across Servers | v2.153.0 |
+| Encrypted Waves' First Keys Bound to the Wave | v2.153.1 |
+| Encrypted Waves: Key Requests Relayed to Every Server in the Wave | v2.154.0 |
+| Encrypting a Wave With People Elsewhere; Late-Joining Servers Get the Whole History | v2.155.0 |
 
 ---
 
@@ -219,7 +230,7 @@ Extend E2EE to federated messages between servers.
 - **Decided 2026-11-07:** a person's public key comes from their home server over signed federation, and members can see and compare key fingerprints, with a change flagged.
 - **Design decided 2026-11-20:** `docs/federated-e2ee/01-design.md`, in four phases. A changed key still gets the wave key and is flagged, keys come only from allied servers, the wave's owner, admins or moderators rotate, fingerprints are 128-bit hex. Phase 0 fixes two security gaps in encryption on a single server first: a device gives the wave key to any public key the server names, and keys are never rotated when someone leaves.
 - **Phase 1 built in v2.149.0:** fingerprints in Settings, people lists and profile cards, Mark as verified (one key only; a change says the verification no longer holds), and devices reading format 2. Next: see phase 1b below.
-- **Identity keys, phase 1b, built in v2.150.0** (`docs/federated-e2ee/02-identity-keys.md`, decided 2026-11-24): a fingerprint is of a lasting identity key, locked by the recovery key alone, which signs each person's encryption and signing keys. Replacing keys keeps the fingerprint and everyone's verification; keys not signed by someone's identity get no wave key. **Phase 1c built in v2.151.0:** pings are signed, ✓ beside authors you verified, forged or replayed ones held back with ⚠, and the server name in addresses pinned by the first signed ping. **Phase 2 built in v2.152.0:** protocol 3, key lookups between servers (only for people sharing an encrypted wave), their cache and change push, encryption fields on federated pings, plain text from other servers refused. **Phase 3 built in v2.153.0:** encrypted waves include people on protocol-3 servers; keys and renewals travel through the wave's own server; every handed-over key bound and its wrapper checked. Not yet: turning encryption on for a wave that already has people elsewhere, and relaying key requests to third servers.
+- **Identity keys, phase 1b, built in v2.150.0** (`docs/federated-e2ee/02-identity-keys.md`, decided 2026-11-24): a fingerprint is of a lasting identity key, locked by the recovery key alone, which signs each person's encryption and signing keys. Replacing keys keeps the fingerprint and everyone's verification; keys not signed by someone's identity get no wave key. **Phase 1c built in v2.151.0:** pings are signed, ✓ beside authors you verified, forged or replayed ones held back with ⚠, and the server name in addresses pinned by the first signed ping. **Phase 2 built in v2.152.0:** protocol 3, key lookups between servers (only for people sharing an encrypted wave), their cache and change push, encryption fields on federated pings, plain text from other servers refused. **Phase 3 built in v2.153.0:** encrypted waves include people on protocol-3 servers; keys and renewals travel through the wave's own server; every handed-over key bound and its wrapper checked. **v2.153.1:** the first keys of a new encrypted wave are bound too. **v2.154.0:** key requests relayed to every server in the wave, so a member on any allied server can hand a newcomer the key. **v2.155.0:** an existing wave with people elsewhere can be encrypted (their servers' plain copies replaced), and a server joining late gets the earlier pings of people on other servers too. All four phases are built.
 
 ---
 

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.155.0] - 2026-11-24
+
+Encryption across servers: the last two gaps. A wave that already has people on other servers can now be encrypted, and a server joining a wave late gets its whole history. Server and web only, no app build, no migration. Federation **protocol 4**: encrypting such a wave needs every server in it on 2.155.0.
+
+### Added
+- **Encrypting a wave with people on other servers.** Until now Wave Settings refused it, because their servers hold the wave's earlier pings in plain text. Decided 2026-11-24: those copies are replaced.
+  - Only the wave's own server can encrypt it, and only once every server in it speaks protocol 4. Servers only invited so far need protocol 3, as for any encrypted wave. A copy says whose wave it is; a broadcast to allied servers can't be encrypted.
+  - The other servers are told (`wave_encrypted`), make their copies encrypted, and their people ask for the key. Members' devices answer, through the wave's server as for any newcomer.
+  - The earlier pings are re-encrypted on the creator's device as before, now including the pings of people on other servers held on the wave's server. Each batch goes to the other servers (`pings_reencrypted`), which replace their plain copies, including their own people's. They take it only from the wave's server, only once their copy is encrypted, only ciphertext and only over a plain ping of that copy.
+  - A ping re-encrypted by someone other than its author is format 1 (unsigned), as on one server: the creator can't sign as anyone else.
+  - The confirmation says that a server could keep a copy it made before.
+- **Protocol 4** (`FEDERATION_PROTOCOL_VERSION`): a server that understands `wave_encrypted` and `pings_reencrypted`. Older servers would ignore them and keep a plain copy, so they're refused by name.
+
+### Fixed
+- **A server joining late missed the pings of people on other servers.** The history a server pulls when one of its people accepts (`/api/federation/wave-backfill`) held only pings posted on the wave's server. Found in the third-server test: carol, joining from C, saw alice's earlier ping and not bob's from B. The wave's server now also serves the pings of the wave's people elsewhere, labelled with their server, never the asker's own people's, to a server that asks (`travellers: true`). An older server doesn't ask, since it would file them as the wave server's.
+- **[SECURITY] A copy drops a ping in the history that claims an author on itself.** Our own people's pings are ours; the wave's server has no business handing one back.
+- **[SECURITY] Keys stored at `/encrypt` only for the wave's people**, as at creation since v2.153.1.
+
+### Verified
+- `tests/federated-backfill-travellers.test.cjs`: asked without `travellers`, only the wave server's own pings; with it, a traveller's too, labelled, never the asker's own people's, nor deleted or expired ones; a server not in the wave refused; a copy asks for them and files each under its author's server. Counterfactual: without the own-server check, a ping "by" someone here is filed.
+- `tests/e2ee-encrypt-with-travellers.test.cjs`: refused while a server speaks protocol 3; the other server told with the wave's servers; the earlier pings to re-encrypt include a traveller's; the re-encrypted ones sent, plain text in a batch neither stored nor sent. On a copy, only the wave server's word encrypts it, then its person asks for the key; only the wave server's batch, only after, replaces the plain copies (a traveller's and its own person's), not plain text, not a ping of another wave. Counterfactual: finding the copy by wave id alone, another server rewrites a ping here.
+- `tests/federation-consent.test.cjs`: `/encrypt` with an invitation open to a server below protocol 3 is now `ENCRYPTED_SERVER_NOT_READY`.
+- **In a browser** (headless Chrome, three local servers; B and C allied):
+  - alice on A and bob on B posted plain pings in a wave; alice turned encryption on from Wave Settings, and the confirmation named the other servers;
+  - A's and B's copies of both pings became ciphertext, with no plain text left on B, and bob's device got the key, format 2, wrapped by alice;
+  - bob read the earlier pings and alice read his new one, with no ⚠;
+  - carol, joining from C afterwards, got all four pings, bob's labelled as B's, and the key from bob through A, and read them all.
+- Full suite: 796 tests pass.
+
+### Documentation
+- **Brought current to v2.154.0.** README (version, fingerprints, signed pings, encryption across servers, direct calls, federation key handshake), the roadmap (completed features to v2.154.0; what is left of encryption across servers), the design doc's status line, and CLAUDE.md's references.
+
 ## [2.154.0] - 2026-11-24
 
 Encryption across servers: key requests relayed. Since v2.153.0 a newcomer on another server got the key only from a member's device on the wave's own server, so with all of them offline the newcomer waited, even with members online elsewhere. Server and web only, no app build. **Migrates** (one column, one table).

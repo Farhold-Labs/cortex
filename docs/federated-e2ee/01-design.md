@@ -1,9 +1,9 @@
 # Encryption across servers — design
 
-Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below), **phase 2 in v2.152.0** ("Phase 2 as built"), **phase 3 in v2.153.0** ("Phase 3 as built"): encrypted waves now include people on other servers. **Fingerprints and format 2 are being revised** by `02-identity-keys.md` (decided 2026-11-24): the fingerprint becomes that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
+Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below), **phase 2 in v2.152.0** ("Phase 2 as built"), **phase 3 in v2.153.0** ("Phase 3 as built"): encrypted waves now include people on other servers; first keys bound in v2.153.1, key requests relayed in v2.154.0. Fingerprints and format 2 were revised by `02-identity-keys.md` (decided 2026-11-24, built in v2.150.0 and v2.151.0): the fingerprint is that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
 public key comes from their home server over signed federation; members can
 see and compare key fingerprints, with a change flagged) and 2026-11-20 (the
-five questions) are recorded at the end and folded into the text. Not built.
+five questions) are recorded at the end and folded into the text.
 
 ## Why
 
@@ -463,6 +463,18 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
   it. Tried in browsers on three local servers (B and C allied): with the
   owner offline, B's member gave C's newcomer the key, wrapped by them and
   checked by C's device.
+- **History and encrypting later (v2.155.0).** A server joining late pulled
+  only the pings posted on the wave's server, never those of its people on
+  other servers (found in the third-server test). The backfill now serves
+  those too, labelled with their server, to a server that asks for them.
+  Turning encryption on for a wave with people elsewhere is allowed on the
+  wave's own server once every server in it speaks protocol 4. Decided
+  2026-11-24 (Jared): the plain copies elsewhere are replaced. The other
+  servers are told (`wave_encrypted`) and their people ask for the key; the
+  earlier pings, theirs included, are re-encrypted on the creator's device
+  (format 1, since the creator can't sign as their authors) and sent
+  (`pings_reencrypted`) to replace the plain copies. A server can't be made
+  to forget a copy it already made, and the confirmation says so.
 - **Third server, tried 2026-11-24 (v2.153.1)** with three real servers and
   real browsers on one machine: the wave on A, allied with B and C, which are
   not allied with each other. The wave was made in the app; B's and C's keys

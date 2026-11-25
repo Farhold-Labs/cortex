@@ -19106,7 +19106,9 @@ const authenticateFederationResponse = createFederationAuthMiddleware(['active',
 // v2.152.0: protocol 3 is a server that can take part in encrypted waves
 // (docs/federated-e2ee/, phase 2). Each signed envelope says so, and the
 // receiver keeps what its ally last said.
-const FEDERATION_PROTOCOL_VERSION = 3;
+// v2.155.0: protocol 4 is one that can also take an existing wave becoming
+// encrypted (`wave_encrypted`, `pings_reencrypted`).
+const FEDERATION_PROTOCOL_VERSION = 4;
 function createFederationEnvelope(id, type, payload) {
   return { id, type, payload, protocolVersion: FEDERATION_PROTOCOL_VERSION };
 }
@@ -20394,7 +20396,7 @@ async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
   while (pages < MAX_PAGES) {
     pages++;
     const resp = await sendSignedFederationRequest(originNode, 'POST', '/api/federation/wave-backfill', {
-      originWaveId: wave.originWaveId, before, limit: 100,
+      originWaveId: wave.originWaveId, before, limit: 100, travellers: true,
     });
     if (!resp.ok) {
       const t = await resp.text();
@@ -20410,10 +20412,15 @@ async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
       try {
         const plain = federatedCiphertextRefusal(wave.id, d);
         if (plain) { failed++; console.warn(`⚠️ history: dropped ping ${d.id}: ${plain}`); continue; }
-        if (d.author && d.author.id) {
+        // v2.155.0: the wave's server also sends its travellers' pings, each
+        // with its author's server. Never one claiming to be by someone here:
+        // our own people's pings are ours, not the origin's to hand back.
+        const authorNode = typeof d.author?.nodeName === 'string' && d.author.nodeName ? d.author.nodeName : wave.originNode;
+        if (authorNode === currentNodeName()) { failed++; console.warn(`⚠️ history: dropped ping ${d.id}: names an author on this server`); continue; }
+        if (d.author && d.author.id && d.author.handle) {
           db.cacheRemoteUser({
             id: d.author.id,
-            nodeName: wave.originNode,
+            nodeName: authorNode,
             handle: d.author.handle,
             displayName: d.author.displayName,
             avatar: d.author.avatar,
@@ -20424,9 +20431,10 @@ async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
           id: d.id,
           waveId: wave.id,
           originWaveId: wave.originWaveId,
-          originNode: wave.originNode,
+          // As a relayed ping is filed (new_ping), so a later edit matches.
+          originNode: authorNode,
           authorId: d.author?.id,
-          authorNode: wave.originNode,
+          authorNode,
           parentId: d.parentId,
           content: d.content,
           createdAt: d.createdAt,
@@ -21349,6 +21357,52 @@ app.post('/api/federation/inbox', federationInboxLimiter, authenticateFederation
         break;
       }
 
+      case 'wave_encrypted': {
+        // v2.155.0 (copy side): the wave's own server encrypted the wave.
+        // From it only; the copy becomes encrypted at its version, and its
+        // people here ask for the key.
+        const { originWaveId: eWave, keyVersion: eVersion, servers: eServers } = payload || {};
+        const copy = typeof eWave === 'string' && db.getWaveByOrigin(sourceNode.nodeName, eWave);
+        if (!copy || copy.federationState !== 'participant' || db.isWaveEncrypted(copy.id)) break;
+        db.setWaveEncrypted(copy.id, true);
+        db.setWaveKeyVersion(copy.id, Number.isInteger(eVersion) && eVersion > 0 && eVersion < 1e6 ? eVersion : 1);
+        storeWaveServers(copy, sourceNode.nodeName, eServers);
+        broadcastToWave(copy.id, { type: 'wave_encrypted', waveId: copy.id, encryptionState: 1 });
+        for (const userId of participation.getWaveParticipants(copy.id)) {
+          const person = db.findUserById(userId);
+          const own = person && db.getUserPublicKey(userId);
+          const missing = own ? copyMissingKeyVersions(copy.id, userId) : [];
+          if (!missing.length) continue;
+          db.upsertWaveKeyRequest(copy.id, userId, own);
+          forwardKeyRequest(copy, person, missing);
+        }
+        console.log(`🔒 ${copy.id} (${sourceNode.nodeName}'s ${eWave}) is now encrypted`);
+        break;
+      }
+
+      case 'pings_reencrypted': {
+        // v2.155.0 (copy side): earlier pings of a wave that became encrypted,
+        // re-encrypted by its server, replacing the plain copies here: those
+        // of people elsewhere (remote_pings) and of our own people (pings).
+        // Only from the wave's server, only into an encrypted copy, only
+        // ciphertext, and only over a plain ping of that copy.
+        const { originWaveId: rWave, pings: rPings } = payload || {};
+        const copy = typeof rWave === 'string' && db.getWaveByOrigin(sourceNode.nodeName, rWave);
+        if (!copy || copy.federationState !== 'participant' || !db.isWaveEncrypted(copy.id) || !Array.isArray(rPings)) break;
+        let replaced = 0;
+        for (const item of rPings.slice(0, 200)) {
+          if (typeof item?.id !== 'string' || item.id.length > 100) continue;
+          const fields = { encrypted: true, content: item.content, nonce: item.nonce, keyVersion: item.keyVersion, format: 1 };
+          if (federatedCiphertextRefusal(copy.id, fields)) continue;
+          if (!db.encryptPingContent(item.id, item.content, item.nonce, item.keyVersion, copy.id)) continue;
+          replaced++;
+        }
+        // One reload for the batch, not one per ping.
+        if (replaced) broadcastToWave(copy.id, { type: 'wave_encrypted', waveId: copy.id, encryptionState: 1 });
+        if (replaced) console.log(`🔒 ${copy.id}: ${replaced} earlier ping(s) replaced with ciphertext from ${sourceNode.nodeName}`);
+        break;
+      }
+
       case 'wave_servers': {
         // v2.154.0 (copy side): the servers this wave is on, from its own server.
         const copy = typeof payload?.originWaveId === 'string' && db.getWaveByOrigin(sourceNode.nodeName, payload.originWaveId);
@@ -21765,10 +21819,14 @@ app.post('/api/federation/wave-backfill', federationInboxLimiter, authenticateFe
       return res.status(403).json({ error: 'Node is not a participant of this wave' });
     }
 
+    // v2.155.0: a server that asks for `travellers` also gets the pings of the
+    // wave's people on other servers (not its own people's). An older one
+    // doesn't ask: it would file them as ours.
+    const travellers = req.body.travellers === true;
     const ourIdentity = db.getServerIdentity();
-    const page = db.getWavePingsForFederation(originWaveId, { before, limit });
+    const page = db.getWavePingsForFederation(originWaveId, { before, limit, travellers, exceptNode: sourceNode.nodeName });
     res.json({
-      pings: page.map(p => ({ ...p, author: { ...p.author, nodeName: ourIdentity?.nodeName } })),
+      pings: page.map(p => ({ ...p, author: { ...p.author, nodeName: p.author.nodeName || ourIdentity?.nodeName } })),
       hasMore: page.length === limit,
     });
   } catch (err) {
@@ -25952,24 +26010,27 @@ function isGroupWave(wave) {
  * whose servers speak protocol 3. The body of the 409 naming those that
  * don't, or null.
  */
-async function encryptedServersRefusal(nodeNames) {
+async function encryptedServersRefusal(nodeNames, minimum = 3) {
   const notReady = [];
   for (const n of new Set(nodeNames)) {
     let node = db.getFederationNodeByName(n);
     // What we last heard may be from before it upgraded: ask its identity
     // page, the same one pairing read. TLS vouches for it as it did then.
-    if (node && node.status === 'active' && (node.protocolVersion || 1) < 3) {
+    if (node && node.status === 'active' && (node.protocolVersion || 1) < minimum) {
       const listed = await readAllyIdentity(node);
       if (listed?.nodeName === node.nodeName && Number.isInteger(listed.protocolVersion) && listed.protocolVersion !== node.protocolVersion) {
         db.updateFederationNode(node.id, { protocolVersion: listed.protocolVersion });
         node = db.getFederationNodeByName(n);
       }
     }
-    if (!node || node.status !== 'active' || (node.protocolVersion || 1) < 3) notReady.push(n);
+    if (!node || node.status !== 'active' || (node.protocolVersion || 1) < minimum) notReady.push(n);
   }
   if (!notReady.length) return null;
+  const needs = minimum >= 4 ? '2.155' : '2.153';
   return {
-    error: `${notReady.join(', ')} can't take part in encrypted ${T_WAVES()} yet; ${notReady.length === 1 ? 'it needs' : 'they need'} Cortex 2.153 or later`,
+    error: minimum >= 4
+      ? `${notReady.join(', ')} can't take part in encrypting this ${T_WAVE()} yet; ${notReady.length === 1 ? 'it needs' : 'they need'} Cortex ${needs} or later`
+      : `${notReady.join(', ')} can't take part in encrypted ${T_WAVES()} yet; ${notReady.length === 1 ? 'it needs' : 'they need'} Cortex ${needs} or later`,
     code: 'ENCRYPTED_SERVER_NOT_READY',
     servers: notReady,
   };
@@ -25985,11 +26046,6 @@ async function readAllyIdentity(node) {
     } finally { clearTimeout(timer); }
   } catch { return null; }
 }
-
-const encryptedTravellersRefusal = () => ({
-  error: `People on other servers can't read an end-to-end encrypted ${T_WAVE()} yet, so it can't include them`,
-  code: 'ENCRYPTED_NO_TRAVELLERS',
-});
 
 function isFederatedWave(wave) {
   return !!wave && (wave.privacy === 'crossServer' || wave.privacy === 'cross-server'
@@ -26757,8 +26813,8 @@ app.delete('/api/waves/:id/participants/:userId', authenticateToken, async (req,
 
 // ============ Encryption across servers: the plumbing (v2.152.0) ============
 // docs/federated-e2ee/01-design.md phase 2. Encrypted waves and people on
-// other servers are still refused together (encryptedTravellersRefusal); this
-// is what phase 3 will stand on.
+// other servers were still refused together then; this is what phase 3
+// stands on.
 
 /** A ping's encryption fields as they travel between servers. */
 function encryptionFields(p) {
@@ -27489,7 +27545,7 @@ app.get('/api/waves/:id/participants/keys', authenticateToken, (req, res) => {
 });
 
 // Initialize wave encryption (set wave as encrypted and create metadata)
-app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
+app.post('/api/waves/:id/encrypt', authenticateToken, async (req, res) => {
   try {
     const waveId = req.params.id;
     const { keyDistribution } = req.body;
@@ -27513,17 +27569,37 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Wave is already encrypted' });
     }
 
-    // v2.142.0: not while people on other servers are in it, or asked to be.
-    if (isFederatedWave(wave) || db.listRemoteWaveInvitations?.(waveId)?.length) {
-      return res.status(409).json(encryptedTravellersRefusal());
+    // v2.155.0: a wave with people on other servers may be encrypted by its
+    // own server, if every server in it can take the change (protocol 4).
+    // A copy is someone else's wave; a broadcast is everyone's on every
+    // allied server, and can't be encrypted for them.
+    if (wave.federationState === 'participant') {
+      return res.status(409).json({ error: `This ${T_WAVE()} belongs to ${wave.originNode}; only its own server can encrypt it`, code: 'ENCRYPT_ON_ORIGIN' });
+    }
+    if (wave.federationAudience === 'everyone' && isFederatedWave(wave)) {
+      return res.status(400).json({ error: `A ${T_WAVE()} broadcast to allied servers cannot be end-to-end encrypted`, code: 'ENCRYPTED' });
+    }
+    const servers = db.getWaveFederationNodes(waveId).map(n => n.nodeName);
+    if (servers.length) {
+      const notReady = await encryptedServersRefusal(servers, 4);
+      if (notReady) return res.status(409).json(notReady);
+    }
+    // Servers only asked so far join it encrypted, which protocol 3 can.
+    const asked = (db.listRemoteWaveInvitations?.(waveId) || []).map(i => i.node_name).filter(n => !servers.includes(n));
+    if (asked.length) {
+      const notReady = await encryptedServersRefusal(asked);
+      if (notReady) return res.status(409).json(notReady);
     }
 
     // Create wave key metadata
     db.createWaveKeyMetadata(waveId);
 
-    // Store encrypted keys for each participant (null userId = creator's own key)
+    // Store encrypted keys for each participant (null userId = creator's own key).
+    // v2.155.0: only for the wave's people, as at creation (v2.153.1).
+    const keyHolders = new Set([req.user.userId, ...waveMemberIds(wave)]);
     for (const { userId, encryptedWaveKey, senderPublicKey, format } of keyDistribution) {
       const targetUserId = userId || req.user.userId;
+      if (!keyHolders.has(targetUserId)) continue;
       db.createWaveEncryptionKey(waveId, targetUserId, encryptedWaveKey, senderPublicKey, 1, null, format, { userId: req.user.userId });
     }
 
@@ -27543,6 +27619,14 @@ app.post('/api/waves/:id/encrypt', authenticateToken, (req, res) => {
       waveId,
       encryptionState: encryptionStatus.totalPings > 0 ? 2 : 1
     });
+
+    // v2.155.0: the other servers make their copies encrypted, and their
+    // people ask for the key. The earlier pings follow as they are
+    // re-encrypted (pings_reencrypted).
+    if (servers.length) {
+      const list = waveServersOf(waveId);
+      for (const n of servers) sendWaveKeysTo(n, 'wave_encrypted', { originWaveId: waveId, keyVersion: 1, servers: list });
+    }
 
     res.json({
       success: true,
@@ -27666,12 +27750,24 @@ app.post('/api/waves/:id/encrypt-pings', authenticateToken, (req, res) => {
 
     // Update each ping with encrypted content
     let encryptedCount = 0;
+    const done = [];
     for (const { id, content, nonce } of encryptBatch) {
       try {
-        if (db.encryptPingContent(id, content, nonce, keyVersion, waveId)) encryptedCount++;
+        // Only ciphertext, as for any ping sent into an encrypted wave.
+        if (federatedCiphertextRefusal(waveId, { encrypted: true, content, nonce, keyVersion })) continue;
+        if (db.encryptPingContent(id, content, nonce, keyVersion, waveId)) {
+          encryptedCount++;
+          done.push({ id, content, nonce, keyVersion, format: 1 });
+        }
       } catch (err) {
         console.error(`Failed to encrypt ping ${id}:`, err);
       }
+    }
+
+    // v2.155.0: the other servers replace their plain copies, their own
+    // people's included.
+    if (done.length && wave.federationState === 'origin') {
+      for (const n of db.getWaveFederationNodes(waveId)) sendWaveKeysTo(n.nodeName, 'pings_reencrypted', { originWaveId: waveId, pings: done });
     }
 
     // Check if all pings are now encrypted

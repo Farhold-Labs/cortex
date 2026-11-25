@@ -248,14 +248,15 @@ async function run({ stripSharing = false, stripPlain = false } = {}) {
 
 test('phase 2: protocol 3, key lookup between servers, encryption fields travel, plain text refused', { timeout: 180000 }, async () => {
   const r = await run();
-  assert.deepEqual(r.identity, { protocol: 3, e2ee: true, seal: 'host.example' });
+  // Protocol 4 since v2.155.0 (encrypting a wave with people elsewhere).
+  assert.deepEqual(r.identity, { protocol: 4, e2ee: true, seal: 'host.example' });
   assert.equal(r.farSpeaks, 4, 'an ally\'s signed envelope says what it speaks');
   assert.deepEqual(r.lookup, { peer: ['u-alice'], peerKey: true, far: [], seal: 'host.example', tooMany: 400 },
     'only people sharing an encrypted wave with the asking server, and nobody to a server that shares none');
   assert.equal(r.incoming.plainKept, false, 'plain text from another server is dropped');
   assert.deepEqual(r.incoming.sealed, { encrypted: true, nonce: true, keyVersion: 1, format: 2 });
   assert.equal(r.plainEditKept, false, 'and so is a plain edit');
-  assert.deepEqual(r.outgoing, { encrypted: true, nonce: true, keyVersion: 1, format: 2, protocol: 3 });
+  assert.deepEqual(r.outgoing, { encrypted: true, nonce: true, keyVersion: 1, format: 2, protocol: 4 });
   assert.deepEqual(r.backfill, { encrypted: true, keyVersion: 1, format: 2 });
   assert.deepEqual(r.remote, { status: 200, key: true, identity: true, statement: 1, seal: 'peer.example', cachedSecond: true, askedAgain: 2, bob: 'NOT_SHARED' });
   assert.deepEqual(r.announced, ['u-alice']);
