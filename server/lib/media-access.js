@@ -14,10 +14,12 @@ export function canAccessMedia({ db, canAccessWave, userId, provider, connection
       && share.itemId === itemId && share.ownerId === connection.userId
       && canAccessWave(share.waveId, userId) && canAccessWave(share.waveId, share.ownerId)) return true;
   }
-  if (provider === 'jellyfin' && typeof partyId === 'string' && partyId.length <= 100) {
+  // An active watch party lets the wave's readers stream the host's item,
+  // that item only, from that provider (Plex as well since v2.156.0).
+  if (typeof partyId === 'string' && partyId.length <= 100) {
     const party = db.getWatchParty?.(partyId);
-    return !!(party && party.status === 'active' && party.jellyfinConnectionId === connection.id
-      && party.jellyfinItemId === itemId && party.hostUserId === connection.userId
+    return !!(party && party.status === 'active' && party.provider === provider && party.connectionId === connection.id
+      && party.itemId === itemId && party.hostUserId === connection.userId
       && canAccessWave(party.waveId, userId) && canAccessWave(party.waveId, party.hostUserId));
   }
   return false;
