@@ -426,9 +426,11 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
     }
   };
 
-  // v2.142.0: the server refuses to encrypt a wave with people on other servers.
+  // v2.155.0: a wave with people on other servers can be encrypted by its
+  // own server; their servers replace their plain copies. A copy can't be.
   const hasTravellers = wave?.privacy === 'crossServer' || wave?.privacy === 'cross-server'
-    || wave?.federationState === 'origin' || wave?.federationState === 'participant';
+    || wave?.federationState === 'origin';
+  const isCopy = wave?.federationState === 'participant';
 
   const handleEncryptWave = async () => {
     if (wave.encrypted) {
@@ -440,8 +442,11 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
       return;
     }
 
+    const elsewhere = hasTravellers
+      ? '\n\nPeople on other servers are in it. Their servers are sent the encrypted messages to replace the plain copies they hold, and their people are given the key by members who are online. A server could still keep a copy it made before.'
+      : '';
     const confirmed = window.confirm(
-      'Enable end-to-end encryption for this wave?\n\nAll existing and future messages will be encrypted. Participants without E2EE set up will receive keys automatically once they configure encryption.\n\nDo not close this window until encryption is complete.\n\nContinue?'
+      `Enable end-to-end encryption for this wave?\n\nAll existing and future messages will be encrypted. Participants without E2EE set up will receive keys automatically once they configure encryption.${elsewhere}\n\nDo not close this window until encryption is complete.\n\nContinue?`
     );
     if (!confirmed) return;
 
@@ -792,9 +797,9 @@ const WaveSettingsModal = ({ isOpen, onClose, wave, groups, fetchAPI, showToast,
           <div style={{ marginBottom: '16px' }}>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '8px' }}>ENCRYPTION</div>
 
-            {!wave.encrypted && hasTravellers ? (
+            {!wave.encrypted && isCopy ? (
               <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', lineHeight: 1.5 }}>
-                People on other servers can't read an encrypted {T.wave} yet, so this one can't be encrypted while they're in it or invited to it.
+                This {T.wave} belongs to {wave.originNode || 'another server'}; only its own server can encrypt it.
               </div>
             ) : !wave.encrypted ? (
               <button
