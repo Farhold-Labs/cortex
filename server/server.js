@@ -20475,8 +20475,10 @@ async function pullOlderCopiesHistoryNow() {
   for (const waveId of db.copiesNeedingHistoryPull()) {
     const wave = db.getWave(waveId);
     if (!wave) continue;
+    // Its server's protocol as it is now: what we last heard may be from
+    // before it upgraded.
+    if (await encryptedServersRefusal([wave.originNode], 4)) { waiting++; continue; }
     const origin = db.getFederationNodeByName(wave.originNode);
-    if (!origin || origin.status !== 'active' || (origin.protocolVersion || 1) < 4) { waiting++; continue; }
     try {
       const r = await pullFederatedHistory(wave, origin, { onlyMissing: true });
       done++;

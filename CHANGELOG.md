@@ -17,6 +17,7 @@ Older copies of waves get the history they missed. Server only, no app build. **
   - Only pings the copy lacks are added. Pings it holds are left as they are, a deleted one stays deleted, and one claiming an author on this server is dropped, as in v2.155.0.
   - A copy is recorded once its history has come down whole (`federated_history_pulls`), at acceptance or by this pull, and isn't pulled again.
   - A copy whose wave's server is unreachable or older than protocol 4 waits. Older servers don't send other servers' pings. The pull runs again every 6 hours.
+  - The wave's server's protocol is asked fresh before a copy is skipped. What a server last heard can be from before its ally upgraded: dev still had QA at protocol 3 and port1 at 2, both on 2.155.1.
 
 ### Verified
 - `tests/federated-history-repull.test.cjs`, one real server and fake allies:
@@ -24,10 +25,11 @@ Older copies of waves get the history they missed. Server only, no app build. **
   - its missing ping is added; held, deleted and forged ones are left out;
   - the copy is then recorded;
   - a copy whose server speaks protocol 3 isn't asked and stays unrecorded;
-  - one already recorded isn't asked.
+  - one already recorded isn't asked;
+  - a server recorded at protocol 3 whose identity page now says 4 is updated, and its copy is pulled.
 - **Counterfactual:** without the only-missing check, a held ping is overwritten by the origin's copy.
 - `tests/federated-backfill-travellers.test.cjs`: a copy pulled at acceptance is recorded.
-- Full suite: 800 tests pass.
+- Full suite: 801 tests pass.
 
 ### Documentation
 - The roadmap no longer lists encryption across servers as outstanding. All four phases are built, and they're in the completed table.
