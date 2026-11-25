@@ -210,6 +210,13 @@ The instance operator (whoever runs the server) can see:
 - **Messages in waves that are not end-to-end encrypted**
 - **Attached files and broadcast recordings**, in any wave (see above)
 - **Direct call history**: who called whom, when and for how long (see above)
+- **Dice rolls at a tabletop game** (v2.158.0, where the operator has turned
+  the feature on): who rolled, in which wave, when, the dice (`1d20+5`), each
+  die's face and the total, **including in an end-to-end encrypted wave**. The
+  server does the rolling so nobody can fake one, so it has to know them. What
+  a roll was for ("Stealth check") is part of the message and stays encrypted.
+  The table's GMs can also see every roll at their table, even ones made for
+  the GM only. Rolls are kept until the wave is deleted.
 
 ---
 

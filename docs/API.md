@@ -4879,6 +4879,26 @@ States: `ringing` → `answered` → `ended`; or `declined` (the callee said no)
 
 **Wave calls are announced (v2.145.0).** When a wave's call room goes from empty to someone, within two minutes of a call token being issued for it, the wave's people get WebSocket `wave_call_started` `{ waveId, startedBy }` and, by their wave-activity push preference, a quiet push. At most once per wave every 10 minutes. The app shows a JOIN banner in the wave from `call_presence`.
 
+## Tabletop role-playing (v2.158.0)
+
+Opt-in instance feature `ttrpg`: every route answers 403 `FEATURE_DISABLED` until an admin turns it on. Design: `docs/ttrpg/README.md`. A **table** is a wave with the game switched on. Waves with people on other servers can't be tables yet: 409 `TTRPG_LOCAL_ONLY`.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/waves/:id/table` | anyone who can read the wave | `{ table: { system, defaultVisibility, gms, isGm, canManage } \| null, canManage }` |
+| PUT | `/api/waves/:id/table` | the wave's owner and admins | `{ system: 'dnd5e-2024'\|'generic', defaultVisibility: 'gm'\|'public', gms: [userId] }`. With no GMs, the wave's owner. Each GM must be able to read the wave (400 `GM_NOT_IN_WAVE`); at most 10. Sends WebSocket `wave_table_updated` `{ waveId }` |
+| DELETE | `/api/waves/:id/table` | the wave's owner and admins | Switches the table off. Its rolls are kept |
+| POST | `/api/waves/:id/rolls` | anyone who can post in the wave | `{ expression, visibility? }`, default the table's. The server rolls. 201 `{ roll }`. 400 `INVALID_DICE` with the reason; 409 `NOT_A_TABLE`; 403 `GM_ONLY` for `gm_secret` from a non-GM. Rate limited (`RATE_LIMIT_DICE_MAX`, 60/min per person) |
+| GET | `/api/waves/:id/rolls` | anyone who can read the wave | `?ids=a,b` (at most 100), or the log: `?roller=&before=&limit=` (newest first, at most 200) |
+
+**Notation** (`server/lib/dice.js`): `d20`, `3d6`, `d%`; `+`/`-` between groups and flat modifiers; `adv`/`dis` (`2d20kh1`/`2d20kl1`); `kh`/`k`/`kl`/`dh`/`dl` with a count; `r`/`ro` with a face (reroll at or under it, always or once). Spaces only around `+` and `-`. At most 100 dice, 1000 sides, 20 groups, 100 characters.
+
+**A roll:** `{ id, waveId, rollerId, expression, terms, total, crit, visibility, pingId, createdAt, hidden: false }`. `terms[i]` is `{ type: 'mod', sign, value }` or `{ type: 'dice', sign, count, sides, keep, reroll, dice: [{ value, kept, rerolled }], subtotal }`. `crit` is `success` or `failure` for a lone kept d20, else null.
+
+**Who sees it:** `public` is everyone's; `gm` the roller's and the GMs'; `gm_secret` (GMs only) the GMs'. Anyone else gets `{ id, waveId, rollerId, visibility, pingId, createdAt, hidden: true, expression }`, with `expression` null for `gm_secret`, and no result. This is decided on every read.
+
+**Posting a roll:** `POST /api/pings` takes `rollId`. The roll must be the author's, in that wave, and not already posted, or 409 `ROLL_UNAVAILABLE` and no ping is made. The ping's content is the roll's label (encrypted in an encrypted wave) or `🎲 <expression>`. Pings carry `roll_id`.
+
 ## Voice channels (v2.118.0)
 
 A Community channel of type `voice` is a LiveKit room that always exists, named `vc-<channelId>`. It holds no waves. Opt-in instance feature `voiceChannels` (403 `FEATURE_DISABLED` when off), on top of `communities`; it needs LiveKit. Design: `docs/communities/03-voice-channels.md`.

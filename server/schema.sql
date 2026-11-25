@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS pings (
     -- Threading fields (v2.38.0)
     threaded INTEGER DEFAULT 0,            -- 1 if message has been burst/threaded
     is_thread_reply INTEGER DEFAULT 0      -- 1 if reply was made within thread panel
-, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL, deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL, expires_at TEXT, format INTEGER NOT NULL DEFAULT 1);
+, bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL, media_type TEXT, media_url TEXT, media_duration INTEGER, media_encrypted INTEGER DEFAULT 0, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, pinned_at TEXT, pinned_by TEXT REFERENCES users(id) ON DELETE SET NULL, deleted_by TEXT REFERENCES users(id) ON DELETE SET NULL, expires_at TEXT, format INTEGER NOT NULL DEFAULT 1, roll_id TEXT REFERENCES dice_rolls(id) ON DELETE SET NULL);
 CREATE INDEX IF NOT EXISTS idx_pings_wave ON pings(wave_id);
 CREATE INDEX IF NOT EXISTS idx_pings_author ON pings(author_id);
 CREATE INDEX IF NOT EXISTS idx_pings_parent ON pings(parent_id);
@@ -1736,6 +1736,34 @@ CREATE INDEX IF NOT EXISTS idx_watch_parties_status
         ON watch_parties(status);
 CREATE INDEX IF NOT EXISTS idx_watch_parties_host
         ON watch_parties(host_user_id);
+
+CREATE TABLE IF NOT EXISTS wave_tables (
+        wave_id            TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+        system             TEXT NOT NULL,
+        default_visibility TEXT NOT NULL,
+        updated_by         TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at         TEXT NOT NULL,
+        updated_at         TEXT NOT NULL
+      );
+
+CREATE TABLE IF NOT EXISTS wave_table_gms (
+        wave_id TEXT NOT NULL REFERENCES wave_tables(wave_id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY (wave_id, user_id)
+      );
+
+CREATE TABLE IF NOT EXISTS dice_rolls (
+        id          TEXT PRIMARY KEY,
+        wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        roller_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expression  TEXT NOT NULL,
+        result      TEXT NOT NULL,
+        total       INTEGER NOT NULL,
+        visibility  TEXT NOT NULL,
+        ping_id     TEXT UNIQUE,
+        created_at  TEXT NOT NULL
+      );
+CREATE INDEX IF NOT EXISTS idx_dice_rolls_wave ON dice_rolls(wave_id, created_at);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
