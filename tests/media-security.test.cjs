@@ -244,6 +244,35 @@ test('HTTP media authorization and proxies against disposable Cortex and upstrea
       assert.equal((await request(variantUrl, 'outsider')).status, 404);
       hostilePlaylist = true; assert.equal((await request(hlsRoot)).status, 502); hostilePlaylist = false;
     });
+    await t.test('two people playing the same Plex item are two Plex clients, so one never stops the other (v2.156.3)', async () => {
+      // Plex keeps one transcode per client identifier. A shared one meant each
+      // new viewer's stream ended everyone else's.
+      const playback = async (user) => {
+        const from = upstreamRequests.length;
+        const info = await (await request(`/api/plex/stream/${plex.id}/222?share=${hlsGrant}`, user)).json();
+        const master = await (await request(info.streamUrl, user)).text();
+        const variant = await (await request(master.split('\n').find(l => l.startsWith('/api/')), user)).text();
+        await (await request(variant.split('\n').find(l => l.startsWith('/api/')), user)).arrayBuffer();
+        const sent = upstreamRequests.slice(from).filter(r => r.url.includes('/transcode/') || r.url.endsWith('segment.ts'));
+        const ids = new Set(sent.map(r => r.headers['x-plex-client-identifier']));
+        for (const r of sent.filter(r => r.url.includes('X-Plex-Client-Identifier='))) ids.add(new URL(r.url, upstreamBase).searchParams.get('X-Plex-Client-Identifier'));
+        assert.ok(sent.length >= 4, 'decision, start, variant and segment reached Plex');
+        assert.equal(ids.size, 1, `one playback, one Plex client: ${[...ids]}`);
+        return [...ids][0];
+      };
+      const a = await playback('owner'), b = await playback('member'), c = await playback('member');
+      assert.notEqual(a, b); assert.notEqual(b, c);
+      assert.ok(![a, b, c].includes('cortex-media-server'));
+      // Direct play: each person their own client too.
+      const direct = async (user) => {
+        const from = upstreamRequests.length;
+        const info = await (await request(`/api/plex/stream/${plex.id}/111?share=${plexShare}`, user)).json();
+        await (await request(info.streamUrl, user)).arrayBuffer();
+        return upstreamRequests.slice(from).find(r => r.url.includes('/library/parts/')).headers['x-plex-client-identifier'];
+      };
+      const d1 = await direct('owner'), d2 = await direct('member');
+      assert.notEqual(d1, d2); assert.ok(![d1, d2].includes('cortex-media-server'));
+    });
     await t.test('malformed ranges and HTML masquerading as media are rejected', async () => {
       const count = upstreamRequests.length;
       const url = `/api/jellyfin/video/${jellyfin.id}/111?share=${jellyShare}`;
