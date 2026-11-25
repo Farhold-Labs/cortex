@@ -4305,6 +4305,14 @@ export class DatabaseSQLite {
         PRIMARY KEY (wave_id, node_name)
       );
     `);
+    // v2.155.2: copies whose whole history (people on other servers included,
+    // v2.155.0) has been pulled. Copies made earlier are pulled once more.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS federated_history_pulls (
+        wave_id   TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+        pulled_at TEXT NOT NULL
+      );
+    `);
 
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
@@ -13028,6 +13036,20 @@ export class DatabaseSQLite {
       const add = this.db.prepare('INSERT OR IGNORE INTO federated_wave_servers (wave_id, node_name) VALUES (?, ?)');
       for (const n of nodeNames) add.run(waveId, n);
     })();
+  }
+
+  markFederatedHistoryPulled(waveId) {
+    this.db.prepare('INSERT OR REPLACE INTO federated_history_pulls (wave_id, pulled_at) VALUES (?, ?)').run(waveId, new Date().toISOString());
+  }
+
+  // Copies of other servers' waves never pulled in full since v2.155.0.
+  copiesNeedingHistoryPull() {
+    return this.db.prepare(`
+      SELECT id FROM waves
+      WHERE federation_state = 'participant' AND origin_node IS NOT NULL AND origin_wave_id IS NOT NULL
+        AND id NOT IN (SELECT wave_id FROM federated_history_pulls)
+      ORDER BY id
+    `).all().map(r => r.id);
   }
 
   getFederatedWaveServers(waveId) {
