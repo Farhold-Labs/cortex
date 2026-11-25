@@ -195,6 +195,7 @@ async function run({ noOwnNodeCheck = false } = {}) {
     await settle();
     r.asked = peer.got.filter(m => m.path === '/api/federation/wave-backfill').map(m => m.body.travellers);
     r.copy = raw('SELECT id, author_id a, author_node n FROM remote_pings WHERE wave_id = ? ORDER BY id', copyId).map(x => `${x.id}:${x.a}@${x.n}`);
+    r.pulled = raw('SELECT wave_id FROM federated_history_pulls WHERE wave_id = ?', copyId).length;
     r.remoteUsers = raw("SELECT handle, node_name FROM remote_users WHERE id IN ('u-yan', 'u-cy') ORDER BY handle").map(x => `${x.handle}@${x.node_name}`);
     return r;
   } finally {
@@ -220,6 +221,7 @@ test('a copy asks for the whole history and files each ping under its author\'s 
   assert.deepEqual(r.asked, [true]);
   assert.deepEqual(r.copy, ['rp-yan-1:u-yan@third.example', 'rp-zed-1:u-zed@peer.example']);
   assert.deepEqual(r.remoteUsers, ['yan@third.example']);
+  assert.equal(r.pulled, 1, 'a copy pulled at acceptance is recorded, so it is not pulled again');
 });
 
 test('[SECURITY] counterfactual: without the own-server check, a ping "by" someone here is filed', async () => {

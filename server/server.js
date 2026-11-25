@@ -20390,8 +20390,9 @@ app.post('/api/federation/inbox/request', federationRequestLimiter, async (req, 
  * Used by the admin resync and when someone here accepts an invitation into a
  * wave from another server (v2.137.0).
  */
-async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
-  let before = null, cached = 0, failed = 0, pages = 0;
+// `onlyMissing`: add pings this copy lacks and leave every one it has alone.
+async function pullFederatedHistory(wave, originNode, { maxPages = 500, onlyMissing = false } = {}) {
+  let before = null, cached = 0, failed = 0, pages = 0, complete = false;
   const MAX_PAGES = maxPages; // safety bound (~100k pings at 500)
   while (pages < MAX_PAGES) {
     pages++;
@@ -20406,7 +20407,7 @@ async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
     }
     const data = await resp.json();
     const pings = data.pings || [];
-    if (pings.length === 0) break;
+    if (pings.length === 0) { complete = true; break; }
 
     for (const d of pings) {
       try {
@@ -20417,6 +20418,7 @@ async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
         // our own people's pings are ours, not the origin's to hand back.
         const authorNode = typeof d.author?.nodeName === 'string' && d.author.nodeName ? d.author.nodeName : wave.originNode;
         if (authorNode === currentNodeName()) { failed++; console.warn(`⚠️ history: dropped ping ${d.id}: names an author on this server`); continue; }
+        if (onlyMissing && db.getRemotePing(d.id)) continue;
         if (d.author && d.author.id && d.author.handle) {
           db.cacheRemoteUser({
             id: d.author.id,
@@ -20450,9 +20452,44 @@ async function pullFederatedHistory(wave, originNode, { maxPages = 500 } = {}) {
       }
     }
     before = pings[pings.length - 1].createdAt; // oldest in this page
-    if (!data.hasMore) break;
+    if (!data.hasMore) { complete = true; break; }
   }
+  // Stopped at the page limit: not the whole history yet.
+  if (complete) db.markFederatedHistoryPulled(wave.id);
   return { cached, failed, pages };
+}
+
+// v2.155.2: copies made before v2.155.0 pulled their history when the wave's
+// server sent only its own people's pings, so they lack the earlier pings of
+// people on other servers. Pull each such copy once more, adding only what is
+// missing, one at a time. A copy whose wave's server is unreachable or older
+// than protocol 4 (which doesn't send them) waits for the next run.
+let olderCopiesPulling = false;
+async function pullOlderCopiesHistory() {
+  if (olderCopiesPulling) return;
+  olderCopiesPulling = true;
+  try { await pullOlderCopiesHistoryNow(); } finally { olderCopiesPulling = false; }
+}
+async function pullOlderCopiesHistoryNow() {
+  let done = 0, waiting = 0;
+  for (const waveId of db.copiesNeedingHistoryPull()) {
+    const wave = db.getWave(waveId);
+    if (!wave) continue;
+    const origin = db.getFederationNodeByName(wave.originNode);
+    if (!origin || origin.status !== 'active' || (origin.protocolVersion || 1) < 4) { waiting++; continue; }
+    try {
+      const r = await pullFederatedHistory(wave, origin, { onlyMissing: true });
+      done++;
+      if (r.cached) {
+        console.log(`📥 History of ${waveId}: ${r.cached} earlier ping(s) added from ${wave.originNode}`);
+        broadcastToWave(waveId, { type: 'wave_updated', wave: { id: waveId } });
+      }
+    } catch (err) {
+      waiting++;
+      console.warn(`[federation] history of ${waveId} from ${wave.originNode}: ${err.message}`);
+    }
+  }
+  if (done || waiting) console.log(`📥 Older copies' history: ${done} pulled, ${waiting} waiting`);
 }
 
 // Resync a federated (participant) wave's full history from its origin (admin).
@@ -32801,6 +32838,14 @@ server.listen(PORT, BIND_HOST, () => {
       }
     }, SESSION_CLEANUP_INTERVAL);
     console.log('📱 Session management enabled (cleanup every hour)');
+  }
+
+  // v2.155.2: older copies' history, shortly after start and then every 6 hours
+  // for any whose wave's server wasn't ready.
+  if (FEDERATION_ENABLED) {
+    const runHistoryPulls = () => pullOlderCopiesHistory().catch(err => console.warn('[federation] older copies\' history:', err.message));
+    setTimeout(runHistoryPulls, parseInt(process.env.HISTORY_PULL_DELAY_MS, 10) || 60_000);
+    setInterval(runHistoryPulls, 6 * 60 * 60 * 1000);
   }
 
   // Start privacy retention cleanup job (v2.16.0)

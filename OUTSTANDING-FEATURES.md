@@ -7,7 +7,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 ---
 
-## Completed Features (v1.5.0 - v2.155.0)
+## Completed Features (v1.5.0 - v2.155.2)
 
 | Feature | Version |
 |---------|---------|
@@ -181,6 +181,8 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Encrypted Waves' First Keys Bound to the Wave | v2.153.1 |
 | Encrypted Waves: Key Requests Relayed to Every Server in the Wave | v2.154.0 |
 | Encrypting a Wave With People Elsewhere; Late-Joining Servers Get the Whole History | v2.155.0 |
+| No Password Prompt While the Remembered Key Restores | v2.155.1 |
+| Older Copies Get the History They Missed | v2.155.2 |
 
 ---
 
@@ -215,22 +217,6 @@ Enhanced search with advanced filters and boolean operators.
 - Filter by: author, date range, wave privacy level, has:media, has:reactions
 - Sort by: relevance, date, author
 - Saved search queries
-
----
-
-### 3. End-to-End Encryption for Federation
-**Complexity:** High
-
-Extend E2EE to federated messages between servers.
-
-- Key exchange between federated users across different servers
-- Secure key distribution via federation protocol
-- Handle key rotation for multi-server participants
-- **Current status:** Local E2EE works (v2.1.0), and since v2.143.0 (phase 0) it encrypts thread and focus-view replies, renews keys when people leave and flags key changes. Across servers it never did: federation sends no wave key, nonce or key version, and travellers' own pings arrived in plain text. Since v2.142.0 encrypted waves and people on other servers are refused together.
-- **Decided 2026-11-07:** a person's public key comes from their home server over signed federation, and members can see and compare key fingerprints, with a change flagged.
-- **Design decided 2026-11-20:** `docs/federated-e2ee/01-design.md`, in four phases. A changed key still gets the wave key and is flagged, keys come only from allied servers, the wave's owner, admins or moderators rotate, fingerprints are 128-bit hex. Phase 0 fixes two security gaps in encryption on a single server first: a device gives the wave key to any public key the server names, and keys are never rotated when someone leaves.
-- **Phase 1 built in v2.149.0:** fingerprints in Settings, people lists and profile cards, Mark as verified (one key only; a change says the verification no longer holds), and devices reading format 2. Next: see phase 1b below.
-- **Identity keys, phase 1b, built in v2.150.0** (`docs/federated-e2ee/02-identity-keys.md`, decided 2026-11-24): a fingerprint is of a lasting identity key, locked by the recovery key alone, which signs each person's encryption and signing keys. Replacing keys keeps the fingerprint and everyone's verification; keys not signed by someone's identity get no wave key. **Phase 1c built in v2.151.0:** pings are signed, ✓ beside authors you verified, forged or replayed ones held back with ⚠, and the server name in addresses pinned by the first signed ping. **Phase 2 built in v2.152.0:** protocol 3, key lookups between servers (only for people sharing an encrypted wave), their cache and change push, encryption fields on federated pings, plain text from other servers refused. **Phase 3 built in v2.153.0:** encrypted waves include people on protocol-3 servers; keys and renewals travel through the wave's own server; every handed-over key bound and its wrapper checked. **v2.153.1:** the first keys of a new encrypted wave are bound too. **v2.154.0:** key requests relayed to every server in the wave, so a member on any allied server can hand a newcomer the key. **v2.155.0:** an existing wave with people elsewhere can be encrypted (their servers' plain copies replaced), and a server joining late gets the earlier pings of people on other servers too. All four phases are built.
 
 ---
 
@@ -286,7 +272,6 @@ Full-featured TTRPG support for running campaigns directly in Cortex.
 |---------|----------|------------|-------------|
 | Export Wave | Low | Medium | Low |
 | Advanced Search | Low | Medium | Medium |
-| E2E for Federation | Medium | High | High |
 | OAuth Provider | Low | Medium | Medium |
 | TTRPG System | Low | Very High | High |
 

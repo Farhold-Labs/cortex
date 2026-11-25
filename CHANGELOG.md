@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.155.2] - 2026-11-25
+
+Older copies of waves get the history they missed. Server only, no app build. **Migrates** (one table).
+
+### Fixed
+- **Copies made before v2.155.0 now get the earlier pings of people on other servers.** v2.155.0 made a server joining a wave late pull those pings too, but only from then on. A copy made earlier still lacked any pings posted, before it joined, by the wave's people on other servers.
+  - Shortly after start, each copy not yet pulled in full is pulled once more from its wave's server. Copies are done one at a time.
+  - Only pings the copy lacks are added. Pings it holds are left as they are, a deleted one stays deleted, and one claiming an author on this server is dropped, as in v2.155.0.
+  - A copy is recorded once its history has come down whole (`federated_history_pulls`), at acceptance or by this pull, and isn't pulled again.
+  - A copy whose wave's server is unreachable or older than protocol 4 waits. Older servers don't send other servers' pings. The pull runs again every 6 hours.
+
+### Verified
+- `tests/federated-history-repull.test.cjs`, one real server and fake allies:
+  - an older copy is pulled once, asking for other servers' pings;
+  - its missing ping is added; held, deleted and forged ones are left out;
+  - the copy is then recorded;
+  - a copy whose server speaks protocol 3 isn't asked and stays unrecorded;
+  - one already recorded isn't asked.
+- **Counterfactual:** without the only-missing check, a held ping is overwritten by the origin's copy.
+- `tests/federated-backfill-travellers.test.cjs`: a copy pulled at acceptance is recorded.
+- Full suite: 800 tests pass.
+
+### Documentation
+- The roadmap no longer lists encryption across servers as outstanding. All four phases are built, and they're in the completed table.
+
 ## [2.155.1] - 2026-11-25
 
 Opening the app after an hour or more away asked for the password again, although the key was remembered. Reported on farhold. Web only (the apps load it from the server), no migration.
@@ -20,7 +45,7 @@ Opening the app after an hour or more away asked for the password again, althoug
   - Before the fix, the password prompt was on screen for the first 4 s of every reopen.
   - After it, the prompt never appeared.
 - Not tried on a real phone.
-- Full suite passes.
+- Full suite: 800 tests pass.
 
 ## [2.155.0] - 2026-11-24
 
