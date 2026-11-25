@@ -240,6 +240,8 @@ Enhanced search with advanced filters and boolean operators.
 ### TTRPG (Table Top Role Playing Games)
 Full-featured TTRPG support for running campaigns directly in Cortex.
 
+**Design: `docs/ttrpg/README.md` (proposed 2026-11-25).** D&D 5e first, any system eventually. Dice, then sheets, then GM tools, then cross-server tables, then maps. The server rolls; rolls are visible to it even in encrypted campaigns, everything else stays encrypted. The list below is the original wish list; the design doc supersedes it.
+
 **Dice Rolling:**
 - Inline dice notation (e.g., `/roll 2d20+5`, `/roll 4d6kh3`)
 - Support for all standard dice (d4, d6, d8, d10, d12, d20, d100)
@@ -274,7 +276,7 @@ Full-featured TTRPG support for running campaigns directly in Cortex.
 | Export Wave | Low | Medium | Low |
 | Advanced Search | Low | Medium | Medium |
 | OAuth Provider | Low | Medium | Medium |
-| TTRPG System | Low | Very High | High |
+| TTRPG System | Next | Very High | High |
 
 ---
 

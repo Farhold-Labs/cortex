@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- `docs/ttrpg/README.md`: the design for tabletop role-playing (dice, character sheets, GM tools, tables across servers, maps), with the decisions made on 2026-11-25 and the questions still open. Nothing built yet.
+
 ## [2.157.1] - 2026-11-25
 
 Popping a watch party out to the system's picture-in-picture window now frees the screen. Web client only, no app build, no migration.

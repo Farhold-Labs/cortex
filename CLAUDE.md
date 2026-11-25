@@ -486,6 +486,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/direct-calls/** — ringing a contact, outside waves (decided 2026-11-22; phase 1 built in v2.145.0, phase 2 in v2.146.0, phase 3 not built)
 - **docs/federation-keys/** — replacing a server's federation key by handshake (built in v2.147.0)
 - **docs/federated-e2ee/** — encryption across servers (decided 2026-11-20; phase 0 = local [SECURITY] fixes in v2.143.0, phase 1 = fingerprints and reading format 2 in v2.149.0; `02-identity-keys.md` = lasting identity fingerprints and signed pings, decided 2026-11-24, phase 1b built in v2.150.0, 1c (signed pings) in v2.151.0, phase 2 (plumbing between servers) in v2.152.0, phase 3 (encrypted waves across servers) in v2.153.0, first keys bound in v2.153.1, key requests relayed in v2.154.0, encrypting later and full history in v2.155.0, older copies' history in v2.155.2)
+- **docs/ttrpg/** — tabletop role-playing: server-rolled dice, encrypted sheets, GM tools, cross-server tables, maps last (proposed 2026-11-25, D&D 5e first; not built)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy
