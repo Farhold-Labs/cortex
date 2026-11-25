@@ -65,7 +65,7 @@ HLS resource maps are process-local, as other realtime state in this application
 3. **Share old media links again from their intended wave.** Legacy links without grants remain usable by the connection owner but are deliberately denied to other viewers. An active, authorized watch party is a separate explicit permission.
 4. Check actual Plex/Jellyfin direct play, transcoding, seeking, thumbnails, and native/Safari playback in staging. Streaming now uses Cortex server bandwidth, and upstream redirects must be corrected to a canonical configured server URL.
 
-The patch does not deploy or rotate live credentials automatically. The existing watch-party UI wiring and real-device codec behavior are not certified by these server tests; the security checks cover the actual HTTP and WebSocket endpoints, and the reusable watch-party player uses the protected binary URL.
+The patch does not deploy or rotate live credentials automatically. Since v2.155.3 the watch-party UI is wired to these endpoints and was driven in a browser against a simulated Jellyfin (host and viewer, play, pause, seek, end); real-device codec behaviour is still untested. Only one party runs per wave: another member starting one gets `409 WATCH_PARTY_RUNNING`, and a host starting again replaces their own.
 
 ## Validation
 

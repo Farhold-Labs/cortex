@@ -609,6 +609,7 @@ const Message = ({
                   contacts={contacts}
                   onMentionClick={onShowProfile}
                   fetchAPI={fetchAPI}
+                  waveId={wave?.id || currentWaveId}
                 />
               )}
               {message.media_type === 'audio' && message.media_url && (

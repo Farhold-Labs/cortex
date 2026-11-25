@@ -14923,6 +14923,10 @@ export class DatabaseSQLite {
   /**
    * Get active watch party for a wave
    */
+  getActiveWatchPartyWaveIds() {
+    return this.db.prepare("SELECT DISTINCT wave_id FROM watch_parties WHERE status = 'active'").all().map(r => r.wave_id);
+  }
+
   getActiveWatchPartyForWave(waveId) {
     const row = this.db.prepare(`
       SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar,
@@ -14953,36 +14957,6 @@ export class DatabaseSQLite {
       lastSyncAt: row.last_sync_at,
       createdAt: row.created_at,
     };
-  }
-
-  /**
-   * Get all active watch parties for waves the user participates in
-   */
-  getActiveWatchPartiesForUser(userId) {
-    const rows = this.db.prepare(`
-      SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar
-      FROM watch_parties wp
-      LEFT JOIN users u ON wp.host_user_id = u.id
-      INNER JOIN wave_participants wpart ON wp.wave_id = wpart.wave_id
-      WHERE wpart.user_id = ? AND wp.status = 'active'
-    `).all(userId);
-
-    return rows.map(row => ({
-      id: row.id,
-      waveId: row.wave_id,
-      hostUserId: row.host_user_id,
-      hostHandle: row.host_handle,
-      hostName: row.host_name,
-      hostAvatar: row.host_avatar,
-      jellyfinItemId: row.jellyfin_item_id,
-      mediaTitle: row.media_title,
-      mediaType: row.media_type,
-      status: row.status,
-      playbackPosition: row.playback_position,
-      isPlaying: row.is_playing === 1,
-      lastSyncAt: row.last_sync_at,
-      createdAt: row.created_at,
-    }));
   }
 
   /**
