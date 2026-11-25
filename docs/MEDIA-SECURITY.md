@@ -46,7 +46,7 @@ DELETE /api/media/shares/share-...
 Authorization: Bearer <Cortex token>
 ```
 
-No upstream API credential is returned from playback, thumbnails, watch-party objects, or feed-import objects. Plex's owner OAuth setup remains a separate authentication flow.
+Upstream access tokens are stored with AES-256-GCM under a key derived from `JWT_SECRET` by HKDF (v2.156.1). Before that they were XOR'd with the secret's first 32 characters, from which one known token and the database recover every other token; older rows are converted at boot. A token that can't be read (for example after `JWT_SECRET` changes) is refused with `409 MEDIA_RECONNECT` and never sent upstream; its owner connects the server again. No upstream API credential is returned from playback, thumbnails, watch-party objects, or feed-import objects. Plex's owner OAuth setup remains a separate authentication flow.
 
 ## Proxy behavior
 

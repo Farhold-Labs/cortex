@@ -183,6 +183,18 @@ test('HTTP media authorization and proxies against disposable Cortex and upstrea
       const body = await res.json(); assert.equal(res.status, 201, JSON.stringify(body)); return body.share.id;
     };
     let plexShare, jellyShare, hlsRoot, hlsGrant;
+    await t.test('stored media tokens were converted to AES-256-GCM at boot (v2.156.1)', () => {
+      const d = new (serverRequire('better-sqlite3'))(path.join(serverDir, 'data/farhold.db'), { readonly: true });
+      try {
+        for (const table of ['jellyfin_connections', 'plex_connections']) {
+          for (const { access_token: token } of d.prepare(`SELECT access_token FROM ${table}`).all()) {
+            assert.ok(token.startsWith('v2:'), `${table} still holds an old-form token`);
+            assert.notEqual(token, encrypted);
+          }
+        }
+      } finally { d.close(); }
+      assert.match(output, /jellyfin: 2 access token\(s\) re-encrypted/);
+    });
     await t.test('only owners can mint grants, and only in waves they can post to', async () => {
       const body = { provider: 'plex', connectionId: plex.id, itemId: '111', waveId: wave.id };
       assert.equal((await request('/api/media/shares', 'member', { method: 'POST', body })).status, 403);
