@@ -29,6 +29,7 @@ import * as waveParticipationCrypto from './lib/wave-participation-crypto.js';
 import * as pushSubscriptionCrypto from './lib/push-subscription-crypto.js';
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
 import { encryptMediaToken, decryptMediaToken, convertLegacy as convertLegacyMediaTokens } from './lib/media-token-crypto.js';
+import { pickConnection } from './lib/plex-connection-pick.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import * as waveRoles from './lib/wave-roles.js';
 import * as communityAuthz from './lib/communities/authorize.js';
@@ -11359,7 +11360,7 @@ async function plexRequest(serverUrl, path, accessToken, options = {}) {
   const response = await fetch(url.toString(), {
     ...options,
     redirect: 'error',
-    signal: AbortSignal.timeout(30000),
+    signal: options.signal || AbortSignal.timeout(30000),
     headers: {
       ...getPlexHeaders(accessToken),
       ...(options.headers || {}),
@@ -11467,29 +11468,24 @@ app.get('/api/plex/auth/servers', authenticateToken, plexLimiter, async (req, re
 
     const resources = await response.json();
 
-    // Filter to only Plex Media Server instances that are owned
-    const servers = resources
-      .filter(r => r.provides === 'server' && r.owned)
-      .map(server => {
-        // Find the best connection - prefer local, then relay, then remote
-        const connections = server.connections || [];
-        const localConn = connections.find(c => c.local && !c.relay);
-        const remoteConn = connections.find(c => !c.local && !c.relay);
-        const relayConn = connections.find(c => c.relay);
-        const bestConn = localConn || remoteConn || relayConn || connections[0];
-
-        return {
-          name: server.name,
-          machineIdentifier: server.clientIdentifier,
-          accessToken: server.accessToken,
-          connection: bestConn ? {
-            uri: bestConn.uri,
-            local: bestConn.local,
-            relay: bestConn.relay,
-          } : null,
-        };
-      })
-      .filter(s => s.connection); // Only include servers with valid connections
+    // Owned Plex Media Servers, each with the address this server can reach
+    // (lib/plex-connection-pick.js): Cortex proxies playback, so the browser's
+    // view of the network doesn't matter.
+    const owned = resources.filter(r => r.provides === 'server' && r.owned).slice(0, 10);
+    const servers = (await Promise.all(owned.map(async (server) => {
+      const connection = await pickConnection((server.connections || []).slice(0, 12), async (uri) => {
+        try {
+          const r = await plexRequest(uri, '/identity', server.accessToken, { signal: AbortSignal.timeout(5000) });
+          return r.ok;
+        } catch { return false; }
+      });
+      return {
+        name: server.name,
+        machineIdentifier: server.clientIdentifier,
+        accessToken: server.accessToken,
+        connection,
+      };
+    }))).filter(s => s.connection); // Only include servers with valid connections
 
     res.json({ servers });
   } catch (err) {
@@ -11618,6 +11614,11 @@ app.post('/api/plex/connections', authenticateToken, plexLimiter, async (req, re
       },
     });
   } catch (err) {
+    // A fetch that never got an answer: the address is wrong or, often, a LAN
+    // address this server can't reach. Say so instead of a bare failure.
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError' || err?.message === 'fetch failed') {
+      return res.status(502).json({ error: 'Cortex could not reach that Plex address. Use an address reachable from the internet (Plex remote access), not a home-network one.' });
+    }
     console.error('Plex connection error:', err);
     res.status(500).json({ error: 'Failed to connect to Plex server' });
   }
