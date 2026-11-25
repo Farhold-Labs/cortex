@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.157.0] - 2026-11-25
+
+Talk while you watch: a watch party can shrink to a small window in a corner. Web client only, no app build, no migration.
+
+### Added
+- **Picture in picture for watch parties.** The player used to cover the whole app, so nobody could talk in the wave during a party.
+  - CHAT shrinks it to a small window over the app (top right by default, clear of the header). Tap it, or ⤢, to fill the screen again; back does the reverse. Drag it to any corner, and it settles there.
+  - The small window keeps play and pause for the host, close, and a thin progress line.
+  - The same video element serves both sizes, so changing size never restarts or re-syncs playback.
+  - The size and corner are remembered on this device (`cortex-watch-party-view`).
+  - Where the browser offers it, POP OUT (⧉) hands the video to the system's own picture-in-picture window, which keeps playing outside the app.
+  - The WATCH PARTY banner is hidden in the wave while you're watching that party; it comes back when you close the player.
+
+### Fixed
+- **The player's controls never faded on a phone.** They faded only after a touch or mouse movement had started the timer, so a viewer who never touched the screen kept the title, buttons and progress bar over the film for good. They now fade three seconds after playback starts, and lie over the picture instead of taking space under it.
+- **A toast could stay on screen indefinitely.** Its timer restarted whenever the app re-rendered, because the close callback was a new function each time. During a watch party that's every few seconds, so "… started a watch party" sat over the message box. The timer now runs from when the message appears.
+
+### Verified
+- Headless Chrome, a 1280×800 host and a 390×844 phone viewer with a simulated Jellyfin server: controls fade untouched on both; CHAT shrinks the player without restarting it; both people post from the wave while the video plays and see each other's pings; dragging moves the window to the bottom-left and remembers it; a tap fills the screen again; the host pauses from the small window and the viewer pauses. Not tried on a real phone, or with the system picture-in-picture window.
+
 ## [2.156.3] - 2026-11-25
 
 Two people can now play the same Plex video at once. Server only, no app build, no migration.
