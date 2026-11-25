@@ -2,6 +2,7 @@ import { mediaPlaybackUrl } from '../../utils/media.js';
 import React, { useState, useRef, useEffect } from 'react';
 import { API_URL } from '../../config/constants.js';
 import { storage } from '../../utils/storage.js';
+import StartWatchPartyButton from './StartWatchPartyButton.jsx';
 
 /**
  * Plex Media Embed Component (v2.15.0)
@@ -18,6 +19,8 @@ const PlexEmbed = ({
   type,
   duration,
   summary,
+  waveId,
+  fetchAPI,
   onPlay,
 }) => {
   const [imageError, setImageError] = useState(false);
@@ -470,6 +473,8 @@ const PlexEmbed = ({
             )}
           </>
         )}
+
+        <StartWatchPartyButton provider="plex" connectionId={connectionId} itemId={ratingKey} name={name} type={type} waveId={waveId} fetchAPI={fetchAPI} color={plexColor} />
       </div>
     </div>
   );

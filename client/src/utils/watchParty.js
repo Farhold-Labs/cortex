@@ -1,8 +1,8 @@
 // Watch parties (v2.14.0; wired up end to end in v2.155.3).
 //
 // The server describes a party as { id, waveId, hostUserId, hostName,
-// jellyfinConnectionId, jellyfinItemId, mediaTitle, playbackPosition,
-// isPlaying }. The UI works with one shape, made here, so the REST answers and
+// provider, connectionId, itemId, mediaTitle, playbackPosition, isPlaying }
+// (before v2.156.0, jellyfinConnectionId and jellyfinItemId). The UI works with one shape, made here, so the REST answers and
 // every WebSocket message agree.
 
 export function normaliseParty(raw, fallbackWaveId = null) {
@@ -13,8 +13,9 @@ export function normaliseParty(raw, fallbackWaveId = null) {
     waveId: raw.waveId || fallbackWaveId,
     hostId: raw.hostUserId ?? raw.hostId ?? null,
     hostName: raw.hostName || raw.hostHandle || null,
-    connectionId: raw.jellyfinConnectionId ?? raw.connectionId ?? null,
-    itemId: raw.jellyfinItemId ?? raw.itemId ?? null,
+    provider: raw.provider === 'plex' ? 'plex' : 'jellyfin',
+    connectionId: raw.connectionId ?? raw.jellyfinConnectionId ?? null,
+    itemId: raw.itemId ?? raw.jellyfinItemId ?? null,
     name: raw.mediaTitle ?? raw.name ?? 'Untitled',
     state: isPlaying ? 'playing' : 'paused',
     position: Number(raw.playbackPosition ?? raw.position ?? 0) || 0,
@@ -40,14 +41,14 @@ export function expectedPosition(party) {
   return party.position + (party.state === 'playing' ? (Date.now() - party.syncedAt) / 1000 : 0);
 }
 
-// Jellyfin connections this person owns, asked once a session: only the
-// owner of a connection can host a party with it.
-let ownConnections = null;
-export function ownJellyfinConnectionIds(fetchJSON) {
-  if (!ownConnections) {
-    ownConnections = fetchJSON('/jellyfin/connections')
+// Media connections this person owns, per provider, asked once a session:
+// only the owner of a connection can host a party with it.
+const ownConnections = {};
+export function ownConnectionIds(fetchJSON, provider = 'jellyfin') {
+  if (!ownConnections[provider]) {
+    ownConnections[provider] = fetchJSON(`/${provider === 'plex' ? 'plex' : 'jellyfin'}/connections`)
       .then(data => new Set((data.connections || data || []).map(c => c.id)))
-      .catch(() => { ownConnections = null; return new Set(); });
+      .catch(() => { delete ownConnections[provider]; return new Set(); });
   }
-  return ownConnections;
+  return ownConnections[provider];
 }
