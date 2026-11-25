@@ -18,7 +18,9 @@ import { useSystemBack } from '../../hooks/useSystemBack.js';
  * the app (picture in picture), so the wave stays open to talk in. Drag the
  * small window to any corner; tap it to fill the screen again. The size and
  * corner are remembered on this device. Where the browser offers it, POP OUT
- * hands the video to the system's own picture-in-picture window.
+ * hands the video to the system's own picture-in-picture window; the player
+ * in the app then shrinks to a bar (BRING BACK, close), leaving the screen
+ * free, and comes back as the small window when the pop-out closes (v2.157.1).
  *
  * Props:
  * - party: normalised party (utils/watchParty.js)
@@ -243,6 +245,23 @@ const WatchPartyPlayer = ({ party, currentUserId, onCommand, onHeartbeat, onLeav
     if (!video?.requestPictureInPicture) return;
     (document.pictureInPictureElement ? document.exitPictureInPicture() : video.requestPictureInPicture()).catch(() => {});
   }, []);
+  const [poppedOut, setPoppedOut] = useState(false);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return undefined;
+    const enter = () => setPoppedOut(true);
+    // Back from the pop-out (its own button, or it was closed): the small window.
+    const leave = () => { setPoppedOut(false); setPref({ mode: 'mini' }); };
+    video.addEventListener('enterpictureinpicture', enter);
+    video.addEventListener('leavepictureinpicture', leave);
+    return () => { video.removeEventListener('enterpictureinpicture', enter); video.removeEventListener('leavepictureinpicture', leave); };
+  }, [stream, setPref]);
+  // The pop-out window has its own play and pause (and skip, on some systems).
+  // For the host they are everyone's: say so now rather than at the next heartbeat.
+  const hostFromPopOut = useCallback((command) => {
+    const video = videoRef.current;
+    if (isHost && video && document.pictureInPictureElement === video) onCommand?.(command, video.currentTime);
+  }, [isHost, onCommand]);
 
   // Dragging the small window: it follows the finger, then settles in the
   // nearest corner. A press that barely moves is a tap: fill the screen.
@@ -292,7 +311,14 @@ const WatchPartyPlayer = ({ party, currentUserId, onCommand, onHeartbeat, onLeav
   };
 
   const miniWidth = isMobile ? 'min(58vw, 280px)' : '360px';
-  const frameStyle = !mini
+  const frameStyle = poppedOut
+    ? {
+      position: 'fixed', display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 6px 6px 12px',
+      boxShadow: '0 6px 24px rgba(0,0,0,0.6)', border: '1px solid var(--border-primary, rgba(255,255,255,0.3))', borderRadius: '4px',
+      [pref.corner[0] === 't' ? 'top' : 'bottom']: pref.corner[0] === 't' ? MINI_INSET.top : MINI_INSET.bottom,
+      [pref.corner[1] === 'l' ? 'left' : 'right']: MINI_INSET.side,
+    }
+    : !mini
     /* Above the holiday effects overlay (9999): no leaves falling across the film. */
     ? { position: 'fixed', inset: 0 }
     : {
@@ -312,14 +338,18 @@ const WatchPartyPlayer = ({ party, currentUserId, onCommand, onHeartbeat, onLeav
   ) : (
     <video
       ref={videoRef}
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+      /* Popped out, the element must stay in the page for the pop-out to play: kept, unseen. */
+      style={poppedOut
+        ? { position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }
+        : { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
       preload="metadata"
       playsInline
       onClick={mini ? undefined : tapPicture}
       onLoadedMetadata={handleLoadedMetadata}
       onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
-      onPlay={() => setIsPlaying(true)}
-      onPause={() => setIsPlaying(false)}
+      onPlay={() => { setIsPlaying(true); hostFromPopOut('play'); }}
+      onPause={() => { setIsPlaying(false); hostFromPopOut('pause'); }}
+      onSeeked={() => hostFromPopOut('seek')}
       onEnded={() => { setIsPlaying(false); if (isHost) onCommand?.('pause', videoRef.current?.currentTime || 0); }}
       onError={() => { setError('The video could not be loaded. The party may have ended, or the host\'s media server is unreachable.'); setIsLoading(false); }}
     />
@@ -328,26 +358,36 @@ const WatchPartyPlayer = ({ party, currentUserId, onCommand, onHeartbeat, onLeav
   return (
     <div
       ref={containerRef}
-      role={mini ? 'region' : 'dialog'}
+      role={mini || poppedOut ? 'region' : 'dialog'}
       aria-label={`Watch party: ${party.name}`}
       style={{ ...frameStyle, background: '#000', zIndex: 10000 }}
-      onMouseMove={mini ? undefined : revealControls}
-      onTouchStart={mini ? undefined : revealControls}
-      onPointerDown={mini ? onMiniPointerDown : undefined}
-      onPointerMove={mini ? onMiniPointerMove : undefined}
-      onPointerUp={mini ? onMiniPointerUp : undefined}
-      onPointerCancel={mini ? () => { dragRef.current = null; setDrag(null); } : undefined}
+      onMouseMove={mini || poppedOut ? undefined : revealControls}
+      onTouchStart={mini || poppedOut ? undefined : revealControls}
+      onPointerDown={mini && !poppedOut ? onMiniPointerDown : undefined}
+      onPointerMove={mini && !poppedOut ? onMiniPointerMove : undefined}
+      onPointerUp={mini && !poppedOut ? onMiniPointerUp : undefined}
+      onPointerCancel={mini && !poppedOut ? () => { dragRef.current = null; setDrag(null); } : undefined}
     >
       {/* One video element for both sizes, so changing size never restarts it. */}
       {picture}
 
-      {isLoading && !error && (
+      {poppedOut && (
+        <>
+          <span style={{ color: 'var(--text-secondary, #ccc)', fontFamily: 'monospace', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+            ⧉ {party.name.length > 24 ? `${party.name.slice(0, 23)}…` : party.name} · popped out
+          </span>
+          <button onClick={popOut} style={{ ...miniButton, width: 'auto', padding: '0 10px', fontFamily: 'monospace', fontSize: '0.7rem' }} title="Bring the video back into Cortex">BRING BACK</button>
+          <button onClick={onLeave} style={miniButton} aria-label="Close the player" title={isHost ? 'Close the player; the party goes on' : 'Close the player'}>✕</button>
+        </>
+      )}
+
+      {!poppedOut && isLoading && !error && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.8)', pointerEvents: 'none' }}>
           <GlowText color="var(--accent-amber)">Loading…</GlowText>
         </div>
       )}
 
-      {needsTap && !error && (
+      {!poppedOut && needsTap && !error && (
         <button
           onClick={play}
           style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', border: 'none', color: 'white', fontFamily: 'monospace', fontSize: mini ? '0.75rem' : '1rem', cursor: 'pointer' }}
@@ -356,13 +396,13 @@ const WatchPartyPlayer = ({ party, currentUserId, onCommand, onHeartbeat, onLeav
         </button>
       )}
 
-      {!isHost && !isLoading && !error && !needsTap && party.state === 'paused' && (
+      {!poppedOut && !isHost && !isLoading && !error && !needsTap && party.state === 'paused' && (
         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'rgba(0,0,0,0.6)', padding: mini ? '4px 8px' : '10px 16px', color: 'white', fontFamily: 'monospace', fontSize: mini ? '0.7rem' : '0.85rem', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
           Paused{mini ? '' : ` by ${party.hostName || 'the host'}`}
         </div>
       )}
 
-      {mini ? (
+      {poppedOut ? null : mini ? (
         <>
           <div style={{ position: 'absolute', top: '4px', right: '4px', display: 'flex', gap: '4px' }}>
             {isHost && (

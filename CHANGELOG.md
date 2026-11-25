@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.157.1] - 2026-11-25
+
+Popping a watch party out to the system's picture-in-picture window now frees the screen. Web client only, no app build, no migration.
+
+### Fixed
+- **POP OUT left the player in Cortex.** The video went to the system window, but the player stayed behind as a black box over the app (full screen, or the small window), so the screen was still taken.
+  - Now, while the video is popped out, the player in Cortex shrinks to a bar in its corner: the title, BRING BACK and close. The rest of the screen is free.
+  - When the pop-out closes, or its own back-to-tab button is used, the video returns as the small window.
+  - The video element stays in the page, unseen, because the pop-out plays from it.
+- **The host's play and pause in the pop-out window weren't sent to everyone straight away.** The pop-out has its own play and pause (and skip on some systems), which reached viewers only at the next five-second sync. For the host they are now sent as they happen.
+
+### Verified
+- Headless Chrome, host and viewer: popping out leaves a 440×46 bar and the message box reachable; pausing and playing the popped-out video pauses and plays the viewer within 1.5 s; BRING BACK returns it to the small window. Not tried on a real device; the earlier 2.157.0 picture in picture was confirmed on two real phones.
+
 ## [2.157.0] - 2026-11-25
 
 Talk while you watch: a watch party can shrink to a small window in a corner. Web client only, no app build, no migration.
@@ -25,7 +39,7 @@ Talk while you watch: a watch party can shrink to a small window in a corner. We
 - **A toast could stay on screen indefinitely.** Its timer restarted whenever the app re-rendered, because the close callback was a new function each time. During a watch party that's every few seconds, so "… started a watch party" sat over the message box. The timer now runs from when the message appears.
 
 ### Verified
-- Headless Chrome, a 1280×800 host and a 390×844 phone viewer with a simulated Jellyfin server: controls fade untouched on both; CHAT shrinks the player without restarting it; both people post from the wave while the video plays and see each other's pings; dragging moves the window to the bottom-left and remembers it; a tap fills the screen again; the host pauses from the small window and the viewer pauses. Not tried on a real phone, or with the system picture-in-picture window.
+- Headless Chrome, a 1280×800 host and a 390×844 phone viewer with a simulated Jellyfin server: controls fade untouched on both; CHAT shrinks the player without restarting it; both people post from the wave while the video plays and see each other's pings; dragging moves the window to the bottom-left and remembers it; a tap fills the screen again; the host pauses from the small window and the viewer pauses. Since confirmed on two real phones, with a Plex watch party.
 
 ## [2.156.3] - 2026-11-25
 
