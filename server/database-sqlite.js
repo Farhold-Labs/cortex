@@ -10773,20 +10773,38 @@ export class DatabaseSQLite {
   // Paginated ping history for federation backfill (origin side). Newest-first;
   // pass `before` (a created_at ISO string) to page backwards. Author is
   // pre-formatted (bot-aware) to match the wave-broadcast payload shape.
-  getWavePingsForFederation(waveId, { before = null, limit = 100 } = {}) {
+  getWavePingsForFederation(waveId, { before = null, limit = 100, travellers = false, exceptNode = null } = {}) {
+    const now = new Date().toISOString();
+    const params = [waveId, now];
     let sql = `
       SELECT d.id, d.parent_id, d.author_id, d.content, d.created_at, d.edited_at, d.reactions, d.bot_id, d.expires_at,
              d.encrypted, d.nonce, d.key_version, d.format,
              u.display_name AS user_display_name, u.avatar AS user_avatar, u.avatar_url AS user_avatar_url, u.handle AS user_handle,
-             b.name AS bot_name
+             b.name AS bot_name, NULL AS author_node
       FROM pings d
       JOIN users u ON d.author_id = u.id
       LEFT JOIN bots b ON d.bot_id = b.id
       WHERE d.wave_id = ? AND d.deleted = 0
         AND (d.expires_at IS NULL OR d.expires_at > ?)`;
-    const params = [waveId, new Date().toISOString()];
     if (before) { sql += ' AND d.created_at < ?'; params.push(before); }
-    sql += ' ORDER BY d.created_at DESC LIMIT ?';
+    // v2.155.0: the pings of the wave's people on other servers, which this
+    // server holds as remote_pings. Never the asker's own people's: it has
+    // those already.
+    if (travellers) {
+      sql += `
+      UNION ALL
+      SELECT r.id, r.parent_id, r.author_id, r.content, r.created_at, r.edited_at, r.reactions, NULL, r.expires_at,
+             r.encrypted, r.nonce, r.key_version, r.format,
+             ru.display_name, ru.avatar, ru.avatar_url, ru.handle,
+             NULL, r.author_node
+      FROM remote_pings r
+      LEFT JOIN remote_users ru ON ru.id = r.author_id AND ru.node_name = r.author_node
+      WHERE r.wave_id = ? AND r.deleted = 0 AND r.author_node != ?
+        AND (r.expires_at IS NULL OR r.expires_at > ?)`;
+      params.push(waveId, exceptNode || '', now);
+      if (before) { sql += ' AND r.created_at < ?'; params.push(before); }
+    }
+    sql += ' ORDER BY 5 DESC LIMIT ?'; // created_at, by position: it is the same column in both halves
     params.push(limit);
     const rows = this.db.prepare(sql).all(...params);
     return rows.map(d => {
@@ -10812,6 +10830,8 @@ export class DatabaseSQLite {
           displayName: isBot ? `[Bot] ${d.bot_name}` : d.user_display_name,
           avatar: isBot ? '🤖' : d.user_avatar,
           avatarUrl: isBot ? null : d.user_avatar_url,
+          // Set only for someone on another server.
+          ...(d.author_node ? { nodeName: d.author_node } : {}),
         },
       };
     });
@@ -13434,8 +13454,14 @@ export class DatabaseSQLite {
         COUNT(*) as total,
         SUM(CASE WHEN encrypted = 1 THEN 1 ELSE 0 END) as encrypted_count,
         SUM(CASE WHEN COALESCE(encrypted, 0) = 0 AND (expires_at IS NULL OR expires_at > ?) THEN 1 ELSE 0 END) as remaining
-      FROM pings WHERE wave_id = ?
-    `).get(new Date().toISOString(), waveId);
+      FROM (
+        SELECT encrypted, expires_at FROM pings WHERE wave_id = ?
+        -- v2.155.0: and the pings of its people on other servers, which an
+        -- encrypted wave's server re-encrypts and sends on too.
+        UNION ALL
+        SELECT encrypted, expires_at FROM remote_pings WHERE wave_id = ? AND deleted = 0
+      )
+    `).get(new Date().toISOString(), waveId, waveId);
     const total = stats.total || 0;
     const remaining = stats.remaining || 0;
 
@@ -13472,14 +13498,21 @@ export class DatabaseSQLite {
 
   // Get unencrypted pings for a wave (for batch encryption)
   getUnencryptedPings(waveId, limit = 50) {
+    const now = new Date().toISOString();
+    // v2.155.0: travellers' pings held here (remote_pings) are included. A
+    // wave's own server can only be the wave's, so a copy's remote_pings are
+    // never handed out: /encrypt refuses a copy.
     return this.db.prepare(`
-      SELECT id, content, author_id, created_at
-      FROM pings
+      SELECT id, content, author_id, created_at FROM pings
       WHERE wave_id = ? AND COALESCE(encrypted, 0) = 0
         AND (expires_at IS NULL OR expires_at > ?)
-      ORDER BY created_at ASC
+      UNION ALL
+      SELECT id, content, author_id, created_at FROM remote_pings
+      WHERE wave_id = ? AND COALESCE(encrypted, 0) = 0 AND deleted = 0
+        AND (expires_at IS NULL OR expires_at > ?)
+      ORDER BY 4 ASC
       LIMIT ?
-    `).all(waveId, new Date().toISOString(), limit).map(d => ({
+    `).all(waveId, now, waveId, now, limit).map(d => ({
       id: d.id,
       content: d.content,
       authorId: d.author_id,
@@ -13493,11 +13526,23 @@ export class DatabaseSQLite {
   // the ping id alone, so a wave's creator could overwrite any ping anywhere,
   // encrypted or not, by naming its id to /encrypt-pings.
   encryptPingContent(pingId, encryptedContent, nonce, keyVersion, waveId) {
-    return this.db.prepare(`
+    const local = this.db.prepare(`
       UPDATE pings
       SET content = ?, nonce = ?, key_version = ?, encrypted = 1
       WHERE id = ? AND wave_id = ? AND COALESCE(encrypted, 0) = 0
     `).run(encryptedContent, nonce, keyVersion, pingId, waveId).changes;
+    return local || this.encryptRemotePingContent(pingId, encryptedContent, nonce, keyVersion, waveId);
+  }
+
+  // v2.155.0: the same for a ping of someone on another server held here,
+  // only a plain one of this wave (format 1: whoever re-encrypts it is not
+  // its author, so it can't be signed).
+  encryptRemotePingContent(pingId, encryptedContent, nonce, keyVersion, waveId) {
+    return this.db.prepare(`
+      UPDATE remote_pings
+      SET content = ?, nonce = ?, key_version = ?, encrypted = 1, format = 1, updated_at = ?
+      WHERE id = ? AND wave_id = ? AND COALESCE(encrypted, 0) = 0 AND deleted = 0
+    `).run(encryptedContent, nonce, keyVersion, new Date().toISOString(), pingId, waveId).changes;
   }
   encryptDropletContent(id, enc, nonce, kv, waveId) { return this.encryptPingContent(id, enc, nonce, kv, waveId); }
 

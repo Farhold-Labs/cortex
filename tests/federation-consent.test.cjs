@@ -119,14 +119,12 @@ async function run({ noInvitationCheck = false, noHomeBlockCheck = false, noEncr
     if (noEncryptedCheck) {
       // v2.142.0 counterfactual: the places an encrypted wave meets people
       // on other servers. Since v2.153.0 creating, inviting and answering
-      // refuse only servers not at protocol 3 (encryptedServersRefusal);
-      // turning encryption on for a wave with people elsewhere still refuses.
-      const refusal = 'async function encryptedServersRefusal(nodeNames) {';
+      // refuse only servers not at protocol 3 (encryptedServersRefusal), and
+      // since v2.155.0 turning encryption on too (protocol 4 for servers in
+      // the wave, 3 for those only asked).
+      const refusal = 'async function encryptedServersRefusal(nodeNames, minimum = 3) {';
       assert.ok(src.includes(refusal), 'counterfactual: could not find encryptedServersRefusal');
       src = src.replace(refusal, refusal + '\n  return null;');
-      const encrypt = 'if (isFederatedWave(wave) || db.listRemoteWaveInvitations?.(waveId)?.length) {';
-      assert.ok(src.includes(encrypt), 'counterfactual: could not find the /encrypt check');
-      src = src.replace(encrypt, 'if (false && (isFederatedWave(wave) || db.listRemoteWaveInvitations?.(waveId)?.length)) {');
     }
     fs.writeFileSync(f, src + "\nserver.on('listening', () => console.log('FEDCONSENT_PORT=' + server.address().port));\n");
 
@@ -396,7 +394,7 @@ test('people on other servers are asked', { timeout: 120000 }, async (t) => {
       create: '409 ENCRYPTED_SERVER_NOT_READY',
       invite: '409 ENCRYPTED_SERVER_NOT_READY',
       asked: [],
-      encrypt: '409 ENCRYPTED_NO_TRAVELLERS',
+      encrypt: '409 ENCRYPTED_SERVER_NOT_READY',
       lateAnswer: '404 INVITATION_GONE',
       lateBackfill: 403,
     });
