@@ -45,7 +45,7 @@ Opening the app after an hour or more away asked for the password again, althoug
   - Before the fix, the password prompt was on screen for the first 4 s of every reopen.
   - After it, the prompt never appeared.
 - Not tried on a real phone.
-- Full suite: 800 tests pass.
+- Full suite: 796 tests pass.
 
 ## [2.155.0] - 2026-11-24
 
