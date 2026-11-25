@@ -106,6 +106,7 @@ export function E2EEProvider({ children, token, API_URL }) {
   // into a cache that has just been cleared.
   const keyGenerationRef = useRef(0);
   const sessionRestoreAttempted = useRef(false);
+  const restorePromiseRef = useRef(null);
   // The unlocked key, readable from checkE2EEStatus without re-creating it.
   // The gate that calls checkE2EEStatus unmounts whenever the app leaves its
   // shell for a full-page route (/about, /watch, /broadcast, /recording) and
@@ -299,28 +300,43 @@ export function E2EEProvider({ children, token, API_URL }) {
     if (!token) return;
 
     try {
-      // First, try to restore from session cache (for page refreshes)
+      // First, try to restore from session cache (for page refreshes).
+      // One restore per sign-in, and every check waits for it (v2.155.1). The
+      // start-up token rotation re-runs this check while the first is still
+      // asking the server about the remembered key; the second used to skip the
+      // restore, find nothing unlocked and ask for the password, which on a
+      // slow phone stayed up long enough to be typed into.
       if (!sessionRestoreAttempted.current) {
         sessionRestoreAttempted.current = true;
-        let cached = await restoreFromSessionCache();
-        // v2.150.1: the key remembered here may be from before a password
-        // reset or a key replacement on another device. Using it went on
-        // signing for keys the server no longer has, with errors that said
-        // nothing about why. If the server definitely holds a different key,
-        // forget this one and ask for the password. (Offline, keep it: the
-        // app must still start on a bad connection.)
-        if (cached) {
-          try {
-            const mine = await fetchAPI('/e2ee/keys/me');
-            const current = mine.ok ? (await mine.json()).publicKey : null;
-            if (mine.status === 404 || (current && current !== cached.publicKeyBase64)) {
-              console.warn('E2EE: the key remembered here is out of date; asking for the password');
-              clearSessionCache();
-              cached = null;
-            }
-          } catch { /* offline: keep it */ }
-        }
-        if (cached) {
+        restorePromiseRef.current = (async () => {
+          let cached = await restoreFromSessionCache();
+          // v2.150.1: the key remembered here may be from before a password
+          // reset or a key replacement on another device. Using it went on
+          // signing for keys the server no longer has, with errors that said
+          // nothing about why. If the server definitely holds a different key,
+          // forget this one and ask for the password. (Offline, keep it: the
+          // app must still start on a bad connection.)
+          if (cached) {
+            try {
+              const mine = await fetchAPI('/e2ee/keys/me');
+              const current = mine.ok ? (await mine.json()).publicKey : null;
+              if (mine.status === 404 || (current && current !== cached.publicKeyBase64)) {
+                console.warn('E2EE: the key remembered here is out of date; asking for the password');
+                clearSessionCache();
+                cached = null;
+              }
+            } catch { /* offline: keep it */ }
+          }
+          return cached;
+        })();
+      }
+      if (restorePromiseRef.current) {
+        const restoring = restorePromiseRef.current;
+        const cached = await restoring;
+        // Signed out (or signed in again) while restoring: not ours any more.
+        if (restorePromiseRef.current !== restoring) return;
+        // A key already in memory (unlocked, or replaced since) wins.
+        if (cached && !privateKeyRef.current) {
           setPrivateKey(cached.privateKey);
           setPublicKey(cached.publicKey);
           setPublicKeyBase64(cached.publicKeyBase64);
@@ -1948,6 +1964,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     setKeyChanges([]);
     clearSessionCache();
     sessionRestoreAttempted.current = false;
+    restorePromiseRef.current = null;
   }, [clearSessionCache]);
 
   // Signed out, by any route, means the key goes (v2.114.1). Only the gate's
