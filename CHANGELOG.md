@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.156.3] - 2026-11-25
+
+Two people can now play the same Plex video at once. Server only, no app build, no migration.
+
+### Fixed
+- **A second person playing a Plex video stopped it for the first,** in a watch party or not. Found testing a watch party between two phones: when the second person joined, the host's video died; when the host started again, the other's failed.
+  - Cortex introduced itself to Plex with one client identifier (`cortex-media-server`) for every playback. Plex keeps one transcode per client, so each new stream ended the one before.
+  - Each transcoded (HLS) playback is now its own Plex client: the decision, the playlist and every proxied segment carry that playback's identifier. Direct play carries one per person, stable across seeks.
+  - Jellyfin was not affected: every stream already has its own `PlaySessionId`.
+- `media-security.test.cjs`: two people and one person twice each get their own Plex client for transcoded play, every request in one playback carries the same one, and direct play differs per person. With the shared identifier put back, the test fails.
+
 ## [2.156.2] - 2026-11-25
 
 Connecting Plex by signing in now picks an address Cortex can reach. Server and web client only, no app build, no migration.
