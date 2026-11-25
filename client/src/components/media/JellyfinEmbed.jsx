@@ -1,5 +1,6 @@
 import { mediaPlaybackUrl } from '../../utils/media.js';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { ownJellyfinConnectionIds, normaliseParty } from '../../utils/watchParty.js';
 import { API_URL } from '../../config/constants.js';
 import { storage } from '../../utils/storage.js';
 
@@ -18,10 +19,39 @@ const JellyfinEmbed = ({
   duration,
   serverUrl,
   overview,
-  onStartWatchParty,
-  canStartWatchParty = false,
+  waveId,
+  fetchAPI,
   onPlay,
 }) => {
+  // v2.155.3: only the connection's owner can host a party with it, in the
+  // wave this ping is in. The button was never shown before (always false).
+  const [canHost, setCanHost] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [partyError, setPartyError] = useState(null);
+  useEffect(() => {
+    if (!waveId || !fetchAPI || !connectionId) return undefined;
+    let live = true;
+    ownJellyfinConnectionIds(fetchAPI).then(ids => { if (live) setCanHost(ids.has(connectionId)); });
+    return () => { live = false; };
+  }, [waveId, fetchAPI, connectionId]);
+
+  const startWatchParty = async () => {
+    setStarting(true);
+    setPartyError(null);
+    try {
+      const data = await fetchAPI('/watch-parties', {
+        method: 'POST',
+        body: { waveId, connectionId, itemId, mediaTitle: name, mediaType: type },
+      });
+      const party = normaliseParty(data.party, waveId);
+      if (party) window.dispatchEvent(new CustomEvent('cortex:watch-party-hosted', { detail: { party } }));
+    } catch (err) {
+      setPartyError(err.message || 'Could not start the watch party');
+    } finally {
+      setStarting(false);
+    }
+  };
+
   const [imageError, setImageError] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -325,10 +355,11 @@ const JellyfinEmbed = ({
         )}
 
         {/* Actions */}
-        {canStartWatchParty && onStartWatchParty && (
+        {canHost && (
           <div style={{ marginTop: '12px' }}>
             <button
-              onClick={() => onStartWatchParty({ connectionId, itemId, name, type })}
+              onClick={startWatchParty}
+              disabled={starting}
               style={{
                 width: '100%',
                 padding: '10px',
@@ -345,8 +376,11 @@ const JellyfinEmbed = ({
                 gap: '8px',
               }}
             >
-              <span>🎬</span> START WATCH PARTY
+              <span>🎬</span> {starting ? 'STARTING…' : 'START WATCH PARTY'}
             </button>
+            {partyError && (
+              <div style={{ marginTop: '6px', color: 'var(--accent-orange)', fontSize: '0.75rem' }}>{partyError}</div>
+            )}
           </div>
         )}
       </div>

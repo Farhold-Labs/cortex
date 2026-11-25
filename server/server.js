@@ -11037,11 +11037,42 @@ app.get('/api/jellyfin/thumbnail/:connectionId/:itemId', authenticateToken, medi
 }));
 // ============ Watch Party Endpoints (v2.14.0) ============
 
-// Get all active watch parties for waves the user participates in
+// A playback position from a host: seconds, finite, not negative (v2.155.3).
+function watchPartyPosition(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 1e7 ? value : null;
+}
+
+// What a party's viewers are told about it (never the Jellyfin server URL).
+function watchPartyView(party) {
+  return {
+    id: party.id,
+    waveId: party.waveId,
+    hostUserId: party.hostUserId,
+    hostHandle: party.hostHandle,
+    hostName: party.hostName,
+    hostAvatar: party.hostAvatar,
+    jellyfinConnectionId: party.jellyfinConnectionId,
+    jellyfinItemId: party.jellyfinItemId,
+    mediaTitle: party.mediaTitle,
+    mediaType: party.mediaType,
+    playbackPosition: party.playbackPosition,
+    isPlaying: party.isPlaying,
+    lastSyncAt: party.lastSyncAt,
+    createdAt: party.createdAt,
+  };
+}
+
+// Active watch parties in waves this person can read. v2.155.3: this went by
+// participant rows, which public and channel waves don't have, and left out
+// the connection the player streams from.
 app.get('/api/jellyfin/watch-parties/active', authenticateToken, (req, res) => {
   try {
-    const parties = db.getActiveWatchPartiesForUser(req.user.userId);
-    res.json({ parties: parties || [] });
+    const parties = db.getActiveWatchPartyWaveIds()
+      .filter(waveId => canAccessWaveFromCache(waveId, req.user.userId))
+      .map(waveId => db.getActiveWatchPartyForWave(waveId))
+      .filter(Boolean)
+      .map(watchPartyView);
+    res.json({ parties });
   } catch (err) {
     console.error('Failed to get active watch parties:', err);
     res.json({ parties: [] });
@@ -11052,36 +11083,13 @@ app.get('/api/jellyfin/watch-parties/active', authenticateToken, (req, res) => {
 app.get('/api/watch-parties/:waveId', authenticateToken, (req, res) => {
   const { waveId } = req.params;
 
-  // Verify user is participant in wave
   const wave = db.getWave(waveId);
   if (!wave || !canAccessWaveFromCache(waveId, req.user.userId)) {
     return res.status(404).json({ error: 'Wave not found' });
   }
 
   const party = db.getActiveWatchPartyForWave(waveId);
-  if (!party) {
-    return res.json({ party: null });
-  }
-
-  // Don't expose access token
-  res.json({
-    party: {
-      id: party.id,
-      waveId: party.waveId,
-      hostUserId: party.hostUserId,
-      hostHandle: party.hostHandle,
-      hostName: party.hostName,
-      hostAvatar: party.hostAvatar,
-      jellyfinConnectionId: party.jellyfinConnectionId,
-      jellyfinItemId: party.jellyfinItemId,
-      mediaTitle: party.mediaTitle,
-      mediaType: party.mediaType,
-      playbackPosition: party.playbackPosition,
-      isPlaying: party.isPlaying,
-      lastSyncAt: party.lastSyncAt,
-      createdAt: party.createdAt,
-    },
-  });
+  res.json({ party: party ? watchPartyView(party) : null });
 });
 
 // Create a watch party
@@ -11092,7 +11100,6 @@ app.post('/api/watch-parties', authenticateToken, (req, res) => {
     return res.status(400).json({ error: 'Wave ID, connection ID, and item ID are required' });
   }
 
-  // Verify user is participant in wave
   const wave = db.getWave(waveId);
   if (!wave || !canAccessWaveFromCache(waveId, req.user.userId)) {
     return res.status(404).json({ error: 'Wave not found' });
@@ -11103,34 +11110,29 @@ app.post('/api/watch-parties', authenticateToken, (req, res) => {
     return res.status(404).json({ error: 'Connection not found' });
   }
 
+  // v2.155.3: starting one ended whatever party was running, someone else's
+  // included, without telling anyone. Another host's party must end first;
+  // the host's own is replaced, and its viewers are told.
+  const running = db.getActiveWatchPartyForWave(waveId);
+  if (running && running.hostUserId !== req.user.userId) {
+    return res.status(409).json({ error: `${running.hostName || 'Someone'} is already hosting a watch party here`, code: 'WATCH_PARTY_RUNNING' });
+  }
+
   try {
     const party = db.createWatchParty({
       waveId,
       hostUserId: req.user.userId,
       jellyfinConnectionId: connectionId,
       jellyfinItemId: itemId,
-      mediaTitle: mediaTitle || 'Unknown Media',
-      mediaType: mediaType || 'Video',
+      mediaTitle: typeof mediaTitle === 'string' && mediaTitle.trim() ? mediaTitle.trim().slice(0, 200) : 'Unknown Media',
+      mediaType: typeof mediaType === 'string' ? mediaType.slice(0, 40) : 'Video',
     });
 
-    // Notify wave participants via WebSocket
-    for (const userId of participation.getWaveParticipants(waveId)) {
-      if (userId !== req.user.userId) {
-        broadcastToUser(userId, {
-          type: 'watch_party_started',
-          waveId,
-          party: {
-            id: party.id,
-            hostUserId: party.hostUserId,
-            hostName: party.hostName,
-            mediaTitle: party.mediaTitle,
-            mediaType: party.mediaType,
-          },
-        });
-      }
-    }
+    if (running) broadcastToWave(waveId, { type: 'watch_party_ended', waveId, partyId: running.id });
+    // Everyone who can read the wave, as for its pings.
+    broadcastToWave(waveId, { type: 'watch_party_started', waveId, party: watchPartyView(party) });
 
-    res.json({ party });
+    res.json({ party: watchPartyView(party) });
   } catch (err) {
     console.error('Create watch party error:', err);
     res.status(500).json({ error: 'Failed to create watch party' });
@@ -11153,15 +11155,7 @@ app.delete('/api/watch-parties/:id', authenticateToken, (req, res) => {
 
   const success = db.endWatchParty(id);
   if (success) {
-    // Notify wave participants
-    for (const userId of participation.getWaveParticipants(party.waveId)) {
-      broadcastToUser(userId, {
-        type: 'watch_party_ended',
-        waveId: party.waveId,
-        partyId: id,
-      });
-    }
-
+    broadcastToWave(party.waveId, { type: 'watch_party_ended', waveId: party.waveId, partyId: id });
     res.json({ success: true });
   } else {
     res.status(404).json({ error: 'Watch party not found or already ended' });
@@ -31592,8 +31586,11 @@ wss.on('connection', (ws, req) => {
         // Host sends playback state sync (every 5 seconds)
         if (!userId) return;
 
-        const { partyId, playbackPosition, isPlaying } = message;
+        const { partyId } = message;
         if (!partyId) return;
+        const playbackPosition = watchPartyPosition(message.playbackPosition);
+        const isPlaying = message.isPlaying === true;
+        if (playbackPosition === null) return;
 
         // Verify user is the host
         if (!db.isWatchPartyHost(partyId, userId)) return;
@@ -31605,6 +31602,7 @@ wss.on('connection', (ws, req) => {
         // Broadcast to wave participants
         broadcastToWave(party.waveId, {
           type: 'watch_party_sync',
+          waveId: party.waveId,
           partyId,
           playbackPosition,
           isPlaying,
@@ -31615,8 +31613,10 @@ wss.on('connection', (ws, req) => {
         // Host sends play/pause/seek commands (immediate)
         if (!userId) return;
 
-        const { partyId, command, position } = message;
-        if (!partyId || !command) return;
+        const { partyId, command } = message;
+        if (!partyId || !['play', 'pause', 'seek'].includes(command)) return;
+        const position = message.position === undefined ? undefined : watchPartyPosition(message.position);
+        if (position === null) return;
 
         // Verify user is the host
         if (!db.isWatchPartyHost(partyId, userId)) return;
@@ -31626,9 +31626,9 @@ wss.on('connection', (ws, req) => {
 
         // Update state based on command
         if (command === 'play') {
-          db.updateWatchPartyPlayback(partyId, { isPlaying: true, playbackPosition: position || party.playbackPosition });
+          db.updateWatchPartyPlayback(partyId, { isPlaying: true, playbackPosition: position ?? party.playbackPosition });
         } else if (command === 'pause') {
-          db.updateWatchPartyPlayback(partyId, { isPlaying: false, playbackPosition: position || party.playbackPosition });
+          db.updateWatchPartyPlayback(partyId, { isPlaying: false, playbackPosition: position ?? party.playbackPosition });
         } else if (command === 'seek' && position !== undefined) {
           db.updateWatchPartyPlayback(partyId, { playbackPosition: position });
         }
@@ -31636,6 +31636,7 @@ wss.on('connection', (ws, req) => {
         // Broadcast command to wave participants
         broadcastToWave(party.waveId, {
           type: 'watch_party_command',
+          waveId: party.waveId,
           partyId,
           command,
           position,
@@ -31656,19 +31657,7 @@ wss.on('connection', (ws, req) => {
         }
 
         // Send current state to joining user
-        ws.send(JSON.stringify({
-          type: 'watch_party_state',
-          party: {
-            id: party.id,
-            hostUserId: party.hostUserId,
-            hostName: party.hostName,
-            jellyfinItemId: party.jellyfinItemId,
-            mediaTitle: party.mediaTitle,
-            playbackPosition: party.playbackPosition,
-            isPlaying: party.isPlaying,
-            lastSyncAt: party.lastSyncAt,
-          },
-        }));
+        ws.send(JSON.stringify({ type: 'watch_party_state', party: watchPartyView(party) }));
       } else if (message.type === 'watch_party_leave') {
         // User leaves a watch party
         if (!userId) return;

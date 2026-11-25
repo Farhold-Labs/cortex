@@ -129,6 +129,7 @@ test('HTTP media authorization and proxies against disposable Cortex and upstrea
     const encrypted = Buffer.from([...secret].map((c, i) => c.charCodeAt(0) ^ key.charCodeAt(i % key.length))).toString('base64');
     const plex = db.createPlexConnection({ userId: 'owner', serverUrl: upstreamBase, accessToken: encrypted, plexUserId: 'upstream-user', serverName: 'Fixture', machineIdentifier: 'fixture' });
     const jellyfin = db.createJellyfinConnection({ userId: 'owner', serverUrl: upstreamBase, accessToken: encrypted, jellyfinUserId: 'upstream-user', serverName: 'Fixture' });
+    const memberJellyfin = db.createJellyfinConnection({ userId: 'member', serverUrl: upstreamBase, accessToken: encrypted, jellyfinUserId: 'upstream-member', serverName: 'Member fixture' });
     db.db.close();
     fs.appendFileSync(path.join(serverDir, 'server.js'), "\nserver.on('listening', () => console.log('MEDIA_TEST_PORT=' + server.address().port));\n");
     child = spawn(process.execPath, ['server.js'], { cwd: serverDir,
@@ -244,13 +245,30 @@ test('HTTP media authorization and proxies against disposable Cortex and upstrea
         } finally { ws.terminate(); }
       };
       assert.equal((await joinState('outsider')).type, 'watch_party_not_found');
-      assert.equal((await joinState('member')).type, 'watch_party_state');
+      const state = await joinState('member');
+      assert.equal(state.type, 'watch_party_state');
+      // v2.155.3: what the player needs to stream, never the server URL.
+      assert.equal(state.party.jellyfinConnectionId, jellyfin.id);
+      assert.equal(state.party.jellyfinServerUrl, undefined);
+      const active = await (await request('/api/jellyfin/watch-parties/active')).json();
+      assert.deepEqual(active.parties.map(p => [p.id, p.jellyfinConnectionId]), [[party, jellyfin.id]]);
+      assert.deepEqual((await (await request('/api/jellyfin/watch-parties/active', 'outsider')).json()).parties, []);
+      // Another member can't end the owner's party by starting one.
+      const second = await request('/api/watch-parties', 'member', { method: 'POST', body: { waveId: wave.id, connectionId: memberJellyfin.id, itemId: '111' } });
+      assert.equal(second.status, 409);
+      assert.equal((await second.json()).code, 'WATCH_PARTY_RUNNING');
       const url = `/api/jellyfin/video/${jellyfin.id}/111?party=${party}`;
       const video = await request(url); assert.equal(video.status, 200); await video.arrayBuffer();
       assert.equal((await request(url, 'outsider')).status, 403);
       assert.equal((await request(`/api/jellyfin/video/${jellyfin.id}/112?party=${party}`)).status, 403);
       assert.equal((await request(`/api/watch-parties/${party}`, 'owner', { method: 'DELETE' })).status, 200);
       assert.equal((await request(url)).status, 403);
+      // A host starting again replaces their own party.
+      const again = async () => (await (await request('/api/watch-parties', 'owner', { method: 'POST', body: { waveId: wave.id, connectionId: jellyfin.id, itemId: '111' } })).json()).party.id;
+      const first = await again(), replaced = await again();
+      assert.notEqual(first, replaced);
+      assert.equal((await request(`/api/jellyfin/video/${jellyfin.id}/111?party=${first}`)).status, 403);
+      assert.equal((await request(`/api/watch-parties/${replaced}`, 'owner', { method: 'DELETE' })).status, 200);
     });
     await t.test('revoking a share or removing a member denies subsequent requests, including HLS', async () => {
       assert.equal((await request(`/api/media/shares/${plexShare}`, 'outsider', { method: 'DELETE' })).status, 404);

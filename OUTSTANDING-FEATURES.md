@@ -7,7 +7,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 ---
 
-## Completed Features (v1.5.0 - v2.155.2)
+## Completed Features (v1.5.0 - v2.155.3)
 
 | Feature | Version |
 |---------|---------|
@@ -183,6 +183,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | Encrypting a Wave With People Elsewhere; Late-Joining Servers Get the Whole History | v2.155.0 |
 | No Password Prompt While the Remembered Key Restores | v2.155.1 |
 | Older Copies Get the History They Missed | v2.155.2 |
+| Watch Parties Work End to End (Start From a Jellyfin Card, Follow the Host, End) | v2.155.3 |
 
 ---
 
@@ -192,7 +193,6 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 - **Broadcasts from OBS / RTMP** (LiveKit Ingress), for streaming from a camera rig rather than a phone.
 - **A persistent floating video player** that survives navigating away from a wave. Browser picture-in-picture dies when the embed unmounts.
-- **Watch-party UI.** The server side is protected and tested; the UI has not been certified.
 - **iOS app on the App Store.** Needs a Mac, Xcode and an Apple Developer account.
 
 ### 1. Export Wave as PDF/HTML
