@@ -1691,8 +1691,8 @@ export function E2EEProvider({ children, token, API_URL }) {
       const waveKey = await crypto.generateWaveKey();
 
       // v2.153.1: the wave exists, so its keys are bound to it (format 2).
-      // Turning encryption on is refused for a wave with people elsewhere,
-      // so this server is its own.
+      // Only its own server may turn encryption on (v2.155.0), so its id
+      // here is its id everywhere; people elsewhere ask for the key.
       const formattedDistribution = await bindInitialKeys(waveKey, waveId, participantIds);
 
       // Call encrypt endpoint to enable encryption on the wave

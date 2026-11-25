@@ -463,6 +463,18 @@ statements, and **1c**, signed pings on one server, before 2 and 3.
   it. Tried in browsers on three local servers (B and C allied): with the
   owner offline, B's member gave C's newcomer the key, wrapped by them and
   checked by C's device.
+- **History and encrypting later (v2.155.0).** A server joining late pulled
+  only the pings posted on the wave's server, never those of its people on
+  other servers (found in the third-server test). The backfill now serves
+  those too, labelled with their server, to a server that asks for them.
+  Turning encryption on for a wave with people elsewhere is allowed on the
+  wave's own server once every server in it speaks protocol 4. Decided
+  2026-11-24 (Jared): the plain copies elsewhere are replaced. The other
+  servers are told (`wave_encrypted`) and their people ask for the key; the
+  earlier pings, theirs included, are re-encrypted on the creator's device
+  (format 1, since the creator can't sign as their authors) and sent
+  (`pings_reencrypted`) to replace the plain copies. A server can't be made
+  to forget a copy it already made, and the confirmation says so.
 - **Third server, tried 2026-11-24 (v2.153.1)** with three real servers and
   real browsers on one machine: the wave on A, allied with B and C, which are
   not allied with each other. The wave was made in the app; B's and C's keys
