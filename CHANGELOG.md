@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.155.1] - 2026-11-25
+
+Opening the app after an hour or more away asked for the password again, although the key was remembered. Reported on farhold. Web only (the apps load it from the server), no migration.
+
+### Fixed
+- **The remembered key is no longer missed while it is being restored.** At start-up the app restores the remembered key and, since v2.150.1, asks the server whether it is still current. When the access token had expired (after an hour away), the start-up refresh finished while that request was in flight. The new token started a second check, which didn't know a restore was under way, found nothing unlocked and showed the password prompt. On a fast connection the restore finished a moment later and the prompt went away; on a phone it stayed long enough to be typed into, so it seemed to ask every time. Now every check waits for the one restore. A key already in memory is never replaced by the restored one, and a restore that finishes after signing out is dropped.
+
+### Verified
+- **In headless Chrome on dev, at phone size:** unlocked, then reopened five times with an expired access token and the key check slowed to 2 s, as on a phone.
+  - The screen was sampled every half second through each open.
+  - Before the fix, the password prompt was on screen for the first 4 s of every reopen.
+  - After it, the prompt never appeared.
+- Not tried on a real phone.
+- Full suite passes.
+
 ## [2.155.0] - 2026-11-24
 
 Encryption across servers: the last two gaps. A wave that already has people on other servers can now be encrypted, and a server joining a wave late gets its whole history. Server and web only, no app build, no migration. Federation **protocol 4**: encrypting such a wave needs every server in it on 2.155.0.
