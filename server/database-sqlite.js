@@ -4290,6 +4290,21 @@ export class DatabaseSQLite {
         UNIQUE (wave_id, node_name, user_id)
       );
     `);
+    // v2.154.0: a request passed on by the wave's own server (on a copy), so
+    // members here can answer it; and which servers a copy's wave is on.
+    {
+      const cols = this.db.prepare('PRAGMA table_info(remote_wave_key_requests)').all().map(c => c.name);
+      if (cols.length && !cols.includes('origin_request_id')) {
+        this.db.exec('ALTER TABLE remote_wave_key_requests ADD COLUMN origin_request_id TEXT');
+      }
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS federated_wave_servers (
+        wave_id   TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        node_name TEXT NOT NULL,
+        PRIMARY KEY (wave_id, node_name)
+      );
+    `);
 
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
@@ -12966,18 +12981,37 @@ export class DatabaseSQLite {
 
   // ============ Key requests from other servers (v2.153.0) ============
 
-  upsertRemoteWaveKeyRequest(waveId, nodeName, userId, handle, versions) {
+  // `originRequestId` (v2.154.0): on a copy, the request as the wave's own
+  // server knows it, passed on so members here can answer.
+  upsertRemoteWaveKeyRequest(waveId, nodeName, userId, handle, versions, originRequestId = null) {
     const now = new Date().toISOString();
     const existing = this.db.prepare('SELECT id FROM remote_wave_key_requests WHERE wave_id = ? AND node_name = ? AND user_id = ?').get(waveId, nodeName, userId);
     if (existing) {
-      this.db.prepare("UPDATE remote_wave_key_requests SET handle = ?, versions = ?, status = 'pending', created_at = ?, granted_at = NULL, granted_by = NULL WHERE id = ?")
-        .run(handle, JSON.stringify(versions), now, existing.id);
+      this.db.prepare("UPDATE remote_wave_key_requests SET handle = ?, versions = ?, origin_request_id = ?, status = 'pending', created_at = ?, granted_at = NULL, granted_by = NULL WHERE id = ?")
+        .run(handle, JSON.stringify(versions), originRequestId, now, existing.id);
       return existing.id;
     }
     const id = `rkr-${uuidv4()}`;
-    this.db.prepare('INSERT INTO remote_wave_key_requests (id, wave_id, node_name, user_id, handle, versions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(id, waveId, nodeName, userId, handle, JSON.stringify(versions), now);
+    this.db.prepare('INSERT INTO remote_wave_key_requests (id, wave_id, node_name, user_id, handle, versions, created_at, origin_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, waveId, nodeName, userId, handle, JSON.stringify(versions), now, originRequestId);
     return id;
+  }
+
+  settleRelayedWaveKeyRequests(waveId, originRequestId) {
+    return this.db.prepare("UPDATE remote_wave_key_requests SET status = 'granted', granted_at = ? WHERE wave_id = ? AND origin_request_id = ? AND status = 'pending'")
+      .run(new Date().toISOString(), waveId, originRequestId).changes;
+  }
+
+  setFederatedWaveServers(waveId, nodeNames) {
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM federated_wave_servers WHERE wave_id = ?').run(waveId);
+      const add = this.db.prepare('INSERT OR IGNORE INTO federated_wave_servers (wave_id, node_name) VALUES (?, ?)');
+      for (const n of nodeNames) add.run(waveId, n);
+    })();
+  }
+
+  getFederatedWaveServers(waveId) {
+    return this.db.prepare('SELECT node_name FROM federated_wave_servers WHERE wave_id = ?').all(waveId).map(r => r.node_name);
   }
 
   getRemoteWaveKeyRequest(id) {
@@ -12985,7 +13019,7 @@ export class DatabaseSQLite {
     if (!r) return null;
     let versions = [];
     try { versions = JSON.parse(r.versions || '[]'); } catch { versions = []; }
-    return { id: r.id, waveId: r.wave_id, nodeName: r.node_name, userId: r.user_id, handle: r.handle, versions, status: r.status };
+    return { id: r.id, waveId: r.wave_id, nodeName: r.node_name, userId: r.user_id, handle: r.handle, versions, status: r.status, originRequestId: r.origin_request_id || null };
   }
 
   pendingRemoteWaveKeyRequests() {

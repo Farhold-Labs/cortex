@@ -1721,8 +1721,14 @@ CREATE TABLE IF NOT EXISTS remote_wave_key_requests (
         status     TEXT NOT NULL DEFAULT 'pending',
         created_at TEXT NOT NULL,
         granted_at TEXT,
-        granted_by TEXT,
+        granted_by TEXT, origin_request_id TEXT,
         UNIQUE (wave_id, node_name, user_id)
+      );
+
+CREATE TABLE IF NOT EXISTS federated_wave_servers (
+        wave_id   TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        node_name TEXT NOT NULL,
+        PRIMARY KEY (wave_id, node_name)
       );
 
 -- ============ Full-text search triggers ============
