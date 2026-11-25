@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.156.1] - 2026-11-25
+
+Jellyfin and Plex access tokens are now encrypted at rest. Server only, no app build. Stored tokens are converted at boot; the schema is unchanged.
+
+### Security
+- **[SECURITY] Jellyfin and Plex access tokens were XOR'd with the first 32 characters of `JWT_SECRET`, not encrypted.** Found while testing watch parties (v2.155.3).
+  - Anyone holding the database and one token they know (their own, from their own media server) recovers the key from the two. That gives them every other person's token, and the first 32 characters of `JWT_SECRET`.
+  - They're now AES-256-GCM (`lib/media-token-crypto.js`), with a random IV each time and a key derived from `JWT_SECRET` by HKDF for this purpose only. The database alone reveals nothing, and the key reveals nothing about `JWT_SECRET`.
+  - There's no new environment variable. The tokens were already tied to `JWT_SECRET`, and a newly required key would stop a server starting until someone added it.
+- **Converted at boot.** Every token still in the old form is re-encrypted, in one transaction per table. A failure changes nothing and says so in the log.
+- **Fails closed.** At runtime, a token in the old form, damaged, or written under another `JWT_SECRET` is refused, never sent upstream. Playback answers `409 MEDIA_RECONNECT` ("this media server needs to be connected again"), and the boot log counts any such tokens.
+
+### Verified
+- `tests/media-token-crypto.test.cjs`:
+  - tokens round-trip, and each encryption differs;
+  - a wrong secret, a flipped bit or an old-form token is refused;
+  - conversion rewrites only old-form tokens, and counts but never rewrites an unreadable one;
+  - **counterfactual:** the attack above recovers another person's token from the old form, and nothing from the new.
+- `tests/media-security.test.cjs` seeds old-form tokens. After boot both tables hold only `v2:` values, and the log reports the conversion. The fake upstream rejects any request without the exact token, so every playback test there also shows the converted tokens are right.
+- Full suite: 809 tests pass.
+- **On dev:** the boot log reported one Jellyfin and one Plex token re-encrypted, both tables then held only `v2:` values, and both connections still streamed. The fake servers there don't check tokens; the media-security test is what checks they come out exact.
+
 ## [2.156.0] - 2026-11-25
 
 Watch parties for Plex. Until now only Jellyfin could host one. Server and web, no app build. **Migrates** (rebuilds `watch_parties`).
