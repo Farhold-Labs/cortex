@@ -13,7 +13,9 @@
 //     claiming an author here is dropped; then recorded as pulled;
 //   - old-third, from third.example (protocol 3, which doesn't send other
 //     servers' pings): not asked, not recorded, so a later run tries again;
-//   - done-peer, already recorded: not asked.
+//   - done-peer, already recorded: not asked;
+//   - old-up, from up.example, recorded at protocol 3 but upgraded since
+//     (its identity page says 4): its protocol is refreshed and it is pulled.
 // A copy pulled at acceptance is recorded too.
 //
 // Counterfactual: without the only-missing check, the held ping is overwritten.
@@ -35,8 +37,8 @@ const rsa = () => crypto.generateKeyPairSync('rsa', { modulusLength: 2048, publi
 const at = (m) => new Date(Date.UTC(2026, 10, 1, 12, m)).toISOString();
 const author = (id, handle, nodeName) => ({ id, handle, displayName: handle, avatar: handle[0].toUpperCase(), ...(nodeName ? { nodeName } : {}) });
 
-async function fakeServer(histories) {
-  const peer = { got: [], histories };
+async function fakeServer(histories, identity = null) {
+  const peer = { got: [], histories, identity };
   peer.srv = http.createServer((req, res) => {
     let body = '';
     req.on('data', c => { body += c; });
@@ -45,6 +47,7 @@ async function fakeServer(histories) {
       try { json = JSON.parse(body || '{}'); } catch { /* ignore */ }
       peer.got.push({ path: req.url, body: json });
       res.setHeader('Content-Type', 'application/json');
+      if (req.url === '/api/federation/identity' && peer.identity) return res.end(JSON.stringify(peer.identity));
       if (req.url === '/api/federation/wave-backfill') {
         return res.end(JSON.stringify({ pings: peer.histories[json.originWaveId] || [], hasMore: false }));
       }
@@ -70,7 +73,10 @@ async function run({ noOnlyMissing = false } = {}) {
     ],
   });
   const third = await fakeServer({ 'third-old': [] });
-  const fakes = { 'peer.example': [peer, 4], 'third.example': [third, 3] };
+  const up = await fakeServer({ 'up-old': [
+    { id: 'rp-up-1', content: 'from the upgraded server', createdAt: at(1), reactions: {}, author: author('u-uma', 'uma') },
+  ] }, { nodeName: 'up.example', protocolVersion: 4 });
+  const fakes = { 'peer.example': [peer, 4], 'third.example': [third, 3], 'up.example': [up, 3] };
   let child, output = '';
   try {
     const serverDir = path.join(temp, 'server');
@@ -89,7 +95,7 @@ async function run({ noOnlyMissing = false } = {}) {
     }
     fs.writeFileSync(f, src);
 
-    const keys = { 'peer.example': rsa(), 'third.example': rsa() };
+    const keys = { 'peer.example': rsa(), 'third.example': rsa(), 'up.example': rsa() };
     const dbPath = path.join(serverDir, 'data/farhold.db');
     const { DatabaseSQLite } = await import('../server/database-sqlite.js');
     const setup = new DatabaseSQLite({ dbPath });
@@ -110,6 +116,7 @@ async function run({ noOnlyMissing = false } = {}) {
     copy.run('old-peer', 'Old copy', now, now, 'peer.example', 'their-old');
     copy.run('old-third', 'Old copy of third', now, now, 'third.example', 'third-old');
     copy.run('done-peer', 'Pulled already', now, now, 'peer.example', 'their-done');
+    copy.run('old-up', 'Old copy of up', now, now, 'up.example', 'up-old');
     const held = setup.db.prepare(`INSERT INTO remote_pings (id, wave_id, origin_wave_id, origin_node, author_id, author_node, content, created_at, cached_at, updated_at, deleted)
                                    VALUES (?, 'old-peer', 'their-old', 'peer.example', 'u-zed', 'peer.example', ?, ?, ?, ?, ?)`);
     held.run('rp-zed-1', 'zed as held here', at(4), now, now, 0);
@@ -140,9 +147,11 @@ async function run({ noOnlyMissing = false } = {}) {
       try { return d.prepare(sql).all(...args); } finally { d.close(); }
     };
     return {
-      asked: [...peer.got, ...third.got].filter(m => m.path === '/api/federation/wave-backfill').map(m => `${m.body.originWaveId}:${m.body.travellers}`).sort(),
+      asked: [...peer.got, ...third.got, ...up.got].filter(m => m.path === '/api/federation/wave-backfill').map(m => `${m.body.originWaveId}:${m.body.travellers}`).sort(),
       copy: raw("SELECT id, content, deleted, author_node n FROM remote_pings WHERE wave_id = 'old-peer' ORDER BY id").map(x => `${x.id}|${x.content}|${x.deleted}|${x.n}`),
       pulled: raw('SELECT wave_id FROM federated_history_pulls ORDER BY wave_id').map(x => x.wave_id),
+      upCopy: raw("SELECT id FROM remote_pings WHERE wave_id = 'old-up'").map(x => x.id),
+      protocols: raw('SELECT node_name, protocol_version p FROM federation_nodes ORDER BY node_name').map(x => `${x.node_name}:${x.p}`),
       log: output.match(/Older copies' history: .*/)[0],
     };
   } finally {
@@ -157,8 +166,8 @@ const fixedRun = () => (fixed ||= run());
 
 test('an older copy is pulled once more, asking for other servers\' pings; one already pulled is not', async () => {
   const r = await fixedRun();
-  assert.deepEqual(r.asked, ['their-old:true']);
-  assert.equal(r.log, "Older copies' history: 1 pulled, 1 waiting");
+  assert.deepEqual(r.asked, ['their-old:true', 'up-old:true']);
+  assert.equal(r.log, "Older copies' history: 2 pulled, 1 waiting");
 });
 
 test('only missing pings are added: held, deleted and forged ones are left out', async () => {
@@ -172,7 +181,13 @@ test('only missing pings are added: held, deleted and forged ones are left out',
 
 test('the copy is recorded as pulled; one whose server is below protocol 4 waits', async () => {
   const r = await fixedRun();
-  assert.deepEqual(r.pulled, ['done-peer', 'old-peer']);
+  assert.deepEqual(r.pulled, ['done-peer', 'old-peer', 'old-up']);
+});
+
+test('a server recorded at an older protocol is asked again, and pulled once it has upgraded', async () => {
+  const r = await fixedRun();
+  assert.deepEqual(r.protocols, ['peer.example:4', 'third.example:3', 'up.example:4']);
+  assert.deepEqual(r.upCopy, ['rp-up-1']);
 });
 
 test('counterfactual: without the only-missing check, a held ping is overwritten', async () => {
