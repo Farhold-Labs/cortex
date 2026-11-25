@@ -28,6 +28,7 @@ import { storage } from './storage.js';
 import * as waveParticipationCrypto from './lib/wave-participation-crypto.js';
 import * as pushSubscriptionCrypto from './lib/push-subscription-crypto.js';
 import * as crawlSecrets from './lib/crawl-secret-crypto.js';
+import { encryptMediaToken, decryptMediaToken, convertLegacy as convertLegacyMediaTokens } from './lib/media-token-crypto.js';
 import * as crewMembershipCrypto from './lib/crew-membership-crypto.js';
 import * as waveRoles from './lib/wave-roles.js';
 import * as communityAuthz from './lib/communities/authorize.js';
@@ -4856,6 +4857,21 @@ class Database {
 
 // Initialize database - use SQLite or JSON based on USE_SQLITE environment variable
 const db = USE_SQLITE ? new DatabaseSQLite() : new Database();
+
+// v2.156.1: Jellyfin and Plex tokens stored in the old XOR form are converted
+// to AES-256-GCM, each table in one transaction. A token that still can't be
+// read afterwards stays refused (its owner reconnects); it is never used.
+if (db.saveMediaTokens) {
+  for (const provider of ['jellyfin', 'plex']) {
+    try {
+      const { converted, unreadable } = db.saveMediaTokens(provider, (rows, save) => convertLegacyMediaTokens(rows, JWT_SECRET, save));
+      if (converted) console.log(`🔐 ${provider}: ${converted} access token(s) re-encrypted with AES-256-GCM`);
+      if (unreadable) console.error(`⚠️  ${provider}: ${unreadable} access token(s) can't be read (JWT_SECRET changed?); those connections must be reconnected`);
+    } catch (err) {
+      console.error(`⚠️  ${provider}: converting access tokens failed, nothing changed: ${err.message}`);
+    }
+  }
+}
 
 // Move crawl settings out of .env and into the database, once (v2.80.0). Only
 // runs when the database has no provider keys yet, so an upgrade inherits the
@@ -10546,29 +10562,24 @@ app.delete('/api/gifs/favorites', authenticateToken, (req, res) => {
 
 // ============ Jellyfin Integration Endpoints (v2.14.0) ============
 
-// Helper: Encrypt Jellyfin token for storage
+// Jellyfin and Plex access tokens at rest: AES-256-GCM since v2.156.1
+// (lib/media-token-crypto.js). A token that can't be read is refused here,
+// never sent upstream.
 function encryptJellyfinToken(token) {
-  // Simple XOR encryption with JWT_SECRET for storage
-  // In production, consider using crypto.createCipheriv with proper IV
-  if (!token) return null;
-  const key = JWT_SECRET.slice(0, 32).padEnd(32, '0');
-  let encrypted = '';
-  for (let i = 0; i < token.length; i++) {
-    encrypted += String.fromCharCode(token.charCodeAt(i) ^ key.charCodeAt(i % key.length));
-  }
-  return Buffer.from(encrypted, 'binary').toString('base64');
+  return encryptMediaToken(token, JWT_SECRET);
 }
-
-// Helper: Decrypt Jellyfin token
-function decryptJellyfinToken(encrypted) {
-  if (!encrypted) return null;
-  const key = JWT_SECRET.slice(0, 32).padEnd(32, '0');
-  const token = Buffer.from(encrypted, 'base64').toString('binary');
-  let decrypted = '';
-  for (let i = 0; i < token.length; i++) {
-    decrypted += String.fromCharCode(token.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+function decryptJellyfinToken(stored) {
+  return readMediaToken(stored);
+}
+function readMediaToken(stored) {
+  if (!stored) return null;
+  const token = decryptMediaToken(stored, JWT_SECRET);
+  if (token === null) {
+    const err = new Error('This media server needs to be connected again');
+    err.code = 'MEDIA_RECONNECT';
+    throw err;
   }
-  return decrypted;
+  return token;
 }
 
 /// Helper: Make authenticated request to Jellyfin server
@@ -10591,7 +10602,11 @@ const mediaHlsSessions = new HlsSessions();
 
 // Express 4 does not handle rejected async route promises automatically.
 const mediaRoute = handler => (req, res, next) => {
-  Promise.resolve().then(() => handler(req, res, next)).catch(() => {
+  Promise.resolve().then(() => handler(req, res, next)).catch((error) => {
+    // A stored token that can't be read (v2.156.1): say what to do about it.
+    if (error?.code === 'MEDIA_RECONNECT' && !res.headersSent && !res.destroyed) {
+      return res.status(409).json({ error: error.message, code: 'MEDIA_RECONNECT' });
+    }
     if (!res.headersSent && !res.destroyed) res.status(502).json({ error: 'Media unavailable' });
     else if (!res.destroyed) res.destroy();
   });
@@ -11317,27 +11332,11 @@ const PLEX_CLIENT_IDENTIFIER = 'cortex-media-server';
 const PLEX_PRODUCT = 'Cortex';
 const PLEX_VERSION = '2.15.0';
 
-// Helper: Encrypt Plex token for storage (same encryption as Jellyfin)
 function encryptPlexToken(token) {
-  if (!token) return null;
-  const key = JWT_SECRET.slice(0, 32).padEnd(32, '0');
-  let encrypted = '';
-  for (let i = 0; i < token.length; i++) {
-    encrypted += String.fromCharCode(token.charCodeAt(i) ^ key.charCodeAt(i % key.length));
-  }
-  return Buffer.from(encrypted, 'binary').toString('base64');
+  return encryptMediaToken(token, JWT_SECRET);
 }
-
-// Helper: Decrypt Plex token
-function decryptPlexToken(encrypted) {
-  if (!encrypted) return null;
-  const key = JWT_SECRET.slice(0, 32).padEnd(32, '0');
-  const token = Buffer.from(encrypted, 'base64').toString('binary');
-  let decrypted = '';
-  for (let i = 0; i < token.length; i++) {
-    decrypted += String.fromCharCode(token.charCodeAt(i) ^ key.charCodeAt(i % key.length));
-  }
-  return decrypted;
+function decryptPlexToken(stored) {
+  return readMediaToken(stored);
 }
 
 // Helper: Get Plex request headers

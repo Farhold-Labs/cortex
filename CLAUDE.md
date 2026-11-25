@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.156.0**. Last brought current 2026-11-24.
+Current version: **2.156.1**. Last brought current 2026-11-24.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2156000 / versionName "2.156.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2156000 / MARKETING_VERSION 2.156.0
+client/android/app/build.gradle                  versionCode 2156001 / versionName "2.156.1"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2156001 / MARKETING_VERSION 2.156.1
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -180,7 +180,7 @@ The unlocked key lives in `E2EEProvider`, above the routes; the unlock gate (`E2
 
 ### Media access (v2.86.0)
 
-Jellyfin/Plex playback requires an item-specific, **wave-scoped grant** (`media_shares`), and all playback is **proxied through Cortex** so upstream credentials never reach a client. `server/lib/media-access.js` holds the authorization decision, `server/lib/media-proxy.js` the transport and HLS URI rewriting. A connection ID, item ID or copied embed URL grants nothing on its own. Full model in `docs/MEDIA-SECURITY.md`.
+Jellyfin/Plex playback requires an item-specific, **wave-scoped grant** (`media_shares`), and all playback is **proxied through Cortex** so upstream credentials never reach a client. Their access tokens are stored with AES-256-GCM under a key derived from `JWT_SECRET` (`lib/media-token-crypto.js`, v2.156.1); an unreadable token is refused (`MEDIA_RECONNECT`), never sent upstream. `server/lib/media-access.js` holds the authorization decision, `server/lib/media-proxy.js` the transport and HLS URI rewriting. A connection ID, item ID or copied embed URL grants nothing on its own. Full model in `docs/MEDIA-SECURITY.md`.
 
 ### Attachments (v2.104.0, v2.113.3)
 
