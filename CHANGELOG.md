@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation
-- `docs/ttrpg/README.md`: the design for tabletop role-playing (dice, character sheets, GM tools, tables across servers, maps), with the decisions made on 2026-11-25 and the questions still open. Nothing built yet.
+## [2.158.0] - 2026-11-25
+
+Tabletop role-playing, phase 1: tables and dice the server rolls. Server and web client, no app build. Migrates (three new tables, one new column). Off unless an admin turns on **Tabletop games**.
+
+### Added
+- **Tables.** A wave's owner or admins can make it a table (⋮ → Make this a table): the game (D&D 5e with the 2024 rules, or any system), its GMs (the owner by default, up to 10), and who sees a roll by default. The default is **GM and roller**, as asked; a table can make rolls public by default instead. Switching a table off keeps its rolls. Tables are for waves on one server for now: tables across servers are phase 4.
+- **Dice the server rolls.** `/roll 1d20+5 Stealth` (or `/r`), `/gmroll`, `/publicroll` and, for GMs, `/secretroll`; or **🎲 Roll Dice** in the message box's ⋮ menu, a tray with d4 to d%, a modifier, advantage and disadvantage, a label and who sees it.
+  - The server rolls with `crypto.randomInt` and keeps every roll. Nobody can edit or delete one, and a roll can go on one ping only: its roller's, in its own wave. So nobody can fake a roll or reuse a good one.
+  - Notation (`server/lib/dice.js`): several groups and modifiers (`2d6+1d4+3`), `adv`/`dis`, keep or drop highest or lowest (`4d6kh3`), rerolls (`2d6ro2` for Great Weapon Fighting), `d%`. At most 100 dice, 1000 sides, 100 characters, 60 rolls a minute per person.
+- **Roll cards.** Each die is shown, dropped dice struck through, rerolls marked, the total large, and a natural 20 or 1 marked CRITICAL or FUMBLE.
+- **Who sees a roll, decided by the server on every read.** Everyone (public); the GM and the roller (to the GM); or the GMs only (GM secret, which only a GM can roll). Anyone else gets that a roll was made, with its dice for a roll to the GM and nothing for a secret one, and never the result. Hiding it on the device was not an option: what's hidden is never sent.
+- **The roll log** (⋮ → Roll log): every roll at the table, newest first, filterable by person, with the same rule. A roll made but never posted shows there too, so rolling until a good number comes up can be spotted.
+- **Encrypted waves.** A roll's label is the ping's text, sealed like any ping. The server learns "1d20+4 = 13", never "Persuade the duke". `docs/PRIVACY.md` says so.
+- The design: `docs/ttrpg/README.md`, with the decisions of 2026-11-25 (2024 rules, the group uses D&D Beyond now, roll visibility a table setting, fog of war drawn on screen when maps come).
+
+### Verified
+- `tests/ttrpg-dice.test.cjs` (11): the notation, refusals and limits, and the spread of real rolls; against a disposable server: off by default, who may set up a table and who may be GM, refusals (bad dice, not a table, outsiders, secret rolls by players, waves across servers), who sees what by id and in the log, a roll on one ping only (another person's, another wave's or an already posted roll is refused and leaves no ping), and switching off. **Counterfactual:** with `rollView` removed, another player sees a roll made to the GM.
+- Headless Chrome on dev, a GM at 1280×800 and a player at 390×844: make a table; `/roll`, `/gmroll`, `/secretroll` and `/publicroll` show each person what they should; a bad roll explains itself; the dice tray rolls `adv+3` with a label; the roll log shows all nine rolls. In an encrypted wave the card shows the decrypted label while the stored ping is ciphertext, and the roll record holds only the dice. Not tried on a real phone.
+- `/roll` in the thread panel and focus view is sent as text for now.
 
 ## [2.157.1] - 2026-11-25
 

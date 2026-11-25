@@ -48,6 +48,9 @@ const FEATURES = [
   // minute each person spends in one is billed by LiveKit.
   { key: 'voiceChannels', label: 'VOICE CHANNELS', defaultOff: true,
     hint: 'Lets Communities have voice channels people drop in and out of, with video and screen sharing. Needs Communities and LiveKit; every minute someone spends in one uses LiveKit minutes. Off by default.' },
+  // Defaults OFF (v2.158.0): a feature for the groups that want it.
+  { key: 'ttrpg', label: 'TABLETOP GAMES', defaultOff: true,
+    hint: 'Lets a wave\'s owner make it a table for a tabletop role-playing game: dice the server rolls (/roll), a dice tray, GMs and a roll log. Off by default.' },
 ];
 
 // Voice channel idle limits (v2.119.0). Blank means the server's default.
