@@ -33,6 +33,34 @@ test('media grants are bound to provider, owner, connection, item and current wa
   members.add('owner'); share = null; assert.equal(canAccessMedia(scope), false);
 });
 
+test('a watch party grants its item from its provider only (Plex as well as Jellyfin, v2.156.0)', async () => {
+  const { canAccessMedia } = await import('../server/lib/media-access.js');
+  let party = { status: 'active', provider: 'plex', connectionId: 'plex-1', itemId: '111', hostUserId: 'owner', waveId: 'wave' };
+  const members = new Set(['owner', 'member']);
+  const scope = { db: { getWatchParty: () => party }, canAccessWave: (wave, user) => wave === 'wave' && members.has(user),
+    userId: 'member', provider: 'plex', connection: { id: 'plex-1', userId: 'owner' }, itemId: '111', partyId: 'party' };
+  assert.equal(canAccessMedia(scope), true);
+  // [SECURITY] A Jellyfin party never opens a Plex item, even with the same ids.
+  for (const changed of [{ provider: 'jellyfin' }, { userId: 'outsider' }, { itemId: '112' }, { partyId: null },
+    { connection: { id: 'plex-2', userId: 'owner' } }, { connection: { id: 'plex-1', userId: 'other-owner' } }]) {
+    assert.equal(canAccessMedia({ ...scope, ...changed }), false, JSON.stringify(changed));
+  }
+  party = { ...party, provider: 'jellyfin' }; assert.equal(canAccessMedia(scope), false);
+  party = { ...party, provider: 'plex', status: 'ended' }; assert.equal(canAccessMedia(scope), false);
+
+  // Counterfactual: without the provider match, a Jellyfin party opens a Plex
+  // item that shares its connection and item ids.
+  const source = fs.readFileSync(path.join(root, 'server/lib/media-access.js'), 'utf8');
+  const check = 'party.provider === provider && ';
+  assert.ok(source.includes(check), 'counterfactual: provider check not found');
+  const copy = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-media-cf-')), 'media-access.mjs');
+  fs.writeFileSync(copy, source.split(check).join(''));
+  const { canAccessMedia: withoutCheck } = await import(copy);
+  party = { ...party, provider: 'jellyfin', status: 'active' };
+  assert.equal(withoutCheck(scope), true, 'the stripped copy should let a Jellyfin party open the Plex item');
+  fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+});
+
 test('HLS resource references cannot escape their server or be forged across viewers', async () => {
   const { HlsSessions } = await import('../server/lib/media-proxy.js');
   let now = 0;
@@ -248,10 +276,10 @@ test('HTTP media authorization and proxies against disposable Cortex and upstrea
       const state = await joinState('member');
       assert.equal(state.type, 'watch_party_state');
       // v2.155.3: what the player needs to stream, never the server URL.
-      assert.equal(state.party.jellyfinConnectionId, jellyfin.id);
+      assert.equal(state.party.connectionId, jellyfin.id); assert.equal(state.party.provider, 'jellyfin');
       assert.equal(state.party.jellyfinServerUrl, undefined);
       const active = await (await request('/api/jellyfin/watch-parties/active')).json();
-      assert.deepEqual(active.parties.map(p => [p.id, p.jellyfinConnectionId]), [[party, jellyfin.id]]);
+      assert.deepEqual(active.parties.map(p => [p.id, p.provider, p.connectionId]), [[party, 'jellyfin', jellyfin.id]]);
       assert.deepEqual((await (await request('/api/jellyfin/watch-parties/active', 'outsider')).json()).parties, []);
       // Another member can't end the owner's party by starting one.
       const second = await request('/api/watch-parties', 'member', { method: 'POST', body: { waveId: wave.id, connectionId: memberJellyfin.id, itemId: '111' } });
@@ -263,6 +291,21 @@ test('HTTP media authorization and proxies against disposable Cortex and upstrea
       assert.equal((await request(`/api/jellyfin/video/${jellyfin.id}/112?party=${party}`)).status, 403);
       assert.equal((await request(`/api/watch-parties/${party}`, 'owner', { method: 'DELETE' })).status, 200);
       assert.equal((await request(url)).status, 403);
+      // v2.156.0: a Plex party lets members stream that item, and only that.
+      const plexStarted = await request('/api/watch-parties', 'owner', { method: 'POST', body: { waveId: wave.id, provider: 'plex', connectionId: plex.id, itemId: '111', mediaTitle: 'Plex night' } });
+      const plexData = await plexStarted.json(); assert.equal(plexStarted.status, 200, JSON.stringify(plexData));
+      assert.equal(plexData.party.provider, 'plex'); assert.equal(plexData.party.connectionId, plex.id);
+      const plexParty = plexData.party.id;
+      const plexUrl = `/api/plex/video/${plex.id}/111?party=${plexParty}`;
+      const plexVideo = await request(plexUrl); assert.equal(plexVideo.status, 200); await plexVideo.arrayBuffer();
+      assert.equal((await request(plexUrl, 'outsider')).status, 403);
+      assert.equal((await request(`/api/plex/video/${plex.id}/112?party=${plexParty}`)).status, 403);
+      // The Plex party's id opens nothing on Jellyfin.
+      assert.equal((await request(`/api/jellyfin/video/${jellyfin.id}/111?party=${plexParty}`)).status, 403);
+      assert.equal((await request('/api/watch-parties', 'owner', { method: 'POST', body: { waveId: wave.id, provider: 'plex', connectionId: jellyfin.id, itemId: '111' } })).status, 404);
+      assert.equal((await request('/api/watch-parties', 'owner', { method: 'POST', body: { waveId: wave.id, provider: 'vimeo', connectionId: plex.id, itemId: '111' } })).status, 400);
+      assert.equal((await request(`/api/watch-parties/${plexParty}`, 'owner', { method: 'DELETE' })).status, 200);
+      assert.equal((await request(plexUrl)).status, 403);
       // A host starting again replaces their own party.
       const again = async () => (await (await request('/api/watch-parties', 'owner', { method: 'POST', body: { waveId: wave.id, connectionId: jellyfin.id, itemId: '111' } })).json()).party.id;
       const first = await again(), replaced = await again();

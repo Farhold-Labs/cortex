@@ -578,6 +578,8 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
             type={embed.type}
             duration={embed.duration}
             summary={embed.summary}
+            waveId={waveId}
+            fetchAPI={fetchAPI}
           />
         ) : (
           <RichEmbed key={`${embed.platform}-${embed.contentId}-${index}`} embed={embed} autoLoad={autoLoadEmbeds} />

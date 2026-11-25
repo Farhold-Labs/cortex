@@ -1,14 +1,16 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { API_URL } from '../../config/constants.js';
 import { GlowText } from '../ui/SimpleComponents.jsx';
 import { storage } from '../../utils/storage.js';
 import { expectedPosition } from '../../utils/watchParty.js';
+import { mediaPlaybackUrl } from '../../utils/media.js';
 import { useSystemBack } from '../../hooks/useSystemBack.js';
 
 /**
  * WatchPartyPlayer Component (v2.14.0; rewired v2.155.3)
  *
- * Synchronised video player for Jellyfin watch parties. The host plays,
+ * Synchronised video player for Jellyfin and Plex watch parties (Plex since
+ * v2.156.0). The host plays,
  * pauses and seeks for everyone and says where it is every few seconds;
  * everyone else follows.
  *
@@ -53,13 +55,58 @@ const WatchPartyPlayer = ({ party, currentUserId, onCommand, onHeartbeat, onLeav
 
   useSystemBack(true, onLeave, { marker: 'cortex-watch-party' });
 
-  // Video elements can't send headers, so the token rides in the URL, as for
-  // every Jellyfin embed. `party` is what lets a viewer stream the host's item.
-  const streamUrl = useMemo(() => {
-    if (!party?.connectionId || !party?.itemId) return '';
+  // Ask the provider's stream route for this item, as the Jellyfin and Plex
+  // cards do; the party is what lets a viewer stream the host's item. Plex may
+  // answer with an HLS playlist (when it must transcode), played with hls.js.
+  // Video elements can't send headers, so the token rides in the URL.
+  const [stream, setStream] = useState(null); // { url, hls }
+  const hlsRef = useRef(null);
+  useEffect(() => {
+    if (!party?.connectionId || !party?.itemId) return undefined;
+    let live = true;
     const token = storage.getToken();
-    return `${API_URL}/jellyfin/video/${party.connectionId}/${party.itemId}?party=${encodeURIComponent(party.id)}&token=${encodeURIComponent(token || '')}`;
-  }, [party?.id, party?.connectionId, party?.itemId]);
+    const provider = party.provider === 'plex' ? 'plex' : 'jellyfin';
+    fetch(`${API_URL}/${provider}/stream/${party.connectionId}/${party.itemId}?party=${encodeURIComponent(party.id)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!live) return;
+        if (!res.ok || !data.streamUrl) throw new Error(data.error || 'The video could not be loaded.');
+        setStream({ url: mediaPlaybackUrl(data.streamUrl, API_URL, token), hls: !!data.needsHlsPlayer });
+      })
+      .catch((err) => { if (live) { setError(err.message); setIsLoading(false); } });
+    return () => { live = false; };
+  }, [party?.id, party?.provider, party?.connectionId, party?.itemId]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!stream || !video) return undefined;
+    let cancelled = false;
+    if (!stream.hls || video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = stream.url;
+    } else {
+      import('hls.js').then(({ default: Hls }) => {
+        if (cancelled) return;
+        if (!Hls.isSupported()) { setError('This browser cannot play this video.'); setIsLoading(false); return; }
+        const hls = new Hls();
+        hls.on(Hls.Events.ERROR, (_e, data) => {
+          if (!data.fatal) return;
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+          else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+          else { setError('The video could not be loaded.'); setIsLoading(false); }
+        });
+        hls.loadSource(stream.url);
+        hls.attachMedia(video);
+        hlsRef.current = hls;
+      });
+    }
+    return () => {
+      cancelled = true;
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
+    };
+  }, [stream]);
 
   const play = useCallback(() => {
     const video = videoRef.current;
@@ -184,7 +231,6 @@ const WatchPartyPlayer = ({ party, currentUserId, onCommand, onHeartbeat, onLeav
         ) : (
           <video
             ref={videoRef}
-            src={streamUrl}
             style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             preload="metadata"
             playsInline

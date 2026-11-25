@@ -8,7 +8,7 @@ A logged-in user may access an item when one of these conditions holds:
 
 - They own its media-server connection.
 - The connection owner explicitly created a grant for that exact provider, connection, item, and wave, and both the viewer and owner still have access to the wave.
-- For Jellyfin watch parties, the exact item belongs to an active party hosted by the connection owner, and the viewer and host still have wave access.
+- For watch parties (Jellyfin, and Plex since v2.156.0), the exact item belongs to an active party of the same provider hosted by the connection owner, and the viewer and host still have wave access. A party's id never opens an item from the other provider.
 
 Connection IDs, item IDs, and copied embed URLs alone are not permissions. A private-wave grant does not authorize users outside that wave. A public-wave grant follows the application's public-wave policy: any authenticated viewer with public-wave access can use it. Library browsing and connection management remain owner-only.
 
@@ -65,7 +65,7 @@ HLS resource maps are process-local, as other realtime state in this application
 3. **Share old media links again from their intended wave.** Legacy links without grants remain usable by the connection owner but are deliberately denied to other viewers. An active, authorized watch party is a separate explicit permission.
 4. Check actual Plex/Jellyfin direct play, transcoding, seeking, thumbnails, and native/Safari playback in staging. Streaming now uses Cortex server bandwidth, and upstream redirects must be corrected to a canonical configured server URL.
 
-The patch does not deploy or rotate live credentials automatically. Since v2.155.3 the watch-party UI is wired to these endpoints and was driven in a browser against a simulated Jellyfin (host and viewer, play, pause, seek, end); real-device codec behaviour is still untested. Only one party runs per wave: another member starting one gets `409 WATCH_PARTY_RUNNING`, and a host starting again replaces their own.
+The patch does not deploy or rotate live credentials automatically. Since v2.155.3 the watch-party UI is wired to these endpoints (Plex too since v2.156.0, including transcoded HLS, whose every playlist and segment request re-checks the party) and was driven in a browser against a simulated Jellyfin (host and viewer, play, pause, seek, end); real-device codec behaviour is still untested. Only one party runs per wave: another member starting one gets `409 WATCH_PARTY_RUNNING`, and a host starting again replaces their own.
 
 ## Validation
 

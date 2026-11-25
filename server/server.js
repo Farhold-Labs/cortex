@@ -11051,8 +11051,9 @@ function watchPartyView(party) {
     hostHandle: party.hostHandle,
     hostName: party.hostName,
     hostAvatar: party.hostAvatar,
-    jellyfinConnectionId: party.jellyfinConnectionId,
-    jellyfinItemId: party.jellyfinItemId,
+    provider: party.provider,
+    connectionId: party.connectionId,
+    itemId: party.itemId,
     mediaTitle: party.mediaTitle,
     mediaType: party.mediaType,
     playbackPosition: party.playbackPosition,
@@ -11095,9 +11096,14 @@ app.get('/api/watch-parties/:waveId', authenticateToken, (req, res) => {
 // Create a watch party
 app.post('/api/watch-parties', authenticateToken, (req, res) => {
   const { waveId, connectionId, itemId, mediaTitle, mediaType } = req.body;
+  // v2.156.0: Plex as well as Jellyfin.
+  const provider = req.body.provider === undefined ? 'jellyfin' : req.body.provider;
 
   if (!waveId || !connectionId || !itemId) {
     return res.status(400).json({ error: 'Wave ID, connection ID, and item ID are required' });
+  }
+  if (!validMediaTarget(provider, connectionId, itemId)) {
+    return res.status(400).json({ error: 'Invalid media identifier' });
   }
 
   const wave = db.getWave(waveId);
@@ -11105,8 +11111,9 @@ app.post('/api/watch-parties', authenticateToken, (req, res) => {
     return res.status(404).json({ error: 'Wave not found' });
   }
 
-  // Verify user owns the connection
-  if (!db.userOwnsJellyfinConnection(req.user.userId, connectionId)) {
+  // Only the connection's owner can host with it.
+  const connection = mediaConnection(provider, connectionId);
+  if (!connection || connection.userId !== req.user.userId) {
     return res.status(404).json({ error: 'Connection not found' });
   }
 
@@ -11122,8 +11129,9 @@ app.post('/api/watch-parties', authenticateToken, (req, res) => {
     const party = db.createWatchParty({
       waveId,
       hostUserId: req.user.userId,
-      jellyfinConnectionId: connectionId,
-      jellyfinItemId: itemId,
+      provider,
+      connectionId,
+      itemId,
       mediaTitle: typeof mediaTitle === 'string' && mediaTitle.trim() ? mediaTitle.trim().slice(0, 200) : 'Unknown Media',
       mediaType: typeof mediaType === 'string' ? mediaType.slice(0, 40) : 'Video',
     });

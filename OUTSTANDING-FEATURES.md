@@ -7,7 +7,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 
 ---
 
-## Completed Features (v1.5.0 - v2.155.3)
+## Completed Features (v1.5.0 - v2.156.0)
 
 | Feature | Version |
 |---------|---------|
@@ -184,6 +184,7 @@ This document tracks planned but not-yet-implemented features. For completed fea
 | No Password Prompt While the Remembered Key Restores | v2.155.1 |
 | Older Copies Get the History They Missed | v2.155.2 |
 | Watch Parties Work End to End (Start From a Jellyfin Card, Follow the Host, End) | v2.155.3 |
+| Plex Watch Parties (Direct Play and Transcoded HLS) | v2.156.0 |
 
 ---
 
