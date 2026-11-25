@@ -6,6 +6,7 @@ import { useWindowSize } from '../hooks/useWindowSize.js';
 import { VERSION, API_URL, BASE_URL, canAccess, FONT_SIZES, MESSAGE_FONTS, DEFAULT_MESSAGE_FONT } from '../config/constants.js';
 import { setTerminology } from '../config/terminology.js';
 import { getRandomTagline, SUCCESS, NOTIFICATION, formatError, GHOST_PROTOCOL } from '../../messages.js';
+import { normaliseParty, applyPlayback } from '../utils/watchParty.js';
 import { storage } from '../utils/storage.js';
 import { plainText } from '../utils/plainText.js';
 import { startAttachmentSession, stopAttachmentSession } from '../utils/attachments.js';
@@ -1362,47 +1363,37 @@ function MainApp({ sharePingId }) {
         }
         return next;
       });
-    } else if (data.type === 'watch_party_created' || data.type === 'watch_party_started') {
-      // Watch party started in a wave (v2.14.0)
-      const party = data.party || data;
-      console.log('🎬 Watch party created/started:', party);
-      setActiveWatchParties(prev => ({
-        ...prev,
-        [party.waveId]: party
-      }));
-      if (party.hostId !== user?.id) {
-        showToastMsg(NOTIFICATION.watchPartyStarted(party.hostName || 'Someone'), 'info');
+    } else if (data.type === 'watch_party_started' || data.type === 'watch_party_state') {
+      // A party started, or the state asked for on joining (v2.155.3: one shape).
+      const party = normaliseParty(data.party, data.waveId);
+      if (party?.waveId) {
+        setActiveWatchParties(prev => ({ ...prev, [party.waveId]: party }));
+        if (data.type === 'watch_party_started' && party.hostId !== user?.id) {
+          showToastMsg(NOTIFICATION.watchPartyStarted(party.hostName || 'Someone'), 'info');
+        }
       }
     } else if (data.type === 'watch_party_ended') {
-      // Watch party ended (v2.14.0)
       const { waveId, partyId } = data;
-      console.log('🎬 Watch party ended:', partyId);
       setActiveWatchParties(prev => {
+        if (prev[waveId]?.id !== partyId) return prev;
         const next = { ...prev };
         delete next[waveId];
         return next;
       });
-      // Close player if it was open for this party
       if (watchPartyPlayer?.partyId === partyId) {
         setWatchPartyPlayer(null);
         showToastMsg(NOTIFICATION.watchPartyEnded, 'info');
       }
-    } else if (data.type === 'watch_party_sync') {
-      // Watch party playback state sync (v2.14.0)
-      const { waveId, state, position, timestamp } = data;
-      console.log('🎬 Watch party sync:', state, position);
-      setActiveWatchParties(prev => ({
-        ...prev,
-        [waveId]: prev[waveId] ? { ...prev[waveId], state, position, lastSync: timestamp } : prev[waveId]
-      }));
-    } else if (data.type === 'watch_party_participant_joined' || data.type === 'watch_party_participant_left') {
-      // Watch party participant change (v2.14.0)
-      const { waveId, participants, userName } = data;
-      console.log(`🎬 Watch party participant ${data.type === 'watch_party_participant_joined' ? 'joined' : 'left'}:`, userName);
-      setActiveWatchParties(prev => ({
-        ...prev,
-        [waveId]: prev[waveId] ? { ...prev[waveId], participants } : prev[waveId]
-      }));
+    } else if (data.type === 'watch_party_sync' || data.type === 'watch_party_command') {
+      // The host's heartbeat (where it is) or a play, pause or seek.
+      const { waveId, partyId } = data;
+      setActiveWatchParties(prev => (prev[waveId]?.id === partyId
+        ? { ...prev, [waveId]: applyPlayback(prev[waveId], {
+          command: data.command,
+          position: data.type === 'watch_party_sync' ? data.playbackPosition : data.position,
+          isPlaying: data.isPlaying,
+        }) }
+        : prev));
     } else if (data.type === 'wave_event_created' || data.type === 'wave_event_updated' || data.type === 'wave_event_deleted') {
       // Calendar events updated — CalendarView will reload on next render via its own loadEvents
       // No-op here: CalendarView manages its own state
@@ -1634,8 +1625,9 @@ function MainApp({ sharePingId }) {
     try {
       const data = await fetchAPI('/jellyfin/watch-parties/active');
       const partiesMap = {};
-      (data.parties || []).forEach(party => {
-        partiesMap[party.waveId] = party;
+      (data.parties || []).forEach(raw => {
+        const party = normaliseParty(raw);
+        if (party?.waveId) partiesMap[party.waveId] = party;
       });
       setActiveWatchParties(partiesMap);
     } catch (e) {
@@ -1644,33 +1636,40 @@ function MainApp({ sharePingId }) {
     }
   }, [fetchAPI]);
 
-  const handleJoinWatchParty = useCallback(async (waveId, partyId) => {
-    try {
-      await fetchAPI(`/jellyfin/watch-parties/${partyId}/join`, { method: 'POST' });
-      // Open the player after joining
-      setWatchPartyPlayer({ waveId, partyId });
-    } catch (e) {
-      console.error('Failed to join watch party:', e);
-      showToastMsg(e.message || formatError('Failed to join watch party'), 'error');
-    }
-  }, [fetchAPI, showToastMsg]);
-
-  const handleLeaveWatchParty = useCallback(async (partyId) => {
-    try {
-      await fetchAPI(`/jellyfin/watch-parties/${partyId}/leave`, { method: 'POST' });
-      setWatchPartyPlayer(null);
-    } catch (e) {
-      console.error('Failed to leave watch party:', e);
-      showToastMsg(e.message || formatError('Failed to leave watch party'), 'error');
-    }
-  }, [fetchAPI, showToastMsg]);
-
-  const handleOpenWatchParty = useCallback((waveId, partyId) => {
+  // Joining is watching: there is no server-side membership. Ask for the
+  // party's state as it is now, then open the player (v2.155.3; this called
+  // join and leave routes that never existed).
+  const handleJoinWatchParty = useCallback((waveId, partyId) => {
+    sendWSMessage({ type: 'watch_party_join', partyId });
     setWatchPartyPlayer({ waveId, partyId });
+  }, [sendWSMessage]);
+
+  const handleLeaveWatchParty = useCallback(() => {
+    setWatchPartyPlayer(null);
   }, []);
 
-  const handleCloseWatchPartyPlayer = useCallback(() => {
-    setWatchPartyPlayer(null);
+  const handleOpenWatchParty = handleJoinWatchParty;
+
+  const handleEndWatchParty = useCallback(async (partyId) => {
+    try {
+      await fetchAPI(`/watch-parties/${partyId}`, { method: 'DELETE' });
+      setWatchPartyPlayer(null);
+    } catch (e) {
+      showToastMsg(e.message || formatError('Failed to end watch party'), 'error');
+    }
+  }, [fetchAPI, showToastMsg]);
+
+  // The host's own party, started from a Jellyfin card in a ping: show it and
+  // open the player.
+  useEffect(() => {
+    const onHosted = (e) => {
+      const party = e.detail?.party;
+      if (!party?.waveId) return;
+      setActiveWatchParties(prev => ({ ...prev, [party.waveId]: party }));
+      setWatchPartyPlayer({ waveId: party.waveId, partyId: party.id });
+    };
+    window.addEventListener('cortex:watch-party-hosted', onHosted);
+    return () => window.removeEventListener('cortex:watch-party-hosted', onHosted);
   }, []);
 
   // Dismiss alert handler
@@ -2701,7 +2700,7 @@ function MainApp({ sharePingId }) {
                       activeWatchParty={activeWatchParties[selectedWave?.id]}
                       activeCall={activeCalls[selectedWave?.id]}
                       onJoinWatchParty={(partyId) => handleJoinWatchParty(selectedWave?.id, partyId)}
-                      onLeaveWatchParty={handleLeaveWatchParty}
+                      onEndWatchParty={handleEndWatchParty}
                       onOpenWatchParty={(partyId) => handleOpenWatchParty(selectedWave?.id, partyId)}
                       onWatchPartiesChange={loadActiveWatchParties}
                       onOpenThread={(msg, extra) => handleOpenThread(selectedWave.id, msg, extra)}
@@ -3030,15 +3029,14 @@ function MainApp({ sharePingId }) {
       )}
 
       {/* Watch Party Player Modal (v2.14.0) */}
-      {watchPartyPlayer && (
+      {watchPartyPlayer && activeWatchParties[watchPartyPlayer.waveId]?.id === watchPartyPlayer.partyId && (
         <WatchPartyPlayer
-          partyId={watchPartyPlayer.partyId}
-          waveId={watchPartyPlayer.waveId}
-          fetchAPI={fetchAPI}
-          sendWSMessage={sendWSMessage}
-          currentUser={user}
-          onClose={handleCloseWatchPartyPlayer}
-          onLeave={() => handleLeaveWatchParty(watchPartyPlayer.partyId)}
+          party={activeWatchParties[watchPartyPlayer.waveId]}
+          currentUserId={user?.id}
+          onCommand={(command, position) => sendWSMessage({ type: 'watch_party_command', partyId: watchPartyPlayer.partyId, command, position })}
+          onHeartbeat={(playbackPosition, isPlaying) => sendWSMessage({ type: 'watch_party_sync', partyId: watchPartyPlayer.partyId, playbackPosition, isPlaying })}
+          onLeave={handleLeaveWatchParty}
+          onEnd={() => handleEndWatchParty(watchPartyPlayer.partyId)}
           isMobile={isMobile}
         />
       )}

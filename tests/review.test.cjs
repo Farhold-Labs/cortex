@@ -79,27 +79,40 @@ test('watch party lookup uses the real database API and denies outsiders', () =>
   });
   const res = response(); handler(request(), res); assert.equal(res.statusCode, 404);
 });
-test('watch party creation notifies other participants through the multi-session broadcaster', () => {
+test('watch party creation tells everyone who can read the wave (v2.155.3: broadcastToWave)', () => {
   const sent = [];
   const handler = route('post', '/api/watch-parties', {
-    db: { getWave: () => ({ id: 'wave' }), userOwnsJellyfinConnection: () => true, createWatchParty: () => ({ id: 'party' }) },
+    db: { getWave: () => ({ id: 'wave' }), userOwnsJellyfinConnection: () => true, createWatchParty: () => ({ id: 'party' }), getActiveWatchPartyForWave: () => null },
     canAccessWaveFromCache: () => true,
-    participation: { getWaveParticipants: () => ['reader', 'other'] },
-    broadcastToUser: (...args) => sent.push(args),
+    watchPartyView: p => ({ id: p.id }),
+    broadcastToWave: (...args) => sent.push(args),
   });
   const res = response(); handler(request({ waveId: 'wave', connectionId: 'connection', itemId: 'item' }), res);
   assert.equal(res.statusCode, 200); assert.equal(res.body.party.id, 'party');
-  assert.equal(sent.length, 1); assert.equal(sent[0][0], 'other'); assert.equal(sent[0][1].type, 'watch_party_started');
+  assert.equal(sent.length, 1); assert.equal(sent[0][0], 'wave'); assert.equal(sent[0][1].type, 'watch_party_started');
+  assert.equal(sent[0][1].party.id, 'party');
 });
-test('watch party deletion notifies participants after ending the party', () => {
+test('a member cannot end another host\'s watch party by starting one', () => {
+  const sent = [];
+  const handler = route('post', '/api/watch-parties', {
+    db: { getWave: () => ({ id: 'wave' }), userOwnsJellyfinConnection: () => true, createWatchParty: () => { throw new Error('must not create'); },
+      getActiveWatchPartyForWave: () => ({ id: 'running', hostUserId: 'someone-else', hostName: 'Zoe' }) },
+    canAccessWaveFromCache: () => true,
+    watchPartyView: p => p,
+    broadcastToWave: (...args) => sent.push(args),
+  });
+  const res = response(); handler(request({ waveId: 'wave', connectionId: 'connection', itemId: 'item' }), res);
+  assert.equal(res.statusCode, 409); assert.equal(res.body.code, 'WATCH_PARTY_RUNNING'); assert.equal(sent.length, 0);
+});
+test('watch party deletion tells the wave after ending the party', () => {
   const sent = [];
   const handler = route('delete', '/api/watch-parties/:id', {
     db: { getWatchParty: () => ({ hostUserId: 'reader', waveId: 'wave' }), endWatchParty: () => true },
-    participation: { getWaveParticipants: () => ['reader', 'other'] },
-    broadcastToUser: (...args) => sent.push(args),
+    broadcastToWave: (...args) => sent.push(args),
   });
   const res = response(); handler(request(), res);
-  assert.equal(res.body.success, true); assert.equal(sent.length, 2);
+  assert.equal(res.body.success, true); assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], 'wave'); assert.equal(sent[0][1].type, 'watch_party_ended');
 });
 test('Electron only accepts web server URLs and safe external protocols', async () => {
   const { isServerUrl, isExternalUrl } = await import('../client/electron/url-policy.js');

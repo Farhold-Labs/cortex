@@ -1731,6 +1731,11 @@ CREATE TABLE IF NOT EXISTS federated_wave_servers (
         PRIMARY KEY (wave_id, node_name)
       );
 
+CREATE TABLE IF NOT EXISTS federated_history_pulls (
+        wave_id   TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+        pulled_at TEXT NOT NULL
+      );
+
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
     INSERT INTO pings_fts(rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);

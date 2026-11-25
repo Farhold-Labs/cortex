@@ -4305,6 +4305,14 @@ export class DatabaseSQLite {
         PRIMARY KEY (wave_id, node_name)
       );
     `);
+    // v2.155.2: copies whose whole history (people on other servers included,
+    // v2.155.0) has been pulled. Copies made earlier are pulled once more.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS federated_history_pulls (
+        wave_id   TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
+        pulled_at TEXT NOT NULL
+      );
+    `);
 
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
@@ -13030,6 +13038,20 @@ export class DatabaseSQLite {
     })();
   }
 
+  markFederatedHistoryPulled(waveId) {
+    this.db.prepare('INSERT OR REPLACE INTO federated_history_pulls (wave_id, pulled_at) VALUES (?, ?)').run(waveId, new Date().toISOString());
+  }
+
+  // Copies of other servers' waves never pulled in full since v2.155.0.
+  copiesNeedingHistoryPull() {
+    return this.db.prepare(`
+      SELECT id FROM waves
+      WHERE federation_state = 'participant' AND origin_node IS NOT NULL AND origin_wave_id IS NOT NULL
+        AND id NOT IN (SELECT wave_id FROM federated_history_pulls)
+      ORDER BY id
+    `).all().map(r => r.id);
+  }
+
   getFederatedWaveServers(waveId) {
     return this.db.prepare('SELECT node_name FROM federated_wave_servers WHERE wave_id = ?').all(waveId).map(r => r.node_name);
   }
@@ -14901,6 +14923,10 @@ export class DatabaseSQLite {
   /**
    * Get active watch party for a wave
    */
+  getActiveWatchPartyWaveIds() {
+    return this.db.prepare("SELECT DISTINCT wave_id FROM watch_parties WHERE status = 'active'").all().map(r => r.wave_id);
+  }
+
   getActiveWatchPartyForWave(waveId) {
     const row = this.db.prepare(`
       SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar,
@@ -14931,36 +14957,6 @@ export class DatabaseSQLite {
       lastSyncAt: row.last_sync_at,
       createdAt: row.created_at,
     };
-  }
-
-  /**
-   * Get all active watch parties for waves the user participates in
-   */
-  getActiveWatchPartiesForUser(userId) {
-    const rows = this.db.prepare(`
-      SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar
-      FROM watch_parties wp
-      LEFT JOIN users u ON wp.host_user_id = u.id
-      INNER JOIN wave_participants wpart ON wp.wave_id = wpart.wave_id
-      WHERE wpart.user_id = ? AND wp.status = 'active'
-    `).all(userId);
-
-    return rows.map(row => ({
-      id: row.id,
-      waveId: row.wave_id,
-      hostUserId: row.host_user_id,
-      hostHandle: row.host_handle,
-      hostName: row.host_name,
-      hostAvatar: row.host_avatar,
-      jellyfinItemId: row.jellyfin_item_id,
-      mediaTitle: row.media_title,
-      mediaType: row.media_type,
-      status: row.status,
-      playbackPosition: row.playback_position,
-      isPlaying: row.is_playing === 1,
-      lastSyncAt: row.last_sync_at,
-      createdAt: row.created_at,
-    }));
   }
 
   /**
