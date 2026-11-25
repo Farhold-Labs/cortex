@@ -1,9 +1,9 @@
 # Encryption across servers — design
 
-Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below), **phase 2 in v2.152.0** ("Phase 2 as built"), **phase 3 in v2.153.0** ("Phase 3 as built"): encrypted waves now include people on other servers. **Fingerprints and format 2 are being revised** by `02-identity-keys.md` (decided 2026-11-24): the fingerprint becomes that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
+Status: **decided** (2026-11-20). **Phase 0 built in v2.143.0, phase 1 in v2.149.0** (see "Phase 1 as built" below), **phase 2 in v2.152.0** ("Phase 2 as built"), **phase 3 in v2.153.0** ("Phase 3 as built"): encrypted waves now include people on other servers; first keys bound in v2.153.1, key requests relayed in v2.154.0. Fingerprints and format 2 were revised by `02-identity-keys.md` (decided 2026-11-24, built in v2.150.0 and v2.151.0): the fingerprint is that of a lasting identity key, and pings are signed. Jared's decisions of 2026-11-07 (a person's
 public key comes from their home server over signed federation; members can
 see and compare key fingerprints, with a change flagged) and 2026-11-20 (the
-five questions) are recorded at the end and folded into the text. Not built.
+five questions) are recorded at the end and folded into the text.
 
 ## Why
 

@@ -1,6 +1,6 @@
 # CORTEX - Secure Wave Communications
 
-**Version 2.136.1** | A privacy-first, federated communication platform inspired by Google Wave.
+**Version 2.154.0** | A privacy-first, federated communication platform inspired by Google Wave.
 
 > *"Can't stop the signal."*
 
@@ -103,7 +103,10 @@ Demo accounts (password: `Demo123!`, requires `SEED_DEMO_DATA=true`):
 ### End-to-End Encryption
 - **ECDH P-384 + AES-256-GCM** — Per-wave symmetric keys distributed via key exchange. Encryption is chosen per wave (or forced for every wave with `FORCE_WAVE_ENCRYPTION`); it covers message text, not attached files
 - **Zero-knowledge server** — Server never sees plaintext message content
-- **Key rotation** — Automatic re-encryption when participants are removed
+- **Key rotation** — A wave gets a new key when anyone holding the current one leaves or is removed; newcomers are handed every older version, so they read the history
+- **Fingerprints you can verify** — Each person has a lasting identity key; compare its fingerprint in Settings, on people lists and profile cards, and mark it verified. Renewed keys keep the fingerprint, and a new identity is flagged
+- **Signed pings** — Every encrypted ping is signed by its author: ✓ beside people you verified, and forged or replayed pings held back with ⚠
+- **Across servers** — An encrypted wave can include people on other Cortex servers. Their servers store only ciphertext; keys travel through the wave's own server, bound to the wave, version and holder, and any member on an allied server can hand a newcomer the key
 - **Migration UI** — Bulk re-encryption of existing messages when enabling E2EE on a wave
 - **Web Crypto API** — Native browser cryptography, no external libraries
 
@@ -123,7 +126,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 ### Federation
 - **Server-to-server** — Multiple Cortex instances exchange pings across the Verse
 - **Federated users** — Add `@user@other-server.com` as wave participants
-- **HTTP Signatures** — RSA-SHA256 signed requests for server authentication
+- **HTTP Signatures** — RSA-SHA256 signed requests for server authentication; a server's key is replaced by handshake, so allies never lose track of it
 - **Cover traffic** — Decoy messages, message padding, and queue jitter resist traffic analysis
 - **Trust model** — Manual allowlist of trusted federation partners (Allied Ports)
 - **Cross-Port Authentication** — Sign in to any mutually-trusted Cortex instance using your home-server identity; browser-based approval with single-use, short-lived auth codes and 24-hour guest sessions
@@ -131,6 +134,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy.
 ### Media
 - **Voice/Video messages** — Record and send audio (5 min) and video messages
 - **Voice/Video calls** — Real-time calls via LiveKit with screen sharing
+- **Direct calls** — Ring a contact like a phone call, outside any wave: answer or decline, missed calls and call history. The Android app rings over the lock screen and keeps the call going in the background
 - **Live broadcasts** — Stream your camera and microphone to a wave, optionally to a public link for people without an account. Viewers are hidden and silent. The studio has camera zoom (pinch or slider), a rotate button, a sideways layout, and the orientation is chosen before going live. Opt-in per server
 - **Broadcast recording** — Record a broadcast to an S3-compatible bucket (Backblaze B2 in production); wave members watch it afterwards, and it is posted to the wave when ready
 - **Attachments** — Any file up to 25 MB, with an uploading screen that shows progress, warns before a refresh would cancel it, and lets you keep browsing. Attached audio and video play right in the conversation

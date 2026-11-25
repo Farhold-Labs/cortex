@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- **Brought current to v2.154.0.** README (version, fingerprints, signed pings, encryption across servers, direct calls, federation key handshake), the roadmap (completed features to v2.154.0; what is left of encryption across servers), the design doc's status line, and CLAUDE.md's references.
+
 ## [2.154.0] - 2026-11-24
 
 Encryption across servers: key requests relayed. Since v2.153.0 a newcomer on another server got the key only from a member's device on the wave's own server, so with all of them offline the newcomer waited, even with members online elsewhere. Server and web only, no app build. **Migrates** (one column, one table).

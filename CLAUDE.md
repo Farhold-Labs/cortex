@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.154.0**. Last brought current 2026-10-30.
+Current version: **2.154.0**. Last brought current 2026-11-24.
 
 ## Project Overview
 
@@ -485,7 +485,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/wave-access/** — wave audiences, self-forming groups and invitations (decided 2026-10-29, phased; phase 1 shipped in v2.130.0, phase 2 the Community wave report in v2.131.0, phase 3 self-forming groups in v2.132.0, phase 4 narrowing and review in v2.134.0, phase 5 folders and audience labels in v2.135.0, phase 6 federated audience v2.136.1, invitations v2.137.0, groups and travellers v2.138.0)
 - **docs/direct-calls/** — ringing a contact, outside waves (decided 2026-11-22; phase 1 built in v2.145.0, phase 2 in v2.146.0, phase 3 not built)
 - **docs/federation-keys/** — replacing a server's federation key by handshake (built in v2.147.0)
-- **docs/federated-e2ee/** — encryption across servers (decided 2026-11-20; phase 0 = local [SECURITY] fixes in v2.143.0, phase 1 = fingerprints and reading format 2 in v2.149.0; `02-identity-keys.md` = lasting identity fingerprints and signed pings, decided 2026-11-24, phase 1b built in v2.150.0, 1c (signed pings) in v2.151.0, phase 2 (plumbing between servers) in v2.152.0, phase 3 (encrypted waves across servers) in v2.153.0)
+- **docs/federated-e2ee/** — encryption across servers (decided 2026-11-20; phase 0 = local [SECURITY] fixes in v2.143.0, phase 1 = fingerprints and reading format 2 in v2.149.0; `02-identity-keys.md` = lasting identity fingerprints and signed pings, decided 2026-11-24, phase 1b built in v2.150.0, 1c (signed pings) in v2.151.0, phase 2 (plumbing between servers) in v2.152.0, phase 3 (encrypted waves across servers) in v2.153.0, first keys bound in v2.153.1, key requests relayed in v2.154.0)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy
