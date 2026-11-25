@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.156.0] - 2026-11-25
+
+Watch parties for Plex. Until now only Jellyfin could host one. Server and web, no app build. **Migrates** (rebuilds `watch_parties`).
+
+### Added
+- **Plex watch parties.** A Plex card in a ping now has START WATCH PARTY for whoever owns that Plex connection, as Jellyfin cards have had since v2.155.3. The button is one component for both (`StartWatchPartyButton.jsx`).
+- **The player asks the provider's stream route for the item,** as the cards do: `/api/jellyfin/stream` or `/api/plex/stream`, with the party. A Plex item the browser can play (MP4 or MOV with H.264) streams directly; anything else, Plex transcodes to HLS. The player plays that natively where the browser can and with hls.js elsewhere, loading hls.js only then.
+  - Each viewer gets their own Plex transcode, as when they play a shared Plex card.
+
+### Changed
+- **`watch_parties` holds a provider, a connection and an item** (`provider`, `connection_id`, `item_id`), not a Jellyfin connection.
+  - The old table required a Jellyfin connection (`NOT NULL`, with a foreign key to `jellyfin_connections`). An older database's table is renamed aside, rebuilt from the same SQL a fresh install uses, and its parties copied over as Jellyfin parties.
+  - The API's party objects carry `provider`, `connectionId` and `itemId`. A page still running the v2.155.3 client reads `connectionId` too.
+- **`POST /api/watch-parties` takes `provider`** (`jellyfin`, the default, or `plex`). It refuses an identifier that isn't a valid media target (400) and a connection the person doesn't own (404).
+
+### Security
+- **[SECURITY] A party grants its item from its own provider only.** The rule that lets a wave's readers stream the host's item now also requires the party's provider to match the item's. A Plex party's id opens nothing on Jellyfin, nor the reverse, even when connection and item ids coincide. Transcoded HLS re-checks the party on every playlist and segment request, so ending a party stops that playback too.
+
+### Verified
+- `tests/media-security.test.cjs`:
+  - **The access rule:** a Plex party grants its item and nothing else (another item, connection, owner, outsider, or an ended party). Counterfactual: a copy of `media-access.js` without the provider match lets a Jellyfin party open the Plex item.
+  - **On a real server against a simulated Plex:** a member streams a Plex party's item, an outsider and another item get 403, and the party's id gets 403 on Jellyfin. A Plex party on a Jellyfin connection is 404, an unknown provider 400, and ending the party revokes playback.
+  - The Jellyfin tests now read the new field names.
+- `tests/watch-party-migration.test.cjs`: an older database's party comes through the rebuild as a Jellyfin party (position, state, title kept), and the table and its indexes match a fresh install's exactly.
+- **In headless Chrome on dev** (`https://dev.farhold.com`, mal hosting and zoe watching, both at phone size), against a simulated Plex:
+  - **a direct-play MP4,** and **an MKV that Plex "transcodes" to HLS.** That one ran twice: once with Chrome's own HLS, once with the viewer's HLS support hidden so hls.js played it, from a `blob:` source;
+  - in each, only mal saw START WATCH PARTY;
+  - play put both at 3.9 s; a seek put both within 0.1 s of 62.7 s; pause stopped both within 0.1 s;
+  - a closed and reopened viewer came back at the host's position, and END closed everything;
+  - Jellyfin ran again unchanged;
+  - no console errors.
+- **Found and fixed before commit:** taking the party code out of the Jellyfin card also deleted the card's own state, which crashed any wave showing a Jellyfin card. The build didn't catch it; the browser run did.
+- **Not tried:** a real Plex server, a phone.
+- Full suite: 804 tests pass.
+
 ## [2.155.3] - 2026-11-25
 
 Watch parties work. The server side was protected and tested in v2.86.0, but the UI could not have been used: nothing showed a way to start one, the player always drew nothing, and joining called routes that don't exist. Server and web, no app build, no migration.

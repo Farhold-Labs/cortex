@@ -82,8 +82,9 @@ test('watch party lookup uses the real database API and denies outsiders', () =>
 test('watch party creation tells everyone who can read the wave (v2.155.3: broadcastToWave)', () => {
   const sent = [];
   const handler = route('post', '/api/watch-parties', {
-    db: { getWave: () => ({ id: 'wave' }), userOwnsJellyfinConnection: () => true, createWatchParty: () => ({ id: 'party' }), getActiveWatchPartyForWave: () => null },
+    db: { getWave: () => ({ id: 'wave' }), createWatchParty: () => ({ id: 'party' }), getActiveWatchPartyForWave: () => null },
     canAccessWaveFromCache: () => true,
+    validMediaTarget: () => true, mediaConnection: () => ({ userId: 'reader' }),
     watchPartyView: p => ({ id: p.id }),
     broadcastToWave: (...args) => sent.push(args),
   });
@@ -95,7 +96,8 @@ test('watch party creation tells everyone who can read the wave (v2.155.3: broad
 test('a member cannot end another host\'s watch party by starting one', () => {
   const sent = [];
   const handler = route('post', '/api/watch-parties', {
-    db: { getWave: () => ({ id: 'wave' }), userOwnsJellyfinConnection: () => true, createWatchParty: () => { throw new Error('must not create'); },
+    validMediaTarget: () => true, mediaConnection: () => ({ userId: 'reader' }),
+    db: { getWave: () => ({ id: 'wave' }), createWatchParty: () => { throw new Error('must not create'); },
       getActiveWatchPartyForWave: () => ({ id: 'running', hostUserId: 'someone-else', hostName: 'Zoe' }) },
     canAccessWaveFromCache: () => true,
     watchPartyView: p => p,

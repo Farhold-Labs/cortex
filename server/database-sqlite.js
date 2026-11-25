@@ -387,6 +387,59 @@ const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
  * SQLite-backed Database class
  * Provides the same interface as the original JSON-based Database class
  */
+// Watch parties (v2.14.0; Plex too since v2.156.0). Shared by a fresh install
+// and the rebuild that migrates older databases.
+const WATCH_PARTIES_SQL = `
+        CREATE TABLE IF NOT EXISTS watch_parties (
+          id TEXT PRIMARY KEY,
+          wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          host_user_id TEXT NOT NULL REFERENCES users(id),
+          provider TEXT NOT NULL DEFAULT 'jellyfin',
+          connection_id TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          media_title TEXT,
+          media_type TEXT,
+          status TEXT DEFAULT 'active',
+          playback_position REAL DEFAULT 0,
+          is_playing INTEGER DEFAULT 0,
+          last_sync_at TEXT,
+          created_at TEXT NOT NULL,
+          ended_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_watch_parties_wave
+        ON watch_parties(wave_id);
+
+        CREATE INDEX IF NOT EXISTS idx_watch_parties_status
+        ON watch_parties(status);
+
+        CREATE INDEX IF NOT EXISTS idx_watch_parties_host
+        ON watch_parties(host_user_id);
+`;
+
+// A watch party row as the server uses it. Never the media server's address.
+function watchPartyFromRow(row) {
+  return {
+    id: row.id,
+    waveId: row.wave_id,
+    hostUserId: row.host_user_id,
+    hostHandle: row.host_handle,
+    hostName: row.host_name,
+    hostAvatar: row.host_avatar,
+    provider: row.provider || 'jellyfin',
+    connectionId: row.connection_id,
+    itemId: row.item_id,
+    mediaTitle: row.media_title,
+    mediaType: row.media_type,
+    status: row.status,
+    playbackPosition: row.playback_position,
+    isPlaying: row.is_playing === 1,
+    lastSyncAt: row.last_sync_at,
+    createdAt: row.created_at,
+    endedAt: row.ended_at,
+  };
+}
+
 export class DatabaseSQLite {
   constructor(options = {}) {
     this.dbPath = options.dbPath || DB_PATH;
@@ -1835,30 +1888,7 @@ export class DatabaseSQLite {
         ON jellyfin_connections(status);
 
         -- Watch party sessions for synchronized playback
-        CREATE TABLE IF NOT EXISTS watch_parties (
-          id TEXT PRIMARY KEY,
-          wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
-          host_user_id TEXT NOT NULL REFERENCES users(id),
-          jellyfin_connection_id TEXT NOT NULL REFERENCES jellyfin_connections(id),
-          jellyfin_item_id TEXT NOT NULL,
-          media_title TEXT,
-          media_type TEXT,
-          status TEXT DEFAULT 'active',
-          playback_position INTEGER DEFAULT 0,
-          is_playing INTEGER DEFAULT 0,
-          last_sync_at TEXT,
-          created_at TEXT NOT NULL,
-          ended_at TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_watch_parties_wave
-        ON watch_parties(wave_id);
-
-        CREATE INDEX IF NOT EXISTS idx_watch_parties_status
-        ON watch_parties(status);
-
-        CREATE INDEX IF NOT EXISTS idx_watch_parties_host
-        ON watch_parties(host_user_id);
+        ${WATCH_PARTIES_SQL}
 
         -- Video feed imports from Jellyfin
         CREATE TABLE IF NOT EXISTS jellyfin_feed_imports (
@@ -4305,6 +4335,31 @@ export class DatabaseSQLite {
         PRIMARY KEY (wave_id, node_name)
       );
     `);
+    // v2.156.0: watch parties for Plex too. The table named a Jellyfin
+    // connection (NOT NULL, with a foreign key), so it is rebuilt with the
+    // provider and a connection and item of either kind. Same SQL as a fresh
+    // install, so both end up identical.
+    {
+      const cols = this.db.prepare('PRAGMA table_info(watch_parties)').all().map(c => c.name);
+      if (cols.includes('jellyfin_connection_id')) {
+        console.log('📝 Rebuilding watch_parties for Plex parties (v2.156.0)...');
+        this.db.transaction(() => {
+          this.db.exec('ALTER TABLE watch_parties RENAME TO watch_parties_v1');
+          for (const idx of ['idx_watch_parties_wave', 'idx_watch_parties_status', 'idx_watch_parties_host']) this.db.exec(`DROP INDEX IF EXISTS ${idx}`);
+          this.db.exec(WATCH_PARTIES_SQL);
+          this.db.exec(`
+            INSERT INTO watch_parties (id, wave_id, host_user_id, provider, connection_id, item_id, media_title, media_type,
+                                       status, playback_position, is_playing, last_sync_at, created_at, ended_at)
+            SELECT id, wave_id, host_user_id, 'jellyfin', jellyfin_connection_id, jellyfin_item_id, media_title, media_type,
+                   status, playback_position, is_playing, last_sync_at, created_at, ended_at
+            FROM watch_parties_v1
+          `);
+          this.db.exec('DROP TABLE watch_parties_v1');
+        })();
+        console.log('✅ watch_parties rebuilt');
+      }
+    }
+
     // v2.155.2: copies whose whole history (people on other servers included,
     // v2.155.0) has been pulled. Copies made earlier are pulled once more.
     this.db.exec(`
@@ -14866,7 +14921,7 @@ export class DatabaseSQLite {
   /**
    * Create a watch party
    */
-  createWatchParty({ waveId, hostUserId, jellyfinConnectionId, jellyfinItemId, mediaTitle, mediaType }) {
+  createWatchParty({ waveId, hostUserId, provider = 'jellyfin', connectionId, itemId, mediaTitle, mediaType }) {
     const id = `wp-${uuidv4()}`;
     const now = new Date().toISOString();
 
@@ -14877,9 +14932,9 @@ export class DatabaseSQLite {
     `).run(now, waveId);
 
     this.db.prepare(`
-      INSERT INTO watch_parties (id, wave_id, host_user_id, jellyfin_connection_id, jellyfin_item_id, media_title, media_type, status, playback_position, is_playing, last_sync_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 0, 0, ?, ?)
-    `).run(id, waveId, hostUserId, jellyfinConnectionId, jellyfinItemId, mediaTitle, mediaType, now, now);
+      INSERT INTO watch_parties (id, wave_id, host_user_id, provider, connection_id, item_id, media_title, media_type, status, playback_position, is_playing, last_sync_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 0, ?, ?)
+    `).run(id, waveId, hostUserId, provider, connectionId, itemId, mediaTitle, mediaType, now, now);
 
     return this.getWatchParty(id);
   }
@@ -14889,35 +14944,15 @@ export class DatabaseSQLite {
    */
   getWatchParty(partyId) {
     const row = this.db.prepare(`
-      SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar,
-             jc.server_url as jellyfin_server_url
+      SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar
       FROM watch_parties wp
       LEFT JOIN users u ON wp.host_user_id = u.id
-      LEFT JOIN jellyfin_connections jc ON wp.jellyfin_connection_id = jc.id
       WHERE wp.id = ?
     `).get(partyId);
 
     if (!row) return null;
 
-    return {
-      id: row.id,
-      waveId: row.wave_id,
-      hostUserId: row.host_user_id,
-      hostHandle: row.host_handle,
-      hostName: row.host_name,
-      hostAvatar: row.host_avatar,
-      jellyfinConnectionId: row.jellyfin_connection_id,
-      jellyfinServerUrl: row.jellyfin_server_url,
-      jellyfinItemId: row.jellyfin_item_id,
-      mediaTitle: row.media_title,
-      mediaType: row.media_type,
-      status: row.status,
-      playbackPosition: row.playback_position,
-      isPlaying: row.is_playing === 1,
-      lastSyncAt: row.last_sync_at,
-      createdAt: row.created_at,
-      endedAt: row.ended_at,
-    };
+    return watchPartyFromRow(row);
   }
 
   /**
@@ -14929,34 +14964,15 @@ export class DatabaseSQLite {
 
   getActiveWatchPartyForWave(waveId) {
     const row = this.db.prepare(`
-      SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar,
-             jc.server_url as jellyfin_server_url
+      SELECT wp.*, u.handle as host_handle, u.display_name as host_name, u.avatar as host_avatar
       FROM watch_parties wp
       LEFT JOIN users u ON wp.host_user_id = u.id
-      LEFT JOIN jellyfin_connections jc ON wp.jellyfin_connection_id = jc.id
       WHERE wp.wave_id = ? AND wp.status = 'active'
     `).get(waveId);
 
     if (!row) return null;
 
-    return {
-      id: row.id,
-      waveId: row.wave_id,
-      hostUserId: row.host_user_id,
-      hostHandle: row.host_handle,
-      hostName: row.host_name,
-      hostAvatar: row.host_avatar,
-      jellyfinConnectionId: row.jellyfin_connection_id,
-      jellyfinServerUrl: row.jellyfin_server_url,
-      jellyfinItemId: row.jellyfin_item_id,
-      mediaTitle: row.media_title,
-      mediaType: row.media_type,
-      status: row.status,
-      playbackPosition: row.playback_position,
-      isPlaying: row.is_playing === 1,
-      lastSyncAt: row.last_sync_at,
-      createdAt: row.created_at,
-    };
+    return watchPartyFromRow(row);
   }
 
   /**

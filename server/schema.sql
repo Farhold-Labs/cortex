@@ -930,28 +930,6 @@ CREATE INDEX IF NOT EXISTS idx_jellyfin_connections_user
 CREATE INDEX IF NOT EXISTS idx_jellyfin_connections_status
         ON jellyfin_connections(status);
 
-CREATE TABLE IF NOT EXISTS watch_parties (
-          id TEXT PRIMARY KEY,
-          wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
-          host_user_id TEXT NOT NULL REFERENCES users(id),
-          jellyfin_connection_id TEXT NOT NULL REFERENCES jellyfin_connections(id),
-          jellyfin_item_id TEXT NOT NULL,
-          media_title TEXT,
-          media_type TEXT,
-          status TEXT DEFAULT 'active',
-          playback_position INTEGER DEFAULT 0,
-          is_playing INTEGER DEFAULT 0,
-          last_sync_at TEXT,
-          created_at TEXT NOT NULL,
-          ended_at TEXT
-        );
-CREATE INDEX IF NOT EXISTS idx_watch_parties_wave
-        ON watch_parties(wave_id);
-CREATE INDEX IF NOT EXISTS idx_watch_parties_status
-        ON watch_parties(status);
-CREATE INDEX IF NOT EXISTS idx_watch_parties_host
-        ON watch_parties(host_user_id);
-
 CREATE TABLE IF NOT EXISTS jellyfin_feed_imports (
           id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1735,6 +1713,29 @@ CREATE TABLE IF NOT EXISTS federated_history_pulls (
         wave_id   TEXT PRIMARY KEY REFERENCES waves(id) ON DELETE CASCADE,
         pulled_at TEXT NOT NULL
       );
+
+CREATE TABLE IF NOT EXISTS watch_parties (
+          id TEXT PRIMARY KEY,
+          wave_id TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+          host_user_id TEXT NOT NULL REFERENCES users(id),
+          provider TEXT NOT NULL DEFAULT 'jellyfin',
+          connection_id TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          media_title TEXT,
+          media_type TEXT,
+          status TEXT DEFAULT 'active',
+          playback_position REAL DEFAULT 0,
+          is_playing INTEGER DEFAULT 0,
+          last_sync_at TEXT,
+          created_at TEXT NOT NULL,
+          ended_at TEXT
+        );
+CREATE INDEX IF NOT EXISTS idx_watch_parties_wave
+        ON watch_parties(wave_id);
+CREATE INDEX IF NOT EXISTS idx_watch_parties_status
+        ON watch_parties(status);
+CREATE INDEX IF NOT EXISTS idx_watch_parties_host
+        ON watch_parties(host_user_id);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
