@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { confirmLeaveDuringUpload } from '../../utils/uploads.js';
 import { BASE_URL, PRIVACY_LEVELS, waveAudience } from '../../config/constants.js';
 import { OFFLINE, VERSION_CHECK } from '../../../messages.js';
@@ -91,7 +91,12 @@ export const PrivacyBadge = ({ level, wave = null, compact = false, onClick = nu
 // ============ TOAST NOTIFICATION ============
 export const Toast = ({ message, type = 'info', duration = 4000, dismissible, onClose }) => {
   const colors = { success: 'var(--accent-green)', error: 'var(--accent-orange)', info: 'var(--accent-amber)' };
-  useEffect(() => { const t = setTimeout(onClose, duration); return () => clearTimeout(t); }, [onClose, duration]);
+  // The timer runs from when the message appears. It used to restart whenever
+  // onClose changed, and callers pass a new arrow each render, so a busy screen
+  // (a watch party re-renders every few seconds) kept a toast up for good (v2.157.0).
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => { const t = setTimeout(() => closeRef.current?.(), duration); return () => clearTimeout(t); }, [message, duration]);
   return (
     <div
       role="status"

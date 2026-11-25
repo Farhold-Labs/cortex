@@ -11340,11 +11340,13 @@ function decryptPlexToken(stored) {
   return readMediaToken(stored);
 }
 
-// Helper: Get Plex request headers
-function getPlexHeaders(accessToken = null) {
+// Helper: Get Plex request headers. `clientId` names one playback: Plex keeps
+// one transcode per client, so a shared identifier let each new viewer's
+// stream stop everyone else's (v2.156.3).
+function getPlexHeaders(accessToken = null, clientId = PLEX_CLIENT_IDENTIFIER) {
   const headers = {
     'Accept': 'application/json',
-    'X-Plex-Client-Identifier': PLEX_CLIENT_IDENTIFIER,
+    'X-Plex-Client-Identifier': clientId,
     'X-Plex-Product': PLEX_PRODUCT,
     'X-Plex-Version': PLEX_VERSION,
   };
@@ -11910,6 +11912,8 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
       console.log(`Plex stream: ${fileContainer}/${videoCodec} needs transcoding`);
 
       const sessionId = `cortex-${crypto.randomUUID()}`;
+      // This playback's own Plex client: see getPlexHeaders.
+      const clientId = sessionId;
       const decisionUrl = `${connection.serverUrl}/video/:/transcode/universal/decision?` +
         `path=${encodeURIComponent(`/library/metadata/${ratingKey}`)}` +
         `&mediaIndex=0&partIndex=0` +
@@ -11920,10 +11924,10 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
         `&location=lan` +
         `&session=${sessionId}` +
         `&X-Plex-Platform=Chrome` +
-        `&X-Plex-Client-Identifier=${PLEX_CLIENT_IDENTIFIER}`;
+        `&X-Plex-Client-Identifier=${clientId}`;
 
       const decisionResponse = await fetch(decisionUrl, {
-        headers: getPlexHeaders(accessToken),
+        headers: getPlexHeaders(accessToken, clientId),
         redirect: 'error',
         signal: AbortSignal.timeout(30000),
       });
@@ -11965,10 +11969,10 @@ app.get('/api/plex/stream/:connectionId/:ratingKey', authenticateToken, plexLimi
         `&session=${sessionId}` +
         `&X-Plex-Platform=Chrome` +
         `&X-Plex-Product=Cortex` +
-        `&X-Plex-Client-Identifier=${PLEX_CLIENT_IDENTIFIER}`;
+        `&X-Plex-Client-Identifier=${clientId}`;
 
       const playback = mediaHlsSessions.create({ userId: req.user.userId, connectionId, itemId: ratingKey,
-        serverUrl: connection.serverUrl, shareId: req.query.share, partyId: req.query.party }, hlsUrl);
+        serverUrl: connection.serverUrl, shareId: req.query.share, partyId: req.query.party, clientId }, hlsUrl);
       const rootResource = playback.resources.keys().next().value;
 
       res.json({
@@ -12002,7 +12006,10 @@ app.get('/api/plex/video/:connectionId/:ratingKey', authenticateToken, mediaRout
     const part = (data.MediaContainer || data).Metadata?.[0]?.Media?.[0]?.Part?.[0];
     if (!part?.key) return res.status(404).json({ error: 'No playable media found' });
     const url = upstreamUrl(connection.serverUrl, part.key, '/library/parts/');
-    await proxyMedia(req, res, url, getPlexHeaders(accessToken));
+    // Each viewer is their own Plex client here too (see getPlexHeaders); a
+    // stable one per person, since every seek is a new request.
+    const viewerClient = `cortex-${crypto.createHash('sha256').update(`plex-viewer:${req.user.userId}`).digest('hex').slice(0, 24)}`;
+    await proxyMedia(req, res, url, getPlexHeaders(accessToken, viewerClient));
   } catch {
     if (!res.headersSent) res.status(502).json({ error: 'Media unavailable' });
   }
@@ -12029,7 +12036,7 @@ app.get('/api/plex/hls/:sessionId/:resourceId', authenticateToken, mediaRoute(as
     return res.status(403).json({ error: 'Media access revoked' });
   }
   const accessToken = decryptPlexToken(connection.accessToken);
-  await proxyMedia(req, res, resource, getPlexHeaders(accessToken), {
+  await proxyMedia(req, res, resource, getPlexHeaders(accessToken, session.clientId), {
     playlist: text => {
       const rewritten = mediaHlsSessions.rewrite(session, text, resource, req.token);
       if (rewritten.includes(accessToken) || rewritten.includes(encodeURIComponent(accessToken))) {

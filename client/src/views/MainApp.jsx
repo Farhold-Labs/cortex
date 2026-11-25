@@ -2697,7 +2697,8 @@ function MainApp({ sharePingId }) {
                       scrollToMessageId={scrollToMessageId}
                       onScrollToMessageComplete={() => setScrollToMessageId(null)}
                       federationEnabled={federationEnabled}
-                      activeWatchParty={activeWatchParties[selectedWave?.id]}
+                      // The banner says "a party is on": not needed while you're watching it (v2.157.0).
+                      activeWatchParty={activeWatchParties[selectedWave?.id]?.id === watchPartyPlayer?.partyId ? null : activeWatchParties[selectedWave?.id]}
                       activeCall={activeCalls[selectedWave?.id]}
                       onJoinWatchParty={(partyId) => handleJoinWatchParty(selectedWave?.id, partyId)}
                       onEndWatchParty={handleEndWatchParty}
