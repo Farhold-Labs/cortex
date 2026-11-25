@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.155.3] - 2026-11-25
+
+Watch parties work. The server side was protected and tested in v2.86.0, but the UI could not have been used: nothing showed a way to start one, the player always drew nothing, and joining called routes that don't exist. Server and web, no app build, no migration.
+
+### Fixed
+- **Starting a party.** The only button was in the Jellyfin card, and the card was always told not to show it. It now shows START WATCH PARTY to the owner of the Jellyfin connection, the only person the server lets host. A party starts in the wave the ping is in, and the player opens.
+- **The player.** MainApp gave it a party id; it expected the party. Now it gets the party in one shape, made from the server's fields (`utils/watchParty.js`), used for the REST answers and every WebSocket message.
+  - The host plays, pauses and seeks for everyone, and reports its position every 5 seconds.
+  - Viewers follow the host's play state, and are moved when more than 2 seconds out, counting the time since the host last reported.
+  - If a browser blocks a viewer's autoplay, it asks for a tap.
+  - Everyone can mute and go full screen.
+  - The phone's back closes the player.
+  - It sits above the seasonal effects, which fell across the video.
+- **Joining.** It called `/jellyfin/watch-parties/:id/join` and `/leave`, which never existed. Joining now opens the player and asks for the party's state over the WebSocket, so a late viewer starts where the host is. CLOSE closes the player; the party goes on.
+- **The banner** read fields the server never sends (state, participants, host id), so it showed blanks.
+  - It shows the title, who's hosting and whether it's playing, with WATCH for everyone and END for the host.
+  - The viewer count is gone; nothing counts viewers.
+  - It's above the messages: inside them it scrolled out of sight in any long wave.
+- **Who hears about a party.** The list of active parties and the started and ended notices went by participant rows. Public and channel waves have none, so their readers never saw a party. They now use the same reach and read check as the wave's pings. The list and the join answer now include the Jellyfin connection the player streams from; never its server address.
+- **One party per wave.** Starting one silently ended whatever was running, someone else's included, and nobody was told. Another member now gets `409 WATCH_PARTY_RUNNING`. A host starting again replaces their own, and its viewers are told it ended.
+- **Playback values from the host are checked.** A position must be a finite number of seconds, and a command must be play, pause or seek. A position of 0 is no longer read as "no position".
+
+### Verified
+- **In headless Chrome on dev** (`https://dev.farhold.com`, so the page and API share an origin as in production), against a simulated Jellyfin serving a 90-second clip:
+  - mal (host, at phone size and again at 1280×800) and zoe (viewer, phone);
+  - only mal saw START WATCH PARTY, and starting opened his player;
+  - zoe got the banner and a notice, and WATCH opened hers;
+  - mal pressed play: both at 4 s, playing. He seeked: both at 62.9 s. He paused: both paused at 63.8 s;
+  - zoe closed and reopened, and came back at the host's position;
+  - mal pressed END: zoe's player closed and both banners went;
+  - no errors in either console.
+- `tests/media-security.test.cjs`:
+  - the join answer and the active list carry the connection and never the server address;
+  - an outsider's list is empty;
+  - a second member is refused with 409;
+  - a host's restart replaces their party and ends the first party's playback.
+- **Not tried:**
+  - a real Jellyfin server, or a phone;
+  - the tap-to-start overlay, since every viewer in the test opened the player with a tap, which lets it play.
+- Full suite: 802 tests pass. Three stubbed route tests in `review.test.cjs` now expect the wave-wide notice and the 409.
+
+### Not changed
+- **[SECURITY] Jellyfin and Plex access tokens are stored XOR'd with the first 32 characters of `JWT_SECRET`, not encrypted.** Found while setting up the test. A follow-up: they should use AES-GCM like the other field-level keys.
+
+## [2.155.2] - 2026-11-25
+
+Older copies of waves get the history they missed. Server only, no app build. **Migrates** (one table).
+
+### Fixed
+- **Copies made before v2.155.0 now get the earlier pings of people on other servers.** v2.155.0 made a server joining a wave late pull those pings too, but only from then on. A copy made earlier still lacked any pings posted, before it joined, by the wave's people on other servers.
+  - Shortly after start, each copy not yet pulled in full is pulled once more from its wave's server. Copies are done one at a time.
+  - Only pings the copy lacks are added. Pings it holds are left as they are, a deleted one stays deleted, and one claiming an author on this server is dropped, as in v2.155.0.
+  - A copy is recorded once its history has come down whole (`federated_history_pulls`), at acceptance or by this pull, and isn't pulled again.
+  - A copy whose wave's server is unreachable or older than protocol 4 waits. Older servers don't send other servers' pings. The pull runs again every 6 hours.
+  - The wave's server's protocol is asked fresh before a copy is skipped. What a server last heard can be from before its ally upgraded: dev still had QA at protocol 3 and port1 at 2, both on 2.155.1.
+
+### Verified
+- `tests/federated-history-repull.test.cjs`, one real server and fake allies:
+  - an older copy is pulled once, asking for other servers' pings;
+  - its missing ping is added; held, deleted and forged ones are left out;
+  - the copy is then recorded;
+  - a copy whose server speaks protocol 3 isn't asked and stays unrecorded;
+  - one already recorded isn't asked;
+  - a server recorded at protocol 3 whose identity page now says 4 is updated, and its copy is pulled.
+- **Counterfactual:** without the only-missing check, a held ping is overwritten by the origin's copy.
+- `tests/federated-backfill-travellers.test.cjs`: a copy pulled at acceptance is recorded.
+- Full suite: 801 tests pass.
+
+### Documentation
+- The roadmap no longer lists encryption across servers as outstanding. All four phases are built, and they're in the completed table.
+
 ## [2.155.1] - 2026-11-25
 
 Opening the app after an hour or more away asked for the password again, although the key was remembered. Reported on farhold. Web only (the apps load it from the server), no migration.
@@ -20,7 +91,7 @@ Opening the app after an hour or more away asked for the password again, althoug
   - Before the fix, the password prompt was on screen for the first 4 s of every reopen.
   - After it, the prompt never appeared.
 - Not tried on a real phone.
-- Full suite passes.
+- Full suite: 796 tests pass.
 
 ## [2.155.0] - 2026-11-24
 

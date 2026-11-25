@@ -336,7 +336,7 @@ const RichEmbed = ({ embed, autoLoad = false }) => {
 };
 
 // Component to render message content with embeds (formerly MessageWithEmbeds)
-const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [], contacts = [], onMentionClick, fetchAPI }) => {
+const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [], contacts = [], onMentionClick, fetchAPI, waveId }) => {
   const embeds = useMemo(() => detectEmbedUrls(content), [content]);
 
   // Get the plain text URLs that have embeds (to potentially hide them)
@@ -565,7 +565,8 @@ const MessageWithEmbeds = ({ content, autoLoadEmbeds = false, participants = [],
             type={embed.type}
             duration={embed.duration}
             overview={embed.overview}
-            canStartWatchParty={false}
+            waveId={waveId}
+            fetchAPI={fetchAPI}
           />
         ) : embed.platform === 'plex' ? (
           <PlexEmbed

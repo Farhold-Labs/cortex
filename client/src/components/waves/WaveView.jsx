@@ -48,7 +48,7 @@ import { withGroupScope } from '../../utils/groupScope.jsx';
 import { askConfirm } from '../../utils/askConfirm.jsx';
 const GoLiveModal = lazyComponent(() => import('../broadcast/GoLiveModal.jsx'));
 
-const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onLeaveWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove, onNewWaveWithPeople, onToggleMute, activeCall }) => {
+const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWaveUpdate, isMobile, sendWSMessage, typingUsers, reloadTrigger, contacts, contactRequests, sentContactRequests, onRequestsChange, onContactsChange, blockedUsers, mutedUsers, onBlockUser, onUnblockUser, onMuteUser, onUnmuteUser, onBlockedMutedChange, onShowProfile, onFocusPing, onNavigateToWave, scrollToMessageId, onScrollToMessageComplete, federationEnabled, activeWatchParty, onJoinWatchParty, onEndWatchParty, onOpenWatchParty, onWatchPartiesChange, onOpenThread, moveSource, onStartMove, onCompleteMove, onNewWaveWithPeople, onToggleMute, activeCall }) => {
   // E2EE context
   const e2ee = useE2EE();
 
@@ -2658,20 +2658,21 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         />
       )}
 
+      {/* Watch Party Banner (v2.14.0). Above the messages since v2.155.3: inside
+          the scroller it was out of sight in any long wave. */}
+      {activeWatchParty && (
+        <WatchPartyBanner
+          party={activeWatchParty}
+          isHost={activeWatchParty.hostId === currentUser?.id}
+          onJoin={() => onJoinWatchParty?.(activeWatchParty.id)}
+          onEnd={() => onEndWatchParty?.(activeWatchParty.id)}
+          isMobile={isMobile}
+        />
+      )}
+
       {/* Messages */}
       <div ref={messagesRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '12px' : '20px' }}>
 
-        {/* Watch Party Banner (v2.14.0) */}
-        {activeWatchParty && (
-          <WatchPartyBanner
-            party={activeWatchParty}
-            isHost={activeWatchParty.hostId === currentUser?.id}
-            onJoin={() => onJoinWatchParty?.(activeWatchParty.id)}
-            onLeave={() => onLeaveWatchParty?.(activeWatchParty.id)}
-            onOpen={() => onOpenWatchParty?.(activeWatchParty.id)}
-            isMobile={isMobile}
-          />
-        )}
         {/* Load Older Messages Button */}
         {hasMoreMessages && (
           <div style={{ textAlign: 'center', marginBottom: '16px' }}>
