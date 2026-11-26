@@ -92,13 +92,15 @@ export function itemEntries(x, qty, sheet) {
 export function planFill(sheet, srd, choices) {
   const inc = choices.include || {};
   const have = new Set((sheet.featureList || []).map(f => f.key));
-  const plan = { features: [], resources: [], items: [], attacks: [], gp: 0, skills: [], speciesName: null, background: null, speed: null, size: null, abilityBonuses: null, tools: [], subclassNames: {} };
+  const plan = { features: [], resources: [], items: [], attacks: [], gp: 0, skills: [], speciesName: null, background: null, speed: null, size: null, abilityBonuses: null, tools: [], subclassNames: {}, proficiencyLines: [], asi: [], feats: srd.feats || [] };
   const d = derive(sheet);
   const feature = (key, srdId, name, source) => { if (!have.has(key) && !plan.features.some(f => f.key === key)) plan.features.push({ id: newId(), key, srd: srdId, name, source }); };
 
   (sheet.classes || []).forEach((row, i) => {
     const cls = srd.classes.find(c => c.id === classIdOf(row.name));
     if (!cls) return;
+    // Levelling up (or adding) one class touches that class only.
+    if (choices.onlyLevel && choices.onlyLevel[i] === undefined) return;
     const L = Math.max(1, Math.min(20, Number(row.level) || 1));
     const from = choices.onlyLevel?.[i] || 1;
     const sub = choices.subclasses?.[i] !== undefined
@@ -117,6 +119,13 @@ export function planFill(sheet, srd, choices) {
       }
     }
     if (i === 0 && inc.skills) plan.skills.push(...(choices.skills || []).filter(k => cls.skills?.from.includes(k)).slice(0, cls.skills?.choose || 0));
+    // A class taken by multiclassing (v2.164.0): its own, smaller skill choice and proficiencies.
+    if (i > 0 && inc.skills && cls.multiclass?.skills) {
+      plan.skills.push(...(choices.mcSkills?.[i] || []).filter(k => cls.multiclass.skills.from.includes(k)).slice(0, cls.multiclass.skills.choose));
+    }
+    if (i > 0 && inc.features && from <= 1 && cls.multiclass?.proficiencies?.length && !String(sheet.proficiencies || '').includes(`${cls.name} (multiclass)`)) {
+      plan.proficiencyLines.push(`${cls.name} (multiclass): ${cls.multiclass.proficiencies.join(', ')}`);
+    }
     if (i === 0 && inc.equipment) collectEquipment(cls.equipment, choices.equipment?.class, srd, plan);
   });
 
@@ -143,6 +152,8 @@ export function planFill(sheet, srd, choices) {
   }
   plan.skills = [...new Set(plan.skills)].filter(k => !(Number(sheet.skills?.[k]) > 0));
   if (inc.hp) plan.hpMax = startingHp(sheet, srd);
+  // Ability Score Improvements and Epic Boons among what's added: each wants a choice.
+  plan.asi = plan.features.filter(f => asiKind(f.srd)).map(f => ({ key: f.key, kind: asiKind(f.srd), source: f.source, choice: choices.asi?.[f.key] || null }));
   return plan;
 }
 
@@ -174,8 +185,15 @@ export function applyFill(s, plan) {
     gp: s.currency?.gp || 0, proficiencies: s.proficiencies, abilities: { ...s.abilities }, hp: { ...(s.hp || {}) },
     subclasses: (s.classes || []).map(c => c.subclass),
   };
-  s.featureList = [...(s.featureList || []), ...plan.features];
+  s.featureList = [...(s.featureList || []), ...plan.features.map(f => (asiKind(f.srd) ? { ...f, pending: true } : f))];
   undo.featureIds = plan.features.map(f => f.id);
+  // Choices made for Ability Score Improvements now; the rest wait on the Features tab.
+  for (const a of plan.asi || []) {
+    if (!a.choice) continue;
+    const entry = s.featureList.find(f => f.key === a.key);
+    if (entry) { const added = applyAsiChoice(s, entry.id, a.choice, plan.feats || []); if (added) undo.featureIds.push(added); }
+  }
+  if (plan.proficiencyLines?.length) s.proficiencies = [s.proficiencies, ...plan.proficiencyLines].filter(Boolean).join('\n');
   s.resources = [...(s.resources || [])];
   for (const r of plan.resources) {
     const at = s.resources.findIndex(x => String(x.name).toLowerCase() === r.name.toLowerCase());
@@ -252,4 +270,83 @@ export function startingHp(sheet, srd) {
 /** Hit points for a level gained: the fixed value (half the die + 1), plus CON. */
 export function levelUpHp(hitDie, conScore) {
   return Math.max(1, Math.floor(hitDie / 2) + 1 + mod(conScore));
+}
+
+// ---- Ability Score Improvements, feats and Epic Boons (v2.164.0) ----
+
+export function asiKind(srdId) {
+  if (/ability-score-improvement/.test(srdId || '')) return 'asi';
+  if (/epic-boon/.test(srdId || '')) return 'boon';
+  return null;
+}
+
+const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+
+/**
+ * The feats a character can take at an Ability Score Improvement (or Epic
+ * Boon), with the scores and level they need. 2014: the SRD's one feat,
+ * Grappler. 2024: general feats of the level or lower (the Ability Score
+ * Improvement is itself one of them), and at an Epic Boon the boons as well.
+ */
+export function featOptions(feats, sheet, kind, level) {
+  return (feats || []).filter(f => {
+    if (f.type === 'origin' || f.type === 'fighting-style') return false;
+    if (f.type === 'epic-boon' && kind !== 'boon') return false;
+    if (f.minLevel && level < f.minLevel) return false;
+    if (f.needsFeature && !(sheet.featureList || []).some(x => x.name === f.needsFeature)) return false;
+    if (!f.repeatable && (sheet.featureList || []).some(x => x.srd === f.id)) return false;
+    return true;
+  }).map(f => ({ ...f, meetsScores: (f.scores || []).every(p => (Number(sheet.abilities?.[p.ability]) || 0) >= p.min) }));
+}
+
+/** Is a choice complete? { mode: 'plus2' | 'plus1x2' | 'feat', a, b, feat, featAbility } */
+export function asiChoiceValid(choice, feats) {
+  if (!choice) return false;
+  if (choice.mode === 'plus2') return ABILITY_KEYS.includes(choice.a);
+  if (choice.mode === 'plus1x2') return ABILITY_KEYS.includes(choice.a) && ABILITY_KEYS.includes(choice.b) && choice.a !== choice.b;
+  if (choice.mode === 'feat') {
+    const f = (feats || []).find(x => x.id === choice.feat);
+    if (!f) return false;
+    if (f.increase?.from) return f.increase.from.includes(choice.featAbility);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Apply a choice to the Ability Score Improvement (or Epic Boon) entry
+ * `entryId`: raise scores (to the cap: 20, or what the feat says) and, for a
+ * feat, add it as its own feature. Returns the new feature's id, if any.
+ */
+export function applyAsiChoice(s, entryId, choice, feats) {
+  if (!asiChoiceValid(choice, feats)) return null;
+  const entry = (s.featureList || []).find(f => f.id === entryId);
+  if (!entry) return null;
+  const raise = (k, by, max) => { s.abilities = { ...s.abilities, [k]: Math.min(max, Math.max(Number(s.abilities?.[k]) || 10, (Number(s.abilities?.[k]) || 10) + by)) }; };
+  let label; let added = null;
+  if (choice.mode === 'plus2') { raise(choice.a, 2, 20); label = `+2 ${choice.a.toUpperCase()}`; }
+  else if (choice.mode === 'plus1x2') { raise(choice.a, 1, 20); raise(choice.b, 1, 20); label = `+1 ${choice.a.toUpperCase()}, +1 ${choice.b.toUpperCase()}`; }
+  else {
+    const f = feats.find(x => x.id === choice.feat);
+    if (f.increase?.from && choice.featAbility) raise(choice.featAbility, f.increase.by, f.increase.max);
+    label = `${f.name}${f.increase?.from && choice.featAbility ? ` (+${f.increase.by} ${choice.featAbility.toUpperCase()})` : ''}`;
+    added = newId();
+    s.featureList = [...s.featureList, { id: added, key: `feat:${f.id}:${entry.key}`, srd: f.id, name: `Feat: ${f.name}`, source: entry.source }];
+  }
+  s.featureList = s.featureList.map(x => (x.id === entryId ? { ...x, pending: false, choice: label } : x));
+  return added;
+}
+
+/** Can this character multiclass into a class? Both the new class's and every current class's scores count. */
+export function multiclassCheck(sheet, srd, classId) {
+  const scores = sheet.abilities || {};
+  const ok = (req) => !req || ((req.all || []).every(p => (Number(scores[p.ability]) || 0) >= p.min)
+    && (!(req.any || []).length || req.any.some(p => (Number(scores[p.ability]) || 0) >= p.min)));
+  const describe = (req) => [...(req.all || []).map(p => `${p.ability.toUpperCase()} ${p.min}`), (req.any || []).length ? req.any.map(p => `${p.ability.toUpperCase()} ${p.min}`).join(' or ') : ''].filter(Boolean).join(', ');
+  const target = srd.classes.find(c => c.id === classId);
+  const problems = [];
+  for (const cls of [target, ...(sheet.classes || []).map(r => srd.classes.find(c => c.id === classIdOf(r.name)))].filter(Boolean)) {
+    if (!ok(cls.multiclass)) problems.push(`${cls.name} needs ${describe(cls.multiclass)}`);
+  }
+  return [...new Set(problems)];
 }

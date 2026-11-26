@@ -16,6 +16,7 @@ The rules text is from the **System Reference Document 5.1** (`2014/`) and **5.2
 | 2014 species | 9 |
 | 2014 traits | 38 |
 | 2014 backgrounds | 1 |
+| 2014 feats | 1 |
 | 2024 spells | 339 |
 | 2024 monsters | 341 |
 | 2024 equipment | 182 |
@@ -26,5 +27,6 @@ The rules text is from the **System Reference Document 5.1** (`2014/`) and **5.2
 | 2024 species | 9 |
 | 2024 traits | 67 |
 | 2024 backgrounds | 4 |
+| 2024 feats | 17 |
 
 Don't edit these files by hand; fix the converter and run it again.
