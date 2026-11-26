@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.162.0] - 2026-11-25
+
+Tabletop role-playing: the GM's notes, stat blocks and monster hit points are sealed to the GMs' own keys. Server and web client, no app build. Migrates (one new table, one new column).
+
+### Security
+- **The GM key.** A table's GM-only documents are now encrypted with a key only its GMs hold, in every wave, plain or encrypted. That covers the GM half of an encounter (monster HP and AC, hidden combatants), the stat blocks, and notes not yet shared. Neither the server nor a player who also runs the server can read them. In v2.160.0 they were only kept from players by the server, which was a stated limit; this closes it.
+  - **How the key gets to each GM:** a GM's device makes the key and wraps a copy for each GM, the same way a wave's key is handed out. Each copy is bound to the wave, the version and that GM, and is opened only if its wrapper's key is one their fingerprint signed. The current version must also have been wrapped by one of the table's GMs. The server stores only the wrapped copies and can't open them.
+  - **What the server enforces:** it refuses a GM-only document that isn't sealed with the GM key (`GM_KEY_REQUIRED`). It also refuses a document for the table that is, since the table couldn't read it.
+  - **A new GM gets the key only when a GM chooses to share it.** The GM screen shows "Zoe is a GM here but doesn't have the GM key yet" with **Share it**, and the new GM sees that they're waiting. So a GM that a compromised server slipped onto the list gets nothing unless a real GM agrees.
+  - **When someone holding the key stops being a GM** (removed, or gone from the wave), the next GM to open the screen makes a new version for the remaining GMs and seals everything again with it.
+  - **Sharing a note as a handout** seals it for the table; making it GM-only again seals it with the GM key.
+  - **Upgrading:** documents made before this version are sealed with the GM key the first time a GM opens the GM screen.
+  - **Tested with two counterfactuals:**
+    - with the read check stripped, a player gets the note, but only as ciphertext they can't open;
+    - with the sealing rule stripped, the server would store a GM note as plain text.
+
+### Verified
+- **Tests:** 863 pass. `tests/ttrpg-gm.test.cjs` now has 13, covering:
+  - only GMs make the key, for exactly the GMs, one version at a time, with races refused;
+  - sharing only versions the giver holds, never overwriting a copy someone already holds;
+  - a new version due when a GM leaves;
+  - GM-only documents refused unless sealed, and handouts refused if sealed;
+  - the two counterfactuals.
+- **Headless only, with real encryption on dev** (mal as GM at 1280×800, zoe at 390×844):
+  - The first time mal opened the GM screen, it made the key and sealed the stat blocks and encounter that predated this version.
+  - mal made zoe a GM. Her screen said she was waiting; his offered Share it. After he tapped it, she could read the stat blocks.
+  - mal removed zoe as a GM. His device made version 2 and sealed everything again with it, and zoe now receives no GM documents.
+  - A full encounter (initiative, turns, damage to Down) and a shared handout still work.
+
+## [2.161.0] - 2026-11-25
+
+Tabletop role-playing, phase 6 (ahead of 4 and 5): the rules reference. Web client only, no migration.
+
+### Added
+- **📖 Rules reference** in a table's ⋮ menu, for everyone at the table. It covers spells, monsters, equipment, magic items and conditions, from SRD 5.1 (the 2014 rules) and SRD 5.2 (the 2024 rules): 319 and 339 spells, 334 and 341 monsters, 237 and 182 pieces of equipment, 239 and 243 magic items. It opens at the table's edition and can switch to the other. Search by name (or by a class, for spells) and filter by spell level, CR, category or rarity.
+- **Picking from it in a sheet:**
+  - **Spells:** Spells → + From the SRD. A spell arrives with its level, concentration, ritual, dice, and attack or saving throw. The sheet shows "Hit +N" or "DC N DEX" from the character's own numbers. A cantrip's dice grow at levels 5, 11 and 17. **Details** shows the full text, which is read from the reference rather than stored in the sheet.
+  - **Equipment and magic items:** Gear → + Equipment from the SRD, or + Magic item. A weapon also becomes an attack, with its damage, properties, range and mastery. Finesse weapons use the better of Strength and Dexterity; ranged weapons use Dexterity.
+- **Picking from it on the GM screen:** Monsters → + From the SRD makes a copy in the GM's stat blocks, ready to edit and to add to encounters. Stat blocks now also show armour, resistances, immunities and XP.
+
+### How the data is made
+- **Sourced, not typed from memory:**
+  - `tools/build-srd.mjs` converts [5e-bits/5e-database](https://github.com/5e-bits/5e-database) (MIT) at a pinned commit into `client/src/srd/`, and records the commit in `SOURCE.md`.
+  - The rules text is Wizards of the Coast's SRD under CC-BY-4.0, credited on the About page and at the foot of the reference.
+- **Downloads:** each set is its own file, loaded the first time it's opened, and kept out of the service worker's install download. Nobody downloads its 2 MB until they use it.
+
+### Verified
+- **Tests:** 860 pass. New: `tests/ttrpg-srd.test.cjs` (4).
+  - It checks every set in both editions, and spot-checks numbers against the books: Fireball, the 2014 Goblin, the 2024 Longsword, the Dagger's thrown range.
+  - It rolls all of the 1,000+ dice strings in the data through the server's roller. That caught two kinds of entry with a flat number instead of dice (Aid's healing, a blowgun's damage), which now stay text instead of becoming roll buttons that fail.
+- **Headless only** (Chrome on dev, as zoe at 390×844 and mal at 1280×800):
+  - searching both editions;
+  - Fire Bolt into a sheet, with its details;
+  - a Rapier into inventory and attacks (Hit +5, 1d8+3);
+  - the 2024 Goblin Warrior into the GM's stat blocks;
+  - the service worker no longer downloading any of it at install.
+
 ## [2.160.0] - 2026-11-25
 
 Tabletop role-playing, phase 3: the GM's tools. Also the D&D 5e 2014 rules, and a starting layout for classic percentile super-hero games. Server and web client, no app build. Migrates (one new table, one new column).

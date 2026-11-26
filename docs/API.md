@@ -4915,7 +4915,7 @@ At a table only (409 `NOT_A_TABLE`), on one server (409 `TTRPG_LOCAL_ONLY`). A s
 
 ### The GM's tools (v2.160.0)
 
-Same gates as sheets (a table, on one server). Documents are blobs like sheets (JSON in a plain wave; ciphertext bound to `"cortex-tabledoc-v1" ‖ origin wave id ‖ doc id ‖ kind` in an encrypted one, else 400 `ENCRYPTION_REQUIRED`). **Only GMs create, change or delete them** (403 `GM_ONLY`).
+Same gates as sheets (a table, on one server). **Only GMs create, change or delete documents** (403 `GM_ONLY`). A document for the `table` is a blob like a sheet (JSON in a plain wave; ciphertext bound to `"cortex-tabledoc-v1" ‖ origin wave id ‖ doc id ‖ kind` in an encrypted one, else 400 `ENCRYPTION_REQUIRED`). **A `gm` one (v2.162.0) must be sealed with the GM key in every wave:** `{ keyScope: 'gm', encrypted: true, data, nonce, keyVersion }` with `keyVersion` a GM key version that exists, bound to `"cortex-gmdoc-v1" ‖ origin wave id ‖ doc id ‖ kind`, else 400 `GM_KEY_REQUIRED`; a `table` one with `keyScope: 'gm'` is 400. Documents carry `keyScope`.
 
 | Kind | Audiences | |
 |---|---|---|
@@ -4932,6 +4932,9 @@ Same gates as sheets (a table, on one server). Documents are blobs like sheets (
 | PUT | `/api/waves/:id/table-docs/:docId` | `{ baseVersion, data, …, audience? }`; a stale one is 409 `DOC_CONFLICT` with the current `doc` |
 | DELETE | `/api/waves/:id/table-docs/:docId` | |
 | POST | `/api/waves/:id/table/turn` | `{ userId }`, GMs only: "It's your turn" (notification `ttrpg_turn` and push). 400 `NOT_AT_TABLE` for someone who can't read the wave |
+| GET | `/api/waves/:id/table/gm-keys` | GMs only (v2.162.0): `{ version, gms, missing, needsRotation, mine: [{ version, encryptedKey, nonce, wrappedBy, wrapperPublicKey }] }`. `gms` are the table's GMs who can read the wave; `needsRotation` when someone holding the current version isn't one |
+| POST | `/api/waves/:id/table/gm-keys` | GMs only: `{ version, keys: [{ userId, encryptedKey, nonce }] }`, the next version only (409 `GM_KEY_RACE`), wrapped for exactly the `gms` (400 `GM_KEY_RECIPIENTS`). The server records the caller and their public key as the wrapper. Sends `table_gm_key` `{ waveId }` to the GMs |
+| POST | `/api/waves/:id/table/gm-keys/grant` | GMs only: `{ userId, keys: [{ version, encryptedKey, nonce }] }` to a GM lacking them; only versions the caller holds, never over one held. Returns `{ added, … }` |
 
 A change sends WebSocket `table_doc_updated` `{ waveId, docId, kind }` (to the wave, or to the GMs for a GM-only one). **Rolls** (`POST /api/waves/:id/rolls`) take an optional `ref` (1–100 of `A-Z a-z 0-9 : _ -`, else 400 `INVALID_REF`), sent as WebSocket `table_roll` `{ waveId, rollId, ref }`; `GET /rolls?ref=<prefix>` lists rolls whose ref starts with it, each still through `rollView`. Systems: `dnd5e-2024`, `dnd5e-2014` (v2.160.0), `generic`.
 

@@ -28209,9 +28209,9 @@ app.delete('/api/waves/:id/sheets/:sheetId', authenticateToken, (req, res) => {
 // sealed under the wave key in an encrypted wave like sheets. Who may read
 // one is its audience, decided here on every read: the table, or only its
 // GMs. Only GMs write. A note can be shared with the table (a handout) by
-// changing its audience. A player who also controls the server could read
-// GM-only documents in an encrypted wave, since every player holds the wave
-// key: sealing them to the GMs' own keys is noted in the design as later work.
+// changing its audience. Since v2.162.0 GM-only documents are sealed with the
+// GM key (below), in every wave, so not even a player who also runs the server
+// can read them.
 const TABLE_DOC_KINDS = { encounter: ['table'], encounter_gm: ['gm'], monster: ['gm'], note: ['gm', 'table'] };
 const TABLE_DOC_MAX = 1000;
 
@@ -28260,7 +28260,7 @@ app.post('/api/waves/:id/table-docs', authenticateToken, sheetLimiter, (req, res
   const audience = req.body.audience == null ? audiences[0] : req.body.audience;
   if (!audiences.includes(audience)) return res.status(400).json({ error: 'That document can\'t have that audience', code: 'INVALID_DOC' });
   if (db.countTableDocs(t.wave.id) >= TABLE_DOC_MAX) return res.status(409).json({ error: `At most ${TABLE_DOC_MAX} documents at a table`, code: 'DOC_LIMIT' });
-  const parsed = sheetBody(t.wave.id, req.body, 'GM documents');
+  const parsed = tableDocBody(t, audience, req.body);
   if (parsed.error) return res.status(400).json(parsed);
   let doc;
   try {
@@ -28283,7 +28283,7 @@ app.put('/api/waves/:id/table-docs/:docId', authenticateToken, sheetLimiter, (re
   if (!TABLE_DOC_KINDS[doc.kind].includes(audience)) return res.status(400).json({ error: 'That document can\'t have that audience', code: 'INVALID_DOC' });
   const baseVersion = Number(req.body.baseVersion);
   if (!Number.isInteger(baseVersion)) return res.status(400).json({ error: 'baseVersion is required', code: 'INVALID_DOC' });
-  const parsed = sheetBody(t.wave.id, req.body, 'GM documents');
+  const parsed = tableDocBody(t, audience, req.body);
   if (parsed.error) return res.status(400).json(parsed);
   const updated = db.updateTableDoc(t.wave.id, doc.id, baseVersion, { audience, body: parsed.body }, req.user.userId);
   if (!updated) {
@@ -28303,6 +28303,97 @@ app.delete('/api/waves/:id/table-docs/:docId', authenticateToken, (req, res) => 
   db.deleteTableDoc(t.wave.id, doc.id);
   announceTableDoc(t.wave, t.table, doc, [doc.audience]);
   res.json({ success: true });
+});
+
+// ---- The GM key (v2.162.0) ----
+//
+// GM-only documents (an encounter's GM half, stat blocks, unshared notes) are
+// sealed with a key only the GMs hold: wrapped for each GM on a GM's device,
+// bound to the wave, the version and that GM, and checked against the
+// wrapper's fingerprint. The server stores wrapped copies and can't open
+// them, so neither it nor a player who also runs it can read GM documents.
+// The GMs here are the table's GMs who can still read the wave. When someone
+// holding the current version no longer is one, the next GM device makes a
+// new version (they keep what they had, as with wave keys).
+function gmsAtTable(t) {
+  return t.table.gms.filter(g => canAccessWaveFromCache(t.wave.id, g));
+}
+function gmKeyStatus(t) {
+  const version = db.gmKeyVersion(t.wave.id);
+  const gms = gmsAtTable(t);
+  const holders = version ? db.gmKeyHolders(t.wave.id, version) : [];
+  return {
+    version, gms,
+    missing: gms.filter(g => !holders.includes(g)),
+    needsRotation: version > 0 && holders.some(h => !gms.includes(h)),
+  };
+}
+const WRAPPED_KEY = /^[A-Za-z0-9+/]{20,4000}={0,2}$/;
+const KEY_NONCE = /^[A-Za-z0-9+/]{16}$/;
+
+// A GM-only document must be sealed with the GM key; a document for the table
+// must not be (its readers don't hold it).
+function tableDocBody(t, audience, input) {
+  if (audience === 'gm') {
+    const fail = (error) => ({ error, code: 'GM_KEY_REQUIRED' });
+    if (input?.keyScope !== 'gm' || input.encrypted !== true) return fail('GM-only documents must be sealed with the GM key');
+    if (typeof input.nonce !== 'string' || !KEY_NONCE.test(input.nonce)) return fail('A sealed document needs a 12-byte nonce');
+    if (typeof input.data !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.data) || input.data.length < 24) return fail('A sealed document must be ciphertext');
+    if (input.data.length > SHEET_MAX_CIPHER) return { error: 'That is too large', code: 'SHEET_TOO_LARGE' };
+    const version = Number(input.keyVersion);
+    if (!Number.isInteger(version) || version < 1 || version > db.gmKeyVersion(t.wave.id)) return fail('Unknown GM key version');
+    return { body: { data: input.data, encrypted: true, nonce: input.nonce, keyVersion: version, keyScope: 'gm' } };
+  }
+  if (input?.keyScope === 'gm') return { error: 'A document for the table can\'t be sealed with the GM key', code: 'INVALID_DOC' };
+  return sheetBody(t.wave.id, input, 'GM documents');
+}
+
+app.get('/api/waves/:id/table/gm-keys', authenticateToken, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t || !requireGm(t, req, res)) return;
+  res.json({ ...gmKeyStatus(t), mine: db.gmKeysFor(t.wave.id, req.user.userId) });
+});
+
+// A new version, wrapped for every GM at once; the next version only.
+app.post('/api/waves/:id/table/gm-keys', authenticateToken, sheetLimiter, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t || !requireGm(t, req, res)) return;
+  const status = gmKeyStatus(t);
+  const version = Number(req.body.version);
+  if (version !== status.version + 1) return res.status(409).json({ error: 'Another GM changed the GM key first', code: 'GM_KEY_RACE', ...status });
+  const keys = Array.isArray(req.body.keys) ? req.body.keys : [];
+  if (keys.some(k => !k || typeof k.userId !== 'string' || !WRAPPED_KEY.test(k.encryptedKey || '') || !KEY_NONCE.test(k.nonce || ''))) {
+    return res.status(400).json({ error: 'Each wrapped key needs a GM, the key and its nonce', code: 'INVALID_GM_KEY' });
+  }
+  const to = new Set(keys.map(k => k.userId));
+  if (to.size !== keys.length || to.size !== status.gms.length || status.gms.some(g => !to.has(g))) {
+    return res.status(400).json({ error: 'A new GM key goes to every GM at the table and nobody else', code: 'GM_KEY_RECIPIENTS', gms: status.gms });
+  }
+  const wrapperPublicKey = db.getUserPublicKey(req.user.userId);
+  if (!wrapperPublicKey) return res.status(400).json({ error: 'Set up encryption first', code: 'NO_KEYS' });
+  if (!db.addGmKeyVersion(t.wave.id, version, keys, req.user.userId, wrapperPublicKey)) {
+    return res.status(409).json({ error: 'Another GM changed the GM key first', code: 'GM_KEY_RACE', ...gmKeyStatus(t) });
+  }
+  broadcast({ type: 'table_gm_key', waveId: t.wave.id }, t.table.gms);
+  res.status(201).json(gmKeyStatus(t));
+});
+
+// Give a GM the versions they lack (a new GM, or one who missed one).
+app.post('/api/waves/:id/table/gm-keys/grant', authenticateToken, sheetLimiter, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t || !requireGm(t, req, res)) return;
+  const status = gmKeyStatus(t);
+  if (!status.gms.includes(req.body.userId)) return res.status(400).json({ error: 'That person isn\'t a GM at this table', code: 'NOT_A_GM' });
+  const held = new Set(db.gmKeysFor(t.wave.id, req.user.userId).map(k => k.version));
+  const keys = Array.isArray(req.body.keys) ? req.body.keys : [];
+  if (!keys.length || keys.some(k => !k || !held.has(Number(k.version)) || !WRAPPED_KEY.test(k.encryptedKey || '') || !KEY_NONCE.test(k.nonce || ''))) {
+    return res.status(400).json({ error: 'You can only pass on versions of the GM key you hold', code: 'INVALID_GM_KEY' });
+  }
+  const wrapperPublicKey = db.getUserPublicKey(req.user.userId);
+  if (!wrapperPublicKey) return res.status(400).json({ error: 'Set up encryption first', code: 'NO_KEYS' });
+  const added = db.grantGmKeys(t.wave.id, req.body.userId, keys.map(k => ({ ...k, version: Number(k.version) })), req.user.userId, wrapperPublicKey);
+  broadcast({ type: 'table_gm_key', waveId: t.wave.id }, [req.body.userId]);
+  res.json({ added, ...gmKeyStatus(t) });
 });
 
 // "It's your turn", for play-by-post. The GM's device knows whose turn it is

@@ -226,9 +226,13 @@ The instance operator (whoever runs the server) can see:
   the wave is deleted, and are included in an account's data export.
 - **The GM's tools at a tabletop game** (v2.160.0): encounters, monster stat
   blocks and GM notes, who made and changed each and when, and whether each
-  is for the GMs or the whole table. **In an end-to-end encrypted wave their
-  contents are encrypted** under the wave's key, like sheets; in other waves
-  they are readable data. GM-only ones are sent only to the table's GMs. A
+  is for the GMs or the whole table. **GM-only ones (monster hit points, stat
+  blocks, unshared notes) are encrypted with a key only the table's GMs hold**
+  (v2.162.0), in every wave, so the operator can't read them; the server keeps
+  only copies of that key wrapped for each GM, and who wrapped each. The ones
+  for the whole table (the initiative order, handouts) are encrypted under the
+  wave's key in an end-to-end encrypted wave, like sheets, and readable data
+  elsewhere. A
   roll can record what it was for in a short code (an encounter's initiative,
   `enc:<id>:<id>`), never in words. "It's your turn" notifications are stored
   like other notifications.
@@ -241,6 +245,7 @@ Even with full database access, the operator cannot see:
 
 - Message content in encrypted waves (they don't have the keys)
 - Character sheets in encrypted waves
+- A tabletop game's GM-only notes, stat blocks and monster hit points (any wave)
 - Who is in which wave (encrypted at rest)
 - Your contact list (client-side encrypted)
 - Crew membership lists (encrypted at rest)

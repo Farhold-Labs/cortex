@@ -194,6 +194,12 @@ export function d20Roll(bonus, d, mode = 'normal') {
   return n ? `${dice}${signed(n)}` : dice;
 }
 
+/** A cantrip's damage grows at character levels 5, 11 and 17 (both editions). */
+export function cantripDice(dice, level) {
+  const times = level >= 17 ? 4 : level >= 11 ? 3 : level >= 5 ? 2 : 1;
+  return String(dice || '').replace(/(\d*)d(\d+)/gi, (_, n, sides) => `${(Number(n) || 1) * times}d${sides}`);
+}
+
 export function attackBonus(a, d) {
   const abilityMod = a.ability === 'spell' ? (d.spellAttack == null ? 0 : d.spellAttack - d.prof) : a.ability && a.ability !== 'none' ? d.mods[a.ability] : 0;
   return abilityMod + (a.proficient || a.ability === 'spell' ? d.prof : 0) + (Number(a.bonus) || 0);
