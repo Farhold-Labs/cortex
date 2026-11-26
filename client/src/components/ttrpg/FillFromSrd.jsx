@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { loadCharacterSrd } from '../../srd/index.js';
 import { SKILLS } from '../../ttrpg/dnd5e2024.js';
-import { planFill, applyFill, undoFill, matchSubclass, subclassFirstLevel, levelUpHp } from '../../ttrpg/fill.js';
+import { planFill, applyFill, undoFill, matchSubclass, subclassFirstLevel, levelUpHp, featOptions, asiChoiceValid, applyAsiChoice, multiclassCheck } from '../../ttrpg/fill.js';
+import { ABILITIES } from '../../ttrpg/dnd5e2024.js';
 import { btn, labelStyle, inputStyle, box, sectionTitle } from './sheetUi.jsx';
 
 /**
@@ -14,8 +15,9 @@ import { btn, labelStyle, inputStyle, box, sectionTitle } from './sheetUi.jsx';
 const SKILL_NAME = Object.fromEntries(SKILLS.map(k => [k.key, k.name]));
 const RESET = { short: 'short rest', long: 'long rest', none: '—' };
 const classIdOf = (name) => String(name || '').trim().toLowerCase();
+const muted = { color: 'var(--text-dim)', fontSize: '0.72rem' };
 
-export default function FillFromSrd({ data, edition, change, onClose, levelUp = null }) {
+export default function FillFromSrd({ data, edition, change, onClose, levelUp: levelUpProp = null, asiFor = null, addClass = false }) {
   const [srd, setSrd] = useState(null);
   const [error, setError] = useState(null);
   const [include, setInclude] = useState({ features: true, resources: true, skills: false, species: false, background: false, equipment: false });
@@ -28,7 +30,12 @@ export default function FillFromSrd({ data, edition, change, onClose, levelUp = 
   const [equipment, setEquipment] = useState({ class: [], background: [] });
   const [hpMode, setHpMode] = useState('average');
   const [done, setDone] = useState(null);
+  const [asi, setAsi] = useState({}); // choices for Ability Score Improvements and Epic Boons, by feature key
+  const [mcSkills, setMcSkills] = useState({});
+  const [newClass, setNewClass] = useState('');
   const undoRef = useRef(null);
+  // Adding a class (multiclassing, v2.164.0) is a level-up of a new row at level 1.
+  const levelUp = addClass ? (newClass ? { index: (data.classes || []).length, add: true } : null) : levelUpProp;
 
   useEffect(() => {
     let live = true;
@@ -52,33 +59,86 @@ export default function FillFromSrd({ data, edition, change, onClose, levelUp = 
   const target = useMemo(() => {
     if (!levelUp) return data;
     const t = JSON.parse(JSON.stringify(data));
-    t.classes[levelUp.index].level = Math.min(20, (Number(t.classes[levelUp.index].level) || 1) + 1);
+    if (levelUp.add) t.classes.push({ name: srd?.classes.find(c => c.id === newClass)?.name || newClass, level: 1, subclass: '' });
+    else t.classes[levelUp.index].level = Math.min(20, (Number(t.classes[levelUp.index].level) || 1) + 1);
     return t;
-  }, [data, levelUp]);
+  }, [data, levelUp?.index, levelUp?.add, newClass, srd]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const choices = { include, subclasses, speciesId, subspeciesId, backgroundId, applyBonuses, skills, equipment,
+  const choices = { include: levelUp?.add ? { features: true, resources: true, skills: true } : include, subclasses, speciesId, subspeciesId, backgroundId, applyBonuses, skills, equipment, asi, mcSkills,
     ...(levelUp ? { onlyLevel: { [levelUp.index]: target.classes[levelUp.index].level } } : {}) };
   const plan = useMemo(() => (srd ? planFill(target, srd, choices) : null), [srd, target, JSON.stringify(choices)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <div style={{ color: 'var(--accent-orange)' }}>{error} <button type="button" onClick={onClose} style={btn()}>Back</button></div>;
-  if (!srd || !plan) return <div style={{ color: 'var(--text-dim)' }}>Loading the SRD…</div>;
+  if (!srd) return <div style={{ color: 'var(--text-dim)' }}>Loading the SRD…</div>;
+  const level = (target.classes || []).reduce((n, c) => n + (Number(c.level) || 0), 0);
+
+  // Choosing for an Ability Score Improvement already on the sheet.
+  if (asiFor) {
+    const entry = (data.featureList || []).find(f => f.id === asiFor);
+    if (!entry) return <div style={{ color: 'var(--text-dim)' }}>That feature is gone. <button type="button" onClick={onClose} style={btn()}>Back</button></div>;
+    const kind = /epic-boon/.test(entry.srd) ? 'boon' : 'asi';
+    const c = asi[entry.key];
+    if (done) return <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}><div style={{ ...box, color: 'var(--accent-green)' }}>{entry.name}: {done.label}</div><button type="button" onClick={onClose} style={{ ...btn(true), alignSelf: 'flex-start' }}>Done</button></div>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.8rem' }}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button type="button" onClick={onClose} style={btn()} aria-label="Back">◀</button>
+          <span style={{ color: 'var(--accent-purple)' }}>{entry.name} ({entry.source})</span>
+        </div>
+        <AsiChooser kind={kind} edition={edition} feats={featOptions(srd.feats, data, kind, level)} abilities={data.abilities} choice={c} onChange={(v) => setAsi(a => ({ ...a, [entry.key]: v }))} />
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button type="button" disabled={!asiChoiceValid(c, srd.feats)} onClick={() => {
+            change((s) => { applyAsiChoice(s, entry.id, c, srd.feats); }, { now: true });
+            setDone({ label: c.mode === 'feat' ? srd.feats.find(f => f.id === c.feat)?.name : c.mode === 'plus2' ? `+2 ${c.a.toUpperCase()}` : `+1 ${c.a.toUpperCase()}, +1 ${c.b.toUpperCase()}` });
+          }} style={btn(true)}>Apply</button>
+          <button type="button" onClick={onClose} style={btn()}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Adding a class: choose which first.
+  if (addClass && !newClass) {
+    const have = new Set((data.classes || []).map(c => String(c.name).toLowerCase()));
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.8rem' }}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button type="button" onClick={onClose} style={btn()} aria-label="Back">◀</button>
+          <span style={{ color: 'var(--accent-purple)' }}>Add a class (multiclass)</span>
+        </div>
+        {srd.classes.filter(c => !have.has(c.id)).map(c => {
+          const problems = multiclassCheck(data, srd, c.id);
+          return (
+            <button key={c.id} type="button" onClick={() => setNewClass(c.id)} style={{ ...box, textAlign: 'left', cursor: 'pointer', color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+              {c.name} <span style={{ color: problems.length ? 'var(--accent-orange)' : 'var(--text-dim)', fontSize: '0.7rem' }}>{problems.length ? problems.join('; ') : `d${c.hitDie}`}</span>
+            </button>
+          );
+        })}
+        <div style={muted}>The rules need the scores shown, for the new class and the ones you have; you can still add one without them.</div>
+      </div>
+    );
+  }
+  if (!plan) return <div style={{ color: 'var(--text-dim)' }}>Loading the SRD…</div>;
 
   const firstClass = srd.classes.find(c => c.id === classIdOf(data.classes?.[0]?.name));
   const species = srd.species.find(x => x.id === speciesId);
   const background = srd.backgrounds.find(x => x.id === backgroundId);
   const hpGain = levelUp ? (() => {
-    const cls = srd.classes.find(c => c.id === classIdOf(data.classes[levelUp.index].name));
+    const cls = srd.classes.find(c => c.id === classIdOf(target.classes[levelUp.index].name));
     return cls ? levelUpHp(cls.hitDie, data.abilities?.con) : 0;
   })() : 0;
 
   const apply = () => {
     change((s) => {
-      if (levelUp) {
+      if (levelUp?.add) s.classes = [...(s.classes || []), { name: target.classes[levelUp.index].name, level: 1, subclass: '' }];
+      else if (levelUp) {
         const row = s.classes[levelUp.index];
         if (row) row.level = Math.min(20, (Number(row.level) || 1) + 1);
+      }
+      if (levelUp) {
         if (hpMode === 'average' && hpGain) s.hp = { ...s.hp, max: (Number(s.hp?.max) || 0) + hpGain, current: (Number(s.hp?.current) || 0) + hpGain };
       }
-      undoRef.current = { fill: applyFill(s, plan), levelUp: levelUp ? { index: levelUp.index, hp: hpMode === 'average' ? hpGain : 0 } : null };
+      undoRef.current = { fill: applyFill(s, plan), levelUp: levelUp ? { index: levelUp.index, add: !!levelUp.add, hp: hpMode === 'average' ? hpGain : 0 } : null };
     }, { now: true });
     setDone({ features: plan.features.length, resources: plan.resources.length, items: plan.items.length, gp: plan.gp, skills: plan.skills.length });
   };
@@ -87,9 +147,12 @@ export default function FillFromSrd({ data, edition, change, onClose, levelUp = 
     if (!u) return;
     change((s) => {
       undoFill(s, u.fill);
-      if (u.levelUp) {
+      if (u.levelUp?.add) s.classes = s.classes.filter((_, i) => i !== u.levelUp.index);
+      else if (u.levelUp) {
         const row = s.classes[u.levelUp.index];
         if (row) row.level = Math.max(1, (Number(row.level) || 1) - 1);
+      }
+      if (u.levelUp) {
         if (u.levelUp.hp) s.hp = { ...s.hp, max: Math.max(0, (Number(s.hp?.max) || 0) - u.levelUp.hp), current: Math.max(0, (Number(s.hp?.current) || 0) - u.levelUp.hp) };
       }
     }, { now: true });
@@ -122,14 +185,13 @@ export default function FillFromSrd({ data, edition, change, onClose, levelUp = 
       <input type="checkbox" checked={!!include[key]} onChange={(e) => setInclude(i => ({ ...i, [key]: e.target.checked }))} />{label}
     </label>
   );
-  const muted = { color: 'var(--text-dim)', fontSize: '0.72rem' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.8rem' }}>
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
         <button type="button" onClick={onClose} style={btn()} aria-label="Back">◀</button>
         <span style={{ color: 'var(--accent-purple)', flex: 1 }}>
-          {levelUp ? `Level up: ${data.classes[levelUp.index].name} ${target.classes[levelUp.index].level}` : 'Fill from the SRD'}
+          {levelUp?.add ? `Add ${target.classes[levelUp.index].name} 1` : levelUp ? `Level up: ${data.classes[levelUp.index].name} ${target.classes[levelUp.index].level}` : 'Fill from the SRD'}
         </span>
         <span style={muted}>{edition} rules</span>
       </div>
@@ -166,11 +228,30 @@ export default function FillFromSrd({ data, edition, change, onClose, levelUp = 
           </div>
         );
       })}
-      {include.features && (
+      {(include.features || levelUp) && (
         <div style={muted}>
           {plan.features.filter(f => !f.key.startsWith('trait:') && !f.key.startsWith('bg:')).map(f => `${f.name} (${f.source})`).join(' · ') || 'Nothing new.'}
         </div>
       )}
+      {(include.features || levelUp) && plan.asi.map(a => (
+        <div key={a.key} style={{ ...box, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span>{a.kind === 'boon' ? 'Epic Boon' : 'Ability Score Improvement'} ({a.source}) <span style={muted}>choose now, or later from the Features tab</span></span>
+          <AsiChooser kind={a.kind} edition={edition} feats={featOptions(srd.feats, target, a.kind, level)} abilities={target.abilities} choice={asi[a.key]} onChange={(v) => setAsi(x => ({ ...x, [a.key]: v }))} />
+        </div>
+      ))}
+      {levelUp?.add && (() => {
+        const cls = srd.classes.find(c => c.id === newClass);
+        const problems = multiclassCheck(data, srd, newClass);
+        return (
+          <>
+            {problems.length > 0 && <div style={{ ...box, color: 'var(--accent-orange)' }}>Multiclassing needs: {problems.join('; ')}.</div>}
+            {cls?.multiclass?.proficiencies?.length > 0 && <div style={muted}>You gain: {cls.multiclass.proficiencies.join(', ')}</div>}
+            {cls?.multiclass?.skills && (
+              <McSkillPicker cls={cls} data={data} value={mcSkills[levelUp.index] || []} onChange={(v) => setMcSkills(x => ({ ...x, [levelUp.index]: v }))} />
+            )}
+          </>
+        );
+      })()}
 
       {check('resources', 'LIMITED-USE FEATURES AS RESOURCES')}
       {include.resources && (
@@ -184,6 +265,11 @@ export default function FillFromSrd({ data, edition, change, onClose, levelUp = 
         </>
       )}
 
+      {!levelUp && include.skills && (data.classes || []).slice(1).map((row, j) => {
+        const i = j + 1;
+        const cls = srd.classes.find(c => c.id === classIdOf(row.name));
+        return cls?.multiclass?.skills ? <McSkillPicker key={i} cls={cls} data={data} value={mcSkills[i] || []} onChange={(v) => setMcSkills(x => ({ ...x, [i]: v }))} /> : null;
+      })}
       {!levelUp && firstClass?.skills && (
         <>
           {check('skills', `CLASS SKILLS (choose ${firstClass.skills.choose})`)}
@@ -261,7 +347,7 @@ export default function FillFromSrd({ data, edition, change, onClose, levelUp = 
       )}
 
       <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-        <button type="button" onClick={apply} style={btn(true)}>{levelUp ? `Level up to ${target.classes[levelUp.index].level}` : 'Add to the sheet'}</button>
+        <button type="button" onClick={apply} style={btn(true)}>{levelUp?.add ? `Add ${target.classes[levelUp.index].name}` : levelUp ? `Level up to ${target.classes[levelUp.index].level}` : 'Add to the sheet'}</button>
         <button type="button" onClick={onClose} style={btn()}>Cancel</button>
       </div>
       <div style={{ ...labelStyle, marginTop: '8px', textTransform: 'none', letterSpacing: 0 }}>
@@ -302,3 +388,72 @@ function EquipmentChoices({ title, eq, value = [], onChange }) {
   );
 }
 
+
+/** The skill a multiclass gives (Bard, Ranger, Rogue): choose as many as it allows. */
+function McSkillPicker({ cls, data, value, onChange }) {
+  const n = cls.multiclass.skills.choose;
+  return (
+    <div style={{ ...box, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <span style={{ fontSize: '0.75rem' }}>{cls.name} (multiclass): choose {n} skill{n === 1 ? '' : 's'}</span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+        {cls.multiclass.skills.from.map(k => {
+          const on = value.includes(k); const had = Number(data.skills?.[k]) > 0;
+          return (
+            <label key={k} style={{ display: 'flex', gap: '4px', alignItems: 'center', color: had ? 'var(--text-dim)' : 'var(--text-primary)', fontSize: '0.75rem' }}>
+              <input type="checkbox" aria-label={`${cls.name} skill ${SKILL_NAME[k] || k}`} disabled={had || (!on && value.length >= n)} checked={on || had}
+                onChange={(e) => onChange(e.target.checked ? [...value, k] : value.filter(y => y !== k))} />
+              {SKILL_NAME[k] || k}
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * An Ability Score Improvement: +2 to one score, +1 to two, or a feat the
+ * character qualifies for. An Epic Boon (2024): a boon or another feat.
+ * Scores stop at 20 (a feat may say otherwise).
+ */
+export function AsiChooser({ kind, feats, abilities, choice, onChange }) {
+  const c = choice || { mode: kind === 'boon' ? 'feat' : '' };
+  const set = (patch) => onChange({ ...c, ...patch });
+  const score = (k) => Number(abilities?.[k]) || 10;
+  const abilitySelect = (key, label, exclude, max = 20) => (
+    <select aria-label={label} value={c[key] || ''} onChange={(e) => set({ [key]: e.target.value })} style={{ ...inputStyle, width: 'auto' }}>
+      <option value="">{label}…</option>
+      {ABILITIES.filter(a => a.key !== exclude).map(a => <option key={a.key} value={a.key} disabled={score(a.key) >= max}>{a.short} ({score(a.key)})</option>)}
+    </select>
+  );
+  const feat = feats.find(f => f.id === c.feat);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+        {kind !== 'boon' && <button type="button" aria-pressed={c.mode === 'plus2'} onClick={() => set({ mode: 'plus2' })} style={{ ...btn(c.mode === 'plus2'), minHeight: '30px' }}>+2 to one</button>}
+        {kind !== 'boon' && <button type="button" aria-pressed={c.mode === 'plus1x2'} onClick={() => set({ mode: 'plus1x2' })} style={{ ...btn(c.mode === 'plus1x2'), minHeight: '30px' }}>+1 to two</button>}
+        {feats.length > 0 && <button type="button" aria-pressed={c.mode === 'feat'} onClick={() => set({ mode: 'feat' })} style={{ ...btn(c.mode === 'feat'), minHeight: '30px' }}>{kind === 'boon' ? 'Boon or feat' : 'A feat'}</button>}
+      </div>
+      {c.mode === 'plus2' && abilitySelect('a', 'Score')}
+      {c.mode === 'plus1x2' && <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>{abilitySelect('a', 'First', c.b)}{abilitySelect('b', 'Second', c.a)}</div>}
+      {c.mode === 'feat' && (
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <select aria-label="Feat" value={c.feat || ''} onChange={(e) => set({ feat: e.target.value, featAbility: '' })} style={{ ...inputStyle, width: 'auto' }}>
+            <option value="">Choose a feat…</option>
+            {feats.filter(f => f.id !== 'feat-ability-score-improvement').map(f => (
+              <option key={f.id} value={f.id} disabled={!f.meetsScores}>
+                {f.name}{f.meetsScores ? '' : ` (needs ${f.scores.map(p => `${p.ability.toUpperCase()} ${p.min}`).join(', ')})`}
+              </option>
+            ))}
+          </select>
+          {feat?.increase?.from && (
+            <select aria-label="Score the feat raises" value={c.featAbility || ''} onChange={(e) => set({ featAbility: e.target.value })} style={{ ...inputStyle, width: 'auto' }}>
+              <option value="">+{feat.increase.by} to…</option>
+              {feat.increase.from.map(k => <option key={k} value={k} disabled={score(k) >= feat.increase.max}>{k.toUpperCase()} ({score(k)})</option>)}
+            </select>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
