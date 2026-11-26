@@ -12,6 +12,7 @@ const LOADERS = {
     classes: () => import('./2014/classes.json'), features: () => import('./2014/features.json'),
     species: () => import('./2014/species.json'), traits: () => import('./2014/traits.json'),
     backgrounds: () => import('./2014/backgrounds.json'),
+    feats: () => import('./2014/feats.json'),
   },
   2024: {
     spells: () => import('./2024/spells.json'), monsters: () => import('./2024/monsters.json'),
@@ -20,6 +21,7 @@ const LOADERS = {
     classes: () => import('./2024/classes.json'), features: () => import('./2024/features.json'),
     species: () => import('./2024/species.json'), traits: () => import('./2024/traits.json'),
     backgrounds: () => import('./2024/backgrounds.json'),
+    feats: () => import('./2024/feats.json'),
   },
 };
 
@@ -49,10 +51,10 @@ export async function findSrd(edition, kind, id) {
  * species, backgrounds, equipment, and the names of features and traits.
  */
 export async function loadCharacterSrd(edition) {
-  const [classes, species, backgrounds, equipment, features, traits] = await Promise.all(
-    ['classes', 'species', 'backgrounds', 'equipment', 'features', 'traits'].map(k => loadSrd(edition, k)));
+  const [classes, species, backgrounds, equipment, features, traits, feats] = await Promise.all(
+    ['classes', 'species', 'backgrounds', 'equipment', 'features', 'traits', 'feats'].map(k => loadSrd(edition, k)));
   return {
-    edition, classes, species, backgrounds, equipment,
+    edition, classes, species, backgrounds, equipment, feats,
     featureNames: Object.fromEntries(features.map(f => [f.id, f.name])),
     traitNames: Object.fromEntries(traits.map(t => [t.id, t.name])),
   };

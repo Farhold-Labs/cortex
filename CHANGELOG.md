@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.164.0] - 2026-11-25
+
+Character sheets: Ability Score Improvements, feats and multiclassing. Web client only, no migration.
+
+### Added
+- **Ability Score Improvements are applied.** Each one gets a chooser: +2 to one score, +1 to two (stopping at 20), or a feat the character qualifies for. The feats are Grappler in the 2014 SRD, and the general feats in 2024, by level and scores, with the feat's own +1 chosen too.
+  - **Where it shows:** when filling from the SRD, when levelling up, and later with **Choose** on the Features tab for any that weren't decided. That includes ones added by v2.163.0.
+  - **On the sheet:** the choice appears on the feature ("Ability Score Improvement: +2 INT"), and a feat is added as its own feature with its text.
+- **Epic Boons (2024, level 19):** a boon or another feat. A boon can raise a score to 30.
+- **Adding a class** (About → + Class (multiclass)):
+  - It lists the classes with the multiclassing scores each needs, for the new class and the ones you already have. This is shown as a warning, not a block.
+  - It adds the new class's level-1 features, the proficiencies multiclassing gives (Rogue: Light Armor, Thieves' Tools), its skill choice (one for a Bard, Ranger or Rogue), and the fixed hit points.
+- **Fill from the SRD** also offers the multiclass skill choice for each class after the first.
+
+### Fixed
+- **Levelling up one class touches only that class.** In v2.163.0, levelling one class of a multiclassed character also added any missing features of the other classes. Nothing was ever removed, only extra features added. Found by a new test.
+- **The fill screen's new views** (choosing a class, choosing for an improvement) crashed on opening, because a style was used before it was defined. Found in headless testing before release.
+
+### Verified
+- **Tests:** 872 pass. `tests/ttrpg-fill.test.cjs` now has 9, covering:
+  - a Fighter 6 with two improvements, one chosen at once (+2 STR, stopping at 20) and one later (Grappler, +1 DEX);
+  - Grappler not offered twice, origin feats and boons not offered at an improvement;
+  - an Epic Boon taking CON to 21;
+  - 2014 Grappler needing STR 13;
+  - multiclassing prerequisites for both the new and the current class (Fighter's STR *or* DEX);
+  - a multiclass Rogue getting one skill and its proficiencies, once.
+- **Headless only** (Chrome on dev, as zoe at 390×844), on a Wizard 2:
+  - added Rogue (warned it needs DEX 13 and INT 13), with its features, proficiencies and one skill;
+  - Wizard 3 with the Evoker subclass;
+  - Wizard 4 taking +2 INT at its improvement.
+
 ## [2.163.0] - 2026-11-25
 
 Tabletop role-playing: fill a character sheet from the SRD. Web client only, no migration.
