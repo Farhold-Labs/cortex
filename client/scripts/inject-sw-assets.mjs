@@ -20,9 +20,12 @@ if (!existsSync(manifestPath)) {
 
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 
-// Collect every JS and CSS file produced by the build
-const assets = Object.values(manifest)
-  .flatMap(entry => [entry.file, ...(entry.css ?? [])])
+// Collect every JS and CSS file produced by the build, except the rules
+// reference (src/srd, v2.161.0): about 2 MB that most people never open, so
+// it's fetched when someone does rather than at install.
+const assets = Object.entries(manifest)
+  .filter(([source]) => !source.startsWith('src/srd/'))
+  .flatMap(([, entry]) => [entry.file, ...(entry.css ?? [])])
   .filter(Boolean)
   .map(f => `/${f}`)
   .sort();

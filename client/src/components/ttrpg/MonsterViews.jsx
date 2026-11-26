@@ -3,6 +3,8 @@ import { ABILITIES, signed, mod, newId } from '../../ttrpg/dnd5e2024.js';
 import { blankMonster, averageOf, SECTIONS } from '../../ttrpg/monster.js';
 import { listTableDocs, createTableDoc, deleteTableDoc, onTableDocUpdated, useTableDoc } from '../../utils/tableDocs.js';
 import { plainText } from '../../utils/plainText.js';
+import { editionOf } from '../../srd/index.js';
+import { SrdPicker } from './SrdBrowser.jsx';
 import { btn, rollBtn, labelStyle, box, sectionTitle, Field, ListRows } from './sheetUi.jsx';
 
 /**
@@ -23,9 +25,10 @@ export function useMonsters({ fetchAPI, e2ee, wave }) {
   return monsters;
 }
 
-export function MonsterLibrary({ wave, fetchAPI, e2ee, showToast, roll, isMobile }) {
+export function MonsterLibrary({ wave, table, fetchAPI, e2ee, showToast, roll, isMobile }) {
   const monsters = useMonsters({ fetchAPI, e2ee, wave });
   const [openId, setOpenId] = useState(null);
+  const [picking, setPicking] = useState(false);
   const fileRef = useRef(null);
 
   const create = async (data) => {
@@ -54,11 +57,24 @@ export function MonsterLibrary({ wave, fetchAPI, e2ee, showToast, roll, isMobile
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
+  if (picking) {
+    return (
+      <SrdPicker edition={editionOf(table?.system)} kind="monsters" title="Monsters from the SRD" pickLabel="Add to my stat blocks"
+        onClose={() => setPicking(false)}
+        onPick={async (m) => {
+          // A copy: the GM can change it without touching the reference.
+          const { id: _srdId, ...copy } = m;
+          await create(JSON.parse(JSON.stringify(copy)));
+          setPicking(false);
+        }} />
+    );
+  }
   if (openId) return <MonsterEditor wave={wave} docId={openId} fetchAPI={fetchAPI} e2ee={e2ee} roll={roll} isMobile={isMobile} showToast={showToast} onBack={() => setOpenId(null)} />;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-        <button type="button" onClick={() => create(blankMonster('New monster'))} style={btn(true)}>+ New stat block</button>
+        <button type="button" onClick={() => setPicking(true)} style={btn(true)}>+ From the SRD</button>
+        <button type="button" onClick={() => create(blankMonster('New monster'))} style={btn()}>+ New stat block</button>
         <button type="button" onClick={() => fileRef.current?.click()} style={btn()}>Import JSON</button>
         {monsters?.length > 0 && <button type="button" onClick={exportAll} style={btn()}>Export all</button>}
         <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
@@ -102,7 +118,10 @@ function MonsterEditor({ wave, docId, fetchAPI, e2ee, roll, isMobile, showToast,
   );
 }
 
-/** A stat block, read-only, with roll buttons. `who` prefixes roll labels (e.g. "Goblin 2"). */
+/**
+ * A stat block, read-only, with roll buttons when `roll` is given. `who`
+ * prefixes roll labels (e.g. "Goblin 2").
+ */
 export function StatBlock({ m, roll, who }) {
   const name = who || plainText(m.name || '') || 'Monster';
   const line = (label, value) => value ? <div><b style={{ color: 'var(--accent-purple)' }}>{label}</b> {value}</div> : null;
@@ -110,12 +129,12 @@ export function StatBlock({ m, roll, who }) {
     <div style={{ ...box, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.8rem', lineHeight: 1.5 }}>
       <div style={{ fontSize: '1rem', color: 'var(--accent-amber)' }}>{m.name}</div>
       <div style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>{[m.size, m.type].filter(Boolean).join(' ')}{m.alignment ? `, ${m.alignment}` : ''}</div>
-      {line('AC', m.ac)}
+      {line('AC', `${m.ac}${m.acNote ? ` (${m.acNote})` : ''}`)}
       {line('HP', `${m.hp}${m.hpFormula ? ` (${m.hpFormula})` : ''}`)}
       {line('Speed', m.speed)}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '4px', margin: '4px 0' }}>
         {ABILITIES.map(a => (
-          <button key={a.key} type="button" onClick={() => roll(`1d20${mod(m.abilities?.[a.key]) ? signed(mod(m.abilities?.[a.key])) : ''}`, `${name}: ${a.name} check`)}
+          <button key={a.key} type="button" disabled={!roll} onClick={() => roll(`1d20${mod(m.abilities?.[a.key]) ? signed(mod(m.abilities?.[a.key])) : ''}`, `${name}: ${a.name} check`)}
             style={{ ...rollBtn, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2px' }}>
             <span style={{ color: 'var(--text-dim)', fontSize: '0.65rem' }}>{a.short}</span>
             <span>{m.abilities?.[a.key] ?? 10} ({signed(mod(m.abilities?.[a.key]))})</span>
@@ -124,16 +143,17 @@ export function StatBlock({ m, roll, who }) {
       </div>
       {line('Saving Throws', m.saves)}
       {line('Skills', m.skills)}
+      {line('Defenses', m.defenses)}
       {line('Senses', m.senses)}
       {line('Languages', m.languages)}
-      {line('CR', m.cr)}
+      {line('CR', `${m.cr}${m.xp ? ` (${m.xp} XP)` : ''}`)}
       {SECTIONS.map(([key, title]) => (m[key] || []).length > 0 && (
         <div key={key}>
           <div style={sectionTitle}>{title.toUpperCase()}</div>
           {(m[key] || []).map(a => (
             <div key={a.id || a.name} style={{ marginBottom: '6px' }}>
               <b style={{ color: 'var(--text-primary)' }}>{a.name}.</b> <span style={{ whiteSpace: 'pre-wrap', color: 'var(--text-secondary)' }}>{a.text}</span>
-              {(a.attack != null && a.attack !== '' || a.damage) && (
+              {roll && (a.attack != null && a.attack !== '' || a.damage) && (
                 <span style={{ display: 'inline-flex', gap: '4px', marginLeft: '6px', flexWrap: 'wrap' }}>
                   {a.attack != null && a.attack !== '' && <button type="button" onClick={() => roll(`1d20${Number(a.attack) ? signed(Number(a.attack)) : ''}`, `${name}: ${a.name} (to hit)`)} style={rollBtn}>Hit {signed(Number(a.attack) || 0)}</button>}
                   {a.damage && <button type="button" onClick={() => roll(a.damage, `${name}: ${a.name} (damage)`)} style={rollBtn}>{a.damage}</button>}
@@ -171,7 +191,7 @@ function MonsterForm({ m, set, now, isMobile }) {
           </div>
         ))}
       </div>
-      {text('SAVING THROWS', 'saves')}{text('SKILLS', 'skills')}{text('SENSES', 'senses')}{text('LANGUAGES', 'languages')}
+      {text('ARMOR', 'acNote', 80)}{text('SAVING THROWS', 'saves')}{text('SKILLS', 'skills')}{text('RESISTANCES AND IMMUNITIES', 'defenses', 300)}{text('SENSES', 'senses')}{text('LANGUAGES', 'languages')}
       {SECTIONS.map(([key, title]) => (
         <div key={key}>
           <div style={sectionTitle}>{title.toUpperCase()}</div>
