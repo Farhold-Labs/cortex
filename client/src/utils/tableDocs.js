@@ -11,7 +11,7 @@ import { useSealedDoc } from './sealedDoc.js';
  * Either way bound to the wave, the id and the kind.
  */
 
-export const DEFAULT_AUDIENCE = { encounter: 'table', encounter_gm: 'gm', monster: 'gm', note: 'gm' };
+export const DEFAULT_AUDIENCE = { encounter: 'table', encounter_gm: 'gm', monster: 'gm', note: 'gm', map: 'gm', token: 'table' };
 
 const base = (waveId) => `/waves/${encodeURIComponent(waveId)}/table-docs`;
 
@@ -46,8 +46,8 @@ export async function listTableDocs(fetchAPI, e2ee, waveId, kind) {
   }));
 }
 
-export async function createTableDoc(fetchAPI, e2ee, wave, { kind, audience, data, id = newDocId() }) {
-  const body = { id, kind, ...(audience ? { audience } : {}), ...(await seal(e2ee, wave, id, kind, data, audience || DEFAULT_AUDIENCE[kind])) };
+export async function createTableDoc(fetchAPI, e2ee, wave, { kind, audience, data, id = newDocId(), ownerId }) {
+  const body = { id, kind, ...(audience ? { audience } : {}), ...(ownerId ? { ownerId } : {}), ...(await seal(e2ee, wave, id, kind, data, audience || DEFAULT_AUDIENCE[kind])) };
   const { doc } = await fetchAPI(base(wave.id), { method: 'POST', body });
   return doc;
 }
@@ -97,4 +97,28 @@ export async function resealGmDocs(fetchAPI, e2ee, wave, currentVersion) {
     } catch { /* tried again next time */ }
   }
   return n;
+}
+
+/**
+ * Change a document without holding it open (v2.166.0, a token moved on a
+ * map): apply `mutate` to the latest, and if someone wrote first, to theirs.
+ * `audience` changes who reads it (GMs only). Returns the stored document.
+ */
+export async function updateTableDoc(fetchAPI, e2ee, wave, doc, mutate, { audience } = {}) {
+  let current = doc;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const data = await openTableDoc(e2ee, wave.id, current);
+    mutate(data);
+    const to = audience || current.audience;
+    try {
+      const res = await fetchAPI(`${base(wave.id)}/${encodeURIComponent(current.id)}`, {
+        method: 'PUT', body: { baseVersion: current.version, ...(audience ? { audience } : {}), ...(await seal(e2ee, wave, current.id, current.kind, data, to)) },
+      });
+      return res.doc;
+    } catch (err) {
+      if (err.data?.code === 'DOC_CONFLICT' && err.data.doc) { current = err.data.doc; continue; }
+      throw err;
+    }
+  }
+  throw new Error('It kept changing; try again');
 }

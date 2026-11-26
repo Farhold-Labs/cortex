@@ -4915,7 +4915,7 @@ At a table only (409 `NOT_A_TABLE`), on one server (409 `TTRPG_LOCAL_ONLY`). A s
 
 ### The GM's tools (v2.160.0)
 
-Same gates as sheets (a table, on one server). **Only GMs create, change or delete documents** (403 `GM_ONLY`). A document for the `table` is a blob like a sheet (JSON in a plain wave; ciphertext bound to `"cortex-tabledoc-v1" ‖ origin wave id ‖ doc id ‖ kind` in an encrypted one, else 400 `ENCRYPTION_REQUIRED`). **A `gm` one (v2.162.0) must be sealed with the GM key in every wave:** `{ keyScope: 'gm', encrypted: true, data, nonce, keyVersion }` with `keyVersion` a GM key version that exists, bound to `"cortex-gmdoc-v1" ‖ origin wave id ‖ doc id ‖ kind`, else 400 `GM_KEY_REQUIRED`; a `table` one with `keyScope: 'gm'` is 400. Documents carry `keyScope`.
+Same gates as sheets (a table, on one server). **Only GMs create, change or delete documents** (403 `GM_ONLY`), except that a player may create a `token` for the table that they own, and a token's owner may change or delete it (but not hide it). A document for the `table` is a blob like a sheet (JSON in a plain wave; ciphertext bound to `"cortex-tabledoc-v1" ‖ origin wave id ‖ doc id ‖ kind` in an encrypted one, else 400 `ENCRYPTION_REQUIRED`). **A `gm` one (v2.162.0) must be sealed with the GM key in every wave:** `{ keyScope: 'gm', encrypted: true, data, nonce, keyVersion }` with `keyVersion` a GM key version that exists, bound to `"cortex-gmdoc-v1" ‖ origin wave id ‖ doc id ‖ kind`, else 400 `GM_KEY_REQUIRED`; a `table` one with `keyScope: 'gm'` is 400. Documents carry `keyScope`.
 
 | Kind | Audiences | |
 |---|---|---|
@@ -4923,6 +4923,8 @@ Same gates as sheets (a table, on one server). **Only GMs create, change or dele
 | `encounter_gm` | `gm` | monster HP and AC, hidden combatants |
 | `monster` | `gm` | a stat block |
 | `note` | `gm` (default) or `table` | a GM note, or a handout when shared |
+| `map` | `gm` (while prepared) or `table` | a map: picture, grid, fog (v2.166.0) |
+| `token` | `table` or `gm` (hidden) | a token on a map; has an `ownerId` (v2.166.0) |
 
 | Method | Path | Notes |
 |---|---|---|
@@ -4931,6 +4933,7 @@ Same gates as sheets (a table, on one server). **Only GMs create, change or dele
 | POST | `/api/waves/:id/table-docs` | `{ id: 'doc-<uuid>', kind, audience?, data, encrypted?, nonce?, keyVersion? }`; 409 `DOC_ID_TAKEN`; at most 1000 a table (409 `DOC_LIMIT`) |
 | PUT | `/api/waves/:id/table-docs/:docId` | `{ baseVersion, data, …, audience? }`; a stale one is 409 `DOC_CONFLICT` with the current `doc` |
 | DELETE | `/api/waves/:id/table-docs/:docId` | |
+| POST | `/api/waves/:id/table/map-image` | GMs only (v2.166.0): multipart `image` (JPG, PNG, WebP, at most 20MB), kept up to 4096 px a side as WebP and bound to the wave. `{ url, width, height }` |
 | POST | `/api/waves/:id/table/turn` | `{ userId }`, GMs only: "It's your turn" (notification `ttrpg_turn` and push). 400 `NOT_AT_TABLE` for someone who can't read the wave |
 | GET | `/api/waves/:id/table/gm-keys` | GMs only (v2.162.0): `{ version, gms, missing, needsRotation, mine: [{ version, encryptedKey, nonce, wrappedBy, wrapperPublicKey }] }`. `gms` are the table's GMs who can read the wave; `needsRotation` when someone holding the current version isn't one |
 | POST | `/api/waves/:id/table/gm-keys` | GMs only: `{ version, keys: [{ userId, encryptedKey, nonce }] }`, the next version only (409 `GM_KEY_RACE`), wrapped for exactly the `gms` (400 `GM_KEY_RECIPIENTS`). The server records the caller and their public key as the wrapper. Sends `table_gm_key` `{ waveId }` to the GMs |

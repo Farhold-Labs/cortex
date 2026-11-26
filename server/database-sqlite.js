@@ -4470,6 +4470,10 @@ export class DatabaseSQLite {
         PRIMARY KEY (wave_id, user_id, key_version)
       );
     `);
+    // v2.166.0: maps and tokens. A token has an owner, who may move it as well as the GMs.
+    if (!this.db.prepare(`SELECT name FROM pragma_table_info('table_docs') WHERE name = 'owner_id'`).get()) {
+      this.db.exec(`ALTER TABLE table_docs ADD COLUMN owner_id TEXT REFERENCES users(id) ON DELETE CASCADE;`);
+    }
     if (!this.db.prepare(`SELECT name FROM pragma_table_info('table_docs') WHERE name = 'key_scope'`).get()) {
       this.db.exec(`ALTER TABLE table_docs ADD COLUMN key_scope TEXT NOT NULL DEFAULT 'wave';`);
     }
@@ -9528,7 +9532,7 @@ export class DatabaseSQLite {
   tableDocFromRow(r) {
     return {
       id: r.id, waveId: r.wave_id, kind: r.kind, audience: r.audience, version: r.version, data: r.data,
-      encrypted: !!r.encrypted, nonce: r.nonce || null, keyVersion: r.key_version || null, keyScope: r.key_scope || 'wave',
+      encrypted: !!r.encrypted, nonce: r.nonce || null, keyVersion: r.key_version || null, keyScope: r.key_scope || 'wave', ownerId: r.owner_id || null,
       createdBy: r.created_by || null, updatedBy: r.updated_by || null, createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -9549,12 +9553,12 @@ export class DatabaseSQLite {
     return this.db.prepare('SELECT COUNT(*) AS n FROM table_docs WHERE wave_id = ?').get(waveId).n;
   }
 
-  createTableDoc({ id, waveId, kind, audience, body, userId }) {
+  createTableDoc({ id, waveId, kind, audience, body, userId, ownerId = null }) {
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO table_docs (id, wave_id, kind, audience, version, data, encrypted, nonce, key_version, key_scope, created_by, updated_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, waveId, kind, audience, body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, body.keyScope || 'wave', userId, userId, now, now);
+      INSERT INTO table_docs (id, wave_id, kind, audience, version, data, encrypted, nonce, key_version, key_scope, owner_id, created_by, updated_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, waveId, kind, audience, body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, body.keyScope || 'wave', ownerId, userId, userId, now, now);
     return this.getTableDoc(waveId, id);
   }
 

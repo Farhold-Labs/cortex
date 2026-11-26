@@ -5,6 +5,7 @@ import { btn, labelStyle, inputStyle, box, Field } from './sheetUi.jsx';
 import { Frame } from './SheetsPanel.jsx';
 import { EncounterTab } from './EncounterView.jsx';
 import { MonsterLibrary } from './MonsterViews.jsx';
+import { MapTab } from './MapPanel.jsx';
 
 /**
  * The GM's screen (v2.160.0, docs/ttrpg/README.md phase 3). GMs get the
@@ -15,14 +16,14 @@ import { MonsterLibrary } from './MonsterViews.jsx';
 export default function GmPanel(props) {
   const { table, isMobile, onClose } = props;
   const isGm = !!table.isGm;
-  const tabs = isGm ? [['encounter', 'Encounter'], ['monsters', 'Monsters'], ['notes', 'Notes']] : [['encounter', 'Encounter'], ['notes', 'Handouts']];
+  const tabs = isGm ? [['encounter', 'Encounter'], ['map', 'Map'], ['monsters', 'Monsters'], ['notes', 'Notes']] : [['encounter', 'Encounter'], ['map', 'Map'], ['notes', 'Handouts']];
   const [tab, setTab] = useState('encounter');
   // The GM's own rolls from stat blocks: for the GMs (dice shown, result hidden) or for everyone.
   const [gmRollVisibility, setGmRollVisibility] = useState('gm');
   const shared = { ...props, isGm, gmRollVisibility };
   const gmKey = useGmKey({ ...props, isGm });
   return (
-    <Frame isMobile={isMobile} onClose={onClose} title={isGm ? 'GM screen' : 'Encounter and handouts'} label="Close the GM screen"
+    <Frame isMobile={isMobile} onClose={onClose} title={isGm ? 'GM screen' : 'Encounter, map and handouts'} label="Close the GM screen" wide={tab === 'map'}
       right={isGm && (
         <select aria-label="Who sees the GM's rolls" value={gmRollVisibility} onChange={(e) => setGmRollVisibility(e.target.value)} style={{ ...inputStyle, width: 'auto', fontSize: '0.72rem', padding: '4px' }}>
           <option value="gm">My rolls: hidden</option>
@@ -35,6 +36,7 @@ export default function GmPanel(props) {
         {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} type="button" onClick={() => setTab(k)} style={{ ...btn(tab === k), flex: 1 }}>{l}</button>)}
       </div>
       {tab === 'encounter' && <EncounterTab {...shared} />}
+      {tab === 'map' && <MapTab {...shared} />}
       {tab === 'monsters' && isGm && (
         <MonsterLibrary {...shared} roll={(expression, label) => props.roll({ expression, label, visibility: gmRollVisibility })} />
       )}
