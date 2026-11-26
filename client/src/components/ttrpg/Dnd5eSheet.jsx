@@ -3,8 +3,9 @@ import {
   ABILITIES, SKILLS, CLASSES, CONDITIONS, editionInfo,
   derive, signed, d20Roll, attackBonus, damageRoll, applyHp, shortRest, longRest, newId, cantripDice,
 } from '../../ttrpg/dnd5e2024.js';
-import { editionOf, findSrd } from '../../srd/index.js';
+import { editionOf, findSrd, srdFeatureText } from '../../srd/index.js';
 import { SrdPicker, SrdEntry } from './SrdBrowser.jsx';
+import FillFromSrd from './FillFromSrd.jsx';
 import { btn, rollBtn, labelStyle, inputStyle, box, sectionTitle, Field, Counter, Pips, ListRows } from './sheetUi.jsx';
 
 /**
@@ -23,18 +24,26 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
   const [mode, setMode] = useState('normal'); // the next d20 roll: normal, adv, dis
   const [amount, setAmount] = useState('');
   const [picker, setPicker] = useState(null); // an SRD list to pick from: 'spells' | 'equipment' | 'magic-items'
+  const [fill, setFill] = useState(null); // fill from the SRD: { levelUp: { index } | null } (v2.163.0)
   const edition = editionOf(data.system);
   const name = data.name || 'Unnamed';
 
   // Taking something from the SRD (v2.161.0): a copy of what a sheet needs,
   // and the SRD id, so its full text can be shown without storing it.
+  const spellEntry = (x) => ({
+    id: newId(), name: x.name, level: x.level, prepared: true, concentration: x.concentration, ritual: x.ritual,
+    damage: x.damage || x.heal || '', scales: x.scales || null, attack: x.attack || null, save: x.save || null,
+    notes: [x.time, x.range, x.duration].filter(Boolean).join(' · '), srd: x.id,
+  });
+  // Several spells at once (v2.163.0), from the class's list up to the highest slot level.
+  const [classSpellsOnly, setClassSpellsOnly] = useState(true);
+  const casterNames = (data.classes || []).map(c => c.name);
+  const maxSpellLevel = Math.max(0, ...d.slotsMax.map((n, i) => (n > 0 ? i + 1 : 0)), d.pact?.level || 0);
+  const spellFilter = (x) => !classSpellsOnly || (x.classes.some(c => casterNames.includes(c)) && x.level <= maxSpellLevel);
+  const takenSpells = new Set((data.spells || []).map(sp => sp.srd).filter(Boolean));
   const pick = (x) => {
     if (picker === 'spells') {
-      now(s => { s.spells = [...(s.spells || []), {
-        id: newId(), name: x.name, level: x.level, prepared: true, concentration: x.concentration, ritual: x.ritual,
-        damage: x.damage || x.heal || '', scales: x.scales || null, attack: x.attack || null, save: x.save || null,
-        notes: [x.time, x.range, x.duration].filter(Boolean).join(' · '), srd: x.id,
-      }]; });
+      now(s => { s.spells = [...(s.spells || []), spellEntry(x)]; });
     } else if (picker === 'equipment') {
       now(s => {
         s.inventory = [...(s.inventory || []), {
@@ -153,12 +162,26 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         ))}
       </div>
 
-      {picker && (
+      {fill && (
+        <FillFromSrd data={data} edition={edition} change={change} levelUp={fill.levelUp} onClose={() => setFill(null)} />
+      )}
+
+      {!fill && picker && (
         <SrdPicker edition={edition} kind={picker} onClose={() => setPicker(null)} onPick={pick} pickLabel="Add to this sheet"
+          {...(picker === 'spells' ? {
+            filter: spellFilter, taken: takenSpells,
+            onPickMany: (list) => { now(s => { s.spells = [...(s.spells || []), ...list.map(spellEntry)]; }); setPicker(null); },
+            extra: (
+              <label style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                <input type="checkbox" checked={classSpellsOnly} onChange={(e) => setClassSpellsOnly(e.target.checked)} />
+                Only {casterNames.join(' / ') || 'my class'} spells up to level {maxSpellLevel} (tick several, then Add)
+              </label>
+            ),
+          } : {})}
           title={{ spells: 'Spells from the SRD', equipment: 'Equipment from the SRD', 'magic-items': 'Magic items from the SRD' }[picker]} />
       )}
 
-      {!picker && tab === 'main' && (
+      {!fill && !picker && tab === 'main' && (
         <div>
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : 'repeat(6, minmax(0, 1fr))', gap: '6px' }}>
             {ABILITIES.map(a => (
@@ -211,7 +234,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         </div>
       )}
 
-      {!picker && tab === 'actions' && (
+      {!fill && !picker && tab === 'actions' && (
         <div>
           <ListRows
             items={data.attacks || []} canEdit={canEdit} addLabel="Attack" empty="No attacks yet."
@@ -222,9 +245,9 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         </div>
       )}
 
-      {!picker && tab === 'spells' && <Spells data={data} d={d} canEdit={canEdit} set={set} now={now} roll={roll} test={test} name={name} edition={edition} onPick={() => setPicker('spells')} />}
+      {!fill && !picker && tab === 'spells' && <Spells data={data} d={d} canEdit={canEdit} set={set} now={now} roll={roll} test={test} name={name} edition={edition} onPick={() => setPicker('spells')} />}
 
-      {!picker && tab === 'gear' && (
+      {!fill && !picker && tab === 'gear' && (
         <div>
           {canEdit && (
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '4px' }}>
@@ -268,8 +291,10 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         </div>
       )}
 
-      {!picker && tab === 'features' && (
+      {!fill && !picker && tab === 'features' && (
         <div>
+          <SrdFeatures data={data} canEdit={canEdit} now={now} edition={edition} onFill={() => setFill({ levelUp: null })} />
+
           <div style={sectionTitle}>RESOURCES <span style={{ color: 'var(--text-dim)' }}>(Rage, Channel Divinity, Ki…)</span></div>
           <ListRows
             items={data.resources || []} canEdit={canEdit} addLabel="Resource" empty="No limited-use features."
@@ -279,6 +304,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <div style={{ flex: '1 1 120px' }}><Field disabled={!canEdit} ariaLabel="Name" placeholder="Name" value={r.name} onChange={(v) => set(s => { s.resources[i].name = v.slice(0, 60); })} /></div>
                 <Counter label={r.name || 'Resource'} value={r.current} max={r.max} disabled={!canEdit} onChange={(v) => now(s => { s.resources[i].current = v; })} />
+                {r.note && <span style={{ color: 'var(--text-dim)', fontSize: '0.68rem', flexBasis: '100%' }}>{r.note}</span>}
                 {canEdit && <>
                   <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>max</span>
                   <Field type="number" ariaLabel="Maximum" value={r.max} onChange={(v) => set(s => { s.resources[i].max = Math.max(0, v); })} style={{ width: '4em' }} />
@@ -317,7 +343,8 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         </div>
       )}
 
-      {!picker && tab === 'about' && <About data={data} d={d} canEdit={canEdit} set={set} now={now} isMobile={isMobile} />}
+      {!fill && !picker && tab === 'about' && <About data={data} d={d} canEdit={canEdit} set={set} now={now} isMobile={isMobile}
+        onFill={() => setFill({ levelUp: null })} onLevelUp={(index) => setFill({ levelUp: { index } })} />}
     </div>
   );
 }
@@ -504,7 +531,7 @@ function SpellRow({ sp, d, canEdit, set, now, roll, test, name, edition }) {
   );
 }
 
-function About({ data, d, canEdit, set, now, isMobile }) {
+function About({ data, d, canEdit, set, now, isMobile, onFill, onLevelUp }) {
   const ed = editionInfo(data.system);
   const row = (label, key, list) => (
     <div>
@@ -534,6 +561,9 @@ function About({ data, d, canEdit, set, now, isMobile }) {
         {row('SIZE', 'size')}
       </div>
 
+      {canEdit && (
+        <button type="button" onClick={onFill} style={{ ...btn(true), alignSelf: 'flex-start' }}>Fill from the SRD…</button>
+      )}
       <div style={sectionTitle}>CLASSES <span style={{ color: 'var(--text-dim)' }}>level {d.level}</span></div>
       <ListRows
         items={data.classes || []} canEdit={canEdit} addLabel="Class (multiclass)" empty="No class."
@@ -550,6 +580,9 @@ function About({ data, d, canEdit, set, now, isMobile }) {
             </select>
             <Field type="number" disabled={!canEdit} ariaLabel="Level" min={1} max={20} value={c.level} onChange={(v) => set(s => { s.classes[i].level = Math.max(1, Math.min(20, v)); })} />
             <Field disabled={!canEdit} ariaLabel="Subclass" placeholder="Subclass" value={c.subclass} onChange={(v) => set(s => { s.classes[i].subclass = v.slice(0, 40); })} />
+            {canEdit && d.level < 20 && (
+              <button type="button" onClick={() => onLevelUp(i)} style={{ ...btn(), gridColumn: '1 / -1', justifySelf: 'start', minHeight: '28px', padding: '2px 10px' }}>Level up {c.name} ▲</button>
+            )}
           </div>
         )}
       />
@@ -579,6 +612,41 @@ function About({ data, d, canEdit, set, now, isMobile }) {
       )}
       <div style={sectionTitle}>NOTES</div>
       <Field multiline rows={6} disabled={!canEdit} ariaLabel="Notes" value={data.notes} onChange={(v) => set(s => { s.notes = v.slice(0, 20000); })} />
+    </div>
+  );
+}
+
+/** Features and traits added from the SRD (v2.163.0): the text is read from the SRD, not stored in the sheet. */
+function SrdFeatures({ data, canEdit, now, edition, onFill }) {
+  const list = data.featureList || [];
+  const [open, setOpen] = useState({});
+  const toggle = async (f) => {
+    if (open[f.id]) { setOpen(o => ({ ...o, [f.id]: null })); return; }
+    const hit = await srdFeatureText(edition, f.srd).catch(() => null);
+    setOpen(o => ({ ...o, [f.id]: hit || { text: 'Not in the reference.' } }));
+  };
+  return (
+    <div>
+      <div style={{ ...sectionTitle, display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <span style={{ flex: 1 }}>CLASS, SPECIES AND BACKGROUND FEATURES</span>
+        {canEdit && <button type="button" onClick={onFill} style={{ ...btn(), minHeight: '26px', padding: '1px 8px' }}>Fill from the SRD…</button>}
+      </div>
+      {!list.length && <div style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>None yet. Fill from the SRD adds your class, species and background features.</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {list.map(f => (
+          <div key={f.id} style={{ ...box, padding: '6px 8px' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <button type="button" onClick={() => toggle(f)} aria-expanded={!!open[f.id]}
+                style={{ flex: 1, textAlign: 'left', background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'monospace', padding: 0 }}>
+                {open[f.id] ? '▾' : '▸'} {f.name} <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>{f.source}</span>
+              </button>
+              {canEdit && <button type="button" aria-label={`Remove ${f.name}`} onClick={() => now(s => { s.featureList = (s.featureList || []).filter(x => x.id !== f.id); })}
+                style={{ ...btn(), minHeight: '24px', padding: '0 6px', color: 'var(--text-dim)' }}>✕</button>}
+            </div>
+            {open[f.id] && <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.5, marginTop: '6px' }}>{open[f.id].text}</div>}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

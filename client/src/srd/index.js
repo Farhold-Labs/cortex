@@ -9,11 +9,17 @@ const LOADERS = {
     spells: () => import('./2014/spells.json'), monsters: () => import('./2014/monsters.json'),
     equipment: () => import('./2014/equipment.json'), 'magic-items': () => import('./2014/magic-items.json'),
     conditions: () => import('./2014/conditions.json'),
+    classes: () => import('./2014/classes.json'), features: () => import('./2014/features.json'),
+    species: () => import('./2014/species.json'), traits: () => import('./2014/traits.json'),
+    backgrounds: () => import('./2014/backgrounds.json'),
   },
   2024: {
     spells: () => import('./2024/spells.json'), monsters: () => import('./2024/monsters.json'),
     equipment: () => import('./2024/equipment.json'), 'magic-items': () => import('./2024/magic-items.json'),
     conditions: () => import('./2024/conditions.json'),
+    classes: () => import('./2024/classes.json'), features: () => import('./2024/features.json'),
+    species: () => import('./2024/species.json'), traits: () => import('./2024/traits.json'),
+    backgrounds: () => import('./2024/backgrounds.json'),
   },
 };
 
@@ -36,4 +42,27 @@ export function loadSrd(edition, kind) {
 
 export async function findSrd(edition, kind, id) {
   return (await loadSrd(edition, kind)).find(x => x.id === id) || null;
+}
+
+/**
+ * Everything "fill from the SRD" needs for one edition (v2.163.0): classes,
+ * species, backgrounds, equipment, and the names of features and traits.
+ */
+export async function loadCharacterSrd(edition) {
+  const [classes, species, backgrounds, equipment, features, traits] = await Promise.all(
+    ['classes', 'species', 'backgrounds', 'equipment', 'features', 'traits'].map(k => loadSrd(edition, k)));
+  return {
+    edition, classes, species, backgrounds, equipment,
+    featureNames: Object.fromEntries(features.map(f => [f.id, f.name])),
+    traitNames: Object.fromEntries(traits.map(t => [t.id, t.name])),
+  };
+}
+
+/** A feature's or trait's text, by its SRD id. */
+export async function srdFeatureText(edition, id) {
+  for (const kind of ['features', 'traits']) {
+    const hit = (await loadSrd(edition, kind)).find(x => x.id === id);
+    if (hit) return hit;
+  }
+  return null;
 }

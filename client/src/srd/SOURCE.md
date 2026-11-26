@@ -11,10 +11,20 @@ The rules text is from the **System Reference Document 5.1** (`2014/`) and **5.2
 | 2014 equipment | 237 |
 | 2014 magic-items | 239 |
 | 2014 conditions | 15 |
+| 2014 classes | 12 |
+| 2014 features | 325 |
+| 2014 species | 9 |
+| 2014 traits | 38 |
+| 2014 backgrounds | 1 |
 | 2024 spells | 339 |
 | 2024 monsters | 341 |
 | 2024 equipment | 182 |
 | 2024 magic-items | 243 |
 | 2024 conditions | 15 |
+| 2024 classes | 12 |
+| 2024 features | 249 |
+| 2024 species | 9 |
+| 2024 traits | 67 |
+| 2024 backgrounds | 4 |
 
 Don't edit these files by hand; fix the converter and run it again.
