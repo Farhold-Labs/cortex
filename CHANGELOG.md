@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.166.0] - 2026-11-25
+
+Tabletop role-playing, phase 5: maps. Server and web client, no app build. Migrates (one new column).
+
+### Added
+- **A Map tab** on the GM screen, and on the players' screen (now "Encounter, map and handouts").
+- **Uploading:** a GM uploads a picture, which is kept up to 4096 pixels a side (pictures in pings are cut to 1200). A new map stays the GM's until **Show to players**, and can be hidden again.
+- **The grid:** square, with size, shift, colour and feet per square, set to line up with the picture's own grid.
+- **Fog of war,** drawn on the players' screens.
+  - The GM turns it on, then drags rectangles with **Reveal** or **Hide**, or uses Reveal all and Fog all.
+  - Players see only the revealed squares, and other people's tokens only where they're revealed. The GM sees the fog dimmed.
+- **Tokens:**
+  - A GM adds one from a character sheet or by name, with a colour and a size (1×1 up to 4×4), and chooses who may move it.
+  - Players add their own with **+ My token**.
+  - Drag to move: it snaps to the grid, shows the distance as you go ("3 sq · 15 ft."), and moves on everyone's screen when let go.
+  - A **hidden** token (a monster not yet seen) is the GMs' alone until revealed.
+- **Moving around:** pan with a drag or two fingers, zoom with the wheel or a pinch, and ⤢ fits the map.
+
+### Security and privacy
+- **Tokens have owners.** A player may add a token only for themselves and only for the table, and may move or remove only their own; nobody but a GM can hide one.
+  - **Enforced by the server** (`tableDocWritable`), with a counterfactual test: with the check stripped, one player moves another's token.
+- **What players receive:** maps being prepared and hidden tokens are sealed with the GM key, so players never receive them. Shown maps and visible tokens are encrypted under the wave key in an encrypted wave.
+- **The map picture itself is not end-to-end encrypted**, as with every attachment in Cortex. It's bound to the table's wave and served only to its members. `docs/PRIVACY.md` says so.
+- **Fog is drawn on the player's screen**, as decided. Someone who looks at the picture directly sees all of it; what must stay secret belongs in hidden tokens.
+- **Map uploads** are for the table's GMs only, JPG, PNG or WebP, at most 20MB.
+
+### Not yet
+- Hex grids.
+- Measuring without moving a token.
+- Linking tokens to the encounter's initiative order.
+
+### Verified
+- **Tests:** 879 pass.
+  - **New in `tests/ttrpg-gm.test.cjs`:** map uploads (GM only, a 5000-pixel picture kept at 4096, not fetchable from outside the wave); maps GM-only until shown; tokens (a player's own, not someone else's, not hidden, moved by owner and GM, removed by owner only; hidden ones never reach players); the counterfactual.
+  - **In `tests/ttrpg-rules.test.cjs`:** squares, snapping (2×2 tokens too), 5e distance, fog painting, and which tokens a player sees.
+- **Headless only** (Chrome on dev; mal at 1400×900 as GM, zoe at 390×844):
+  - mal uploaded a 1400×1000 map, set 100-pixel squares and showed it.
+  - He turned on fog and revealed a 5×4 room by dragging, then added Kaylee's token and a hidden goblin.
+  - zoe saw only the room and her own token, and dragged it to (4, 4); it moved on mal's screen.
+- Nothing has been tried on a real phone.
+
 ## [2.165.0] - 2026-11-25
 
 Character sheets: armour class from equipment, and rolling ability scores. Web client only, no migration.

@@ -232,7 +232,14 @@ The instance operator (whoever runs the server) can see:
   only copies of that key wrapped for each GM, and who wrapped each. The ones
   for the whole table (the initiative order, handouts) are encrypted under the
   wave's key in an end-to-end encrypted wave, like sheets, and readable data
-  elsewhere. A
+  elsewhere.
+- **Maps at a tabletop game** (v2.166.0): the map picture is an attachment
+  bound to the table's wave and served only to people in it; like every
+  attachment in Cortex it is **not** end-to-end encrypted, in an encrypted
+  wave either. The map's name, grid and fog, and the tokens on it, are
+  encrypted like the rest of the table (GM-only maps and hidden tokens with
+  the GMs' key). The fog is drawn on players' screens: a player who looks
+  at the picture itself sees all of it. A
   roll can record what it was for in a short code (an encounter's initiative,
   `enc:<id>:<id>`), never in words. "It's your turn" notifications are stored
   like other notifications.

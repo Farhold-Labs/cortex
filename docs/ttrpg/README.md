@@ -1,6 +1,6 @@
 # Tabletop role-playing: dice, sheets, then maps
 
-Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0; phase 2 (character sheets) in v2.159.0; phase 3 (the GM's tools) and the 2014 rules in v2.160.0; phase 6 (the rules reference) in v2.161.0, ahead of 4 and 5.**
+Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0; phase 2 (character sheets) in v2.159.0; phase 3 (the GM's tools) and the 2014 rules in v2.160.0; phase 6 (the rules reference) in v2.161.0; phase 5 (maps) in v2.166.0.**
 
 ## Why
 
@@ -129,7 +129,25 @@ As planned:
 - Sheets travel like pings: encrypted, under the wave key the remote player already holds.
 - Visibility applies on every server: a copy receives a hidden result only for its own GMs and roller.
 
-### Phase 5: maps
+### Phase 5: maps — built in v2.166.0
+
+As built: a **Map** tab on the GM screen (and on the players' screen).
+- **The picture:** the GM uploads it (`POST /api/waves/:id/table/map-image`, GMs only). It's kept up to 4096 pixels a side, where pictures in pings are cut to 1200, and bound to the table's wave like any attachment.
+- **Showing it:** a new map is GM-only (sealed with the GM key) until **Show to players**.
+- **Grid and fog:** square grid, with its size, shift, colour and feet per square set to match the picture. Fog is the set of squares the GM has revealed, by dragging rectangles with Reveal or Hide, or with Reveal all and Fog all.
+- **Tokens** are their own documents with an owner (`table_docs.owner_id`).
+  - Players add and move their own; GMs move anything.
+  - A token can follow a character sheet and be 1×1 to 4×4.
+  - A **hidden** token (a monster not yet seen) is GM-only, sealed with the GM key, so players never receive it.
+  - Moves snap to the grid on release, show the distance while dragging (a diagonal counts as one square), and reach everyone through `table_doc_updated`.
+- **Moving around:** pan with a drag or two fingers, zoom with the wheel or a pinch.
+
+What changed from the plan below:
+- **Only square grids;** hex isn't built.
+- **The map picture is not end-to-end encrypted**, in an encrypted wave either. No attachment in Cortex is: it's bound to the wave and served only to its members. The map's details, tokens and fog are encrypted under the wave key in an encrypted wave, like everything else at a table.
+- **Fog is drawn on the player's screen**, as decided: hidden tokens are the secret, fog is not.
+
+As planned:
 - A map is an uploaded image (an attachment bound to the table) with a square or hex grid set by the GM.
 - Tokens: players move their own and the GM moves anything; moves are relayed live. In play-by-post a move is kept and shown to whoever opens the map next.
 - **Fog of war: a decision to make before building this phase.** A cover drawn on the player's device can be removed by anyone who opens their browser's developer tools. Real secrecy means the server sends only the revealed parts of the map, which is more work. For a group of friends the drawn cover is probably enough, and the server-side version can come later.

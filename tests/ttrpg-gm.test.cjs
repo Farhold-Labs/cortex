@@ -26,7 +26,7 @@ const gmSealed = (keyVersion = 1) => ({ ...sealed(), keyScope: 'gm', keyVersion 
 // A wrapped GM key as a device would send it; the server can't open it and doesn't try.
 const wrapped = (userId) => ({ userId, encryptedKey: Buffer.from(`wrapped-for-${userId}-`.repeat(3)).toString('base64'), nonce: Buffer.alloc(12, 3).toString('base64') });
 
-async function startServer({ strip = false, stripGmKey = false } = {}) {
+async function startServer({ strip = false, stripGmKey = false, stripOwner = false } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-gmtools-'));
   const serverDir = path.join(temp, 'server'); fs.mkdirSync(serverDir);
   for (const name of fs.readdirSync(path.join(root, 'server'))) {
@@ -40,6 +40,13 @@ async function startServer({ strip = false, stripGmKey = false } = {}) {
     const src = fs.readFileSync(serverFile, 'utf8');
     // Counterfactual: everyone at the table may read every GM document.
     const marker = 'function tableDocReadable(doc, viewerId, table) {';
+    assert.ok(src.includes(marker));
+    fs.writeFileSync(serverFile, src.replace(marker, `${marker}\n  return true;`));
+  }
+  if (stripOwner) {
+    // Counterfactual: anyone at the table may change any token.
+    const src = fs.readFileSync(serverFile, 'utf8');
+    const marker = 'function tableDocWritable(doc, userId, table) {';
     assert.ok(src.includes(marker));
     fs.writeFileSync(serverFile, src.replace(marker, `${marker}\n  return true;`));
   }
@@ -89,8 +96,12 @@ async function startServer({ strip = false, stripGmKey = false } = {}) {
     const r = await call(null, 'POST', '/api/auth/login', { handle: user, password });
     assert.equal(r.status, 200, JSON.stringify(r.body)); tokens[user] = r.body.token;
   }
+  const raw = async (user, method, url, body) => {
+    const res = await fetch(base + url, { method, headers: tokens[user] ? { Authorization: `Bearer ${tokens[user]}` } : {}, body });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  };
   const stop = () => { child.kill(); fs.rmSync(temp, { recursive: true, force: true }); };
-  return { call, waves: { table: table.id, other: other.id, federated: federated.id }, stop, output: () => output, serverDir };
+  return { call, raw, waves: { table: table.id, other: other.id, federated: federated.id }, stop, output: () => output, serverDir };
 }
 
 // gm is the first account, so the instance admin; admin settings need a step-up.
@@ -253,6 +264,58 @@ test('the GM tools against a disposable server', { timeout: 60000 }, async (t) =
       assert.equal((await call('bob', 'GET', keys)).status, 403);
     });
 
+    await t.test('maps: a GM uploads the picture, kept large; players see a map once it is shown', async () => {
+      const sharp = serverRequire('sharp');
+      const png = await sharp({ create: { width: 5000, height: 3000, channels: 3, background: '#335533' } }).png().toBuffer();
+      const send = async (who) => {
+        const form = new FormData();
+        form.append('image', new Blob([png], { type: 'image/png' }), 'dungeon.png');
+        return s.raw(who, 'POST', `/api/waves/${waves.table}/table/map-image`, form);
+      };
+      assert.equal((await send('ann')).status, 403);
+      const r = await send('gm');
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(r.body.width, 4096); assert.equal(r.body.height, Math.round(3000 * 4096 / 5000));
+      assert.match(r.body.url, /\/uploads\/messages\/.*-map-\d+\.webp$/);
+      // The picture is bound to the table's wave: someone outside it can't fetch it.
+      const path = new URL(r.body.url, 'http://x').pathname;
+      assert.equal((await s.raw('outsider', 'GET', path)).status === 200, false);
+      const map = docId();
+      assert.equal((await call('gm', 'POST', url(waves.table), { id: map, kind: 'map', ...gmSealed(2) })).status, 201);
+      assert.ok(!(await call('ann', 'GET', url(waves.table))).body.docs.some(d => d.id === map), 'a map being prepared is the GMs\'');
+      assert.equal((await call('gm', 'PUT', url(waves.table, map), { baseVersion: 1, audience: 'table', ...plain({ name: 'Dungeon', image: r.body }) })).status, 200);
+      assert.ok((await call('ann', 'GET', url(waves.table))).body.docs.some(d => d.id === map));
+      // Players can't change a map.
+      assert.equal((await call('ann', 'PUT', url(waves.table, map), { baseVersion: 2, ...plain({ name: 'Mine' }) })).status, 403);
+    });
+
+    const annToken = docId(); const gmToken = docId(); const hiddenToken = docId();
+    await t.test('tokens: a player places and moves their own, nobody else\'s, and hides nothing', async () => {
+      let r = await call('ann', 'POST', url(waves.table), { id: annToken, kind: 'token', ...plain({ name: 'Vex', x: 1, y: 1 }) });
+      assert.equal(r.status, 201, JSON.stringify(r.body)); assert.equal(r.body.doc.ownerId, 'ann'); assert.equal(r.body.doc.canEdit, true);
+      assert.equal((await call('ann', 'POST', url(waves.table), { id: docId(), kind: 'token', ownerId: 'bob', ...plain({}) })).status, 403);
+      assert.equal((await call('ann', 'POST', url(waves.table), { id: docId(), kind: 'token', audience: 'gm', ...gmSealed(2) })).status, 403);
+      assert.equal((await call('ann', 'POST', url(waves.table), { id: docId(), kind: 'note', ...gmSealed(2) })).status, 403);
+      // The GM places one for bob.
+      r = await call('gm', 'POST', url(waves.table), { id: gmToken, kind: 'token', ownerId: 'bob', ...plain({ name: 'Zoe', x: 2, y: 2 }) });
+      assert.equal(r.status, 201); assert.equal(r.body.doc.ownerId, 'bob');
+      assert.equal((await call('gm', 'POST', url(waves.table), { id: docId(), kind: 'token', ownerId: 'outsider', ...plain({}) })).status, 400);
+      // Moving.
+      assert.equal((await call('ann', 'PUT', url(waves.table, annToken), { baseVersion: 1, ...plain({ name: 'Vex', x: 3, y: 1 }) })).status, 200);
+      assert.equal((await call('ann', 'PUT', url(waves.table, gmToken), { baseVersion: 1, ...plain({ name: 'Zoe', x: 9, y: 9 }) })).status, 403);
+      assert.equal((await call('bob', 'PUT', url(waves.table, gmToken), { baseVersion: 1, ...plain({ name: 'Zoe', x: 3, y: 2 }) })).status, 200);
+      assert.equal((await call('gm', 'PUT', url(waves.table, annToken), { baseVersion: 2, ...plain({ name: 'Vex', x: 0, y: 0 }) })).status, 200);
+      // A player can't hide their token from the table.
+      assert.equal((await call('ann', 'PUT', url(waves.table, annToken), { baseVersion: 3, audience: 'gm', ...gmSealed(2) })).status, 403);
+      // A hidden monster never reaches players.
+      assert.equal((await call('gm', 'POST', url(waves.table), { id: hiddenToken, kind: 'token', audience: 'gm', ...gmSealed(2) })).status, 201);
+      assert.ok(!(await call('bob', 'GET', url(waves.table))).body.docs.some(d => d.id === hiddenToken));
+      assert.equal((await call('bob', 'GET', url(waves.table, hiddenToken))).status, 404);
+      // Removing: the owner can, another player can't.
+      assert.equal((await call('bob', 'DELETE', url(waves.table, annToken))).status, 403);
+      assert.equal((await call('ann', 'DELETE', url(waves.table, annToken))).status, 200);
+    });
+
     await t.test('deleting: GMs only', async () => {
       assert.equal((await call('gm', 'DELETE', url(waves.table, enc))).status, 200);
       assert.equal((await call('gm', 'GET', url(waves.table, enc))).status, 404);
@@ -289,6 +352,21 @@ test('counterfactual: without the GM-key rule, a GM-only note could be stored as
     assert.equal((await makeTable(s, 'gm', waves.table)).status, 200);
     const r = await call('gm', 'POST', `/api/waves/${waves.table}/table-docs`, { id: docId(), kind: 'note', ...plain({ title: 'Readable by the server' }) });
     assert.equal(r.status, 201, 'the stripped server should take a plain GM note');
+  } finally {
+    s.stop();
+  }
+});
+
+test('counterfactual: without the owner check, a player moves someone else\'s token', { timeout: 60000 }, async () => {
+  const s = await startServer({ stripOwner: true });
+  const { call, waves } = s;
+  try {
+    assert.equal((await enableFeature(s)).status, 200);
+    assert.equal((await makeTable(s, 'gm', waves.table)).status, 200);
+    const id = docId();
+    assert.equal((await call('gm', 'POST', `/api/waves/${waves.table}/table-docs`, { id, kind: 'token', ownerId: 'bob', ...plain({ x: 1, y: 1 }) })).status, 201);
+    const r = await call('ann', 'PUT', `/api/waves/${waves.table}/table-docs/${id}`, { baseVersion: 1, ...plain({ x: 9, y: 9 }) });
+    assert.equal(r.status, 200, 'the stripped server should let ann move bob\'s token');
   } finally {
     s.stop();
   }

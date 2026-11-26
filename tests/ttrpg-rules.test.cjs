@@ -271,3 +271,29 @@ test('ability scores: rolled 4d6 drop lowest on the server, standard array, poin
   assert.match(src, /POINT_COST = \{ 8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9 \}/);
   assert.match(src, /ROLL_EXPRESSION = Array\(6\)\.fill\('4d6dl1'\)/);
 });
+
+test('maps: squares, snapping, 5e distance, fog painting and what players see', async () => {
+  const m = await import('../client/src/ttrpg/map.js');
+  const grid = { size: 50, offsetX: 10, offsetY: -5 };
+  assert.deepEqual(m.cellAt(10, -5, grid), { x: 0, y: 0 });
+  assert.deepEqual(m.cellAt(59, 44, grid), { x: 0, y: 0 });
+  assert.deepEqual(m.cellAt(60, 45, grid), { x: 1, y: 1 });
+  assert.deepEqual(m.cellAt(9, -6, grid), { x: -1, y: -1 });
+  assert.deepEqual(m.cellOrigin(2, 3, grid), { x: 110, y: 145 });
+  // A 2x2 token dropped with its centre at a square corner covers the four around it.
+  assert.deepEqual(m.snapToken(110, 145, 2, grid), { x: 1, y: 2 });
+  assert.deepEqual(m.snapToken(135, 170, 1, grid), { x: 2, y: 3 });
+  assert.equal(m.squaresBetween({ x: 0, y: 0 }, { x: 3, y: 2 }), 3, 'a diagonal is one square');
+  const map = { image: { width: 1000, height: 500 }, grid: { size: 100, offsetX: 0, offsetY: 0 }, fog: { enabled: true, revealed: [] } };
+  assert.deepEqual(m.gridSize(map), { cols: 10, rows: 5 });
+  map.fog.revealed = m.paintFog([], [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 1, y: 1 }], true);
+  assert.deepEqual(map.fog.revealed, ['1,1', '2,1']);
+  assert.deepEqual(m.paintFog(map.fog.revealed, [{ x: 2, y: 1 }], false), ['1,1']);
+  const goblin = { x: 5, y: 3, size: 1 };
+  assert.equal(m.tokenVisibleToPlayer(goblin, map, 'ann', null), false, 'in the fog');
+  assert.equal(m.tokenVisibleToPlayer({ x: 1, y: 1, size: 1 }, map, 'ann', null), true);
+  assert.equal(m.tokenVisibleToPlayer({ x: 0, y: 0, size: 2 }, map, 'ann', null), true, 'part of it is in the open');
+  assert.equal(m.tokenVisibleToPlayer(goblin, map, 'ann', 'ann'), true, 'your own token always');
+  map.fog.enabled = false;
+  assert.equal(m.tokenVisibleToPlayer(goblin, map, 'ann', null), true);
+});

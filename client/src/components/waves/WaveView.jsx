@@ -1970,7 +1970,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                       onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
                       onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                     >
-                      <span>⚔</span><span>{table.isGm ? 'GM screen' : 'Encounter and handouts'}</span>
+                      <span>⚔</span><span>{table.isGm ? 'GM screen' : 'Encounter, map and handouts'}</span>
                     </div>
                   )}
                   {ttrpgEnabled && table && (
