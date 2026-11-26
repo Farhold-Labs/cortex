@@ -4453,6 +4453,26 @@ export class DatabaseSQLite {
     `);
     // A roll can say what it was for (an encounter's initiative), so the GM's
     // device can find it. Rolls are visible to the server anyway.
+    // v2.162.0: the GM key. GM-only documents are sealed with a key only the
+    // table's GMs hold, wrapped for each GM like a wave key (ECDH, bound to
+    // the wave, the version and the GM), so neither the server nor a player
+    // who ran it can read them. A version is never changed once written.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS table_gm_keys (
+        wave_id            TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key_version        INTEGER NOT NULL,
+        encrypted_key      TEXT NOT NULL,
+        nonce              TEXT NOT NULL,
+        wrapped_by         TEXT NOT NULL,
+        wrapper_public_key TEXT NOT NULL,
+        created_at         TEXT NOT NULL,
+        PRIMARY KEY (wave_id, user_id, key_version)
+      );
+    `);
+    if (!this.db.prepare(`SELECT name FROM pragma_table_info('table_docs') WHERE name = 'key_scope'`).get()) {
+      this.db.exec(`ALTER TABLE table_docs ADD COLUMN key_scope TEXT NOT NULL DEFAULT 'wave';`);
+    }
     if (!this.db.prepare(`SELECT name FROM pragma_table_info('dice_rolls') WHERE name = 'ref'`).get()) {
       this.db.exec(`ALTER TABLE dice_rolls ADD COLUMN ref TEXT;`);
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_dice_rolls_ref ON dice_rolls(wave_id, ref);`);
@@ -9508,7 +9528,7 @@ export class DatabaseSQLite {
   tableDocFromRow(r) {
     return {
       id: r.id, waveId: r.wave_id, kind: r.kind, audience: r.audience, version: r.version, data: r.data,
-      encrypted: !!r.encrypted, nonce: r.nonce || null, keyVersion: r.key_version || null,
+      encrypted: !!r.encrypted, nonce: r.nonce || null, keyVersion: r.key_version || null, keyScope: r.key_scope || 'wave',
       createdBy: r.created_by || null, updatedBy: r.updated_by || null, createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -9532,20 +9552,54 @@ export class DatabaseSQLite {
   createTableDoc({ id, waveId, kind, audience, body, userId }) {
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO table_docs (id, wave_id, kind, audience, version, data, encrypted, nonce, key_version, created_by, updated_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, waveId, kind, audience, body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, userId, userId, now, now);
+      INSERT INTO table_docs (id, wave_id, kind, audience, version, data, encrypted, nonce, key_version, key_scope, created_by, updated_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, waveId, kind, audience, body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, body.keyScope || 'wave', userId, userId, now, now);
     return this.getTableDoc(waveId, id);
   }
 
   updateTableDoc(waveId, docId, baseVersion, { audience, body }, userId) {
     const changes = this.db.prepare(`
-      UPDATE table_docs SET version = version + 1, data = ?, encrypted = ?, nonce = ?, key_version = ?,
+      UPDATE table_docs SET version = version + 1, data = ?, encrypted = ?, nonce = ?, key_version = ?, key_scope = ?,
         audience = ?, updated_by = ?, updated_at = ?
       WHERE id = ? AND wave_id = ? AND version = ?
-    `).run(body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, audience, userId, new Date().toISOString(),
+    `).run(body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, body.keyScope || 'wave', audience, userId, new Date().toISOString(),
       docId, waveId, baseVersion).changes;
     return changes === 1 ? this.getTableDoc(waveId, docId) : null;
+  }
+
+  // === The GM key (v2.162.0) ===
+
+  gmKeyVersion(waveId) {
+    return this.db.prepare('SELECT MAX(key_version) AS v FROM table_gm_keys WHERE wave_id = ?').get(waveId).v || 0;
+  }
+
+  gmKeyHolders(waveId, version) {
+    return this.db.prepare('SELECT user_id FROM table_gm_keys WHERE wave_id = ? AND key_version = ?').all(waveId, version).map(r => r.user_id);
+  }
+
+  gmKeysFor(waveId, userId) {
+    return this.db.prepare('SELECT * FROM table_gm_keys WHERE wave_id = ? AND user_id = ? ORDER BY key_version').all(waveId, userId).map(r => ({
+      version: r.key_version, encryptedKey: r.encrypted_key, nonce: r.nonce, wrappedBy: r.wrapped_by, wrapperPublicKey: r.wrapper_public_key,
+    }));
+  }
+
+  /** A new version for everyone listed, only if it is the next one. False if someone made it first. */
+  addGmKeyVersion(waveId, version, keys, wrappedBy, wrapperPublicKey) {
+    const now = new Date().toISOString();
+    return this.db.transaction(() => {
+      if (this.gmKeyVersion(waveId) !== version - 1) return false;
+      const add = this.db.prepare('INSERT INTO table_gm_keys (wave_id, user_id, key_version, encrypted_key, nonce, wrapped_by, wrapper_public_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const k of keys) add.run(waveId, k.userId, version, k.encryptedKey, k.nonce, wrappedBy, wrapperPublicKey, now);
+      return true;
+    })();
+  }
+
+  /** Give someone versions they lack; never over one they hold. Returns how many were added. */
+  grantGmKeys(waveId, userId, keys, wrappedBy, wrapperPublicKey) {
+    const now = new Date().toISOString();
+    const add = this.db.prepare('INSERT OR IGNORE INTO table_gm_keys (wave_id, user_id, key_version, encrypted_key, nonce, wrapped_by, wrapper_public_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    return this.db.transaction(() => keys.reduce((n, k) => n + add.run(waveId, userId, k.version, k.encryptedKey, k.nonce, wrappedBy, wrapperPublicKey, now).changes, 0))();
   }
 
   deleteTableDoc(waveId, docId) {

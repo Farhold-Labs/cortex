@@ -1,6 +1,6 @@
 # Tabletop role-playing: dice, sheets, then maps
 
-Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0; phase 2 (character sheets) in v2.159.0; phase 3 (the GM's tools) and the 2014 rules in v2.160.0.**
+Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0; phase 2 (character sheets) in v2.159.0; phase 3 (the GM's tools) and the 2014 rules in v2.160.0; phase 6 (the rules reference) in v2.161.0, ahead of 4 and 5.**
 
 ## Why
 
@@ -111,7 +111,12 @@ As built: **⚔ GM screen** in the wave's ⋮ menu (players get **Encounter and 
 - **Notes and handouts:** GM notes; **Share with the table** makes one a handout (and says so in the wave), and it can be made GM-only again.
 - The GM's rolls from the screen are hidden (dice shown), secret, or public, chosen on the screen.
 
-**Changed from the plan below:** GM-only documents are **not sealed to the GMs' own keys**. They are encrypted under the wave key in an encrypted wave like everything else, and the server sends them only to GMs (`tableDocReadable`, on every read, with a counterfactual test). So the server can't read them, and players can't get them from the server, but a player who also ran the server could. Sealing them to the GMs' keys needs its own key to give to each GM and renew when GMs change, much like a wave's key; it's left for later. The encounter's split into a table half and a GM half keeps monster HP out of what players receive at all.
+**The GM key (v2.162.0).** GM-only documents (an encounter's GM half, stat blocks, unshared notes) are sealed with a key only the table's GMs hold, in every wave, plain or encrypted, so neither the server nor a player who also runs it can read them. (In v2.160.0 they were only kept from players by the server, which was a stated limit.)
+- A GM's device makes it (AES-256-GCM) and wraps a copy for each GM like a wave key: ECDH with the GM's fingerprint-signed key, bound to `"cortex-gmkey-v1" ‖ wave ‖ version ‖ GM`. The server keeps only wrapped copies (`table_gm_keys`) and who wrapped each; a device opens one only if its wrapper's key is one their fingerprint signed, and for the current version only if the wrapper is a GM here. Documents are sealed bound to `"cortex-gmdoc-v1" ‖ wave ‖ id ‖ kind`.
+- The server refuses a GM-only document that isn't sealed with the GM key (`GM_KEY_REQUIRED`), and one for the table that is. Sharing a note as a handout seals it for the table again; un-sharing seals it with the GM key.
+- **A new GM is given the key by a GM's choice, never automatically:** the GM screen says "Zoe is a GM here but doesn't have the GM key yet" with **Share it**. So a GM the server invented gets nothing unless a real GM agrees. Until then the new GM is told they're waiting.
+- **When someone holding the current version is no longer a GM** (removed, or left the wave), the next GM to open the screen makes a new version for the remaining GMs and seals everything again with it. The one who left keeps what they had, as with wave keys, but the server no longer sends them GM documents.
+- Documents made before v2.162.0 are sealed with the GM key the first time a GM opens the screen.
 
 As planned:
 - **Initiative and encounters:** the GM adds monsters and players, everyone rolls initiative from their sheets, and the GM steps through the turns, live through the watch-party pattern. In play-by-post, the person whose turn it is is notified.
@@ -130,7 +135,13 @@ As planned:
 - **Fog of war: a decision to make before building this phase.** A cover drawn on the player's device can be removed by anyone who opens their browser's developer tools. Real secrecy means the server sends only the revealed parts of the map, which is more work. For a group of friends the drawn cover is probably enough, and the server-side version can come later.
 - Encrypted waves: the map image is an encrypted attachment like any other, and token positions are encrypted under the wave key.
 
-### Phase 6: rules reference
+### Phase 6: rules reference — built in v2.161.0 (ahead of phases 4 and 5)
+
+As built: **📖 Rules reference** in a table's ⋮ menu, for everyone: spells, monsters, equipment, magic items and conditions for the 2014 rules (SRD 5.1) and the 2024 rules (SRD 5.2), searchable, with a filter (spell level, CR, category, rarity). The same list is a picker: a sheet takes spells (with save, attack and dice; cantrips grow with level; the full text on demand from the SRD id, not stored in the sheet) and equipment and magic items (a weapon also becomes an attack, finesse picking the better of Strength and Dexterity); the GM screen takes monsters into the GM's stat blocks as an editable copy.
+
+The data comes from [5e-bits/5e-database](https://github.com/5e-bits/5e-database) at a pinned commit, converted by `tools/build-srd.mjs` into `client/src/srd/` (see its `SOURCE.md`); nothing was typed in from memory. A test checks every set, spot-checks numbers against the books, and rolls every dice string in it through the server's roller (a flat "5" for Aid, or a blowgun's 1, stays text). Each set is its own chunk, loaded when first opened and left out of the service worker's precache, so nobody downloads its 2 MB until they open it. Not yet: the table's own homebrew entries.
+
+As planned:
 - Searchable SRD text (spells, conditions, monsters, equipment) beside the wave, plus the table's own homebrew entries. Phase 2 already needs spell and equipment data for sheets, so most of this comes for free by then.
 
 ## Content and licensing

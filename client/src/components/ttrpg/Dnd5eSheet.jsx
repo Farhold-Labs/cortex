@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import {
   ABILITIES, SKILLS, CLASSES, CONDITIONS, editionInfo,
-  derive, signed, d20Roll, attackBonus, damageRoll, applyHp, shortRest, longRest, newId,
+  derive, signed, d20Roll, attackBonus, damageRoll, applyHp, shortRest, longRest, newId, cantripDice,
 } from '../../ttrpg/dnd5e2024.js';
+import { editionOf, findSrd } from '../../srd/index.js';
+import { SrdPicker, SrdEntry } from './SrdBrowser.jsx';
 import { btn, rollBtn, labelStyle, inputStyle, box, sectionTitle, Field, Counter, Pips, ListRows } from './sheetUi.jsx';
 
 /**
@@ -20,7 +22,43 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
   const [tab, setTab] = useState('main');
   const [mode, setMode] = useState('normal'); // the next d20 roll: normal, adv, dis
   const [amount, setAmount] = useState('');
+  const [picker, setPicker] = useState(null); // an SRD list to pick from: 'spells' | 'equipment' | 'magic-items'
+  const edition = editionOf(data.system);
   const name = data.name || 'Unnamed';
+
+  // Taking something from the SRD (v2.161.0): a copy of what a sheet needs,
+  // and the SRD id, so its full text can be shown without storing it.
+  const pick = (x) => {
+    if (picker === 'spells') {
+      now(s => { s.spells = [...(s.spells || []), {
+        id: newId(), name: x.name, level: x.level, prepared: true, concentration: x.concentration, ritual: x.ritual,
+        damage: x.damage || x.heal || '', scales: x.scales || null, attack: x.attack || null, save: x.save || null,
+        notes: [x.time, x.range, x.duration].filter(Boolean).join(' · '), srd: x.id,
+      }]; });
+    } else if (picker === 'equipment') {
+      now(s => {
+        s.inventory = [...(s.inventory || []), {
+          id: newId(), name: x.name, qty: 1, weight: Number(x.weight) || 0, equipped: false, srd: x.id,
+          notes: [x.cost, x.damage && `${x.damage} ${x.damageType}`.trim(), x.ac && `AC ${x.ac}`, x.properties.join(', ')].filter(Boolean).join(' · '),
+        }];
+        if (x.weapon && x.damage) {
+          // Finesse uses the better of Strength and Dexterity; ranged weapons Dexterity.
+          const dd = derive(s);
+          const ability = x.finesse ? (dd.mods.dex >= dd.mods.str ? 'dex' : 'str') : x.ranged ? 'dex' : 'str';
+          s.attacks = [...(s.attacks || []), {
+            id: newId(), name: x.name, ability, proficient: true, bonus: 0, damage: x.damage, damageType: (x.damageType || '').toLowerCase(),
+            damageAbility: true, damageBonus: 0, notes: [x.properties.join(', '), x.range, x.mastery && `Mastery: ${x.mastery}`, x.versatile && `Two-handed ${x.versatile}`].filter(Boolean).join(' · '),
+          }];
+        }
+      });
+    } else if (picker === 'magic-items') {
+      now(s => { s.inventory = [...(s.inventory || []), {
+        id: newId(), name: x.name, qty: 1, weight: 0, equipped: false, srd: `mi:${x.id}`,
+        notes: [x.rarity, x.attunement ? 'requires attunement' : ''].filter(Boolean).join(' · '),
+      }]; });
+    }
+    setPicker(null);
+  };
 
   // A d20 Test uses the mode once, then goes back to normal.
   const test = (bonus, what) => { const m = mode; setMode('normal'); return roll(d20Roll(bonus, d, m), `${name}: ${what}${m === 'adv' ? ' (advantage)' : m === 'dis' ? ' (disadvantage)' : ''}`); };
@@ -115,7 +153,12 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         ))}
       </div>
 
-      {tab === 'main' && (
+      {picker && (
+        <SrdPicker edition={edition} kind={picker} onClose={() => setPicker(null)} onPick={pick} pickLabel="Add to this sheet"
+          title={{ spells: 'Spells from the SRD', equipment: 'Equipment from the SRD', 'magic-items': 'Magic items from the SRD' }[picker]} />
+      )}
+
+      {!picker && tab === 'main' && (
         <div>
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : 'repeat(6, minmax(0, 1fr))', gap: '6px' }}>
             {ABILITIES.map(a => (
@@ -168,7 +211,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         </div>
       )}
 
-      {tab === 'actions' && (
+      {!picker && tab === 'actions' && (
         <div>
           <ListRows
             items={data.attacks || []} canEdit={canEdit} addLabel="Attack" empty="No attacks yet."
@@ -179,10 +222,16 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         </div>
       )}
 
-      {tab === 'spells' && <Spells data={data} d={d} canEdit={canEdit} set={set} now={now} roll={roll} test={test} name={name} />}
+      {!picker && tab === 'spells' && <Spells data={data} d={d} canEdit={canEdit} set={set} now={now} roll={roll} test={test} name={name} edition={edition} onPick={() => setPicker('spells')} />}
 
-      {tab === 'gear' && (
+      {!picker && tab === 'gear' && (
         <div>
+          {canEdit && (
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '4px' }}>
+              <button type="button" onClick={() => setPicker('equipment')} style={btn()}>+ Equipment from the SRD</button>
+              <button type="button" onClick={() => setPicker('magic-items')} style={btn()}>+ Magic item</button>
+            </div>
+          )}
           <div style={sectionTitle}>COINS</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '6px' }}>
             {['cp', 'sp', 'ep', 'gp', 'pp'].map(c => (
@@ -219,7 +268,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         </div>
       )}
 
-      {tab === 'features' && (
+      {!picker && tab === 'features' && (
         <div>
           <div style={sectionTitle}>RESOURCES <span style={{ color: 'var(--text-dim)' }}>(Rage, Channel Divinity, Ki…)</span></div>
           <ListRows
@@ -268,7 +317,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         </div>
       )}
 
-      {tab === 'about' && <About data={data} d={d} canEdit={canEdit} set={set} now={now} isMobile={isMobile} />}
+      {!picker && tab === 'about' && <About data={data} d={d} canEdit={canEdit} set={set} now={now} isMobile={isMobile} />}
     </div>
   );
 }
@@ -335,7 +384,7 @@ function AttackRow({ a, i, d, canEdit, set, test, roll, name }) {
   );
 }
 
-function Spells({ data, d, canEdit, set, now, roll, test, name }) {
+function Spells({ data, d, canEdit, set, now, roll, test, name, edition, onPick }) {
   const used = data.spellcasting?.slotsUsed || {};
   const levels = d.slotsMax.map((max, i) => ({ level: i + 1, max })).filter(x => x.max > 0);
   const spells = data.spells || [];
@@ -376,6 +425,7 @@ function Spells({ data, d, canEdit, set, now, roll, test, name }) {
 
       <div style={{ ...sectionTitle, display: 'flex', gap: '6px', alignItems: 'center' }}>
         <span style={{ flex: 1 }}>SPELLS</span>
+        {canEdit && <button type="button" onClick={onPick} style={{ ...btn(), minHeight: '26px', padding: '1px 8px' }}>+ From the SRD</button>}
         {['all', 'prepared'].map(f => <button key={f} type="button" onClick={() => setFilter(f)} style={{ ...btn(filter === f), minHeight: '26px', padding: '1px 8px' }}>{f}</button>)}
       </div>
       <ListRows
@@ -387,14 +437,21 @@ function Spells({ data, d, canEdit, set, now, roll, test, name }) {
           const id = shown[shownIndex]?.id;
           now(s => { s.spells = s.spells.filter(sp => sp.id !== id); });
         }}
-        render={(sp) => <SpellRow sp={sp} d={d} canEdit={canEdit} set={set} now={now} roll={roll} name={name} />}
+        render={(sp) => <SpellRow sp={sp} d={d} canEdit={canEdit} set={set} now={now} roll={roll} test={test} name={name} edition={edition} />}
       />
     </div>
   );
 }
 
-function SpellRow({ sp, d, canEdit, set, now, roll, name }) {
+function SpellRow({ sp, d, canEdit, set, now, roll, test, name, edition }) {
   const [editing, setEditing] = useState(!sp.name);
+  const [details, setDetails] = useState(null); // the SRD entry, once asked for
+  const showDetails = async () => {
+    if (details) { setDetails(null); return; }
+    setDetails((await findSrd(edition, 'spells', sp.srd).catch(() => null)) || false);
+  };
+  // A cantrip's dice grow with character level.
+  const dice = sp.damage && Number(sp.level) === 0 && sp.scales === 'character' ? cantripDice(sp.damage, d.level) : sp.damage;
   const at = (s) => s.spells.findIndex(x => x.id === sp.id);
   const edit = (fn) => set(s => { const i = at(s); if (i >= 0) fn(s.spells[i]); });
   const level = Number(sp.level) || 0;
@@ -422,11 +479,16 @@ function SpellRow({ sp, d, canEdit, set, now, roll, name }) {
         <span style={{ flex: '1 1 100px', color: 'var(--text-primary)' }}>
           {sp.name || 'Spell'}{sp.concentration ? ' ◆' : ''}{sp.ritual ? ' ®' : ''}
         </span>
-        {sp.damage && <button type="button" onClick={() => roll(sp.damage, `${name}: ${sp.name || 'Spell'}`)} style={rollBtn}>{sp.damage}</button>}
+        {sp.attack && d.spellAttack != null && <button type="button" onClick={() => test(d.spellAttack, `${sp.name || 'Spell'} attack`)} style={rollBtn}>Hit {signed(d.spellAttack)}</button>}
+        {sp.save && d.spellDC != null && <span style={{ color: 'var(--accent-amber)', fontSize: '0.72rem' }}>DC {d.spellDC} {sp.save.toUpperCase()}</span>}
+        {dice && <button type="button" onClick={() => roll(dice, `${name}: ${sp.name || 'Spell'}`)} style={rollBtn}>{dice}</button>}
+        {sp.srd && <button type="button" onClick={showDetails} aria-expanded={!!details} style={{ ...btn(!!details), minHeight: '28px', padding: '2px 8px' }}>Details</button>}
         {canEdit && level > 0 && <button type="button" onClick={cast} style={{ ...btn(), minHeight: '28px', padding: '2px 8px' }}>Cast</button>}
         {canEdit && <button type="button" onClick={() => setEditing(e => !e)} style={{ ...btn(editing), minHeight: '28px', padding: '2px 8px' }}>Edit</button>}
       </div>
       {sp.notes && !editing && <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', whiteSpace: 'pre-wrap' }}>{sp.notes}</div>}
+      {details && <SrdEntry kind="spells" x={details} />}
+      {details === false && <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Not in the reference.</div>}
       {editing && canEdit && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '6px' }}>
           <div style={{ gridColumn: 'span 2' }}><div style={labelStyle}>NAME</div><Field value={sp.name} onChange={(v) => edit(x => { x.name = v.slice(0, 60); })} /></div>
