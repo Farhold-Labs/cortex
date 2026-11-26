@@ -1592,6 +1592,28 @@ export function E2EEProvider({ children, token, API_URL }) {
     return crypto.decryptPing(ciphertext, nonce, waveKey);
   }, [getWaveKey, getVersionedWaveKey, requestWaveKey, getSealIdentity, statementOf, noteVerdict, remoteInfo, originOf, remoteStatements, localStatements]);
 
+  // ============ Character sheets (v2.159.0) ============
+  // A sheet is sealed under the wave key like a ping, bound to the wave and the
+  // sheet's id. Unsigned: who changed it is the server's record, and a GM may.
+  const encryptSheet = useCallback(async (text, waveId, sheetId) => {
+    let waveKey = await getWaveKey(waveId);
+    let version = waveKeyCacheRef.current.get(waveId)?.version;
+    if (waveKey && !version) { waveKey = await getWaveKey(waveId); version = waveKeyCacheRef.current.get(waveId)?.version; }
+    if (!waveKey || !version) throw new Error('Your encryption key is being redistributed — please try again in a moment');
+    const sealed = await crypto.sealSheet(text, waveKey, crypto.sheetContext(await originOf(waveId), sheetId));
+    return { data: sealed.data, nonce: sealed.nonce, keyVersion: version };
+  }, [getWaveKey, originOf]);
+
+  const decryptSheet = useCallback(async (data, nonce, waveId, sheetId, keyVersion) => {
+    const current = waveKeyCacheRef.current.get(waveId);
+    let waveKey = waveKeyCacheRef.current.get(`${waveId}:${keyVersion}`)?.waveKey
+      || (current && current.version === keyVersion ? current.waveKey : null);
+    if (!waveKey) waveKey = await getVersionedWaveKey(waveId, keyVersion);
+    if (!waveKey) waveKey = await getWaveKey(waveId);
+    if (!waveKey) throw new Error('Wave key not found');
+    return crypto.openSheet(data, nonce, waveKey, crypto.sheetContext(await originOf(waveId), sheetId));
+  }, [getWaveKey, getVersionedWaveKey, originOf]);
+
   // ============ Audio Encryption (v2.3.0) ============
 
   // Encrypt audio chunk for voice calls
@@ -2225,6 +2247,8 @@ export function E2EEProvider({ children, token, API_URL }) {
     // Ping operations
     encryptPing,
     decryptPing,
+    encryptSheet,
+    decryptSheet,
 
     // Audio operations (v2.3.0)
     encryptAudioChunk,

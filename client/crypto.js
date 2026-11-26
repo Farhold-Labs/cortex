@@ -316,6 +316,25 @@ export function waveKeyContext(originWaveId, keyVersion, recipientAddress) {
   return sealContext('cortex-wavekey-v2', originWaveId, keyVersion, recipientAddress);
 }
 
+/** A character sheet (v2.159.0): bound to its wave and its id, so the server can't swap sheets. */
+export function sheetContext(originWaveId, sheetId) {
+  return sealContext('cortex-sheet-v1', originWaveId, sheetId);
+}
+
+export async function sealSheet(text, waveKey, context) {
+  requireContext(context);
+  const nonce = generateNonce();
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: context }, waveKey, new TextEncoder().encode(text));
+  return { data: base64Encode(ct), nonce: base64Encode(nonce) };
+}
+
+export async function openSheet(dataBase64, nonceBase64, waveKey, context) {
+  requireContext(context);
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64Decode(nonceBase64), additionalData: context }, waveKey, base64Decode(dataBase64));
+  return new TextDecoder().decode(plain);
+}
+
 function requireContext(context) {
   if (!(context instanceof Uint8Array) || context.length === 0) throw new Error('Format 2 needs its seal context');
   return context;

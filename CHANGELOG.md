@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.159.0] - 2026-11-25
+
+Tabletop role-playing, phase 2: character sheets. Server and web client, no app build. Migrates (one new table). Needs **Tabletop games** on, and a table.
+
+### Added
+- **Character sheets.** 📜 Character sheets, in a table's ⋮ menu or the message box's ⋮ menu, opens a panel beside the wave, or the whole screen on a phone. Each player makes their own sheets (up to 10 at a table), as **D&D 5e (2024 rules)** or **any system**. The sheet's owner chooses whether everyone at the table sees it or only the GMs; its owner and the GMs can change it, so a GM can take damage off a player's HP.
+- **The 5e sheet** works its numbers out from the scores and classes, by the 2024 rules and from the SRD 5.2 only:
+  - **Always on top:** HP with Damage (temporary hit points go first), Heal and Temp; AC, initiative, speed, proficiency, passive Perception; advantage or disadvantage for the next d20; Heroic Inspiration; conditions; Exhaustion, which takes 2 off every d20 roll and 5 ft off speed per level.
+  - **Every number is a roll button:** ability checks, saves, the 18 skills (proficiency, expertise, Jack of All Trades), initiative, attacks (to hit, damage, critical damage with the dice doubled), spell attacks and spell dice. The roll goes into the wave like any other, labelled with the character's name (`Vex: Stealth (advantage)`), and its result shows at the bottom of the sheet too.
+  - **Spells:** save DC and attack from the class's ability; slots for full, half (2024 Paladins and Rangers from level 1) and pact casters, and for multiclassing, which a player can override; Cast uses the lowest slot left.
+  - **Rests:** limited-use features that come back on a short or long rest; Hit Point Dice spent by rolling them (the HP is added); a long rest brings back all HP and Hit Point Dice and takes a level of Exhaustion off, as 2024 has it. At 0 HP, death saves are rolled and marked (a 1 counts twice; a 20 brings you back with 1 HP).
+  - Inventory with weight against carrying capacity, coins, features, proficiencies and notes.
+- **The any-system sheet:** fields, resources with a maximum, and roll buttons whose dice can use a field's number, `1d20+{Agility}`. Only whole numbers go into dice, never text from a field.
+- **Import and export** as JSON (the sheet's ⋮ menu; Import on the list). D&D Beyond has no way to export to other apps, so there's no import from it.
+- **SRD 5.2 credit** on the About page, which its licence (CC-BY-4.0) asks for.
+
+### Security and privacy
+- **In an encrypted wave a sheet is encrypted on the device**, under the wave's key and bound to that wave and that sheet, so the server can't read it (not even the character's name) or move it to another sheet. The server refuses a plain one there (`ENCRYPTION_REQUIRED`). Checked on dev: the stored row is ciphertext and the name appears nowhere in the database.
+- **Who may read a sheet is decided by the server on every read** (`sheetReadable`): a GM-only sheet is 404 to other players and is never announced to them. Tested with a counterfactual: with the check stripped, another player reads it.
+- **Two people changing a sheet at once don't overwrite each other.** Every write names the version it started from; a stale one is refused with the current sheet, and the device applies its changes again on top. Checked on dev with the GM and the player taking damage off the same character at the same moment: 10 − 4 − 3 = 3.
+- Sheets are in the account data export; deleting the wave or the account deletes them. `docs/PRIVACY.md` says what the server keeps.
+
+### Verified
+- 841 tests pass. New: `tests/ttrpg-sheets.test.cjs` (10: the feature and table gates, who reads, owner and GM writes, stale writes, visibility by its owner only, refusals and the limit, ciphertext only in an encrypted wave, the export, federated waves, deleting, and the counterfactual) and `tests/ttrpg-rules.test.cjs` (5: modifiers, proficiency, saves and skills; spell slots for every caster type and multiclassing; rolls with Exhaustion and criticals; HP and rests; `{field}` dice).
+- **Headless only** (Chrome at 390×844 and 1280×800 on dev, as zoe and mal): making a sheet, rolling Stealth with advantage from it (the card reached the GM with "GM and roller"), the GM opening and damaging it, simultaneous damage, every tab fitting a phone, an attack roll, and an encrypted wave's sheet. Not tried on a real phone.
+
 ## [2.158.0] - 2026-11-25
 
 Tabletop role-playing, phase 1: tables and dice the server rolls. Server and web client, no app build. Migrates (three new tables, one new column). Off unless an admin turns on **Tabletop games**.

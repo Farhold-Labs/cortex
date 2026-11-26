@@ -35,6 +35,7 @@ const MessageComposer = forwardRef(({
   onPlexClick,
   // Dice tray (v2.158.0): offered only at a table.
   onDiceClick,
+  onSheetsClick,
   compact = false,
   fetchAPI,
   // Expiring pings (v2.122.0). Offered only when the caller passes
@@ -477,6 +478,13 @@ const MessageComposer = forwardRef(({
                   onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                 >🎲 Roll Dice</button>
+              )}
+              {onSheetsClick && (
+                <button onClick={() => { setShowAttachMenu(false); onSheetsClick(); }}
+                  style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--accent-purple)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 700 }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >📜 Character Sheets</button>
               )}
               {showGifButton && onGifClick && (
                 <button onClick={() => { setShowAttachMenu(false); onGifClick(); }}

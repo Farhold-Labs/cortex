@@ -240,7 +240,7 @@ Enhanced search with advanced filters and boolean operators.
 ### TTRPG (Table Top Role Playing Games)
 Full-featured TTRPG support for running campaigns directly in Cortex.
 
-**Design: `docs/ttrpg/README.md` (decided 2026-11-25). Phase 1, tables and dice, built in v2.158.0.** D&D 5e first, any system eventually. Dice, then sheets, then GM tools, then cross-server tables, then maps. The server rolls; rolls are visible to it even in encrypted campaigns, everything else stays encrypted. The list below is the original wish list; the design doc supersedes it.
+**Design: `docs/ttrpg/README.md` (decided 2026-11-25). Phase 1, tables and dice, built in v2.158.0; phase 2, character sheets, in v2.159.0.** D&D 5e first, any system eventually. Dice, then sheets, then GM tools, then cross-server tables, then maps. The server rolls; rolls are visible to it even in encrypted campaigns, everything else stays encrypted. The list below is the original wish list; the design doc supersedes it.
 
 **Dice Rolling:**
 - Inline dice notation (e.g., `/roll 2d20+5`, `/roll 4d6kh3`)

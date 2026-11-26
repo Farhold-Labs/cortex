@@ -217,6 +217,13 @@ The instance operator (whoever runs the server) can see:
   a roll was for ("Stealth check") is part of the message and stays encrypted.
   The table's GMs can also see every roll at their table, even ones made for
   the GM only. Rolls are kept until the wave is deleted.
+- **Character sheets at a tabletop game** (v2.159.0): who owns each sheet, in
+  which wave, its game, who may see it, when it was changed and by whom. **In
+  an end-to-end encrypted wave the sheet itself is encrypted** on the device
+  under the wave's key, so the server can't read it (not even the character's
+  name). In other waves the sheet is stored as readable data, like the
+  messages there. Sheets are kept until their owner or a GM deletes them, or
+  the wave is deleted, and are included in an account's data export.
 
 ---
 
@@ -225,6 +232,7 @@ The instance operator (whoever runs the server) can see:
 Even with full database access, the operator cannot see:
 
 - Message content in encrypted waves (they don't have the keys)
+- Character sheets in encrypted waves
 - Who is in which wave (encrypted at rest)
 - Your contact list (client-side encrypted)
 - Crew membership lists (encrypted at rest)
