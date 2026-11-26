@@ -642,6 +642,17 @@
         }
       }
 
+      /* GIFs and clips in a message (v2.168.0): no taller than 240px (or a third of
+         the screen), so a phone shows at least two together. They used to be
+         full width at their own height, and a tall GIF took the whole screen. */
+      img.message-media, video.message-media {
+        max-width: 100%;
+        max-height: min(240px, 33vh);
+        width: auto;
+        height: auto;
+        object-fit: contain;
+      }
+
       /* Public ping content styles */
       .public-ping-content p {
         margin: 0 0 0.75em 0;

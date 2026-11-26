@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.168.0] - 2026-11-26
+
+More room for the conversation on a phone. Web client only, no migration.
+
+### Changed
+- **The wave view had lost space as features were added.** On a Pixel 7 (412×915) the messages had 504 of 915 pixels, and two GIFs didn't fit on screen together. They now have **649 pixels, 29% more**, and two GIFs fit with room to spare.
+  - **The message box is one row on a narrow screen:** ⋮, the text box, ➤. The formatting (Aa) and bigger-editor (⛶) buttons moved into the ⋮ menu, instead of a second row of buttons under the text box. The placeholder is short enough for one line ("Message · @ to mention"); the long one wrapped onto two lines, and the box grew to fit it. Down from 152 to about 86 pixels.
+  - **The pins and events bar is gone when there's nothing in it.** Its "No pins / No events" chips took a line of every wave. With a pin or an upcoming event it shows as before. **New event** moved to the wave's ⋮ menu.
+  - **The wave title is tighter on a phone:** 4px of padding, not 12px. Down from 69 to 53 pixels.
+  - **GIFs and clips in a message** are at most 240 pixels tall (or a third of the screen, whichever is less). In encrypted waves they were full width at their own height, so one tall GIF could fill a phone screen. Unencrypted waves already showed small thumbnails.
+- Desktop keeps its layout. The message box goes to one row only when it's narrow, which a wide thread panel isn't.
+
+### Verified
+- **Headless only** (Chrome at the Pixel 7's 412×915):
+  - The messages area measured 504 pixels before and 649 after.
+  - Two tall GIF-sized pictures with their name lines took 576 pixels and both showed at once.
+  - 880 tests pass.
+- Not tried on the phone itself.
+
 ## [2.167.0] - 2026-11-26
 
 Maps follow the encounter, and a measuring tool. Web client only, no migration.
