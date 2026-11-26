@@ -28036,6 +28036,164 @@ app.get('/api/waves/:id/rolls', authenticateToken, (req, res) => {
   res.json({ rolls: rolls.map(r => rollView(r, req.user.userId, table)) });
 });
 
+// ============ Character sheets (v2.159.0, docs/ttrpg/README.md phase 2) ============
+//
+// A sheet is one blob the server stores and, in an encrypted wave, can't read:
+// ciphertext under the wave key, bound on the device to the wave and the
+// sheet's id. Everything derived (modifiers, totals) is worked out on the
+// device, and rolling from a sheet sends only the finished dice. Its owner and
+// the table's GMs may change it; who may read it (the table, or only the GMs)
+// is decided here on every read, like rolls. Every write names the version it
+// was based on, so a change made at the same moment as another is refused and
+// re-applied on the device rather than lost.
+const SHEET_VISIBILITIES = ['table', 'gm'];
+const SHEET_MAX_PER_PERSON = 10;
+const SHEET_MAX_PLAIN = 128 * 1024;
+const SHEET_MAX_CIPHER = 180 * 1024;
+const sheetLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_SHEETS_MAX) || 120,
+  keyGenerator: (req) => `sheets:${req.user.userId}`,
+  message: { error: 'Too many changes to sheets. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+function sheetReadable(sheet, viewerId, table) {
+  return sheet.ownerId === viewerId || (!!table && table.gms.includes(viewerId)) || sheet.visibility === 'table';
+}
+function sheetWritable(sheet, userId, table) {
+  return sheet.ownerId === userId || (!!table && table.gms.includes(userId));
+}
+function sheetView(sheet, viewerId, table) {
+  return { ...sheet, canEdit: sheetWritable(sheet, viewerId, table), isOwner: sheet.ownerId === viewerId };
+}
+
+// The stored form of a sheet: ciphertext in an encrypted wave (never plain
+// text there), a JSON object elsewhere. Returns { body } or { error, code }.
+function sheetBody(waveId, input) {
+  if (db.waveEncryptionState?.(waveId)) {
+    const fail = (error) => ({ error, code: 'ENCRYPTION_REQUIRED' });
+    if (input?.encrypted !== true) return fail('This wave is end-to-end encrypted, so sheets must be encrypted on your device');
+    if (typeof input.nonce !== 'string' || !/^[A-Za-z0-9+/]{16}$/.test(input.nonce)) return fail('Encrypted sheets need a 12-byte nonce');
+    if (typeof input.data !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.data) || input.data.length < 24) return fail('An encrypted sheet must be ciphertext');
+    if (input.data.length > SHEET_MAX_CIPHER) return { error: 'That sheet is too large', code: 'SHEET_TOO_LARGE' };
+    const version = Number(input.keyVersion);
+    if (!Number.isInteger(version) || version < 1 || version > db.getWaveKeyVersion(waveId)) return fail('Unknown key version');
+    return { body: { data: input.data, encrypted: true, nonce: input.nonce, keyVersion: version } };
+  }
+  if (input?.encrypted === true) return { error: 'This wave isn\'t encrypted', code: 'NOT_ENCRYPTED' };
+  if (typeof input?.data !== 'string') return { error: 'A sheet is required', code: 'INVALID_SHEET' };
+  if (input.data.length > SHEET_MAX_PLAIN) return { error: 'That sheet is too large', code: 'SHEET_TOO_LARGE' };
+  let parsed;
+  try { parsed = JSON.parse(input.data); } catch { parsed = null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: 'A sheet must be a JSON object', code: 'INVALID_SHEET' };
+  return { body: { data: input.data, encrypted: false, nonce: null, keyVersion: null } };
+}
+
+// A sheet anyone at the table may read is announced to the wave; one only
+// for the GMs, only to its owner and the GMs. Only the id travels: whoever
+// is told reads it, through the check above.
+function announceSheet(wave, table, sheetId, ownerId, visibilities) {
+  const message = { type: 'character_sheet_updated', waveId: wave.id, sheetId };
+  if (visibilities.includes('table')) broadcastToWave(wave.id, message);
+  else broadcast(message, [...new Set([ownerId, ...(table?.gms || [])])]);
+}
+
+// The checks every sheet route shares: a table, on this server only.
+function sheetTable(req, res) {
+  const wave = ttrpgWave(req, res);
+  if (!wave) return null;
+  const table = db.getWaveTable(wave.id);
+  if (!table) { res.status(409).json({ error: 'This wave isn\'t a table', code: 'NOT_A_TABLE' }); return null; }
+  if (isFederatedWave(wave)) { res.status(409).json({ error: 'Tables are for waves on one server for now', code: 'TTRPG_LOCAL_ONLY' }); return null; }
+  return { wave, table };
+}
+
+app.get('/api/waves/:id/sheets', authenticateToken, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  const sheets = db.listCharacterSheets(t.wave.id).filter(s => sheetReadable(s, req.user.userId, t.table));
+  res.json({ sheets: sheets.map(s => sheetView(s, req.user.userId, t.table)) });
+});
+
+app.get('/api/waves/:id/sheets/:sheetId', authenticateToken, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  const sheet = db.getCharacterSheet(t.wave.id, req.params.sheetId);
+  // Not readable looks like not there.
+  if (!sheet || !sheetReadable(sheet, req.user.userId, t.table)) return res.status(404).json({ error: 'Sheet not found' });
+  res.json({ sheet: sheetView(sheet, req.user.userId, t.table) });
+});
+
+// The device names the sheet's id, because an encrypted sheet is bound to it
+// before it is sent. An id already taken is refused.
+app.post('/api/waves/:id/sheets', authenticateToken, sheetLimiter, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  if (!canPostToWave(t.wave, req.user.userId)) return res.status(403).json({ error: 'You can\'t post in this wave', code: 'POSTING_RESTRICTED' });
+  const id = req.body.id;
+  if (typeof id !== 'string' || !/^sheet-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
+    return res.status(400).json({ error: 'A sheet needs an id', code: 'INVALID_SHEET' });
+  }
+  if (!TTRPG_SYSTEMS.includes(req.body.system)) return res.status(400).json({ error: 'Unknown game system', code: 'INVALID_SHEET' });
+  const visibility = req.body.visibility == null ? 'table' : req.body.visibility;
+  if (!SHEET_VISIBILITIES.includes(visibility)) return res.status(400).json({ error: 'Unknown sheet visibility', code: 'INVALID_SHEET' });
+  if (db.countCharacterSheets(t.wave.id, req.user.userId) >= SHEET_MAX_PER_PERSON) {
+    return res.status(409).json({ error: `At most ${SHEET_MAX_PER_PERSON} sheets each at a table`, code: 'SHEET_LIMIT' });
+  }
+  const parsed = sheetBody(t.wave.id, req.body);
+  if (parsed.error) return res.status(400).json(parsed);
+  let sheet;
+  try {
+    sheet = db.createCharacterSheet({ id, waveId: t.wave.id, ownerId: req.user.userId, system: req.body.system, visibility, body: parsed.body });
+  } catch (err) {
+    if (String(err.code).startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ error: 'That sheet id is taken', code: 'SHEET_ID_TAKEN' });
+    throw err;
+  }
+  announceSheet(t.wave, t.table, sheet.id, sheet.ownerId, [visibility]);
+  res.status(201).json({ sheet: sheetView(sheet, req.user.userId, t.table) });
+});
+
+// A write based on an older version is refused with the current sheet, which
+// the device re-applies its change to.
+app.put('/api/waves/:id/sheets/:sheetId', authenticateToken, sheetLimiter, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  const sheet = db.getCharacterSheet(t.wave.id, req.params.sheetId);
+  if (!sheet || !sheetReadable(sheet, req.user.userId, t.table)) return res.status(404).json({ error: 'Sheet not found' });
+  if (!sheetWritable(sheet, req.user.userId, t.table)) return res.status(403).json({ error: 'Only its owner and the GMs can change a sheet', code: 'SHEET_READ_ONLY' });
+  // Only the owner chooses who sees it.
+  let visibility = sheet.visibility;
+  if (req.body.visibility != null && req.body.visibility !== sheet.visibility) {
+    if (sheet.ownerId !== req.user.userId) return res.status(403).json({ error: 'Only its owner chooses who sees a sheet', code: 'SHEET_OWNER_ONLY' });
+    if (!SHEET_VISIBILITIES.includes(req.body.visibility)) return res.status(400).json({ error: 'Unknown sheet visibility', code: 'INVALID_SHEET' });
+    visibility = req.body.visibility;
+  }
+  const baseVersion = Number(req.body.baseVersion);
+  if (!Number.isInteger(baseVersion)) return res.status(400).json({ error: 'baseVersion is required', code: 'INVALID_SHEET' });
+  const parsed = sheetBody(t.wave.id, req.body);
+  if (parsed.error) return res.status(400).json(parsed);
+  const updated = db.updateCharacterSheet(t.wave.id, sheet.id, baseVersion, { visibility, body: parsed.body }, req.user.userId);
+  if (!updated) {
+    const current = db.getCharacterSheet(t.wave.id, sheet.id);
+    return res.status(409).json({ error: 'Someone changed this sheet first', code: 'SHEET_CONFLICT', sheet: current ? sheetView(current, req.user.userId, t.table) : null });
+  }
+  announceSheet(t.wave, t.table, updated.id, updated.ownerId, [sheet.visibility, visibility]);
+  res.json({ sheet: sheetView(updated, req.user.userId, t.table) });
+});
+
+app.delete('/api/waves/:id/sheets/:sheetId', authenticateToken, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  const sheet = db.getCharacterSheet(t.wave.id, req.params.sheetId);
+  if (!sheet || !sheetReadable(sheet, req.user.userId, t.table)) return res.status(404).json({ error: 'Sheet not found' });
+  if (!sheetWritable(sheet, req.user.userId, t.table)) return res.status(403).json({ error: 'Only its owner and the GMs can delete a sheet', code: 'SHEET_READ_ONLY' });
+  db.deleteCharacterSheet(t.wave.id, sheet.id);
+  announceSheet(t.wave, t.table, sheet.id, sheet.ownerId, [sheet.visibility]);
+  res.json({ success: true });
+});
+
 app.post('/api/pings', authenticateToken, (req, res) => {
   const waveId = sanitizeInput(req.body.wave_id || req.body.thread_id);
   const content = req.body.content || '';

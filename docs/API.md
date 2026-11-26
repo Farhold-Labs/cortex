@@ -4899,6 +4899,20 @@ Opt-in instance feature `ttrpg`: every route answers 403 `FEATURE_DISABLED` unti
 
 **Posting a roll:** `POST /api/pings` takes `rollId`. The roll must be the author's, in that wave, and not already posted, or 409 `ROLL_UNAVAILABLE` and no ping is made. The ping's content is the roll's label (encrypted in an encrypted wave) or `🎲 <expression>`. Pings carry `roll_id`.
 
+### Character sheets (v2.159.0)
+
+At a table only (409 `NOT_A_TABLE`), on one server (409 `TTRPG_LOCAL_ONLY`). A sheet is one blob: `data` is a JSON object as text in a plain wave, and ciphertext (base64, AES-GCM under the wave key, bound to `"cortex-sheet-v1" ‖ origin wave id ‖ sheet id`) with `encrypted: true`, `nonce` and `keyVersion` in an encrypted wave, where plain text is refused (400 `ENCRYPTION_REQUIRED`). At most 128 KB of JSON or 180 KB of ciphertext.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/waves/:id/sheets` | anyone who can read the wave | `{ sheets }`: the ones they may read (below) |
+| GET | `/api/waves/:id/sheets/:sheetId` | anyone who may read it | `{ sheet }`; 404 for one they may not read |
+| POST | `/api/waves/:id/sheets` | anyone who can post in the wave | `{ id: 'sheet-<uuid>', system: 'dnd5e-2024'\|'generic', visibility?: 'table'\|'gm', data, encrypted?, nonce?, keyVersion? }`. The device names the id, because an encrypted sheet is bound to it; 409 `SHEET_ID_TAKEN`. At most 10 each per table (409 `SHEET_LIMIT`). 201 `{ sheet }` |
+| PUT | `/api/waves/:id/sheets/:sheetId` | its owner and the table's GMs | `{ baseVersion, data, …, visibility? }`. Written only if the sheet is still at `baseVersion`, else 409 `SHEET_CONFLICT` with the current `sheet`, which the device re-applies its change to. Only the owner changes `visibility` (403 `SHEET_OWNER_ONLY`); others get 403 `SHEET_READ_ONLY` |
+| DELETE | `/api/waves/:id/sheets/:sheetId` | its owner and the table's GMs | |
+
+**A sheet:** `{ id, waveId, ownerId, system, visibility, version, data, encrypted, nonce, keyVersion, updatedBy, createdAt, updatedAt, canEdit, isOwner }`. **Who may read it:** its owner, the table's GMs, and, when `visibility` is `table`, everyone who can read the wave; decided on every read. A change sends WebSocket `character_sheet_updated` `{ waveId, sheetId }` (to the wave, or for a GM-only sheet to its owner and the GMs); clients read it again. Rate limited (`RATE_LIMIT_SHEETS_MAX`, 120 writes a minute per person).
+
 ## Voice channels (v2.118.0)
 
 A Community channel of type `voice` is a LiveKit room that always exists, named `vc-<channelId>`. It holds no waves. Opt-in instance feature `voiceChannels` (403 `FEATURE_DISABLED` when off), on top of `communities`; it needs LiveKit. Design: `docs/communities/03-voice-channels.md`.

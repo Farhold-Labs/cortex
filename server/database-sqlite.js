@@ -4405,6 +4405,30 @@ export class DatabaseSQLite {
       console.log('✅ pings.roll_id added');
     }
 
+    // v2.159.0: character sheets. The sheet itself is one blob: JSON in a plain
+    // wave, ciphertext under the wave key in an encrypted one, so the server
+    // can't read it there. `version` goes up on every write; a write names the
+    // version it was based on, so two people changing HP at once don't
+    // overwrite each other.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS character_sheets (
+        id          TEXT PRIMARY KEY,
+        wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        owner_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        system      TEXT NOT NULL,
+        visibility  TEXT NOT NULL,
+        version     INTEGER NOT NULL,
+        data        TEXT NOT NULL,
+        encrypted   INTEGER NOT NULL DEFAULT 0,
+        nonce       TEXT,
+        key_version INTEGER,
+        updated_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_character_sheets_wave ON character_sheets(wave_id, owner_id);
+    `);
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -9404,6 +9428,53 @@ export class DatabaseSQLite {
   setPingRoll(pingId, rollId) {
     this.db.prepare('UPDATE pings SET roll_id = ? WHERE id = ?').run(rollId, pingId);
   }
+
+  // === Character sheets (v2.159.0) ===
+
+  sheetFromRow(r) {
+    return {
+      id: r.id, waveId: r.wave_id, ownerId: r.owner_id, system: r.system, visibility: r.visibility, version: r.version,
+      data: r.data, encrypted: !!r.encrypted, nonce: r.nonce || null, keyVersion: r.key_version || null,
+      updatedBy: r.updated_by || null, createdAt: r.created_at, updatedAt: r.updated_at,
+    };
+  }
+
+  getCharacterSheet(waveId, sheetId) {
+    const r = this.db.prepare('SELECT * FROM character_sheets WHERE id = ? AND wave_id = ?').get(sheetId, waveId);
+    return r ? this.sheetFromRow(r) : null;
+  }
+
+  listCharacterSheets(waveId) {
+    return this.db.prepare('SELECT * FROM character_sheets WHERE wave_id = ? ORDER BY created_at').all(waveId).map(r => this.sheetFromRow(r));
+  }
+
+  countCharacterSheets(waveId, ownerId) {
+    return this.db.prepare('SELECT COUNT(*) AS n FROM character_sheets WHERE wave_id = ? AND owner_id = ?').get(waveId, ownerId).n;
+  }
+
+  createCharacterSheet({ id, waveId, ownerId, system, visibility, body }) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO character_sheets (id, wave_id, owner_id, system, visibility, version, data, encrypted, nonce, key_version, updated_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, waveId, ownerId, system, visibility, body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, ownerId, now, now);
+    return this.getCharacterSheet(waveId, id);
+  }
+
+  // Written only if nobody wrote it since `baseVersion`; returns the sheet, or null on a conflict.
+  updateCharacterSheet(waveId, sheetId, baseVersion, { visibility, body }, userId) {
+    const changes = this.db.prepare(`
+      UPDATE character_sheets SET version = version + 1, data = ?, encrypted = ?, nonce = ?, key_version = ?,
+        visibility = ?, updated_by = ?, updated_at = ?
+      WHERE id = ? AND wave_id = ? AND version = ?
+    `).run(body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, visibility, userId, new Date().toISOString(),
+      sheetId, waveId, baseVersion).changes;
+    return changes === 1 ? this.getCharacterSheet(waveId, sheetId) : null;
+  }
+
+  deleteCharacterSheet(waveId, sheetId) {
+    return this.db.prepare('DELETE FROM character_sheets WHERE id = ? AND wave_id = ?').run(sheetId, waveId).changes > 0;
+  }
   createDroplet(data) { return this.createPing(data); }
 
   getPing(pingId) {
@@ -12391,6 +12462,13 @@ export class DatabaseSQLite {
         ORDER BY created_at DESC LIMIT 500
       `).all(userId);
     } catch { /* Table may not exist */ }
+
+    // v2.159.0: their dice rolls and character sheets (an encrypted sheet as
+    // the ciphertext stored; the device that holds the wave key can export it readable).
+    exportData.diceRolls = this.db.prepare('SELECT * FROM dice_rolls WHERE roller_id = ? ORDER BY created_at DESC LIMIT 1000')
+      .all(userId).map(r => this.diceRollFromRow(r));
+    exportData.characterSheets = this.db.prepare('SELECT * FROM character_sheets WHERE owner_id = ? ORDER BY created_at')
+      .all(userId).map(r => this.sheetFromRow(r));
 
     return exportData;
   }

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working with the Cortex codebase.
 
-Current version: **2.158.0**. Last brought current 2026-11-24.
+Current version: **2.159.0**. Last brought current 2026-11-24.
 
 ## Project Overview
 
@@ -65,8 +65,8 @@ The version lives in **five** places and they must agree:
 server/package.json                              "version"
 client/package.json                              "version"
 client/src/config/constants.js                   VERSION
-client/android/app/build.gradle                  versionCode 2158000 / versionName "2.158.0"
-client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2158000 / MARKETING_VERSION 2.158.0
+client/android/app/build.gradle                  versionCode 2159000 / versionName "2.159.0"
+client/ios/App/App.xcodeproj/project.pbxproj     CURRENT_PROJECT_VERSION 2159000 / MARKETING_VERSION 2.159.0
 ```
 
 Native build numbers are the version with no dots and a trailing two-digit patch: `2.86.0` → `28600`, `2.113.3` → `2113003`. These were forgotten for every release between v2.31.0 and v2.81.4, which meant no native build could present itself as an upgrade. Don't skip them. Remember `npm install --package-lock-only` in `server/` and `client/` so the lockfiles carry the new version too.
@@ -371,7 +371,7 @@ Node-to-node, **push-only and opt-in**. There is no discovery, join or subscribe
 
 ### Tabletop role-playing (v2.158.0)
 
-Opt-in instance feature `ttrpg`; design and phases in `docs/ttrpg/README.md` (phase 1 built). A **table** is a wave with `wave_tables` (system, default visibility) and `wave_table_gms`. **The server rolls** (`server/lib/dice.js`, `crypto.randomInt`); a roll (`dice_rolls`) can't be edited or deleted and goes on one ping, its roller's, in its own wave (`claimDiceRoll`, atomic, inside the ping's transaction; `pings.roll_id`). **Who sees a result is decided on every read by `rollView()`**, never hidden on the device: a new path that returns rolls must go through it. The label is the ping's text, so it's encrypted in an encrypted wave and must never be sent with the roll request (the client splits commands in `utils/diceCommand.js`). Tables in waves with people elsewhere are refused (`TTRPG_LOCAL_ONLY`) until phase 4.
+Opt-in instance feature `ttrpg`; design and phases in `docs/ttrpg/README.md` (phase 1 built). A **table** is a wave with `wave_tables` (system, default visibility) and `wave_table_gms`. **The server rolls** (`server/lib/dice.js`, `crypto.randomInt`); a roll (`dice_rolls`) can't be edited or deleted and goes on one ping, its roller's, in its own wave (`claimDiceRoll`, atomic, inside the ping's transaction; `pings.roll_id`). **Who sees a result is decided on every read by `rollView()`**, never hidden on the device: a new path that returns rolls must go through it. The label is the ping's text, so it's encrypted in an encrypted wave and must never be sent with the roll request (the client splits commands in `utils/diceCommand.js`). Tables in waves with people elsewhere are refused (`TTRPG_LOCAL_ONLY`) until phase 4. **Character sheets (v2.159.0)** are one blob each (`character_sheets`): JSON in a plain wave, sealed under the wave key in an encrypted one (`e2ee.encryptSheet`, bound to wave and sheet id), so all numbers are worked out on the device (`client/src/ttrpg/`). Who may read one (owner, GMs, the table unless GM-only) is `sheetReadable()` on every read. A write names `baseVersion`; a stale one gets 409 `SHEET_CONFLICT` and the device re-applies its pending changes (`useSheet` in `utils/sheets.js`): never make a write path that overwrites without it.
 
 ### Role-based access control
 
@@ -490,7 +490,7 @@ Email is the deliberate exception: **emails are plain and light**, system fonts,
 - **docs/direct-calls/** — ringing a contact, outside waves (decided 2026-11-22; phase 1 built in v2.145.0, phase 2 in v2.146.0, phase 3 not built)
 - **docs/federation-keys/** — replacing a server's federation key by handshake (built in v2.147.0)
 - **docs/federated-e2ee/** — encryption across servers (decided 2026-11-20; phase 0 = local [SECURITY] fixes in v2.143.0, phase 1 = fingerprints and reading format 2 in v2.149.0; `02-identity-keys.md` = lasting identity fingerprints and signed pings, decided 2026-11-24, phase 1b built in v2.150.0, 1c (signed pings) in v2.151.0, phase 2 (plumbing between servers) in v2.152.0, phase 3 (encrypted waves across servers) in v2.153.0, first keys bound in v2.153.1, key requests relayed in v2.154.0, encrypting later and full history in v2.155.0, older copies' history in v2.155.2)
-- **docs/ttrpg/** — tabletop role-playing: server-rolled dice, encrypted sheets, GM tools, cross-server tables, maps last (decided 2026-11-25, D&D 5e 2024 first; phase 1, tables and dice, built in v2.158.0)
+- **docs/ttrpg/** — tabletop role-playing: server-rolled dice, encrypted sheets, GM tools, cross-server tables, maps last (decided 2026-11-25, D&D 5e 2024 first; phase 1, tables and dice, built in v2.158.0; phase 2, character sheets, in v2.159.0)
 - **docs/PRIVACY.md** — what the software stores and who can see it (keep it true when features change)
 - **OUTSTANDING-FEATURES.md** — the roadmap
 - **docs/MEDIA-SECURITY.md** — Jellyfin/Plex grant model and proxy
