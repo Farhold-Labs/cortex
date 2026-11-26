@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.165.0] - 2026-11-25
+
+Character sheets: armour class from equipment, and rolling ability scores. Web client only, no migration.
+
+### Fixed
+- **Equipped armour now counts towards AC, and AC can be changed where you'd look for it.** Until now AC was a single number that only the About tab's Combat section could change, and ticking EQ on armour did nothing.
+  - **Worked out from equipment by default:** the best equipped armour (its base, plus Dexterity up to its cap), or unarmoured 10 + Dex. Unarmoured, a Barbarian adds Constitution and a Monk adds Wisdom (a Monk not with a shield).
+  - **Then bonuses:** every equipped item with a bonus (a shield's +2), and an "other bonus" for anything else, such as the Defense fighting style or a spell.
+  - **Seeing and changing it:** tap AC at the top of the sheet to go to the AC settings. They show the breakdown ("Chain Mail 16 · Shield +2"), and **Set it myself** takes over completely.
+  - **Armour from the SRD** carries its AC. Any item can be given one in Gear, such as "14 + Dex max 2", or "+2" for a shield or ring. Armour added before this version gets its AC filled in the first time its sheet is opened by someone who can edit it.
+  - **Older sheets:** a sheet with an AC typed in (anything but the blank 10) keeps it as set by hand.
+
+### Added
+- **🎲 Roll or set ability scores** (Abilities tab), then put each number where you want it:
+  - **Roll 4d6:** the server rolls 4d6 six times, dropping the lowest die of each, in one roll that goes into the wave like any other, so the GM sees every die.
+  - **The standard array** (15, 14, 13, 12, 10, 8).
+  - **Point buy:** 27 points, scores 8 to 15.
+
+### Verified
+- **Tests:** 875 pass. New, in `tests/ttrpg-rules.test.cjs`:
+  - AC: armour parsing, Dex caps, carried versus worn, the best armour, shields, the other bonus, Barbarian and Monk Unarmored Defense (the Monk losing it with a shield), set by hand, and older sheets;
+  - armour from the SRD carrying its AC;
+  - scores: 4d6-drop-lowest read from one server roll, always 3 to 18, and the point-buy costs (the standard array costs exactly 27).
+- **Headless only** (Chrome on dev, as zoe at 390×844):
+  - Rolled scores (5, 17, 13, 11, 15, 7) were placed, and the roll card in the wave showed all 24 dice to the GM.
+  - Chain Mail and a Shield came from the SRD as "16" and "+2". AC went from 13 unarmoured to 18 once they were equipped, 20 when set by hand, and back to 18.
+
 ## [2.164.0] - 2026-11-25
 
 Character sheets: Ability Score Improvements, feats and multiclassing. Web client only, no migration.
