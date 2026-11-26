@@ -18,7 +18,7 @@ import GenericSheet from './GenericSheet.jsx';
 
 const VIS_LABELS = { table: 'Everyone at the table', gm: 'Only me and the GMs' };
 
-export function Frame({ isMobile, onClose, title, left, right, children, label = "Close" }) {
+export function Frame({ isMobile, onClose, title, left, right, children, label = "Close", wide = false }) {
   return (
     <aside
       role="dialog" aria-label={title}
@@ -26,7 +26,7 @@ export function Frame({ isMobile, onClose, title, left, right, children, label =
         position: 'fixed', zIndex: 1500, background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', fontFamily: 'monospace',
         ...(isMobile
           ? { inset: 0, paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }
-          : { top: 0, right: 0, bottom: 0, width: 'min(460px, 100vw)', borderLeft: '1px solid var(--accent-purple)', boxShadow: '-8px 0 24px rgba(0,0,0,0.4)' }),
+          : { top: 0, right: 0, bottom: 0, width: wide ? 'min(960px, 100vw)' : 'min(460px, 100vw)', borderLeft: '1px solid var(--accent-purple)', boxShadow: '-8px 0 24px rgba(0,0,0,0.4)' }),
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderBottom: '1px solid var(--border-secondary)' }}>

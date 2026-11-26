@@ -28212,14 +28212,18 @@ app.delete('/api/waves/:id/sheets/:sheetId', authenticateToken, (req, res) => {
 // changing its audience. Since v2.162.0 GM-only documents are sealed with the
 // GM key (below), in every wave, so not even a player who also runs the server
 // can read them.
-const TABLE_DOC_KINDS = { encounter: ['table'], encounter_gm: ['gm'], monster: ['gm'], note: ['gm', 'table'] };
+const TABLE_DOC_KINDS = { encounter: ['table'], encounter_gm: ['gm'], monster: ['gm'], note: ['gm', 'table'], map: ['gm', 'table'], token: ['table', 'gm'] };
 const TABLE_DOC_MAX = 1000;
 
 function tableDocReadable(doc, viewerId, table) {
   return doc.audience === 'table' || table.gms.includes(viewerId);
 }
+// v2.166.0: a token's owner may move it (and delete it) as well as the GMs.
+function tableDocWritable(doc, userId, table) {
+  return table.gms.includes(userId) || (doc.kind === 'token' && !!doc.ownerId && doc.ownerId === userId);
+}
 function tableDocView(doc, viewerId, table) {
-  return { ...doc, canEdit: table.gms.includes(viewerId) };
+  return { ...doc, canEdit: tableDocWritable(doc, viewerId, table) };
 }
 function announceTableDoc(wave, table, doc, audiences) {
   const message = { type: 'table_doc_updated', waveId: wave.id, docId: doc.id, kind: doc.kind };
@@ -28250,7 +28254,19 @@ app.get('/api/waves/:id/table-docs/:docId', authenticateToken, (req, res) => {
 
 app.post('/api/waves/:id/table-docs', authenticateToken, sheetLimiter, (req, res) => {
   const t = sheetTable(req, res);
-  if (!t || !requireGm(t, req, res)) return;
+  if (!t) return;
+  // A player may put their own token on a map (for the table to see); everything else is the GMs'.
+  const isGm = t.table.gms.includes(req.user.userId);
+  const ownToken = req.body.kind === 'token' && (req.body.audience == null || req.body.audience === 'table')
+    && (req.body.ownerId == null || req.body.ownerId === req.user.userId);
+  if (!isGm && !ownToken) return res.status(403).json({ error: 'Only the table\'s GMs can do that', code: 'GM_ONLY' });
+  let ownerId = null;
+  if (req.body.kind === 'token') {
+    ownerId = isGm ? (req.body.ownerId || null) : req.user.userId;
+    if (ownerId && (!db.findUserById(ownerId) || !canAccessWaveFromCache(t.wave.id, ownerId))) {
+      return res.status(400).json({ error: 'A token\'s owner must be someone at the table', code: 'NOT_AT_TABLE' });
+    }
+  }
   const id = req.body.id;
   if (typeof id !== 'string' || !/^doc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
     return res.status(400).json({ error: 'A document needs an id', code: 'INVALID_DOC' });
@@ -28264,7 +28280,7 @@ app.post('/api/waves/:id/table-docs', authenticateToken, sheetLimiter, (req, res
   if (parsed.error) return res.status(400).json(parsed);
   let doc;
   try {
-    doc = db.createTableDoc({ id, waveId: t.wave.id, kind: req.body.kind, audience, body: parsed.body, userId: req.user.userId });
+    doc = db.createTableDoc({ id, waveId: t.wave.id, kind: req.body.kind, audience, body: parsed.body, userId: req.user.userId, ownerId });
   } catch (err) {
     if (String(err.code).startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ error: 'That id is taken', code: 'DOC_ID_TAKEN' });
     throw err;
@@ -28278,8 +28294,10 @@ app.put('/api/waves/:id/table-docs/:docId', authenticateToken, sheetLimiter, (re
   if (!t) return;
   const doc = db.getTableDoc(t.wave.id, req.params.docId);
   if (!doc || !tableDocReadable(doc, req.user.userId, t.table)) return res.status(404).json({ error: 'Not found' });
-  if (!requireGm(t, req, res)) return;
+  if (!tableDocWritable(doc, req.user.userId, t.table)) return requireGm(t, req, res);
   const audience = req.body.audience == null ? doc.audience : req.body.audience;
+  // Only GMs hide or show things.
+  if (audience !== doc.audience && !t.table.gms.includes(req.user.userId)) return res.status(403).json({ error: 'Only the table\'s GMs can do that', code: 'GM_ONLY' });
   if (!TABLE_DOC_KINDS[doc.kind].includes(audience)) return res.status(400).json({ error: 'That document can\'t have that audience', code: 'INVALID_DOC' });
   const baseVersion = Number(req.body.baseVersion);
   if (!Number.isInteger(baseVersion)) return res.status(400).json({ error: 'baseVersion is required', code: 'INVALID_DOC' });
@@ -28299,7 +28317,7 @@ app.delete('/api/waves/:id/table-docs/:docId', authenticateToken, (req, res) => 
   if (!t) return;
   const doc = db.getTableDoc(t.wave.id, req.params.docId);
   if (!doc || !tableDocReadable(doc, req.user.userId, t.table)) return res.status(404).json({ error: 'Not found' });
-  if (!requireGm(t, req, res)) return;
+  if (!tableDocWritable(doc, req.user.userId, t.table)) return requireGm(t, req, res);
   db.deleteTableDoc(t.wave.id, doc.id);
   announceTableDoc(t.wave, t.table, doc, [doc.audience]);
   res.json({ success: true });
@@ -28394,6 +28412,41 @@ app.post('/api/waves/:id/table/gm-keys/grant', authenticateToken, sheetLimiter, 
   const added = db.grantGmKeys(t.wave.id, req.body.userId, keys.map(k => ({ ...k, version: Number(k.version) })), req.user.userId, wrapperPublicKey);
   broadcast({ type: 'table_gm_key', waveId: t.wave.id }, [req.body.userId]);
   res.json({ added, ...gmKeyStatus(t) });
+});
+
+// A map's picture (v2.166.0): kept up to 4096 pixels a side, because a battle
+// map's grid has to stay legible (pictures in pings are cut to 1200). GMs
+// only, bound to the table's wave like any attachment.
+const mapUpload = multer({
+  storage: messageStorage,
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)) cb(null, true);
+    else cb(new Error('A map must be a JPG, PNG or WebP picture'), false);
+  },
+});
+app.post('/api/waves/:id/table/map-image', authenticateToken, sheetLimiter, (req, res, next) => {
+  const t = sheetTable(req, res);
+  if (!t || !requireGm(t, req, res)) return;
+  req.ttrpgTable = t;
+  mapUpload.single('image')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'A map picture can be at most 20MB' : (err.message || 'Upload failed') });
+    next();
+  });
+}, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No picture uploaded' });
+    const { wave } = req.ttrpgTable;
+    const image = sharp(req.file.buffer).rotate().resize(4096, 4096, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 85 });
+    const { data, info } = await image.toBuffer({ resolveWithObject: true });
+    const storageKey = `messages/${req.user.userId}-map-${Date.now()}.webp`;
+    const url = await storage.upload(data, storageKey, 'image/webp');
+    await bindUploadToWave(storageKey, wave.id, req.user.userId);
+    res.json({ url, width: info.width, height: info.height });
+  } catch (err) {
+    console.error('Map upload error:', err.message);
+    res.status(500).json({ error: 'Failed to upload the map' });
+  }
 });
 
 // "It's your turn", for play-by-post. The GM's device knows whose turn it is
