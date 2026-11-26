@@ -113,7 +113,7 @@ export function blankSheet(name = '', system = 'dnd5e-2024') {
     abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
     saveProf: { str: true, dex: false, con: true, int: false, wis: false, cha: false },
     skills: {}, jackOfAllTrades: false,
-    ac: 10, initiativeBonus: 0, speed: 30,
+    ac: 10, acMode: 'auto', acBonus: 0, initiativeBonus: 0, speed: 30,
     hp: { max: 10, current: 10, temp: 0 },
     hitDiceUsed: {},
     deathSaves: { successes: 0, failures: 0 },
@@ -171,6 +171,7 @@ export function derive(s) {
   const baseSpeed = Number(s.speed) || 0;
   return {
     level, prof, mods, saves, skills,
+    armorClass: armorClass(s, mods, classes),
     initiative: mods.dex + (Number(s.initiativeBonus) || 0),
     passivePerception: 10 + skills.perception,
     spellAbility, spellDC: spellMod == null ? null : 8 + prof + spellMod, spellAttack: spellMod == null ? null : prof + spellMod,
@@ -185,6 +186,58 @@ export function derive(s) {
     edition: is2014(s) ? 2014 : 2024,
     casters,
   };
+}
+
+/**
+ * An item's AC as written on it (v2.165.0): body armour "16", "11 + Dex",
+ * "14 + Dex (max 2)"; or a bonus "+2" (a shield, a ring of protection).
+ */
+export function parseArmor(text) {
+  const t = String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!t) return null;
+  const bonus = t.match(/^\+ ?(\d{1,2})$/);
+  if (bonus) return { bonus: Number(bonus[1]) };
+  const body = t.match(/^(\d{1,2})(?: ?\+ ?dex(?: ?\(?max ?(\d)\)?)?)?$/);
+  if (body) return { base: Number(body[1]), dex: t.includes('dex'), max: body[2] != null ? Number(body[2]) : null };
+  return null;
+}
+
+/**
+ * Armor Class (v2.165.0): worked out from what's equipped unless set by hand.
+ * The best equipped body armour (its base, plus Dexterity up to its cap), or
+ * unarmoured 10 + Dex (plus Constitution for a Barbarian's, or Wisdom for a
+ * Monk's without a shield, Unarmored Defense); then every equipped bonus
+ * (a shield's +2) and the sheet's own extra bonus. A sheet from before this,
+ * with an AC typed in other than the blank 10, keeps it as set by hand.
+ */
+function armorClass(s, mods, classes) {
+  const manual = s.acMode === 'manual' || (s.acMode == null && s.ac != null && Number(s.ac) !== 10);
+  const parts = [];
+  let body = null; let bonus = 0; let shield = false;
+  for (const it of s.inventory || []) {
+    if (!it.equipped) continue;
+    const a = parseArmor(it.ac);
+    if (!a) continue;
+    if (a.bonus != null) { bonus += a.bonus; parts.push(`${it.name || 'Item'} +${a.bonus}`); if (/shield/i.test(it.name || '')) shield = true; continue; }
+    const value = a.base + (a.dex ? Math.min(mods.dex, a.max ?? Infinity) : 0);
+    if (!body || value > body.value) body = { name: it.name || 'Armor', value, a };
+  }
+  let base;
+  if (body) {
+    base = body.value;
+    parts.unshift(`${body.name} ${body.a.base}${body.a.dex ? ` + Dex ${Math.min(mods.dex, body.a.max ?? Infinity)}` : ''}`);
+  } else {
+    const names = classes.map(c => c.name);
+    const barb = names.includes('Barbarian'); const monk = names.includes('Monk') && !shield;
+    // Unarmored Defense: the better one if a character somehow has both.
+    const extra = Math.max(barb ? mods.con : -Infinity, monk ? mods.wis : -Infinity);
+    base = 10 + mods.dex + (Number.isFinite(extra) ? extra : 0);
+    parts.unshift(`Unarmored 10 + Dex ${mods.dex}${Number.isFinite(extra) ? ` + ${barb && (!monk || mods.con >= mods.wis) ? 'Con' : 'Wis'} ${extra}` : ''}`);
+  }
+  const extraBonus = Number(s.acBonus) || 0;
+  if (extraBonus) parts.push(`Other ${extraBonus > 0 ? '+' : ''}${extraBonus}`);
+  const auto = base + bonus + extraBonus;
+  return { value: manual ? Number(s.ac) || 0 : auto, auto, manual, parts };
 }
 
 /** A d20 Test's dice: the bonus less Exhaustion, with advantage or disadvantage. */
