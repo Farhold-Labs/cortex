@@ -93,6 +93,7 @@ export function E2EEProvider({ children, token, API_URL }) {
 
   // Wave key cache (waveId -> { waveKey: CryptoKey, version: number })
   const waveKeyCacheRef = useRef(new Map());
+  const gmKeysRef = useRef(new Map()); // the GM key per table (v2.162.0)
   // In-flight key work, shared (v2.117.2). Opening an encrypted wave decrypts
   // its 50 pings in parallel, and with a cold cache each one fetched and
   // unwrapped the key itself: farhold's logs showed 50 simultaneous
@@ -1320,6 +1321,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     // In place: drop everything held for the old keypair.
     keyGenerationRef.current++;
     waveKeyCacheRef.current.clear();
+    gmKeysRef.current?.clear();
     waveKeyInFlightRef.current.clear();
     versionKeyInFlightRef.current.clear();
     keyListInFlightRef.current.clear();
@@ -1624,6 +1626,88 @@ export function E2EEProvider({ children, token, API_URL }) {
     sealBlob(text, waveId, (origin) => crypto.tableDocContext(origin, docId, kind)), [sealBlob]);
   const decryptTableDoc = useCallback((data, nonce, waveId, docId, kind, keyVersion) =>
     openBlob(data, nonce, waveId, keyVersion, (origin) => crypto.tableDocContext(origin, docId, kind)), [openBlob]);
+
+  // ============ The GM key (v2.162.0) ============
+  // A table's key only its GMs hold, for GM-only documents. Each GM's copy is
+  // wrapped by a GM's device (ECDH, bound to wave, version and recipient) and
+  // checked against the wrapper's fingerprint before use. The current version
+  // must have been wrapped by one of the table's GMs (or by this device), so
+  // a server can't slip in a key someone else knows.
+  const loadGmKeys = useCallback(async (waveId, { fresh = false } = {}) => {
+    if (!privateKey) throw Object.assign(new Error('Unlock encryption to use the GM screen'), { locked: true });
+    const cached = gmKeysRef.current.get(waveId);
+    if (cached && !fresh) return cached;
+    const body = await fetchJSON(`/waves/${encodeURIComponent(waveId)}/table/gm-keys`);
+    const me = await getSealIdentity();
+    const origin = await originOf(waveId);
+    const keys = new Map();
+    for (const k of body.mine || []) {
+      if (k.version === body.version && k.wrappedBy !== me.userId && !body.gms.includes(k.wrappedBy)) continue;
+      try {
+        await checkWrapperRef.current?.({ senderUserId: k.wrappedBy, senderPublicKey: k.wrapperPublicKey });
+        const context = crypto.gmKeyContext(origin, k.version, crypto.personAddress(me.userId, me.nodeName));
+        keys.set(k.version, await crypto.decryptWaveKey(k.encryptedKey, k.nonce, await crypto.importPublicKey(k.wrapperPublicKey), privateKey, { format: 2, context }));
+      } catch (err) {
+        console.warn(`GM key version ${k.version} for ${waveId} can't be used:`, err.message);
+      }
+    }
+    const state = { version: body.version, gms: body.gms, missing: body.missing, needsRotation: body.needsRotation, keys };
+    gmKeysRef.current.set(waveId, state);
+    return state;
+  }, [privateKey, fetchJSON, getSealIdentity, originOf]);
+
+  // Wrap a key for each GM named; each must have a fingerprint-signed key.
+  const wrapGmKeyFor = useCallback(async (waveId, version, gmKey, userIds) => {
+    const origin = await originOf(waveId);
+    const out = [];
+    for (const userId of userIds) {
+      const recipient = await recipientOf(userId);
+      if (!recipient) throw Object.assign(new Error('A GM has no verified encryption keys yet'), { userId, code: 'GM_NO_KEYS' });
+      const { encryptedKey, nonce } = await crypto.encryptWaveKey(gmKey, await crypto.importPublicKey(recipient.publicKey), privateKey,
+        { format: 2, context: crypto.gmKeyContext(origin, version, recipient.address) });
+      out.push({ userId, encryptedKey, nonce });
+    }
+    return out;
+  }, [originOf, recipientOf, privateKey]);
+
+  /** Make the next version for every GM (the first, or after a GM left). */
+  const rotateGmKey = useCallback(async (waveId) => {
+    const state = await loadGmKeys(waveId, { fresh: true });
+    const version = state.version + 1;
+    const gmKey = await crypto.generateWaveKey();
+    const keys = await wrapGmKeyFor(waveId, version, gmKey, state.gms);
+    const res = await fetchAPI(`/waves/${encodeURIComponent(waveId)}/table/gm-keys`, { method: 'POST', body: JSON.stringify({ version, keys }) });
+    if (!res.ok && res.status !== 409) throw new Error((await res.json().catch(() => ({}))).error || 'Could not make the GM key');
+    return loadGmKeys(waveId, { fresh: true });
+  }, [loadGmKeys, wrapGmKeyFor, fetchAPI]);
+
+  /** Pass every version this device holds to a GM who lacks them. */
+  const grantGmKey = useCallback(async (waveId, userId) => {
+    const state = await loadGmKeys(waveId, { fresh: true });
+    const keys = [];
+    for (const [version, key] of state.keys) keys.push({ version, ...(await wrapGmKeyFor(waveId, version, key, [userId]))[0] });
+    if (!keys.length) throw new Error('This device has no GM key to pass on');
+    const res = await fetchAPI(`/waves/${encodeURIComponent(waveId)}/table/gm-keys/grant`, { method: 'POST', body: JSON.stringify({ userId, keys }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not share the GM key');
+    return loadGmKeys(waveId, { fresh: true });
+  }, [loadGmKeys, wrapGmKeyFor, fetchAPI]);
+
+  const encryptGmDoc = useCallback(async (text, waveId, docId, kind) => {
+    let state = await loadGmKeys(waveId);
+    if (!state.keys.has(state.version)) state = await loadGmKeys(waveId, { fresh: true });
+    const key = state.keys.get(state.version);
+    if (!key) throw Object.assign(new Error("You don't have the GM key yet: another GM has to share it with you"), { code: 'NO_GM_KEY' });
+    const sealed = await crypto.sealSheet(text, key, crypto.gmDocContext(await originOf(waveId), docId, kind));
+    return { data: sealed.data, nonce: sealed.nonce, keyVersion: state.version };
+  }, [loadGmKeys, originOf]);
+
+  const decryptGmDoc = useCallback(async (data, nonce, waveId, docId, kind, keyVersion) => {
+    let state = await loadGmKeys(waveId);
+    if (!state.keys.has(keyVersion)) state = await loadGmKeys(waveId, { fresh: true });
+    const key = state.keys.get(keyVersion);
+    if (!key) throw Object.assign(new Error("You don't have this version of the GM key"), { code: 'NO_GM_KEY' });
+    return crypto.openSheet(data, nonce, key, crypto.gmDocContext(await originOf(waveId), docId, kind));
+  }, [loadGmKeys, originOf]);
 
   // ============ Audio Encryption (v2.3.0) ============
 
@@ -1981,6 +2065,7 @@ export function E2EEProvider({ children, token, API_URL }) {
     setNeedsSetup(false);
     keyGenerationRef.current++;
     waveKeyCacheRef.current.clear();
+    gmKeysRef.current?.clear();
     waveKeyInFlightRef.current.clear();
     versionKeyInFlightRef.current.clear();
     keyListInFlightRef.current.clear();
@@ -2262,6 +2347,11 @@ export function E2EEProvider({ children, token, API_URL }) {
     decryptSheet,
     encryptTableDoc,
     decryptTableDoc,
+    loadGmKeys,
+    rotateGmKey,
+    grantGmKey,
+    encryptGmDoc,
+    decryptGmDoc,
 
     // Audio operations (v2.3.0)
     encryptAudioChunk,

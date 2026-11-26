@@ -21,8 +21,12 @@ let n = 0;
 const docId = () => `doc-${require('node:crypto').randomUUID()}`;
 const plain = (data) => ({ data: JSON.stringify(data) });
 const sealed = () => ({ encrypted: true, data: Buffer.from(`ciphertext-${n++}-`.repeat(4)).toString('base64'), nonce: Buffer.alloc(12, 7).toString('base64'), keyVersion: 1 });
+// What a GM's device sends for a GM-only document (v2.162.0): sealed with the GM key.
+const gmSealed = (keyVersion = 1) => ({ ...sealed(), keyScope: 'gm', keyVersion });
+// A wrapped GM key as a device would send it; the server can't open it and doesn't try.
+const wrapped = (userId) => ({ userId, encryptedKey: Buffer.from(`wrapped-for-${userId}-`.repeat(3)).toString('base64'), nonce: Buffer.alloc(12, 3).toString('base64') });
 
-async function startServer({ strip = false } = {}) {
+async function startServer({ strip = false, stripGmKey = false } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-gmtools-'));
   const serverDir = path.join(temp, 'server'); fs.mkdirSync(serverDir);
   for (const name of fs.readdirSync(path.join(root, 'server'))) {
@@ -39,12 +43,23 @@ async function startServer({ strip = false } = {}) {
     assert.ok(src.includes(marker));
     fs.writeFileSync(serverFile, src.replace(marker, `${marker}\n  return true;`));
   }
+  if (stripGmKey) {
+    const src = fs.readFileSync(serverFile, 'utf8');
+    const marker = 'function tableDocBody(t, audience, input) {';
+    assert.ok(src.includes(marker));
+    fs.writeFileSync(serverFile, src.replace(marker, `${marker}\n  return sheetBody(t.wave.id, input, 'GM documents');`));
+  }
   fs.appendFileSync(serverFile, "\nserver.on('listening', () => console.log('TTRPG_TEST_PORT=' + server.address().port));\n");
 
   const { DatabaseSQLite } = await import('../server/database-sqlite.js');
   const db = new DatabaseSQLite({ dbPath: path.join(serverDir, 'data/farhold.db') });
   const hash = serverRequire('bcryptjs').hashSync(password, 4);
   for (const id of ['gm', 'ann', 'bob', 'outsider']) db.createUser({ id, handle: id, email: `${id}@example.test`, passwordHash: hash, displayName: id });
+  // Encryption keys on record (v2.162.0): the server notes who wrapped a GM key with which key.
+  for (const id of ['gm', 'ann', 'bob', 'outsider']) {
+    db.db.prepare('INSERT INTO user_encryption_keys (user_id, public_key, encrypted_private_key, key_derivation_salt, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, `public-key-of-${id}`, 'x', 'y', new Date().toISOString());
+  }
   const table = db.createWave({ title: 'Table', createdBy: 'gm', participants: ['ann', 'bob'], privacy: 'private' });
   const other = db.createWave({ title: 'Other', createdBy: 'ann', participants: ['gm', 'bob'], privacy: 'private' });
   const federated = db.createWave({ title: 'Across', createdBy: 'gm', participants: ['ann'], privacy: 'private' });
@@ -101,17 +116,45 @@ test('the GM tools against a disposable server', { timeout: 60000 }, async (t) =
     });
 
     const note = docId(); const enc = docId(); const encGm = docId();
-    await t.test('only GMs make documents, and each kind has its audiences', async () => {
-      let r = await call('ann', 'POST', url(waves.table), { id: docId(), kind: 'note', ...plain({ title: 'Mine' }) });
+    await t.test('the GM key: only GMs make it, for every GM and nobody else, one version at a time', async () => {
+      const keys = `/api/waves/${waves.table}/table/gm-keys`;
+      // Every user here has encryption keys on record for the wrapper check.
+      assert.equal((await call('ann', 'POST', keys, { version: 1, keys: [wrapped('ann')] })).status, 403);
+      assert.equal((await call('ann', 'GET', keys)).status, 403);
+      let r = await call('gm', 'GET', keys);
+      assert.equal(r.status, 200); assert.equal(r.body.version, 0); assert.deepEqual(r.body.gms, ['gm']); assert.deepEqual(r.body.missing, ['gm']);
+      assert.equal((await call('gm', 'POST', keys, { version: 2, keys: [wrapped('gm')] })).status, 409);
+      r = await call('gm', 'POST', keys, { version: 1, keys: [wrapped('gm'), wrapped('ann')] });
+      assert.equal(r.status, 400); assert.equal(r.body.code, 'GM_KEY_RECIPIENTS');
+      assert.equal((await call('gm', 'POST', keys, { version: 1, keys: [] })).status, 400);
+      assert.equal((await call('gm', 'POST', keys, { version: 1, keys: [{ ...wrapped('gm'), nonce: 'short' }] })).status, 400);
+      r = await call('gm', 'POST', keys, { version: 1, keys: [wrapped('gm')] });
+      assert.equal(r.status, 201, JSON.stringify(r.body)); assert.equal(r.body.version, 1); assert.deepEqual(r.body.missing, []);
+      // A second "version 1" (a race) is refused, and the first stands.
+      assert.equal((await call('gm', 'POST', keys, { version: 1, keys: [wrapped('gm')] })).status, 409);
+      const mine = (await call('gm', 'GET', keys)).body.mine;
+      assert.equal(mine.length, 1); assert.equal(mine[0].wrappedBy, 'gm'); assert.ok(mine[0].wrapperPublicKey);
+    });
+
+    await t.test('only GMs make documents, and each kind has its audiences; GM-only ones need the GM key', async () => {
+      let r = await call('ann', 'POST', url(waves.table), { id: docId(), kind: 'note', ...gmSealed() });
       assert.equal(r.status, 403); assert.equal(r.body.code, 'GM_ONLY');
-      r = await call('gm', 'POST', url(waves.table), { id: note, kind: 'note', ...plain({ title: 'The duke is a vampire' }) });
-      assert.equal(r.status, 201); assert.equal(r.body.doc.audience, 'gm');
+      r = await call('gm', 'POST', url(waves.table), { id: docId(), kind: 'note', ...plain({ title: 'The duke is a vampire' }) });
+      assert.equal(r.status, 400); assert.equal(r.body.code, 'GM_KEY_REQUIRED');
+      r = await call('gm', 'POST', url(waves.table), { id: docId(), kind: 'note', ...sealed() });
+      assert.equal(r.status, 400); assert.equal(r.body.code, 'GM_KEY_REQUIRED');
+      assert.equal((await call('gm', 'POST', url(waves.table), { id: docId(), kind: 'note', ...gmSealed(2) })).status, 400);
+      r = await call('gm', 'POST', url(waves.table), { id: note, kind: 'note', ...gmSealed() });
+      assert.equal(r.status, 201); assert.equal(r.body.doc.audience, 'gm'); assert.equal(r.body.doc.keyScope, 'gm');
+      // A document for the table can't be sealed with a key its readers don't hold.
+      assert.equal((await call('gm', 'POST', url(waves.table), { id: docId(), kind: 'encounter', ...gmSealed() })).status, 400);
       assert.equal((await call('gm', 'POST', url(waves.table), { id: docId(), kind: 'encounter', audience: 'gm', ...plain({}) })).status, 400);
       assert.equal((await call('gm', 'POST', url(waves.table), { id: docId(), kind: 'encounter_gm', audience: 'table', ...plain({}) })).status, 400);
       assert.equal((await call('gm', 'POST', url(waves.table), { id: docId(), kind: 'secret_plans', ...plain({}) })).status, 400);
       assert.equal((await call('gm', 'POST', url(waves.table), { id: 'doc-1', kind: 'note', ...plain({}) })).status, 400);
       assert.equal((await call('gm', 'POST', url(waves.table), { id: enc, kind: 'encounter', ...plain({ name: 'Ambush', combatants: [] }) })).status, 201);
-      assert.equal((await call('gm', 'POST', url(waves.table), { id: encGm, kind: 'encounter_gm', ...plain({ stats: { goblin: { hp: 7 } } }) })).status, 201);
+      assert.equal((await call('gm', 'POST', url(waves.table), { id: encGm, kind: 'encounter_gm', ...plain({ stats: { goblin: { hp: 7 } } }) })).status, 400);
+      assert.equal((await call('gm', 'POST', url(waves.table), { id: encGm, kind: 'encounter_gm', ...gmSealed() })).status, 201);
     });
 
     await t.test('players read the encounter, never the GM half or the notes', async () => {
@@ -125,28 +168,32 @@ test('the GM tools against a disposable server', { timeout: 60000 }, async (t) =
       // Nor change or delete them.
       assert.equal((await call('ann', 'PUT', url(waves.table, enc), { baseVersion: 1, ...plain({ name: 'Ours now' }) })).status, 403);
       assert.equal((await call('ann', 'DELETE', url(waves.table, enc))).status, 403);
-      assert.equal((await call('ann', 'PUT', url(waves.table, note), { baseVersion: 1, ...plain({}) })).status, 404);
+      assert.equal((await call('ann', 'PUT', url(waves.table, note), { baseVersion: 1, ...gmSealed() })).status, 404);
     });
 
-    await t.test('sharing a note makes it a handout; a stale write is refused', async () => {
-      let r = await call('gm', 'PUT', url(waves.table, note), { baseVersion: 1, audience: 'table', ...plain({ title: 'Handout' }) });
+    await t.test('sharing a note makes it a handout, sealed for the table again; a stale write is refused', async () => {
+      // Shared, it must be readable by the table: not left under the GM key.
+      let r = await call('gm', 'PUT', url(waves.table, note), { baseVersion: 1, audience: 'table', ...gmSealed() });
+      assert.equal(r.status, 400);
+      r = await call('gm', 'PUT', url(waves.table, note), { baseVersion: 1, audience: 'table', ...plain({ title: 'Handout' }) });
       assert.equal(r.status, 200); assert.equal(r.body.doc.audience, 'table');
       assert.equal(JSON.parse((await call('bob', 'GET', url(waves.table, note))).body.doc.data).title, 'Handout');
       r = await call('gm', 'PUT', url(waves.table, note), { baseVersion: 1, ...plain({ title: 'Stale' }) });
       assert.equal(r.status, 409); assert.equal(r.body.code, 'DOC_CONFLICT'); assert.equal(r.body.doc.version, 2);
-      r = await call('gm', 'PUT', url(waves.table, note), { baseVersion: 2, audience: 'gm', ...plain({ title: 'Back' }) });
-      assert.equal(r.status, 200);
+      assert.equal((await call('gm', 'PUT', url(waves.table, note), { baseVersion: 2, audience: 'gm', ...plain({ title: 'Back' }) })).status, 400);
+      r = await call('gm', 'PUT', url(waves.table, note), { baseVersion: 2, audience: 'gm', ...gmSealed() });
+      assert.equal(r.status, 200); assert.equal(r.body.doc.keyScope, 'gm');
       assert.equal((await call('bob', 'GET', url(waves.table, note))).status, 404);
       assert.equal((await call('gm', 'PUT', url(waves.table, enc), { baseVersion: 1, audience: 'gm', ...plain({}) })).status, 400);
     });
 
     await t.test('an encrypted wave takes only ciphertext', async () => {
       assert.equal((await makeTable(s, 'ann', waves.other)).status, 200);
-      // ann owns that wave, so she is its GM.
-      let r = await call('ann', 'POST', url(waves.other), { id: docId(), kind: 'note', ...plain({ title: 'plain' }) });
+      // ann owns that wave, so she is its GM. A document for the table there is ciphertext under the wave key.
+      let r = await call('ann', 'POST', url(waves.other), { id: docId(), kind: 'encounter', ...plain({ name: 'plain' }) });
       assert.equal(r.status, 400); assert.equal(r.body.code, 'ENCRYPTION_REQUIRED');
       const body = sealed();
-      r = await call('ann', 'POST', url(waves.other), { id: docId(), kind: 'note', ...body });
+      r = await call('ann', 'POST', url(waves.other), { id: docId(), kind: 'encounter', ...body });
       assert.equal(r.status, 201); assert.equal(r.body.doc.data, body.data);
     });
 
@@ -180,6 +227,32 @@ test('the GM tools against a disposable server', { timeout: 60000 }, async (t) =
       assert.ok(list.some(x => x.type === 'ttrpg_turn' && /your turn/i.test(`${x.title} ${x.body}`)), JSON.stringify(list).slice(0, 300));
     });
 
+    await t.test('sharing the GM key with a new GM, and a new version when a GM leaves', async () => {
+      const keys = `/api/waves/${waves.table}/table/gm-keys`;
+      assert.equal((await s.call('gm', 'PUT', `/api/waves/${waves.table}/table`, { system: 'dnd5e-2014', defaultVisibility: 'gm', gms: ['gm', 'bob'] })).status, 200);
+      let r = await call('gm', 'GET', keys);
+      assert.deepEqual(r.body.missing, ['bob']); assert.equal(r.body.needsRotation, false);
+      // A new version must go to every GM (not bob alone), and a player can't be given one.
+      assert.equal((await call('bob', 'POST', keys, { version: 2, keys: [wrapped('bob')] })).status, 400);
+      assert.equal((await call('gm', 'POST', `${keys}/grant`, { userId: 'ann', keys: [{ version: 1, ...wrapped('ann') }] })).status, 400);
+      // Only versions the giver holds.
+      assert.equal((await call('gm', 'POST', `${keys}/grant`, { userId: 'bob', keys: [{ version: 2, ...wrapped('bob') }] })).status, 400);
+      r = await call('gm', 'POST', `${keys}/grant`, { userId: 'bob', keys: [{ version: 1, ...wrapped('bob') }] });
+      assert.equal(r.status, 200); assert.equal(r.body.added, 1); assert.deepEqual(r.body.missing, []);
+      // Never over one already held.
+      r = await call('gm', 'POST', `${keys}/grant`, { userId: 'bob', keys: [{ version: 1, ...wrapped('evil') }] });
+      assert.equal(r.body.added, 0);
+      assert.equal((await call('bob', 'GET', keys)).body.mine[0].encryptedKey, wrapped('bob').encryptedKey);
+      // bob stops being a GM: he holds the current version, so a new one is due, for gm alone.
+      assert.equal((await s.call('gm', 'PUT', `/api/waves/${waves.table}/table`, { system: 'dnd5e-2014', defaultVisibility: 'gm', gms: ['gm'] })).status, 200);
+      r = await call('gm', 'GET', keys);
+      assert.equal(r.body.needsRotation, true);
+      assert.equal((await call('gm', 'POST', keys, { version: 2, keys: [wrapped('gm'), wrapped('bob')] })).status, 400);
+      r = await call('gm', 'POST', keys, { version: 2, keys: [wrapped('gm')] });
+      assert.equal(r.status, 201); assert.equal(r.body.needsRotation, false);
+      assert.equal((await call('bob', 'GET', keys)).status, 403);
+    });
+
     await t.test('deleting: GMs only', async () => {
       assert.equal((await call('gm', 'DELETE', url(waves.table, enc))).status, 200);
       assert.equal((await call('gm', 'GET', url(waves.table, enc))).status, 404);
@@ -195,11 +268,27 @@ test('counterfactual: without the read check, a player reads the GM\'s notes', {
   try {
     assert.equal((await enableFeature(s)).status, 200);
     assert.equal((await makeTable(s, 'gm', waves.table)).status, 200);
+    assert.equal((await call('gm', 'POST', `/api/waves/${waves.table}/table/gm-keys`, { version: 1, keys: [wrapped('gm')] })).status, 201);
     const id = docId();
-    assert.equal((await call('gm', 'POST', `/api/waves/${waves.table}/table-docs`, { id, kind: 'note', ...plain({ title: 'Secret door' }) })).status, 201);
+    const body = gmSealed();
+    assert.equal((await call('gm', 'POST', `/api/waves/${waves.table}/table-docs`, { id, kind: 'note', ...body })).status, 201);
     const r = await call('bob', 'GET', `/api/waves/${waves.table}/table-docs/${id}`);
-    assert.equal(r.status, 200, 'the stripped server should leak the note');
-    assert.equal(JSON.parse(r.body.doc.data).title, 'Secret door');
+    assert.equal(r.status, 200, 'the stripped server should hand over the note');
+    // Even so, what it hands over is sealed with a key bob was never given.
+    assert.equal(r.body.doc.data, body.data); assert.equal(r.body.doc.keyScope, 'gm');
+  } finally {
+    s.stop();
+  }
+});
+
+test('counterfactual: without the GM-key rule, a GM-only note could be stored as plain text', { timeout: 60000 }, async () => {
+  const s = await startServer({ stripGmKey: true });
+  const { call, waves } = s;
+  try {
+    assert.equal((await enableFeature(s)).status, 200);
+    assert.equal((await makeTable(s, 'gm', waves.table)).status, 200);
+    const r = await call('gm', 'POST', `/api/waves/${waves.table}/table-docs`, { id: docId(), kind: 'note', ...plain({ title: 'Readable by the server' }) });
+    assert.equal(r.status, 201, 'the stripped server should take a plain GM note');
   } finally {
     s.stop();
   }

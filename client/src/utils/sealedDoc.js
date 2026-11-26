@@ -73,7 +73,7 @@ export function useSealedDoc({ fetchAPI, e2ee, id, url, key, conflictCode, field
           const next = clone(stored.current.data);
           for (const fn of batch) { try { fn(next); } catch { /* skip */ } }
           const extra = nextField.current;
-          const body = { baseVersion: stored.current.meta.version, ...(extra ? { [field]: extra } : {}), ...(await fns.current.seal(e2eeRef.current, next)) };
+          const body = { baseVersion: stored.current.meta.version, ...(extra ? { [field]: extra } : {}), ...(await fns.current.seal(e2eeRef.current, next, { [field]: extra || stored.current.meta?.[field] })) };
           try {
             const res = await fetchAPI(url, { method: 'PUT', body });
             const { data: _ignored, ...rest } = res[key];
