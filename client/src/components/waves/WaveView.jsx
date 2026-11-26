@@ -1761,12 +1761,13 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       {/* Header */}
       <div style={{
-        padding: isMobile ? '12px' : '16px 20px', background: 'linear-gradient(90deg, var(--bg-surface), var(--bg-hover), var(--bg-surface))',
+        // Tight on a phone (v2.168.0): every line here is a line less of the conversation.
+        padding: isMobile ? '4px 8px' : '16px 20px', background: 'linear-gradient(90deg, var(--bg-surface), var(--bg-hover), var(--bg-surface))',
         borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: isMobile ? '8px' : '16px', flexWrap: 'wrap',
         flexShrink: 0,
       }}>
         <button onClick={onBack} style={{
-          padding: '6px 10px', background: 'transparent', border: '1px solid var(--border-primary)',
+          padding: isMobile ? '4px 10px' : '6px 10px', background: 'transparent', border: '1px solid var(--border-primary)',
           color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.75rem',
         }}>←</button>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1941,6 +1942,16 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                       <span>Go live</span>
                     </div>
                   )}
+
+                  {/* Making an event (v2.168.0): it was "+ event" on a bar that's now only shown when there are pins or events. */}
+                  <div
+                    onClick={() => { setShowWaveMenu(false); setShowEventCreate(true); }}
+                    style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-teal)', background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px' }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span>📅</span><span>New event</span>
+                  </div>
 
                   {/* Tabletop role-playing (v2.158.0) */}
                   {ttrpgEnabled && table && (
@@ -2912,8 +2923,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         }}
         style={{
           flexShrink: 0,
-          padding: isMobile ? '6px 10px' : '6px 10px',
-          paddingBottom: isMobile ? 'calc(6px + env(safe-area-inset-bottom, 0px))' : '6px',
+          padding: isMobile ? '4px 6px' : '6px 10px',
+          paddingBottom: isMobile ? 'calc(4px + env(safe-area-inset-bottom, 0px))' : '6px',
           background: dragOver ? 'linear-gradient(0deg, var(--bg-hover), var(--border-subtle))' : 'linear-gradient(0deg, var(--bg-surface), var(--bg-hover))',
           borderTop: dragOver ? '2px dashed var(--accent-orange)' : '1px solid var(--border-subtle)',
           transition: 'all 0.2s ease',
@@ -3038,7 +3049,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
               }
             }
           }}
-          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}...` : 'Shift+Enter for new line, @ to mention'}
+          placeholder={replyingTo ? `Reply to ${replyingTo.sender_name}...` : undefined}
           uploading={uploading}
           uploadingMedia={uploadingMedia}
           mediaUploadStatus={mediaUploadStatus}

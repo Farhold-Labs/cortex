@@ -150,6 +150,11 @@ const WaveContextBar = ({
   const nextEvent = events[0];
   const panelOpen = open === 'events' ? events.length > 0 : open === 'pins' ? pins.length > 0 : false;
 
+  // Nothing pinned and nothing coming up: no bar at all (v2.168.0). Its two
+  // "No pins / No events" chips cost a line of every wave on a phone; making
+  // an event moved to the wave's ⋮ menu.
+  if (!pins.length && !events.length) return null;
+
   const rowStyle = {
     display: 'flex', gap: 10, alignItems: 'center',
     padding: isMobile ? '9px 12px' : '8px 14px',
