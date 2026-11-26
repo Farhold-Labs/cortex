@@ -1,6 +1,6 @@
 # Tabletop role-playing: dice, sheets, then maps
 
-Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0.**
+Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0; phase 2 (character sheets) in v2.159.0.**
 
 ## Why
 
@@ -87,7 +87,13 @@ As built: the ⋮ menu of a wave offers its owner and admins **Make this a table
 - Works in encrypted waves (the label is encrypted, the roll isn't) and in play-by-post (rolls notify like pings).
 - **Tests:** the parser (every row of the notation table, the limits, malformed input), the randomness shape (bounds and rough distribution), visibility on every read path, refusing a `roll_id` from another person or wave or one already used, and that an encrypted wave stores no label. Security tests get a counterfactual.
 
-### Phase 2: character sheets
+### Phase 2: character sheets — built in v2.159.0
+
+As built (the group's most-used D&D Beyond features weren't named, so the core of a D&D Beyond sheet was chosen): **📜 Character sheets** in the wave's ⋮ menu and the message box's ⋮ menu opens a panel beside the wave (the whole screen on a phone). On top, always: HP with Damage, Heal and Temp, AC, initiative, speed, proficiency, passive Perception, advantage or disadvantage for the next d20, Heroic Inspiration, conditions and Exhaustion (2024: −2 to d20 Tests and −5 ft speed per level, applied to every roll). Tabs: abilities, saves and skills (proficiency and expertise, Jack of All Trades), each a roll button; attacks with to-hit, damage and critical damage; spells (DC, attack, slots worked out for full, half and pact casters and multiclassing by the 2024 rules, overridable; cast uses a slot); inventory with weight and carrying capacity, and coins; limited-use features with short or long rest resets, Hit Point Dice spent by rolling, short and long rests; the character's details and classes. A death save at 0 HP is rolled and marked. Labels name the character (`Vex: Stealth (advantage)`). A sheet is the table's to see or only the GMs'; its owner chooses.
+
+How it differs from the plan below: **the 5e sheet's layout is code, its rules tables are data** (`client/src/ttrpg/dnd5e2024.js`); a general formula language for every system wasn't worth building before a second system needs it. The generic sheet is the any-system path: fields, resources and roll buttons whose dice name fields (`1d20+{Agility}`, whole numbers only). **Concurrent changes:** a write names the version it started from; the server refuses a stale one with the current sheet, and the device applies its pending changes again on top (so two people taking HP off at once both count; checked with mal and zoe damaging at the same moment). The sheet is unsigned: who changed it is the server's record (`updated_by`). Not yet: an SRD spell and equipment list to pick from (phase 6), and anything automated by class level beyond slots, hit dice and saves.
+
+As planned:
 - **Templates are data:** fields, derived values (in 5e an ability modifier is `floor((score - 10) / 2)`; the proficiency bonus comes from level), lists (attacks, spells, inventory), resources with a current and maximum (HP, spell slots, hit dice), and roll buttons, which are notation built from fields (`1d20 + {dex_mod} + {prof_if_stealth}`).
 - **The 5e template** uses the SRD only (below). **The generic template** offers free fields, resources and roll buttons, for any other game until it has its own template.
 - **Encrypted like pings.** A sheet is a blob encrypted under the table's wave key, so the server stores it and can't read it. Derived values are worked out on the device. Rolling from a sheet sends the server only the finished expression (`1d20+7`).
@@ -127,4 +133,4 @@ As built: the ⋮ menu of a wave offers its owner and admins **Make this a table
 
 ## Open questions
 
-All four were answered on 2026-11-25 (see Decisions). For phase 2: which D&D Beyond features the group leans on most (its character builder, spell lists, inventory, conditions) decides what the 5e sheet does first.
+All four were answered on 2026-11-25 (see Decisions). Still open: which D&D Beyond features the group misses most, now that phase 2 has the core sheet (its character builder, a spell list to pick from, homebrew).
