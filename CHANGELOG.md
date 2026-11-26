@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.167.0] - 2026-11-26
+
+Maps follow the encounter, and a measuring tool. Web client only, no migration.
+
+### Added
+- **Tokens follow the running encounter**, on everyone's screen:
+  - A green pulsing ring shows whose turn it is.
+  - A red ring means **Bloodied**; greyed with a red cross means **Down**.
+  - The map says which encounter it's following, the round, and whose turn it is.
+  - A monster's state comes from the encounter, so players still never see its HP. A character's comes from their sheet, when the viewer can read it.
+  - A token is linked by the combatant it was made from, or by the character sheet it shares, so tokens placed before this version link too.
+- **Tokens from the encounter:** + Token on the GM's map offers each combatant without a token yet ("From the encounter…"), or **Add all**. New tokens are placed in a row across the middle to be dragged into position. Characters' tokens can be moved by their players.
+- **📏 Measure**, for everyone, GM and players. Drag from one square to another for a line and the distance, in squares and feet: a diagonal counts as one square, and the feet per square come from the grid. It stays until the next measurement.
+
+### Verified
+- **Tests:** 880 pass. New in `tests/ttrpg-rules.test.cjs`: whose turn and Bloodied/Down for monsters (from the encounter) and characters (from their sheets when readable); linking by combatant or sheet; nothing shown when not started or not running; the map following the running encounter touched last.
+- **Headless only** (Chrome on dev; mal at 1400×900 as GM, zoe at 390×844):
+  - mal started an encounter with Kaylee and two goblins, and Add all put the two goblins on the map. Kaylee already had a token, linked through her sheet, which showed Bloodied (her sheet has 3 of 10 HP).
+  - The turn ring moved from Kaylee to Goblin Warrior 1, which showed Bloodied after 6 damage. Goblin Warrior 2 showed Down after 20.
+  - zoe saw the same marks on what was visible to her, and measured 3 squares, 15 ft.
+
 ## [2.166.0] - 2026-11-25
 
 Tabletop role-playing, phase 5: maps. Server and web client, no app build. Migrates (one new column).

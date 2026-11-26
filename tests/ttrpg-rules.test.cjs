@@ -297,3 +297,36 @@ test('maps: squares, snapping, 5e distance, fog painting and what players see', 
   map.fog.enabled = false;
   assert.equal(m.tokenVisibleToPlayer(goblin, map, 'ann', null), true);
 });
+
+test('map tokens follow the encounter: whose turn, Bloodied and Down', async () => {
+  const m = await import('../client/src/ttrpg/map.js');
+  const enc = {
+    active: true, round: 2, turn: 'c-gob',
+    combatants: [
+      { id: 'c-gob', name: 'Goblin 1', kind: 'monster', status: 'bloodied' },
+      { id: 'c-kay', name: 'Kaylee', kind: 'pc', sheetId: 'sheet-k', status: null },
+      { id: 'c-orc', name: 'Orc', kind: 'monster', status: 'down' },
+    ],
+  };
+  assert.deepEqual(
+    (({ turn, status }) => ({ turn, status }))(m.tokenStatus({ combatantId: 'c-gob' }, enc)),
+    { turn: true, status: 'bloodied' });
+  assert.equal(m.tokenStatus({ combatantId: 'c-orc' }, enc).status, 'down');
+  // A character's token, by its sheet; the sheet's HP decides when it can be read.
+  assert.equal(m.tokenStatus({ sheetId: 'sheet-k' }, enc).combatant.id, 'c-kay');
+  assert.equal(m.tokenStatus({ sheetId: 'sheet-k' }, enc, { 'sheet-k': { hp: { current: 4, max: 10 } } }).status, 'bloodied');
+  assert.equal(m.tokenStatus({ sheetId: 'sheet-k' }, enc, { 'sheet-k': { hp: { current: 0, max: 10 } } }).status, 'down');
+  assert.equal(m.tokenStatus({ sheetId: 'sheet-k' }, enc, { 'sheet-k': { hp: { current: 8, max: 10 } } }).status, null);
+  // Not in the encounter, or no encounter running, or not started: nothing.
+  assert.deepEqual(m.tokenStatus({ combatantId: 'nobody' }, enc), { combatant: null, turn: false, status: null });
+  assert.equal(m.tokenStatus({ combatantId: 'c-gob' }, { ...enc, active: false }).turn, false);
+  assert.equal(m.tokenStatus({ combatantId: 'c-gob' }, { ...enc, round: 0 }).turn, false);
+  // The map follows the running encounter touched last.
+  const list = [
+    { id: 'a', updatedAt: '2026-01-02', body: { active: false } },
+    { id: 'b', updatedAt: '2026-01-01', body: { active: true } },
+    { id: 'c', updatedAt: '2026-01-03', body: { active: true } },
+  ];
+  assert.equal(m.currentEncounter(list).id, 'c');
+  assert.equal(m.currentEncounter([list[0]]), null);
+});

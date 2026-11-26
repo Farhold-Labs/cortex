@@ -5,7 +5,9 @@ import { listSheets, openSheet } from '../../utils/sheets.js';
 import { plainText } from '../../utils/plainText.js';
 import {
   blankMap, blankToken, TOKEN_COLORS, cellAt, cellOrigin, snapToken, squaresBetween, cellKey, gridSize, paintFog, tokenVisibleToPlayer,
+  tokenStatus, currentEncounter,
 } from '../../ttrpg/map.js';
+import { onSheetUpdated } from '../../utils/sheets.js';
 import { btn, labelStyle, inputStyle, box } from './sheetUi.jsx';
 
 /**
@@ -85,7 +87,9 @@ function MapView({ mapId, wave, table, isGm, names, currentUser, fetchAPI, e2ee,
   const [mapDoc, setMapDoc] = useState(null); // the stored doc
   const [map, setMap] = useState(null);       // its data
   const [tokens, setTokens] = useState([]);   // [{ doc, data }]
-  const [tool, setTool] = useState('move');   // move | reveal | hide
+  const [tool, setTool] = useState('move');   // move | measure | reveal | hide
+  const [encounter, setEncounter] = useState(null); // the running encounter's table half (v2.167.0)
+  const [sheetData, setSheetData] = useState({});   // sheets this person can read, by id
   const [adding, setAdding] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   const e2eeRef = useRef(e2ee); e2eeRef.current = e2ee;
@@ -102,7 +106,20 @@ function MapView({ mapId, wave, table, isGm, names, currentUser, fetchAPI, e2ee,
       setTokens(all.filter(t => t.body?.mapId === mapId).map(t => ({ doc: t, data: t.body })));
     } catch { /* keep */ }
   }, [fetchAPI, wave.id, mapId]);
-  useEffect(() => { loadMap(); loadTokens(); }, [loadMap, loadTokens]);
+  // The encounter and the sheets the tokens follow (v2.167.0).
+  const loadEncounter = useCallback(async () => {
+    try { setEncounter(currentEncounter(await listTableDocs(fetchAPI, e2eeRef.current, wave.id, 'encounter'))?.body || null); } catch { /* keep */ }
+  }, [fetchAPI, wave.id]);
+  const loadSheets = useCallback(async () => {
+    try {
+      const out = {};
+      for (const sh of await listSheets(fetchAPI, wave.id)) { try { out[sh.id] = await openSheet(e2eeRef.current, wave.id, sh); } catch { /* unreadable */ } }
+      setSheetData(out);
+    } catch { /* keep */ }
+  }, [fetchAPI, wave.id]);
+  useEffect(() => { loadMap(); loadTokens(); loadEncounter(); loadSheets(); }, [loadMap, loadTokens, loadEncounter, loadSheets]);
+  useEffect(() => onTableDocUpdated(({ waveId, kind }) => { if (waveId === wave.id && kind === 'encounter') loadEncounter(); }), [wave.id, loadEncounter]);
+  useEffect(() => onSheetUpdated(({ waveId }) => { if (waveId === wave.id) loadSheets(); }), [wave.id, loadSheets]);
   useEffect(() => onTableDocUpdated(({ waveId, kind, docId }) => {
     if (waveId !== wave.id) return;
     if (kind === 'map' && docId === mapId) loadMap();
@@ -150,9 +167,16 @@ function MapView({ mapId, wave, table, isGm, names, currentUser, fetchAPI, e2ee,
         )}
       </div>
 
+      {!isGm && (
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {[['move', '✋ Move'], ['measure', '📏 Measure']].map(([k, l]) => (
+            <button key={k} type="button" aria-pressed={tool === k} onClick={() => setTool(k)} style={{ ...small, ...btn(tool === k) }}>{l}</button>
+          ))}
+        </div>
+      )}
       {isGm && (
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
-          {[['move', '✋ Move'], ['reveal', '◻ Reveal'], ['hide', '◼ Hide']].map(([k, l]) => (
+          {[['move', '✋ Move'], ['measure', '📏 Measure'], ['reveal', '◻ Reveal'], ['hide', '◼ Hide']].map(([k, l]) => (
             <button key={k} type="button" aria-pressed={tool === k} onClick={() => setTool(k)} style={{ ...small, ...btn(tool === k) }}>{l}</button>
           ))}
           <label style={{ display: 'flex', gap: '4px', alignItems: 'center', color: 'var(--text-secondary)' }}>
@@ -173,10 +197,18 @@ function MapView({ mapId, wave, table, isGm, names, currentUser, fetchAPI, e2ee,
       {isGm && showGrid && <GridSettings map={map} saveMap={saveMap} />}
       {adding && (
         <AddToken map={map} mapId={mapId} wave={wave} isGm={isGm} names={names} currentUser={currentUser} fetchAPI={fetchAPI} e2ee={e2ee}
+          encounter={encounter} tokens={tokens}
           showToast={showToast} onDone={() => { setAdding(false); loadTokens(); }} />
       )}
 
-      <MapCanvas map={map} tokens={tokens} isGm={isGm} me={currentUser?.id} tool={isGm ? tool : 'move'} isMobile={isMobile}
+      {encounter && (
+        <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
+          Following {plainText(encounter.name || 'the encounter')}{encounter.round ? `, round ${encounter.round}` : ''}
+          {(() => { const c = (encounter.combatants || []).find(x => x.id === encounter.turn); return c && encounter.round ? ` · ${plainText(c.name)}'s turn` : ''; })()}
+        </div>
+      )}
+      <MapCanvas map={map} tokens={tokens} isGm={isGm} me={currentUser?.id} tool={isGm ? tool : (tool === 'measure' ? 'measure' : 'move')} isMobile={isMobile}
+        statusOf={(t) => tokenStatus(t.data, encounter, sheetData)}
         onMoveToken={moveToken}
         onFogPaint={(cells, reveal) => saveMap(m => { m.fog = { ...(m.fog || {}), revealed: paintFog(m.fog?.revealed, cells, reveal) }; })} />
 
@@ -214,7 +246,30 @@ function GridSettings({ map, saveMap }) {
   );
 }
 
-function AddToken({ map, mapId, wave, isGm, names, currentUser, fetchAPI, e2ee, showToast, onDone }) {
+function AddToken({ map, mapId, wave, isGm, names, currentUser, fetchAPI, e2ee, showToast, onDone, encounter, tokens = [] }) {
+  const [combatantId, setCombatantId] = useState('');
+  // Combatants in the running encounter without a token on this map yet.
+  const free = (encounter?.combatants || []).filter(c => !tokens.some(t => t.data.combatantId === c.id || (c.sheetId && t.data.sheetId === c.sheetId)));
+  const fromCombatant = async (list) => {
+    const { cols, rows } = gridSize(map);
+    let i = 0;
+    for (const c of list) {
+      const sheetOwner = c.ownerId || null;
+      try {
+        await createTableDoc(fetchAPI, e2ee, wave, {
+          kind: 'token', audience: 'table', ownerId: sheetOwner || undefined,
+          data: { ...blankToken({
+            mapId, name: plainText(c.name || ''), color: c.kind === 'pc' ? TOKEN_COLORS[3] : c.kind === 'monster' ? TOKEN_COLORS[0] : TOKEN_COLORS[2],
+            size: 1, sheetId: c.sheetId || null,
+            // In a row across the middle of the map, so they can be dragged into place.
+            x: Math.max(0, Math.floor(cols / 2) - Math.floor(list.length / 2) + i), y: Math.max(0, Math.floor(rows / 2)),
+          }), combatantId: c.id },
+        });
+      } catch (err) { showToast?.(err.message || `Could not add ${c.name}`, 'error'); }
+      i++;
+    }
+    onDone();
+  };
   const [sheets, setSheets] = useState([]);
   const [name, setName] = useState('');
   const [color, setColor] = useState(TOKEN_COLORS[isGm ? 0 : 3]);
@@ -247,6 +302,17 @@ function AddToken({ map, mapId, wave, isGm, names, currentUser, fetchAPI, e2ee, 
   };
   return (
     <div style={{ ...box, display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+      {isGm && free.length > 0 && (
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', flexBasis: '100%' }}>
+          <select aria-label="From the encounter" value={combatantId} onChange={(e) => setCombatantId(e.target.value)} style={{ ...inputStyle, width: 'auto' }}>
+            <option value="">From the encounter…</option>
+            {free.map(c => <option key={c.id} value={c.id}>{plainText(c.name)}</option>)}
+          </select>
+          <button type="button" disabled={!combatantId} onClick={() => fromCombatant(free.filter(c => c.id === combatantId))} style={small}>Add it</button>
+          <button type="button" onClick={() => fromCombatant(free)} style={small}>Add all {free.length}</button>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>…or make one:</span>
+        </div>
+      )}
       {sheets.length > 0 && (
         <select aria-label="Character" value={sheetId} onChange={(e) => setSheetId(e.target.value)} style={{ ...inputStyle, width: 'auto' }}>
           <option value="">{isGm ? 'A character, or…' : 'My character…'}</option>
@@ -303,7 +369,8 @@ function TokenList({ tokens, isGm, me, names, wave, fetchAPI, e2ee, showToast, r
  * move is dragged and snaps to the grid when let go; the GM's Reveal and Hide
  * tools paint fog.
  */
-function MapCanvas({ map, tokens, isGm, me, tool, isMobile, onMoveToken, onFogPaint }) {
+function MapCanvas({ map, tokens, isGm, me, tool, isMobile, onMoveToken, onFogPaint, statusOf = () => ({}) }) {
+  const [measure, setMeasure] = useState(null); // { from, to } in picture pixels; shown until the next one
   const boxRef = useRef(null);
   const [view, setView] = useState(null); // { x, y, z }
   const [drag, setDrag] = useState(null); // { token, px, py, from }
@@ -350,7 +417,10 @@ function MapCanvas({ map, tokens, isGm, me, tool, isMobile, onMoveToken, onFogPa
     const tokenId = e.target?.closest?.('[data-token]')?.getAttribute('data-token');
     const t = tokenId && tokens.find(x => x.doc.id === tokenId);
     const p = toMap(e.clientX, e.clientY);
-    if (tool === 'move' && t && canMove(t)) {
+    if (tool === 'measure') {
+      setMeasure({ from: p, to: p, live: true });
+      gesture.current = { kind: 'measure' };
+    } else if (tool === 'move' && t && canMove(t)) {
       setDrag({ token: t, px: p.x, py: p.y, from: { x: t.data.x, y: t.data.y } });
       gesture.current = { kind: 'token' };
     } else if (tool !== 'move' && isGm) {
@@ -379,6 +449,9 @@ function MapCanvas({ map, tokens, isGm, me, tool, isMobile, onMoveToken, onFogPa
     } else if (g.kind === 'token') {
       const p = toMap(e.clientX, e.clientY);
       setDrag(d => (d ? { ...d, px: p.x, py: p.y } : d));
+    } else if (g.kind === 'measure') {
+      const p = toMap(e.clientX, e.clientY);
+      setMeasure(m => (m ? { ...m, to: p } : m));
     } else if (g.kind === 'paint') {
       const p = toMap(e.clientX, e.clientY);
       const c = cellAt(p.x, p.y, grid);
@@ -400,6 +473,7 @@ function MapCanvas({ map, tokens, isGm, me, tool, isMobile, onMoveToken, onFogPa
       if (to.x !== drag.from.x || to.y !== drag.from.y) onMoveToken(drag.token, to.x, to.y);
     }
     if (g?.kind === 'paint' && paint) onFogPaint([...paint.cells.values()], paint.reveal);
+    if (g?.kind === 'measure') setMeasure(m => (m ? { ...m, live: false } : m));
     setDrag(null); setPaint(null);
     if (pointers.current.size === 0) gesture.current = null;
   };
@@ -443,8 +517,17 @@ function MapCanvas({ map, tokens, isGm, me, tool, isMobile, onMoveToken, onFogPa
               const k = Math.max(1, Number(t.data.size) || 1);
               const dragging = drag?.token.doc.id === t.doc.id;
               const mineOrGm = canMove(t);
+              const st = statusOf(t);
+              const cx = o.x + (k * size) / 2; const cy = o.y + (k * size) / 2; const r = k * size * 0.42;
               return (
-                <g key={t.doc.id} data-token={t.doc.id} style={{ cursor: tool === 'move' && mineOrGm ? 'grab' : 'default', opacity: dragging ? 0.35 : 1 }}>
+                <g key={t.doc.id} data-token={t.doc.id} style={{ cursor: tool === 'move' && mineOrGm ? 'grab' : 'default', opacity: dragging ? 0.35 : st.status === 'down' ? 0.55 : 1 }}>
+                  <title>{`${plainText(t.data.name || '')}${st.status === 'down' ? ' — Down' : st.status === 'bloodied' ? ' — Bloodied' : ''}${st.turn ? ' — their turn' : ''}`}</title>
+                  {st.turn && (
+                    <circle cx={cx} cy={cy} r={r * 1.22} fill="none" stroke="#0ead69" strokeWidth={Math.max(3, size / 12)} data-turn="1">
+                      <animate attributeName="stroke-opacity" values="1;0.35;1" dur="1.6s" repeatCount="indefinite" />
+                    </circle>
+                  )}
+                  {st.status === 'bloodied' && <circle cx={cx} cy={cy} r={r * 1.08} fill="none" stroke="#c1121f" strokeWidth={Math.max(2, size / 16)} data-status="bloodied" />}
                   <circle cx={o.x + (k * size) / 2} cy={o.y + (k * size) / 2} r={k * size * 0.42} fill={t.data.color || '#e4572e'}
                     stroke={t.doc.ownerId === me ? 'var(--accent-amber, #ffd23f)' : '#fff'} strokeWidth={Math.max(2, size / 18)}
                     strokeDasharray={t.doc.audience === 'gm' ? `${size / 8} ${size / 10}` : undefined} />
@@ -452,11 +535,30 @@ function MapCanvas({ map, tokens, isGm, me, tool, isMobile, onMoveToken, onFogPa
                     fontSize={Math.max(10, k * size * 0.32)} fontFamily="monospace" fill="#fff" stroke="#000" strokeWidth={Math.max(1, size / 40)} paintOrder="stroke" pointerEvents="none">
                     {initials(t.data.name)}
                   </text>
+                  {st.status === 'down' && (
+                    <path d={`M ${cx - r * 0.7} ${cy - r * 0.7} L ${cx + r * 0.7} ${cy + r * 0.7} M ${cx + r * 0.7} ${cy - r * 0.7} L ${cx - r * 0.7} ${cy + r * 0.7}`}
+                      stroke="#c1121f" strokeWidth={Math.max(3, size / 10)} strokeLinecap="round" pointerEvents="none" data-status="down" />
+                  )}
                 </g>
               );
             })}
             {fogOn && <rect x={-W} y={-H} width={W * 3} height={H * 3} fill="#000" fillOpacity={isGm ? 0.45 : 1} mask="url(#cortex-map-fog)" pointerEvents="none" />}
             {pending.map(c => { const o = cellOrigin(c.x, c.y, grid); return <rect key={cellKey(c.x, c.y)} x={o.x} y={o.y} width={size} height={size} fill={paint.reveal ? '#0ead69' : '#e4572e'} fillOpacity={0.35} pointerEvents="none" />; })}
+            {measure && (() => {
+              const a = cellAt(measure.from.x, measure.from.y, grid); const z = cellAt(measure.to.x, measure.to.y, grid);
+              const ao = cellOrigin(a.x, a.y, grid); const zo = cellOrigin(z.x, z.y, grid);
+              const n = squaresBetween(a, z);
+              return (
+                <g pointerEvents="none" data-measure={n}>
+                  <line x1={ao.x + size / 2} y1={ao.y + size / 2} x2={zo.x + size / 2} y2={zo.y + size / 2} stroke="#ffd23f" strokeWidth={Math.max(2, size / 14)} strokeDasharray={`${size / 6} ${size / 8}`} />
+                  <circle cx={ao.x + size / 2} cy={ao.y + size / 2} r={size / 8} fill="#ffd23f" />
+                  <circle cx={zo.x + size / 2} cy={zo.y + size / 2} r={size / 8} fill="#ffd23f" />
+                  <text x={zo.x + size / 2} y={zo.y - size * 0.2} textAnchor="middle" fontSize={Math.max(12, size * 0.38)} fontFamily="monospace" fill="#ffd23f" stroke="#000" strokeWidth={Math.max(1, size / 30)} paintOrder="stroke">
+                    {n} sq · {n * (Number(grid.feet) || 5)} ft.
+                  </text>
+                </g>
+              );
+            })()}
             {drag && dropCell && (() => {
               const k = Math.max(1, Number(drag.token.data.size) || 1);
               const o = cellOrigin(dropCell.x, dropCell.y, grid);
