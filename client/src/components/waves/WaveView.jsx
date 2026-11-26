@@ -1851,7 +1851,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
             >
               {waveData.topic}
             </div>
-          ) : waveData.createdBy === currentUser?.id ? (
+          ) : waveData.createdBy === currentUser?.id && !isMobile ? (
+            // On a phone an empty "+ Set topic" cost the title a second line (v2.168.1); it's in the ⋮ menu there.
             <div
               onClick={() => { setTopicDraft(''); setEditingTopic(true); }}
               style={{ color: 'var(--text-muted)', fontSize: '0.7rem', cursor: 'pointer', opacity: 0.5 }}
@@ -1943,6 +1944,14 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                     </div>
                   )}
 
+                  {isMobile && waveData.createdBy === currentUser?.id && !waveData.topic && (
+                    <div
+                      onClick={() => { setShowWaveMenu(false); setTopicDraft(''); setEditingTopic(true); }}
+                      style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)', background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px' }}
+                    >
+                      <span>✎</span><span>Set topic</span>
+                    </div>
+                  )}
                   {/* Making an event (v2.168.0): it was "+ event" on a bar that's now only shown when there are pins or events. */}
                   <div
                     onClick={() => { setShowWaveMenu(false); setShowEventCreate(true); }}
@@ -2924,7 +2933,10 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         style={{
           flexShrink: 0,
           padding: isMobile ? '4px 6px' : '6px 10px',
-          paddingBottom: isMobile ? 'calc(4px + env(safe-area-inset-bottom, 0px))' : '6px',
+          // Not the safe-area inset (v2.168.1): on a phone the bottom navigation
+          // is always below the message box and already makes room for the
+          // gesture bar, so adding it here too left a gap under the box.
+          paddingBottom: isMobile ? '4px' : '6px',
           background: dragOver ? 'linear-gradient(0deg, var(--bg-hover), var(--border-subtle))' : 'linear-gradient(0deg, var(--bg-surface), var(--bg-hover))',
           borderTop: dragOver ? '2px dashed var(--accent-orange)' : '1px solid var(--border-subtle)',
           transition: 'all 0.2s ease',

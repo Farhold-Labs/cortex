@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.168.1] - 2026-11-26
+
+### Fixed
+- **A gap under the message box on phones.** It left room for the phone's gesture bar, which the bottom navigation underneath already does, so the space was counted twice: about 22 pixels on a Pixel 7. Seen on the phone: headless Chrome reports no gesture bar, so v2.168.0's measurement missed it. The message box now sits 4 pixels above the navigation.
+- **"+ Set topic" no longer takes a second line under a wave's title on a phone** when the wave has no topic; **Set topic** is in the wave's ⋮ menu there. A topic that's set still shows.
+
 ## [2.168.0] - 2026-11-26
 
 More room for the conversation on a phone. Web client only, no migration.
