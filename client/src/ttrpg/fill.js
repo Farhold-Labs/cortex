@@ -63,6 +63,8 @@ export function matchSubclass(cls, text) {
 export function itemEntries(x, qty, sheet) {
   const inventory = {
     id: newId(), name: x.name, qty, weight: Number(x.weight) || 0, equipped: false, srd: x.id,
+    // Armour carries its AC so equipping it counts (v2.165.0); a shield's is a bonus.
+    ...(x.armor && x.ac ? { ac: /shield/i.test(x.category || x.name) ? `+${x.ac}` : x.ac } : {}),
     notes: [x.cost, x.damage && `${x.damage} ${x.damageType}`.trim(), x.ac && `AC ${x.ac}`, (x.properties || []).join(', ')].filter(Boolean).join(' · '),
   };
   let attack = null;
