@@ -149,7 +149,9 @@ The data comes from [5e-bits/5e-database](https://github.com/5e-bits/5e-database
 - It **only adds**: nothing already on the sheet is added twice or replaced, and **Undo** takes it back out, leaving anything changed since.
 - **Several spells at once:** the spell picker can show only the character's classes' spells up to their highest slot, with a tick box each.
 
-Not yet: ability score improvements and feats chosen at a level are listed as features, not applied; class skills for a second class; 2024 background ability increases (shown, chosen by the player).
+**Ability Score Improvements, feats and multiclassing (v2.164.0).** At each Ability Score Improvement (filling, levelling up, or later with **Choose** on the Features tab): +2 to one score, +1 to two (to 20), or a feat the character qualifies for (level, scores, not taken already; a feat's own +1 chosen too). An Epic Boon (2024, level 19) takes a boon or another feat, and a boon can raise a score to 30. Feats come from the SRD: Grappler in 5.1; in 5.2 the general feats and the Epic Boons. **Adding a class** (About → + Class) checks the multiclassing scores for the new class and the current ones (a warning, not a block), adds its level-1 features, its multiclass proficiencies and its skill choice (Bard, Ranger, Rogue), and the fixed hit points. Levelling up one class touches only that class (in v2.163.0 it also added the other classes' missing features).
+
+Not yet: 2024 background ability increases (shown, chosen by the player).
 
 As planned:
 - Searchable SRD text (spells, conditions, monsters, equipment) beside the wave, plus the table's own homebrew entries. Phase 2 already needs spell and equipment data for sheets, so most of this comes for free by then.

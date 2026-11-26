@@ -226,9 +226,23 @@ function characterSets(edition) {
     const collect = (o) => { if (!o) return; if (o.item?.name?.startsWith('Skill:')) skillOptions.push(SKILL_KEY(o.item.name)); if (o.choice) (o.choice.from?.options || []).forEach(collect); };
     (skillChoice?.from?.options || []).forEach(collect);
     const fixed = (c.starting_equipment || []).map(e => ({ id: e.equipment.index, name: e.equipment.name, qty: e.quantity || 1 }));
+    // Multiclassing into this class (v2.164.0): the scores it needs, what it
+    // grants, and the skill it lets you choose, if any.
+    const mc = c.multi_classing || {};
+    const prereq = (mc.prerequisites || []).map(p => ({ ability: p.ability_score?.index, min: p.minimum_score }));
+    const prereqAny = (mc.prerequisite_options?.from?.options || []).map(p => ({ ability: p.ability_score?.index, min: p.minimum_score }));
+    const mcSkillChoice = (mc.proficiency_choices || []).find(pc => JSON.stringify(pc).includes('Skill:'));
+    const mcSkills = [];
+    const mcCollect = (o) => { if (!o) return; if (o.item?.name?.startsWith('Skill:')) mcSkills.push(SKILL_KEY(o.item.name)); if (o.choice) (o.choice.from?.options || []).forEach(mcCollect); };
+    (mcSkillChoice?.from?.options || []).forEach(mcCollect);
     return {
       id: c.index, name: c.name, hitDie: c.hit_die,
       skills: skillChoice ? { choose: skillChoice.choose, from: [...new Set(skillOptions)] } : null,
+      multiclass: {
+        all: prereq, any: prereqAny,
+        proficiencies: (mc.proficiencies || []).map(p => p.name.replace(/^Tool:\s*/, '')),
+        skills: mcSkillChoice ? { choose: mcSkillChoice.choose, from: [...new Set(mcSkills)] } : null,
+      },
       levels: lv, subclasses: subs,
       equipment: { fixed, groups: equipmentGroups(c.starting_equipment_options, edition, ctx) },
     };
@@ -274,7 +288,26 @@ function characterSets(edition) {
       },
     };
   });
-  return { classes, features: [...features.values()], species, traits, backgrounds };
+  // Feats (v2.164.0), with what an Ability Score Improvement or Epic Boon
+  // needs to know: the kind, the level, and the score it raises.
+  const ABIL_WORD = { strength: 'str', dexterity: 'dex', constitution: 'con', intelligence: 'int', wisdom: 'wis', charisma: 'cha' };
+  const feats = (fs.existsSync(path.join(srcDir, `${edition}-Feats.json`)) ? read(edition, 'Feats') : []).map(f => {
+    const t = text(f.desc || f.description);
+    let increase = null;
+    const any = t.match(/Increase one ability score of your choice by 1, to a maximum of (\d+)/i);
+    const some = t.match(/Increase your (\w+)(?:,? (?:or )?(\w+))?(?:,? or (\w+))? score by 1, to a maximum of (\d+)/i);
+    if (f.index === 'ability-score-improvement') increase = { asi: true, max: 20 };
+    else if (any) increase = { from: ['str', 'dex', 'con', 'int', 'wis', 'cha'], by: 1, max: Number(any[1]) };
+    else if (some) increase = { from: [some[1], some[2], some[3]].filter(Boolean).map(w => ABIL_WORD[w.toLowerCase()]).filter(Boolean), by: 1, max: Number(some[4]) };
+    return {
+      id: `feat-${f.index}`, name: f.name, type: f.type || 'general',
+      minLevel: f.prerequisites?.minimum_level || 0,
+      needsFeature: f.prerequisites?.feature_named || null,
+      scores: Array.isArray(f.prerequisites) ? f.prerequisites.filter(p => p.ability_score).map(p => ({ ability: p.ability_score.index, min: p.minimum_score })) : [],
+      repeatable: !!f.repeatable, increase,
+    };
+  });
+  return { classes, features: [...features.values()], species, traits, backgrounds, feats };
 }
 
 const byName = (a, b) => a.name.localeCompare(b.name);

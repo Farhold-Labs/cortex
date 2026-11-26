@@ -16,6 +16,7 @@ const srdFor = (edition) => ({
   edition, classes: load(edition, 'classes'), species: load(edition, 'species'), backgrounds: load(edition, 'backgrounds'), equipment: load(edition, 'equipment'),
   featureNames: Object.fromEntries(load(edition, 'features').map(f => [f.id, f.name])),
   traitNames: Object.fromEntries(load(edition, 'traits').map(t => [t.id, t.name])),
+  feats: load(edition, 'feats'),
 });
 const rules = () => import('../client/src/ttrpg/dnd5e2024.js');
 const fill = () => import('../client/src/ttrpg/fill.js');
@@ -133,4 +134,76 @@ test('hit points: the whole die at level 1, the fixed value after, Constitution 
   s.classes = [{ name: 'Artificer', level: 1 }];
   assert.equal(startingHp(s, srdFor('2024')), null);
   assert.equal(levelUpHp(10, 14), 8); assert.equal(levelUpHp(6, 8), 3); assert.equal(levelUpHp(6, 1), 1);
+});
+
+test('ability score improvements: +2, +1/+1, a feat (and its +1), capped; Epic Boons to 30', async () => {
+  const { blankSheet } = await rules();
+  const { planFill, applyFill, applyAsiChoice, featOptions, asiChoiceValid } = await fill();
+  const srd = srdFor('2024');
+  const s = blankSheet('Asi', 'dnd5e-2024');
+  s.classes = [{ name: 'Fighter', level: 6, subclass: '' }];
+  s.abilities.str = 19; s.abilities.dex = 14;
+  const plan = planFill(s, srd, { include: { features: true } });
+  assert.equal(plan.asi.length, 2, 'Fighter 6 has two (4 and 6)');
+  const [first, second] = plan.asi;
+  // One chosen now (+2 STR stops at 20), one left for later.
+  const p2 = planFill(s, srd, { include: { features: true }, asi: { [first.key]: { mode: 'plus2', a: 'str' } } });
+  applyFill(s, p2);
+  assert.equal(s.abilities.str, 20);
+  const chosen = s.featureList.find(f => f.key === first.key);
+  assert.equal(chosen.choice, '+2 STR'); assert.equal(chosen.pending, false);
+  const later = s.featureList.find(f => f.key === second.key);
+  assert.equal(later.pending, true);
+  // Later: Grappler, +1 DEX.
+  const feats = featOptions(srd.feats, s, 'asi', 6).map(f => f.name);
+  assert.ok(feats.includes('Grappler') && !feats.includes('Alert') && !feats.some(n => n.startsWith('Boon')), feats.join());
+  assert.equal(asiChoiceValid({ mode: 'feat', feat: 'feat-grappler' }, srd.feats), false, 'Grappler needs its +1 chosen');
+  assert.equal(asiChoiceValid({ mode: 'plus1x2', a: 'dex', b: 'dex' }, srd.feats), false);
+  applyAsiChoice(s, later.id, { mode: 'feat', feat: 'feat-grappler', featAbility: 'dex' }, srd.feats);
+  assert.equal(s.abilities.dex, 15);
+  assert.ok(s.featureList.some(f => f.name === 'Feat: Grappler'));
+  assert.ok(!featOptions(srd.feats, s, 'asi', 6).some(f => f.name === 'Grappler'), 'not twice');
+  // An Epic Boon may take a score to 30.
+  s.abilities.con = 20;
+  const boons = featOptions(srd.feats, s, 'boon', 19);
+  assert.ok(boons.some(f => f.type === 'epic-boon'));
+  s.featureList.push({ id: 'b1', key: 'class:fighter:19:fighter-epic-boon', srd: 'fighter-epic-boon', name: 'Epic Boon', source: 'Fighter 19' });
+  applyAsiChoice(s, 'b1', { mode: 'feat', feat: 'feat-boon-of-fate', featAbility: 'con' }, srd.feats);
+  assert.equal(s.abilities.con, 21);
+});
+
+test('2014: Grappler only with STR 13', async () => {
+  const { blankSheet } = await rules();
+  const { featOptions } = await fill();
+  const s = blankSheet('', 'dnd5e-2014'); s.abilities.str = 12;
+  assert.equal(featOptions(srdFor('2014').feats, s, 'asi', 4).find(f => f.name === 'Grappler').meetsScores, false);
+  s.abilities.str = 13;
+  assert.equal(featOptions(srdFor('2014').feats, s, 'asi', 4).find(f => f.name === 'Grappler').meetsScores, true);
+});
+
+test('multiclassing: prerequisites both ways, the class\'s skill choice and proficiencies', async () => {
+  const { blankSheet } = await rules();
+  const { planFill, applyFill, multiclassCheck } = await fill();
+  const srd = srdFor('2014');
+  const s = blankSheet('Mc', 'dnd5e-2014');
+  s.classes = [{ name: 'Wizard', level: 3, subclass: '' }];
+  s.abilities.int = 12; s.abilities.dex = 14;
+  assert.deepEqual(multiclassCheck(s, srd, 'rogue'), ['Wizard needs INT 13']);
+  s.abilities.int = 15;
+  assert.deepEqual(multiclassCheck(s, srd, 'rogue'), []);
+  s.abilities.dex = 12;
+  assert.deepEqual(multiclassCheck(s, srd, 'fighter'), ['Fighter needs STR 13 or DEX 13']);
+  s.abilities.dex = 13;
+  assert.deepEqual(multiclassCheck(s, srd, 'fighter'), []);
+  // Add Rogue 1: Expertise and Sneak Attack, one skill from its list, light armour and thieves' tools.
+  s.classes.push({ name: 'Rogue', level: 1, subclass: '' });
+  const plan = planFill(s, srd, { include: { features: true, resources: true, skills: true }, onlyLevel: { 1: 1 }, mcSkills: { 1: ['stealth', 'perception'] } });
+  assert.ok(plan.features.some(f => f.name === 'Sneak Attack'));
+  // The Wizard's features aren't on this sheet, but adding a Rogue level doesn't add them (it used to).
+  assert.ok(!plan.features.some(f => f.source.startsWith('Wizard')), 'only the new class\'s level');
+  assert.deepEqual(plan.skills, ['stealth'], 'a multiclass Rogue gets one skill');
+  applyFill(s, plan);
+  assert.match(s.proficiencies, /Rogue \(multiclass\): Light Armor, Thieves' Tools/);
+  // Not added twice when filled again.
+  assert.equal(planFill(s, srd, { include: { features: true } }).proficiencyLines.length, 0);
 });

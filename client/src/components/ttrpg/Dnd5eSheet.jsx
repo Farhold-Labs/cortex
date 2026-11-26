@@ -6,6 +6,7 @@ import {
 import { editionOf, findSrd, srdFeatureText } from '../../srd/index.js';
 import { SrdPicker, SrdEntry } from './SrdBrowser.jsx';
 import FillFromSrd from './FillFromSrd.jsx';
+import { asiKind } from '../../ttrpg/fill.js';
 import { btn, rollBtn, labelStyle, inputStyle, box, sectionTitle, Field, Counter, Pips, ListRows } from './sheetUi.jsx';
 
 /**
@@ -163,7 +164,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
       </div>
 
       {fill && (
-        <FillFromSrd data={data} edition={edition} change={change} levelUp={fill.levelUp} onClose={() => setFill(null)} />
+        <FillFromSrd data={data} edition={edition} change={change} levelUp={fill.levelUp} asiFor={fill.asiFor} addClass={fill.addClass} onClose={() => setFill(null)} />
       )}
 
       {!fill && picker && (
@@ -293,7 +294,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
 
       {!fill && !picker && tab === 'features' && (
         <div>
-          <SrdFeatures data={data} canEdit={canEdit} now={now} edition={edition} onFill={() => setFill({ levelUp: null })} />
+          <SrdFeatures data={data} canEdit={canEdit} now={now} edition={edition} onFill={() => setFill({ levelUp: null })} onChoose={(id) => setFill({ asiFor: id })} />
 
           <div style={sectionTitle}>RESOURCES <span style={{ color: 'var(--text-dim)' }}>(Rage, Channel Divinity, Ki…)</span></div>
           <ListRows
@@ -344,7 +345,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
       )}
 
       {!fill && !picker && tab === 'about' && <About data={data} d={d} canEdit={canEdit} set={set} now={now} isMobile={isMobile}
-        onFill={() => setFill({ levelUp: null })} onLevelUp={(index) => setFill({ levelUp: { index } })} />}
+        onFill={() => setFill({ levelUp: null })} onLevelUp={(index) => setFill({ levelUp: { index } })} onAddClass={() => setFill({ addClass: true })} />}
     </div>
   );
 }
@@ -531,7 +532,7 @@ function SpellRow({ sp, d, canEdit, set, now, roll, test, name, edition }) {
   );
 }
 
-function About({ data, d, canEdit, set, now, isMobile, onFill, onLevelUp }) {
+function About({ data, d, canEdit, set, now, isMobile, onFill, onLevelUp, onAddClass }) {
   const ed = editionInfo(data.system);
   const row = (label, key, list) => (
     <div>
@@ -567,7 +568,7 @@ function About({ data, d, canEdit, set, now, isMobile, onFill, onLevelUp }) {
       <div style={sectionTitle}>CLASSES <span style={{ color: 'var(--text-dim)' }}>level {d.level}</span></div>
       <ListRows
         items={data.classes || []} canEdit={canEdit} addLabel="Class (multiclass)" empty="No class."
-        onAdd={() => now(s => { s.classes = [...(s.classes || []), { name: 'Rogue', level: 1, subclass: '' }]; })}
+        onAdd={onAddClass}
         onRemove={(i) => now(s => { s.classes = s.classes.filter((_, j) => j !== i); })}
         render={(c, i) => (
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 4.5em minmax(0, 1fr)', gap: '6px' }}>
@@ -617,7 +618,7 @@ function About({ data, d, canEdit, set, now, isMobile, onFill, onLevelUp }) {
 }
 
 /** Features and traits added from the SRD (v2.163.0): the text is read from the SRD, not stored in the sheet. */
-function SrdFeatures({ data, canEdit, now, edition, onFill }) {
+function SrdFeatures({ data, canEdit, now, edition, onFill, onChoose }) {
   const list = data.featureList || [];
   const [open, setOpen] = useState({});
   const toggle = async (f) => {
@@ -638,8 +639,9 @@ function SrdFeatures({ data, canEdit, now, edition, onFill }) {
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <button type="button" onClick={() => toggle(f)} aria-expanded={!!open[f.id]}
                 style={{ flex: 1, textAlign: 'left', background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'monospace', padding: 0 }}>
-                {open[f.id] ? '▾' : '▸'} {f.name} <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>{f.source}</span>
+                {open[f.id] ? '▾' : '▸'} {f.name}{f.choice ? `: ${f.choice}` : ''} <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>{f.source}</span>
               </button>
+              {canEdit && !f.choice && asiKind(f.srd) && <button type="button" onClick={() => onChoose(f.id)} style={{ ...btn(true), minHeight: '24px', padding: '0 8px' }}>Choose</button>}
               {canEdit && <button type="button" aria-label={`Remove ${f.name}`} onClick={() => now(s => { s.featureList = (s.featureList || []).filter(x => x.id !== f.id); })}
                 style={{ ...btn(), minHeight: '24px', padding: '0 6px', color: 'var(--text-dim)' }}>✕</button>}
             </div>
