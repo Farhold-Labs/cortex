@@ -4429,6 +4429,35 @@ export class DatabaseSQLite {
       CREATE INDEX IF NOT EXISTS idx_character_sheets_wave ON character_sheets(wave_id, owner_id);
     `);
 
+    // v2.160.0: the GM's tools. One store for encounters, the GMs' half of an
+    // encounter, monster stat blocks and notes: a blob each, sealed under the
+    // wave key in an encrypted wave like sheets. `audience` is who may read
+    // it: the table, or only its GMs. Only GMs write.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS table_docs (
+        id          TEXT PRIMARY KEY,
+        wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL,
+        audience    TEXT NOT NULL,
+        version     INTEGER NOT NULL,
+        data        TEXT NOT NULL,
+        encrypted   INTEGER NOT NULL DEFAULT 0,
+        nonce       TEXT,
+        key_version INTEGER,
+        created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+        updated_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_table_docs_wave ON table_docs(wave_id, kind);
+    `);
+    // A roll can say what it was for (an encounter's initiative), so the GM's
+    // device can find it. Rolls are visible to the server anyway.
+    if (!this.db.prepare(`SELECT name FROM pragma_table_info('dice_rolls') WHERE name = 'ref'`).get()) {
+      this.db.exec(`ALTER TABLE dice_rolls ADD COLUMN ref TEXT;`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_dice_rolls_ref ON dice_rolls(wave_id, ref);`);
+    }
+
     // v2.105.1 — clear residue from deletions that ran without foreign-key
     // enforcement. Runs every boot and is silent when there is nothing to do,
     // because "nothing to do" is the expected state from here on: the deletion
@@ -9385,15 +9414,15 @@ export class DatabaseSQLite {
     return this.db.prepare('DELETE FROM wave_tables WHERE wave_id = ?').run(waveId).changes > 0;
   }
 
-  createDiceRoll({ waveId, rollerId, roll, visibility }) {
+  createDiceRoll({ waveId, rollerId, roll, visibility, ref = null }) {
     const row = {
       id: `roll-${crypto.randomUUID()}`, wave_id: waveId, roller_id: rollerId, expression: roll.expression,
       result: JSON.stringify({ terms: roll.terms, crit: roll.crit }), total: roll.total, visibility,
-      ping_id: null, created_at: new Date().toISOString(),
+      ping_id: null, created_at: new Date().toISOString(), ref,
     };
     this.db.prepare(`
-      INSERT INTO dice_rolls (id, wave_id, roller_id, expression, result, total, visibility, ping_id, created_at)
-      VALUES (@id, @wave_id, @roller_id, @expression, @result, @total, @visibility, @ping_id, @created_at)
+      INSERT INTO dice_rolls (id, wave_id, roller_id, expression, result, total, visibility, ping_id, created_at, ref)
+      VALUES (@id, @wave_id, @roller_id, @expression, @result, @total, @visibility, @ping_id, @created_at, @ref)
     `).run(row);
     return this.diceRollFromRow(row);
   }
@@ -9401,7 +9430,7 @@ export class DatabaseSQLite {
   diceRollFromRow(r) {
     const result = JSON.parse(r.result);
     return { id: r.id, waveId: r.wave_id, rollerId: r.roller_id, expression: r.expression, terms: result.terms,
-      crit: result.crit || null, total: r.total, visibility: r.visibility, pingId: r.ping_id || null, createdAt: r.created_at };
+      crit: result.crit || null, total: r.total, visibility: r.visibility, pingId: r.ping_id || null, createdAt: r.created_at, ref: r.ref || null };
   }
 
   getDiceRollsByIds(waveId, ids) {
@@ -9410,9 +9439,11 @@ export class DatabaseSQLite {
       .all(waveId, ...ids).map(r => this.diceRollFromRow(r));
   }
 
-  listDiceRolls(waveId, { rollerId = null, before = null, limit = 50 } = {}) {
+  listDiceRolls(waveId, { rollerId = null, before = null, limit = 50, refPrefix = null } = {}) {
     const where = ['wave_id = ?']; const params = [waveId];
     if (rollerId) { where.push('roller_id = ?'); params.push(rollerId); }
+    // A ref is [A-Za-z0-9:_-] only (checked by the route), so it needs no LIKE escaping.
+    if (refPrefix) { where.push('ref LIKE ?'); params.push(`${refPrefix}%`); }
     if (before) { where.push('created_at < ?'); params.push(before); }
     return this.db.prepare(`SELECT * FROM dice_rolls WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`)
       .all(...params, Math.min(Math.max(1, limit), 200)).map(r => this.diceRollFromRow(r));
@@ -9470,6 +9501,55 @@ export class DatabaseSQLite {
     `).run(body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, visibility, userId, new Date().toISOString(),
       sheetId, waveId, baseVersion).changes;
     return changes === 1 ? this.getCharacterSheet(waveId, sheetId) : null;
+  }
+
+  // === The GM's tools (v2.160.0) ===
+
+  tableDocFromRow(r) {
+    return {
+      id: r.id, waveId: r.wave_id, kind: r.kind, audience: r.audience, version: r.version, data: r.data,
+      encrypted: !!r.encrypted, nonce: r.nonce || null, keyVersion: r.key_version || null,
+      createdBy: r.created_by || null, updatedBy: r.updated_by || null, createdAt: r.created_at, updatedAt: r.updated_at,
+    };
+  }
+
+  getTableDoc(waveId, docId) {
+    const r = this.db.prepare('SELECT * FROM table_docs WHERE id = ? AND wave_id = ?').get(docId, waveId);
+    return r ? this.tableDocFromRow(r) : null;
+  }
+
+  listTableDocs(waveId, kind = null) {
+    const rows = kind
+      ? this.db.prepare('SELECT * FROM table_docs WHERE wave_id = ? AND kind = ? ORDER BY created_at').all(waveId, kind)
+      : this.db.prepare('SELECT * FROM table_docs WHERE wave_id = ? ORDER BY created_at').all(waveId);
+    return rows.map(r => this.tableDocFromRow(r));
+  }
+
+  countTableDocs(waveId) {
+    return this.db.prepare('SELECT COUNT(*) AS n FROM table_docs WHERE wave_id = ?').get(waveId).n;
+  }
+
+  createTableDoc({ id, waveId, kind, audience, body, userId }) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO table_docs (id, wave_id, kind, audience, version, data, encrypted, nonce, key_version, created_by, updated_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, waveId, kind, audience, body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, userId, userId, now, now);
+    return this.getTableDoc(waveId, id);
+  }
+
+  updateTableDoc(waveId, docId, baseVersion, { audience, body }, userId) {
+    const changes = this.db.prepare(`
+      UPDATE table_docs SET version = version + 1, data = ?, encrypted = ?, nonce = ?, key_version = ?,
+        audience = ?, updated_by = ?, updated_at = ?
+      WHERE id = ? AND wave_id = ? AND version = ?
+    `).run(body.data, body.encrypted ? 1 : 0, body.nonce, body.keyVersion, audience, userId, new Date().toISOString(),
+      docId, waveId, baseVersion).changes;
+    return changes === 1 ? this.getTableDoc(waveId, docId) : null;
+  }
+
+  deleteTableDoc(waveId, docId) {
+    return this.db.prepare('DELETE FROM table_docs WHERE id = ? AND wave_id = ?').run(docId, waveId).changes > 0;
   }
 
   deleteCharacterSheet(waveId, sheetId) {

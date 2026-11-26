@@ -1595,24 +1595,35 @@ export function E2EEProvider({ children, token, API_URL }) {
   // ============ Character sheets (v2.159.0) ============
   // A sheet is sealed under the wave key like a ping, bound to the wave and the
   // sheet's id. Unsigned: who changed it is the server's record, and a GM may.
-  const encryptSheet = useCallback(async (text, waveId, sheetId) => {
+  // v2.160.0: a GM's document is sealed the same way with its own context
+  // (wave, id and kind), so neither can be passed off as the other.
+  const sealBlob = useCallback(async (text, waveId, makeContext) => {
     let waveKey = await getWaveKey(waveId);
     let version = waveKeyCacheRef.current.get(waveId)?.version;
     if (waveKey && !version) { waveKey = await getWaveKey(waveId); version = waveKeyCacheRef.current.get(waveId)?.version; }
     if (!waveKey || !version) throw new Error('Your encryption key is being redistributed — please try again in a moment');
-    const sealed = await crypto.sealSheet(text, waveKey, crypto.sheetContext(await originOf(waveId), sheetId));
+    const sealed = await crypto.sealSheet(text, waveKey, makeContext(await originOf(waveId)));
     return { data: sealed.data, nonce: sealed.nonce, keyVersion: version };
   }, [getWaveKey, originOf]);
 
-  const decryptSheet = useCallback(async (data, nonce, waveId, sheetId, keyVersion) => {
+  const openBlob = useCallback(async (data, nonce, waveId, keyVersion, makeContext) => {
     const current = waveKeyCacheRef.current.get(waveId);
     let waveKey = waveKeyCacheRef.current.get(`${waveId}:${keyVersion}`)?.waveKey
       || (current && current.version === keyVersion ? current.waveKey : null);
     if (!waveKey) waveKey = await getVersionedWaveKey(waveId, keyVersion);
     if (!waveKey) waveKey = await getWaveKey(waveId);
     if (!waveKey) throw new Error('Wave key not found');
-    return crypto.openSheet(data, nonce, waveKey, crypto.sheetContext(await originOf(waveId), sheetId));
+    return crypto.openSheet(data, nonce, waveKey, makeContext(await originOf(waveId)));
   }, [getWaveKey, getVersionedWaveKey, originOf]);
+
+  const encryptSheet = useCallback((text, waveId, sheetId) =>
+    sealBlob(text, waveId, (origin) => crypto.sheetContext(origin, sheetId)), [sealBlob]);
+  const decryptSheet = useCallback((data, nonce, waveId, sheetId, keyVersion) =>
+    openBlob(data, nonce, waveId, keyVersion, (origin) => crypto.sheetContext(origin, sheetId)), [openBlob]);
+  const encryptTableDoc = useCallback((text, waveId, docId, kind) =>
+    sealBlob(text, waveId, (origin) => crypto.tableDocContext(origin, docId, kind)), [sealBlob]);
+  const decryptTableDoc = useCallback((data, nonce, waveId, docId, kind, keyVersion) =>
+    openBlob(data, nonce, waveId, keyVersion, (origin) => crypto.tableDocContext(origin, docId, kind)), [openBlob]);
 
   // ============ Audio Encryption (v2.3.0) ============
 
@@ -2249,6 +2260,8 @@ export function E2EEProvider({ children, token, API_URL }) {
     decryptPing,
     encryptSheet,
     decryptSheet,
+    encryptTableDoc,
+    decryptTableDoc,
 
     // Audio operations (v2.3.0)
     encryptAudioChunk,

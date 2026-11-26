@@ -3,8 +3,8 @@ import { GlowText } from '../ui/SimpleComponents.jsx';
 import { SYSTEM_LABELS } from '../../utils/rolls.js';
 import { plainText } from '../../utils/plainText.js';
 import { listSheets, openSheet, createSheet, deleteSheet, onSheetUpdated, useSheet } from '../../utils/sheets.js';
-import { blankSheet } from '../../ttrpg/dnd5e2024.js';
-import { blankGenericSheet } from '../../ttrpg/generic.js';
+import { blankSheet, isDnd5e } from '../../ttrpg/dnd5e2024.js';
+import { blankGenericSheet, GENERIC_PRESETS } from '../../ttrpg/generic.js';
 import { btn, labelStyle, inputStyle, box } from './sheetUi.jsx';
 import Dnd5eSheet from './Dnd5eSheet.jsx';
 import GenericSheet from './GenericSheet.jsx';
@@ -18,7 +18,7 @@ import GenericSheet from './GenericSheet.jsx';
 
 const VIS_LABELS = { table: 'Everyone at the table', gm: 'Only me and the GMs' };
 
-function Frame({ isMobile, onClose, title, left, right, children }) {
+export function Frame({ isMobile, onClose, title, left, right, children, label = "Close" }) {
   return (
     <aside
       role="dialog" aria-label={title}
@@ -35,7 +35,7 @@ function Frame({ isMobile, onClose, title, left, right, children }) {
           <GlowText color="var(--accent-purple)" size="0.95rem">{title}</GlowText>
         </div>
         {right}
-        <button type="button" onClick={onClose} aria-label="Close sheets" style={btn()}>✕</button>
+        <button type="button" onClick={onClose} aria-label={label} style={btn()}>✕</button>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px', boxSizing: 'border-box' }}>{children}</div>
     </aside>
@@ -86,8 +86,8 @@ function SheetList({ wave, table, names, fetchAPI, e2ee, isMobile, showToast, cu
       const parsed = JSON.parse(await file.text());
       const data = parsed?.sheet && parsed?.system ? parsed.sheet : parsed;
       const system = parsed?.system || data?.system;
-      if (!data || typeof data !== 'object' || !['dnd5e-2024', 'generic'].includes(system)) throw new Error('That isn\'t a Cortex character sheet');
-      const sheet = await createSheet(fetchAPI, e2ee, wave, { system, visibility: 'table', data: { ...(system === 'generic' ? blankGenericSheet() : blankSheet()), ...data, system } });
+      if (!data || typeof data !== 'object' || !(isDnd5e(system) || system === 'generic')) throw new Error('That isn\'t a Cortex character sheet');
+      const sheet = await createSheet(fetchAPI, e2ee, wave, { system, visibility: 'table', data: { ...(system === 'generic' ? blankGenericSheet() : blankSheet('', system)), ...data, system } });
       showToast?.('Sheet imported', 'success');
       onOpen(sheet.id);
     } catch (err) { showToast?.(err.message || 'Could not import that sheet', 'error'); }
@@ -134,7 +134,7 @@ function SheetList({ wave, table, names, fetchAPI, e2ee, isMobile, showToast, cu
 }
 
 function summary(d) {
-  if (d?.system === 'dnd5e-2024') {
+  if (isDnd5e(d?.system)) {
     const classes = (d.classes || []).map(c => `${c.name} ${c.level}`).join(' / ');
     return [d.species, classes].filter(Boolean).join(' ');
   }
@@ -143,13 +143,14 @@ function summary(d) {
 
 function NewSheet({ table, wave, fetchAPI, e2ee, showToast, onDone }) {
   const [name, setName] = useState('');
-  const [system, setSystem] = useState(table.system === 'generic' ? 'generic' : 'dnd5e-2024');
+  const [system, setSystem] = useState(SYSTEM_LABELS[table.system] ? table.system : 'dnd5e-2024');
   const [visibility, setVisibility] = useState('table');
+  const [preset, setPreset] = useState('blank');
   const [busy, setBusy] = useState(false);
   const create = async () => {
     setBusy(true);
     try {
-      const data = system === 'generic' ? blankGenericSheet(name.trim()) : blankSheet(name.trim());
+      const data = system === 'generic' ? blankGenericSheet(name.trim(), preset) : blankSheet(name.trim(), system);
       const sheet = await createSheet(fetchAPI, e2ee, wave, { system, visibility, data });
       onDone(sheet.id);
     } catch (err) { showToast?.(err.message || 'Could not make the sheet', 'error'); setBusy(false); }
@@ -162,6 +163,12 @@ function NewSheet({ table, wave, fetchAPI, e2ee, showToast, onDone }) {
         <select value={system} onChange={(e) => setSystem(e.target.value)} style={inputStyle} aria-label="Game">
           {Object.entries(SYSTEM_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select></div>
+      {system === 'generic' && (
+        <div><div style={labelStyle}>START FROM</div>
+          <select value={preset} onChange={(e) => setPreset(e.target.value)} style={inputStyle} aria-label="Start from">
+            {Object.entries(GENERIC_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}
+          </select></div>
+      )}
       <div><div style={labelStyle}>WHO CAN SEE IT</div>
         <select value={visibility} onChange={(e) => setVisibility(e.target.value)} style={inputStyle} aria-label="Who can see it">
           {Object.entries(VIS_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
@@ -237,7 +244,7 @@ function OpenSheet({ sheetId, wave, table, names, fetchAPI, e2ee, isMobile, show
       {error === 'locked' && <div style={{ color: 'var(--text-dim)' }}>🔒 Unlock encryption to read this sheet.</div>}
       {error && error !== 'locked' && <div style={{ color: 'var(--accent-orange)', marginBottom: '8px' }}>{error}</div>}
       {!data && !error && <div style={{ color: 'var(--text-dim)' }}>Loading…</div>}
-      {data && meta.system === 'dnd5e-2024' && <Dnd5eSheet data={data} canEdit={meta.canEdit} change={change} roll={roll} isMobile={isMobile} />}
+      {data && isDnd5e(meta.system) && <Dnd5eSheet data={data} canEdit={meta.canEdit} change={change} roll={roll} isMobile={isMobile} />}
       {data && meta.system === 'generic' && <GenericSheet data={data} canEdit={meta.canEdit} change={change} roll={roll} showToast={showToast} />}
       {last && (
         <div role="status" style={{ position: 'sticky', bottom: 0, marginTop: '10px', ...box, borderColor: 'var(--accent-amber)', display: 'flex', gap: '10px', alignItems: 'baseline' }}>

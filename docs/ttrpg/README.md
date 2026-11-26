@@ -1,6 +1,6 @@
 # Tabletop role-playing: dice, sheets, then maps
 
-Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0; phase 2 (character sheets) in v2.159.0.**
+Proposed 2026-11-25. **Phase 1 (tables and dice) built in v2.158.0; phase 2 (character sheets) in v2.159.0; phase 3 (the GM's tools) and the 2014 rules in v2.160.0.**
 
 ## Why
 
@@ -31,6 +31,8 @@ What's missing is the game itself: fair dice, character sheets, the GM's tools a
 | What the group uses now | **D&D Beyond.** Its sheets are what phase 2 has to replace well enough. |
 | Who sees a roll | **A table setting, defaulting to the GM and the roller.** Anyone can still choose for a single roll. |
 | Fog of war | **Drawn on the player's screen is enough.** |
+| The 2014 rules (2026-11-25) | **Asked for by the group: added in v2.160.0** as a second 5e system (`dnd5e-2014`, SRD 5.1) beside 2024. |
+| Classic Marvel Super Heroes (2026-11-25) | **Only if it's easy.** Its rules aren't openly licensed, so no template that reads the colour chart; the generic sheet has a FASERIP starting layout (v2.160.0) and the group's book does the rest. |
 
 ## The one rule: the server rolls the dice
 
@@ -101,7 +103,17 @@ As planned:
 - A sheet panel beside the wave, and a compact mode on a phone showing HP, AC, the main rolls and conditions.
 - **Import and export as JSON.** D&D Beyond has no public API, so there's no import from it.
 
-### Phase 3: the GM's tools
+### Phase 3: the GM's tools — built in v2.160.0
+
+As built: **⚔ GM screen** in the wave's ⋮ menu (players get **Encounter and handouts**).
+- **Encounters.** The GM names one and adds characters (from the table's sheets, with their initiative bonus), monsters from the stat blocks (several at once, numbered, average or rolled HP, optionally hidden) and others. **Roll for monsters** rolls their initiative in secret. Players tap **Roll initiative**, which rolls from their sheet in public with a ref (`enc:<encounter>:<combatant>`); the GM's device finds those rolls (`GET /rolls?ref=`, told by `table_roll`), fills in the first roll by the character's owner, ignores re-rolls, and sorts. The GM steps through turns and rounds (a downed monster loses its turn, a downed PC keeps it for death saves) and can tell the player whose turn it is (`POST /table/turn`: an in-app notification and push, for play-by-post). Everyone sees the order live, conditions, PCs' HP from sheets they can read, and a monster's state as **Bloodied** or **Down**; its HP and AC are only in the GMs' half. Combatants can be hidden and revealed, moved, removed.
+- **Monster stat blocks:** the GM's own, in the 2024 layout, with ability, attack and damage roll buttons; JSON import and export. **No SRD monster list yet** (phase 6, with the rules reference).
+- **Notes and handouts:** GM notes; **Share with the table** makes one a handout (and says so in the wave), and it can be made GM-only again.
+- The GM's rolls from the screen are hidden (dice shown), secret, or public, chosen on the screen.
+
+**Changed from the plan below:** GM-only documents are **not sealed to the GMs' own keys**. They are encrypted under the wave key in an encrypted wave like everything else, and the server sends them only to GMs (`tableDocReadable`, on every read, with a counterfactual test). So the server can't read them, and players can't get them from the server, but a player who also ran the server could. Sealing them to the GMs' keys needs its own key to give to each GM and renew when GMs change, much like a wave's key; it's left for later. The encounter's split into a table half and a GM half keeps monster HP out of what players receive at all.
+
+As planned:
 - **Initiative and encounters:** the GM adds monsters and players, everyone rolls initiative from their sheets, and the GM steps through the turns, live through the watch-party pattern. In play-by-post, the person whose turn it is is notified.
 - **Monster stat blocks** from the SRD, plus the GM's own. Monster HP is hidden from players.
 - **GM-only notes and handouts.** These need a key only GMs hold: they're sealed to the GMs' public keys, not under the wave key, because every player holds the wave key.

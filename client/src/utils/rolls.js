@@ -58,5 +58,6 @@ export const VISIBILITY_LABELS = {
 
 export const SYSTEM_LABELS = {
   'dnd5e-2024': 'D&D 5e (2024 rules)',
+  'dnd5e-2014': 'D&D 5e (2014 rules)',
   generic: 'Any system (generic)',
 };
