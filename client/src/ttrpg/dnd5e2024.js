@@ -1,12 +1,18 @@
 /**
- * D&D 5e, 2024 rules (v2.159.0, docs/ttrpg/README.md phase 2).
+ * D&D 5e, 2024 rules (v2.159.0, docs/ttrpg/README.md phase 2), and the 2014
+ * rules (v2.160.0) where they differ.
  *
- * Only what the System Reference Document 5.2 gives (CC-BY-4.0, Wizards of
- * the Coast): the names of classes, species, backgrounds, skills and
- * conditions, and the rules tables a sheet works numbers out from. No book
- * text. Everything derived here is worked out on the device, because in an
- * encrypted wave the server can't read the sheet.
+ * Only what the System Reference Documents give (SRD 5.2 for 2024, SRD 5.1
+ * for 2014; both CC-BY-4.0, Wizards of the Coast): the names of classes,
+ * species, backgrounds, skills and conditions, and the rules tables a sheet
+ * works numbers out from. No book text. Everything derived here is worked
+ * out on the device, because in an encrypted wave the server can't read the
+ * sheet. A sheet's `system` says which edition: 'dnd5e-2024' or 'dnd5e-2014'.
  */
+
+export const DND5E_SYSTEMS = ['dnd5e-2024', 'dnd5e-2014'];
+export const isDnd5e = (system) => DND5E_SYSTEMS.includes(system);
+const is2014 = (s) => s?.system === 'dnd5e-2014';
 
 export const ABILITIES = [
   { key: 'str', name: 'Strength', short: 'STR' },
@@ -56,6 +62,22 @@ export const CLASSES = {
 
 export const SPECIES = ['Dragonborn', 'Dwarf', 'Elf', 'Gnome', 'Goliath', 'Halfling', 'Human', 'Orc', 'Tiefling'];
 export const BACKGROUNDS = ['Acolyte', 'Criminal', 'Sage', 'Soldier'];
+// SRD 5.1 (2014): races, not species, and one background.
+export const RACES_2014 = ['Dragonborn', 'Dwarf', 'Elf', 'Gnome', 'Half-Elf', 'Half-Orc', 'Halfling', 'Human', 'Tiefling'];
+export const BACKGROUNDS_2014 = ['Acolyte'];
+
+/** What a sheet's edition calls things and lists. */
+export function editionInfo(system) {
+  return system === 'dnd5e-2014'
+    ? { year: 2014, speciesLabel: 'RACE', species: RACES_2014, backgrounds: BACKGROUNDS_2014, inspiration: 'Inspiration' }
+    : { year: 2024, speciesLabel: 'SPECIES', species: SPECIES, backgrounds: BACKGROUNDS, inspiration: 'Inspiration' };
+}
+
+// 2014 Exhaustion: six levels of effects rather than a penalty to every roll.
+export const EXHAUSTION_2014 = [
+  '', 'Disadvantage on ability checks', 'Speed halved', 'Disadvantage on attack rolls and saving throws',
+  'Hit point maximum halved', 'Speed reduced to 0', 'Death',
+];
 
 export const CONDITIONS = [
   'Blinded', 'Charmed', 'Deafened', 'Frightened', 'Grappled', 'Incapacitated', 'Invisible',
@@ -83,9 +105,9 @@ export const profBonus = (level) => 2 + Math.floor((Math.max(1, Math.min(20, lev
 const uid = () => (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`).slice(0, 8);
 export const newId = uid;
 
-export function blankSheet(name = '') {
+export function blankSheet(name = '', system = 'dnd5e-2024') {
   return {
-    schema: 1, system: 'dnd5e-2024',
+    schema: 1, system: isDnd5e(system) ? system : 'dnd5e-2024',
     name, species: '', background: '', alignment: '', size: 'Medium',
     classes: [{ name: 'Fighter', level: 1, subclass: '' }],
     abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
@@ -119,13 +141,18 @@ export function derive(s) {
     return [k.key, mods[k.ability] + add];
   }));
 
-  // Spellcasting: the multiclass caster level (2024: half casters round up),
-  // and Pact Magic on its own.
+  // Spellcasting: the multiclass caster level and Pact Magic on its own.
+  // Half casters: 2024 rounds up and casts from level 1; 2014 has no slots at
+  // level 1, and rounds down when multiclassed.
   let casterLevel = 0; let casters = 0; let pactLevel = 0; let spellAbility = null;
+  const casterClasses = classes.filter(c => CLASSES[c.name].caster === 'full' || CLASSES[c.name].caster === 'half').length;
   for (const c of classes) {
     const info = CLASSES[c.name]; const lv = Number(c.level) || 0;
     if (info.caster === 'full') { casterLevel += lv; casters++; }
-    else if (info.caster === 'half') { casterLevel += Math.ceil(lv / 2); casters++; }
+    else if (info.caster === 'half') {
+      casterLevel += !is2014(s) ? Math.ceil(lv / 2) : casterClasses > 1 ? Math.floor(lv / 2) : (lv < 2 ? 0 : Math.ceil(lv / 2));
+      casters++;
+    }
     else if (info.caster === 'pact') pactLevel += lv;
     if (info.spellAbility && !spellAbility) spellAbility = info.spellAbility;
   }
@@ -141,6 +168,7 @@ export function derive(s) {
   for (const c of classes) { const d = `d${CLASSES[c.name].hitDie}`; hitDice[d] = (hitDice[d] || 0) + (Number(c.level) || 0); }
 
   const exhaustion = Math.max(0, Math.min(6, Number(s.exhaustion) || 0));
+  const baseSpeed = Number(s.speed) || 0;
   return {
     level, prof, mods, saves, skills,
     initiative: mods.dex + (Number(s.initiativeBonus) || 0),
@@ -149,9 +177,12 @@ export function derive(s) {
     slotsMax, pact: PACT(pactLevel), hasSpells: casters > 0 || pactLevel > 0 || (s.spells || []).length > 0,
     hitDice,
     exhaustion,
-    // 2024: each level of Exhaustion is -2 to every d20 Test and -5 feet of speed.
-    d20Penalty: exhaustion * 2,
-    speed: Math.max(0, (Number(s.speed) || 0) - exhaustion * 5),
+    // 2024: each level of Exhaustion is -2 to every d20 Test and -5 feet of
+    // speed. 2014: no penalty to the roll; speed halved at 2, none at 5.
+    d20Penalty: is2014(s) ? 0 : exhaustion * 2,
+    speed: is2014(s) ? (exhaustion >= 5 ? 0 : exhaustion >= 2 ? Math.floor(baseSpeed / 2) : baseSpeed) : Math.max(0, baseSpeed - exhaustion * 5),
+    exhaustionEffects: is2014(s) ? EXHAUSTION_2014.slice(1, exhaustion + 1) : (exhaustion ? [`−${exhaustion * 2} to d20 rolls`, `−${exhaustion * 5} ft. speed`] : []),
+    edition: is2014(s) ? 2014 : 2024,
     casters,
   };
 }
@@ -198,12 +229,21 @@ export function shortRest(s) {
   s.resources = (s.resources || []).map(r => (r.reset === 'short' ? { ...r, current: r.max } : r));
 }
 
-// 2024 Long Rest: all hit points and all spent Hit Dice back, spell slots
-// back, and one level of Exhaustion off.
+// Long Rest: all hit points, spell slots and features back, and one level of
+// Exhaustion off. Hit Dice: 2024 gives all of them back; 2014 half your total
+// (at least one), largest dice first.
 export function longRest(s) {
   shortRest(s);
   s.hp = { ...s.hp, current: Number(s.hp?.max) || 0, temp: 0 };
-  s.hitDiceUsed = {};
+  if (is2014(s)) {
+    const total = derive(s).hitDice;
+    let back = Math.max(1, Math.floor(Object.values(total).reduce((a, b) => a + b, 0) / 2));
+    const used = { ...(s.hitDiceUsed || {}) };
+    for (const die of Object.keys(used).sort((a, b) => Number(b.slice(1)) - Number(a.slice(1)))) {
+      const give = Math.min(back, Number(used[die]) || 0); used[die] = (Number(used[die]) || 0) - give; back -= give;
+    }
+    s.hitDiceUsed = used;
+  } else s.hitDiceUsed = {};
   s.spellcasting = { ...s.spellcasting, slotsUsed: {}, pactUsed: 0 };
   s.resources = (s.resources || []).map(r => (r.reset === 'long' || r.reset === 'short' ? { ...r, current: r.max } : r));
   s.deathSaves = { successes: 0, failures: 0 };

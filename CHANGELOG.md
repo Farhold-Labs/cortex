@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.160.0] - 2026-11-25
+
+Tabletop role-playing, phase 3: the GM's tools. Also the D&D 5e 2014 rules, and a starting layout for classic percentile super-hero games. Server and web client, no app build. Migrates (one new table, one new column).
+
+### Added
+- **The GM screen** (⚔ in a table's ⋮ menu). Players get **Encounter and handouts** instead.
+- **Encounters and initiative.**
+  - **Setting one up:** the GM adds characters from the table's sheets, monsters from their stat blocks (several at once, numbered, with average or rolled HP, and optionally hidden), and anything else (an ally, a lair action).
+  - **Initiative:** **Roll for monsters** rolls theirs in secret. Each player taps **Roll initiative**, which rolls from their sheet into the wave. The GM's device fills in each character's first roll by its owner, ignoring re-rolls, and sorts the order.
+  - **Turns:** the GM steps through turns and rounds, and back. A downed monster loses its turn; a downed character keeps theirs for death saves.
+  - **Play-by-post:** the player whose turn it is can be told, with a notification and a push.
+  - **What everyone sees, live:** the order, whose turn it is ("It's your turn" for that player), conditions, characters' HP from sheets they can see, and a monster as **Bloodied** or **Down**.
+  - **What only the GMs see:** a monster's HP and AC. They can damage, heal, hide, reveal, move, remove and add conditions.
+- **Monster stat blocks:** the GM's own, in the 2024 layout, with roll buttons for ability checks, attacks and damage. JSON import and export. There's no SRD monster list yet: it comes with the rules reference (phase 6).
+- **GM notes and handouts.** Notes are for the GMs. **Share with the table** turns one into a handout everyone can read, and posts a line in the wave saying so; it can be made GM-only again.
+- **The GM's own rolls** from the screen are hidden (dice shown, result for the GMs), secret, or public.
+- **D&D 5e with the 2014 rules**, as asked for, from SRD 5.1. A table or a sheet can use either edition. On a 2014 sheet:
+  - Paladins and Rangers get spell slots from level 2, and their levels round down when multiclassed.
+  - Exhaustion has its six 2014 effects (speed halved at 2, none at 5) rather than −2 a level.
+  - A long rest gives back half your Hit Dice, not all of them.
+  - It says Race and Inspiration.
+  - The SRD 5.1 credit is on the About page.
+- **A starting layout for the any-system sheet:** classic percentile super-heroes (FASERIP). It has the seven abilities, Resources and Popularity, Health and Karma, a d100 button, and space for powers, talents and contacts. Their rules aren't openly licensed, so the sheet has no colour chart; the book stays at the table.
+
+### Security and privacy
+- **Who may read a GM document is decided by the server on every read** (`tableDocReadable`). The encounter's GM half, stat blocks and unshared notes are 404 to players, and their changes aren't announced to them. Only GMs can write any of them. Tested with a counterfactual: with the check stripped, a player reads the GM's note.
+- **Encrypted waves:** GM documents are encrypted on the device under the wave's key, bound to the wave, their id and their kind, like sheets. The server refuses plain ones there.
+- **A stated limit:** GM-only documents aren't sealed to the GMs' own keys, which the design had planned. A player who also ran the server could read them. Doing it properly needs a key handed to each GM and renewed when GMs change; it's noted in `docs/ttrpg/README.md` for later.
+- **Initiative codes:** a roll can carry a short code saying what it was for (`enc:<encounter>:<combatant>`), never words. A hidden roll found by its code stays hidden.
+- **Turn notifications:** only a GM can send one, and only to someone who can read the wave.
+
+### Fixed
+- A player opening the encounter screen lands on the encounter the GM touched last, not the oldest one still open. Found in testing, where the player rolled initiative into a stale encounter.
+
+### Verified
+- **Tests:** 856 pass. New:
+  - `tests/ttrpg-gm.test.cjs` (10): GM-only writes; audiences by kind; players reading the encounter and nothing else; handouts; stale writes; ciphertext in an encrypted wave; roll codes and their filter; turn notifications; 2014 tables and sheets; the counterfactual.
+  - Six more in `tests/ttrpg-rules.test.cjs`: turns and rounds, sorting and Bloodied, initiative only from the owner's first roll, average HP, 2014 slots, Exhaustion and rests, and the FASERIP layout.
+- **Headless only** (Chrome on dev; mal as GM at 1280×800, zoe at 390×844):
+  - a stat block and its roll;
+  - an encounter with a character and two goblins;
+  - zoe's initiative roll reaching mal's order;
+  - the turn coming round to zoe, with her banner and notification;
+  - a goblin damaged to Down, with its HP never in zoe's view;
+  - a note shared as a handout;
+  - a 2014 sheet, and the FASERIP layout rolling d100.
+- Nothing has been tried on a real phone.
+
 ## [2.159.0] - 2026-11-25
 
 Tabletop role-playing, phase 2: character sheets. Server and web client, no app build. Migrates (one new table). Needs **Tabletop games** on, and a table.
