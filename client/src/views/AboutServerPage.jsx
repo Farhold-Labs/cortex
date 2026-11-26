@@ -191,6 +191,18 @@ const AboutServerPage = ({ onBack }) => {
           </div>
         </div>
 
+        {/* Tabletop games' rules content (v2.159.0): the SRD's licence asks for this credit. */}
+        <div style={sectionStyle}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', textTransform: 'uppercase', marginBottom: '12px' }}>
+            Tabletop games
+          </div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: '1.6' }}>
+            This work includes material from the System Reference Document 5.2 ("SRD 5.2") by Wizards of the Coast LLC,
+            available at <a href="https://www.dndbeyond.com/srd" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-teal)' }}>dndbeyond.com/srd</a>.
+            The SRD 5.2 is licensed under the <a href="https://creativecommons.org/licenses/by/4.0/legalcode" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-teal)' }}>Creative Commons Attribution 4.0 International License</a>.
+          </div>
+        </div>
+
         {/* Footer */}
         <div style={{
           padding: '16px',

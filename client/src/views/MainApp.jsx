@@ -1368,6 +1368,9 @@ function MainApp({ sharePingId }) {
       // A table's GMs decide who sees which rolls (v2.158.0): ask again.
       forgetWaveRolls(data.waveId);
       window.dispatchEvent(new CustomEvent('cortex:wave-table-updated', { detail: { waveId: data.waveId } }));
+    } else if (data.type === 'character_sheet_updated') {
+      // Only the id travels (v2.159.0): an open sheet reads itself again.
+      window.dispatchEvent(new CustomEvent('cortex:sheet-updated', { detail: { waveId: data.waveId, sheetId: data.sheetId } }));
     } else if (data.type === 'watch_party_started' || data.type === 'watch_party_state') {
       // A party started, or the state asked for on joining (v2.155.3: one shape).
       const party = normaliseParty(data.party, data.waveId);

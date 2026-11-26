@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useE2EE } from '../../../e2ee-context.jsx';
 import { useVoiceCall } from '../../hooks/useVoiceCall.js';
 import { usePullToRefresh } from '../../hooks/usePullToRefresh.js';
@@ -32,6 +32,7 @@ import { sealPing, pingSeal } from '../../utils/sealPing.js';
 import { parseRollCommand, rollFallback } from '../../utils/diceCommand.js';
 import { rememberRoll } from '../../utils/rolls.js';
 import { DiceTray, TableSettingsModal, RollLogModal } from '../ttrpg/TtrpgModals.jsx';
+import SheetsPanel from '../ttrpg/SheetsPanel.jsx';
 import { useIsCongested } from '../../hooks/useNetworkStatus.js';
 import { lazyComponent } from '../../utils/lazyComponent.jsx';
 
@@ -154,6 +155,9 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [table, setTable] = useState(null);
   const [tableCanManage, setTableCanManage] = useState(false);
   const [ttrpgModal, setTtrpgModal] = useState(null); // 'dice' | 'settings' | 'log' | null
+  const [showSheets, setShowSheets] = useState(false); // character sheets (v2.159.0)
+  useEffect(() => { setShowSheets(false); }, [wave?.id]);
+  const sheetWave = useMemo(() => ({ id: wave?.id, encrypted: !!waveData?.encrypted }), [wave?.id, waveData?.encrypted]);
   const loadTable = useCallback(async () => {
     if (!ttrpgEnabled || !wave?.id) { setTable(null); setTableCanManage(false); return; }
     try {
@@ -1146,6 +1150,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       }
     }
     let rollId = null;
+    let rolled = null;
     if (rollToPost) {
       try {
         const { roll } = await fetchAPI(`/waves/${encodeURIComponent(wave.id)}/rolls`, {
@@ -1154,10 +1159,11 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
         });
         rememberRoll(roll);
         rollId = roll.id;
+        rolled = roll;
         content = rollToPost.label || rollFallback(roll.expression);
       } catch (err) {
         showToast(err.message || 'Could not roll', 'error');
-        return;
+        return null;
       }
     }
 
@@ -1206,7 +1212,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       registerAttachments(content, wave.id);
       setNewMessage('');
       setReplyingTo(null);
-      showToast(SUCCESS.messageSent, 'success');
+      if (!chosenRoll) showToast(SUCCESS.messageSent, 'success');
       await loadWave(true);
 
       // Only scroll to bottom if posting a root message (not a reply)
@@ -1224,10 +1230,12 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           userActionInProgressRef.current = false;
         }, 150);
       }
+      return rolled;
     } catch (err) {
       showToast(formatError('Failed to send message'), 'error');
       scrollPositionToRestore.current = null; // Clear on error
       userActionInProgressRef.current = false;
+      return null;
     }
   };
 
@@ -1938,6 +1946,16 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                       onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                     >
                       <span>🎲</span><span>Roll log</span>
+                    </div>
+                  )}
+                  {ttrpgEnabled && table && (
+                    <div
+                      onClick={() => { setShowWaveMenu(false); setShowSheets(true); }}
+                      style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-purple)', background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>📜</span><span>Character sheets</span>
                     </div>
                   )}
                   {ttrpgEnabled && tableCanManage && (waveData?.federationState || 'local') === 'local' && waveData?.privacy !== 'crossServer' && (
@@ -3006,6 +3024,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           plexConnections={plexConnections}
           onPlexClick={() => setShowPlexBrowser(true)}
           onDiceClick={table ? () => setTtrpgModal('dice') : undefined}
+          onSheetsClick={table ? () => setShowSheets(true) : undefined}
           fetchAPI={fetchAPI}
           expiry={pingExpiry}
           waveTtl={waveData?.pingTtl || null}
@@ -3125,6 +3144,13 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       {ttrpgModal === 'settings' && (
         <TableSettingsModal waveId={wave.id} table={table} participants={participants} currentUserId={currentUser?.id}
           fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} onClose={() => setTtrpgModal(null)} onSaved={loadTable} />
+      )}
+      {showSheets && table && waveData && (
+        <SheetsPanel
+          wave={sheetWave} table={table} participants={participants} currentUser={currentUser}
+          fetchAPI={fetchAPI} e2ee={e2ee} isMobile={isMobile} showToast={showToast} onClose={() => setShowSheets(false)}
+          onRoll={({ expression, label }) => handleSendMessage('', { roll: { expression, label } })}
+        />
       )}
       {ttrpgModal === 'log' && table && (
         <RollLogModal waveId={wave.id} participants={participants} fetchAPI={fetchAPI} isMobile={isMobile} onClose={() => setTtrpgModal(null)} />
