@@ -224,6 +224,14 @@ The instance operator (whoever runs the server) can see:
   name). In other waves the sheet is stored as readable data, like the
   messages there. Sheets are kept until their owner or a GM deletes them, or
   the wave is deleted, and are included in an account's data export.
+- **The GM's tools at a tabletop game** (v2.160.0): encounters, monster stat
+  blocks and GM notes, who made and changed each and when, and whether each
+  is for the GMs or the whole table. **In an end-to-end encrypted wave their
+  contents are encrypted** under the wave's key, like sheets; in other waves
+  they are readable data. GM-only ones are sent only to the table's GMs. A
+  roll can record what it was for in a short code (an encounter's initiative,
+  `enc:<id>:<id>`), never in words. "It's your turn" notifications are stored
+  like other notifications.
 
 ---
 

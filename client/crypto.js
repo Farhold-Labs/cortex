@@ -321,6 +321,11 @@ export function sheetContext(originWaveId, sheetId) {
   return sealContext('cortex-sheet-v1', originWaveId, sheetId);
 }
 
+/** A GM's document (v2.160.0): bound to its wave, its id and its kind. */
+export function tableDocContext(originWaveId, docId, kind) {
+  return sealContext('cortex-tabledoc-v1', originWaveId, docId, kind);
+}
+
 export async function sealSheet(text, waveKey, context) {
   requireContext(context);
   const nonce = generateNonce();

@@ -1368,6 +1368,11 @@ function MainApp({ sharePingId }) {
       // A table's GMs decide who sees which rolls (v2.158.0): ask again.
       forgetWaveRolls(data.waveId);
       window.dispatchEvent(new CustomEvent('cortex:wave-table-updated', { detail: { waveId: data.waveId } }));
+    } else if (data.type === 'table_doc_updated') {
+      // The GM's documents (v2.160.0): only ids travel.
+      window.dispatchEvent(new CustomEvent('cortex:table-doc-updated', { detail: { waveId: data.waveId, docId: data.docId, kind: data.kind } }));
+    } else if (data.type === 'table_roll') {
+      window.dispatchEvent(new CustomEvent('cortex:table-roll', { detail: { waveId: data.waveId, rollId: data.rollId, ref: data.ref } }));
     } else if (data.type === 'character_sheet_updated') {
       // Only the id travels (v2.159.0): an open sheet reads itself again.
       window.dispatchEvent(new CustomEvent('cortex:sheet-updated', { detail: { waveId: data.waveId, sheetId: data.sheetId } }));

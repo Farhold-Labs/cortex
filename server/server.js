@@ -27913,7 +27913,7 @@ app.all('/api/droplets/:id/reparent', (req, res, next) => {
 // encrypted wave. So the server learns "1d20+5 = 17", never what for.
 // Who sees a result is decided here on every read (rollView), never left to
 // the client to hide. Tables are local to one server until phase 4.
-const TTRPG_SYSTEMS = ['dnd5e-2024', 'generic'];
+const TTRPG_SYSTEMS = ['dnd5e-2024', 'dnd5e-2014', 'generic']; // 2014 since v2.160.0
 const ROLL_VISIBILITIES = ['public', 'gm', 'gm_secret'];
 const TTRPG_MAX_GMS = 10;
 const diceLimiter = rateLimit({
@@ -28005,6 +28005,11 @@ app.post('/api/waves/:id/rolls', authenticateToken, diceLimiter, (req, res) => {
   if (visibility === 'gm_secret' && !table.gms.includes(req.user.userId)) {
     return res.status(403).json({ error: 'Only a GM can roll in secret', code: 'GM_ONLY' });
   }
+  // v2.160.0: what the roll is for (an encounter's initiative), so the GM's device can find it.
+  const ref = req.body.ref == null ? null : req.body.ref;
+  if (ref !== null && (typeof ref !== 'string' || !/^[A-Za-z0-9:_-]{1,100}$/.test(ref))) {
+    return res.status(400).json({ error: 'A roll\'s ref is up to 100 letters, digits, colons, dashes and underscores', code: 'INVALID_REF' });
+  }
   let roll;
   try {
     roll = rollDice(req.body.expression);
@@ -28012,7 +28017,9 @@ app.post('/api/waves/:id/rolls', authenticateToken, diceLimiter, (req, res) => {
     if (err instanceof DiceError) return res.status(400).json({ error: err.message, code: err.code });
     throw err;
   }
-  const stored = db.createDiceRoll({ waveId: wave.id, rollerId: req.user.userId, roll, visibility });
+  const stored = db.createDiceRoll({ waveId: wave.id, rollerId: req.user.userId, roll, visibility, ref });
+  // Only the ids travel; whoever is told reads the roll through rollView.
+  if (ref) broadcastToWave(wave.id, { type: 'table_roll', waveId: wave.id, rollId: stored.id, ref });
   res.status(201).json({ roll: rollView(stored, req.user.userId, table) });
 });
 
@@ -28030,6 +28037,7 @@ app.get('/api/waves/:id/rolls', authenticateToken, (req, res) => {
     rolls = db.listDiceRolls(wave.id, {
       rollerId: typeof req.query.roller === 'string' ? req.query.roller : null,
       before: typeof req.query.before === 'string' ? req.query.before : null,
+      refPrefix: typeof req.query.ref === 'string' && /^[A-Za-z0-9:_-]{1,100}$/.test(req.query.ref) ? req.query.ref : null,
       limit,
     });
   }
@@ -28071,10 +28079,10 @@ function sheetView(sheet, viewerId, table) {
 
 // The stored form of a sheet: ciphertext in an encrypted wave (never plain
 // text there), a JSON object elsewhere. Returns { body } or { error, code }.
-function sheetBody(waveId, input) {
+function sheetBody(waveId, input, noun = 'sheets') {
   if (db.waveEncryptionState?.(waveId)) {
     const fail = (error) => ({ error, code: 'ENCRYPTION_REQUIRED' });
-    if (input?.encrypted !== true) return fail('This wave is end-to-end encrypted, so sheets must be encrypted on your device');
+    if (input?.encrypted !== true) return fail(`This wave is end-to-end encrypted, so ${noun} must be encrypted on your device`);
     if (typeof input.nonce !== 'string' || !/^[A-Za-z0-9+/]{16}$/.test(input.nonce)) return fail('Encrypted sheets need a 12-byte nonce');
     if (typeof input.data !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.data) || input.data.length < 24) return fail('An encrypted sheet must be ciphertext');
     if (input.data.length > SHEET_MAX_CIPHER) return { error: 'That sheet is too large', code: 'SHEET_TOO_LARGE' };
@@ -28192,6 +28200,134 @@ app.delete('/api/waves/:id/sheets/:sheetId', authenticateToken, (req, res) => {
   db.deleteCharacterSheet(t.wave.id, sheet.id);
   announceSheet(t.wave, t.table, sheet.id, sheet.ownerId, [sheet.visibility]);
   res.json({ success: true });
+});
+
+// ============ The GM's tools (v2.160.0, docs/ttrpg/README.md phase 3) ============
+//
+// Encounters, the GMs' half of each encounter (monster HP, hidden
+// combatants), monster stat blocks and notes are documents in one store,
+// sealed under the wave key in an encrypted wave like sheets. Who may read
+// one is its audience, decided here on every read: the table, or only its
+// GMs. Only GMs write. A note can be shared with the table (a handout) by
+// changing its audience. A player who also controls the server could read
+// GM-only documents in an encrypted wave, since every player holds the wave
+// key: sealing them to the GMs' own keys is noted in the design as later work.
+const TABLE_DOC_KINDS = { encounter: ['table'], encounter_gm: ['gm'], monster: ['gm'], note: ['gm', 'table'] };
+const TABLE_DOC_MAX = 1000;
+
+function tableDocReadable(doc, viewerId, table) {
+  return doc.audience === 'table' || table.gms.includes(viewerId);
+}
+function tableDocView(doc, viewerId, table) {
+  return { ...doc, canEdit: table.gms.includes(viewerId) };
+}
+function announceTableDoc(wave, table, doc, audiences) {
+  const message = { type: 'table_doc_updated', waveId: wave.id, docId: doc.id, kind: doc.kind };
+  if (audiences.includes('table')) broadcastToWave(wave.id, message);
+  else broadcast(message, table.gms);
+}
+function requireGm(t, req, res) {
+  if (t.table.gms.includes(req.user.userId)) return true;
+  res.status(403).json({ error: 'Only the table\'s GMs can do that', code: 'GM_ONLY' });
+  return false;
+}
+
+app.get('/api/waves/:id/table-docs', authenticateToken, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  const kind = typeof req.query.kind === 'string' && TABLE_DOC_KINDS[req.query.kind] ? req.query.kind : null;
+  const docs = db.listTableDocs(t.wave.id, kind).filter(d => tableDocReadable(d, req.user.userId, t.table));
+  res.json({ docs: docs.map(d => tableDocView(d, req.user.userId, t.table)) });
+});
+
+app.get('/api/waves/:id/table-docs/:docId', authenticateToken, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  const doc = db.getTableDoc(t.wave.id, req.params.docId);
+  if (!doc || !tableDocReadable(doc, req.user.userId, t.table)) return res.status(404).json({ error: 'Not found' });
+  res.json({ doc: tableDocView(doc, req.user.userId, t.table) });
+});
+
+app.post('/api/waves/:id/table-docs', authenticateToken, sheetLimiter, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t || !requireGm(t, req, res)) return;
+  const id = req.body.id;
+  if (typeof id !== 'string' || !/^doc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
+    return res.status(400).json({ error: 'A document needs an id', code: 'INVALID_DOC' });
+  }
+  const audiences = TABLE_DOC_KINDS[req.body.kind];
+  if (!audiences) return res.status(400).json({ error: 'Unknown kind of document', code: 'INVALID_DOC' });
+  const audience = req.body.audience == null ? audiences[0] : req.body.audience;
+  if (!audiences.includes(audience)) return res.status(400).json({ error: 'That document can\'t have that audience', code: 'INVALID_DOC' });
+  if (db.countTableDocs(t.wave.id) >= TABLE_DOC_MAX) return res.status(409).json({ error: `At most ${TABLE_DOC_MAX} documents at a table`, code: 'DOC_LIMIT' });
+  const parsed = sheetBody(t.wave.id, req.body, 'GM documents');
+  if (parsed.error) return res.status(400).json(parsed);
+  let doc;
+  try {
+    doc = db.createTableDoc({ id, waveId: t.wave.id, kind: req.body.kind, audience, body: parsed.body, userId: req.user.userId });
+  } catch (err) {
+    if (String(err.code).startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ error: 'That id is taken', code: 'DOC_ID_TAKEN' });
+    throw err;
+  }
+  announceTableDoc(t.wave, t.table, doc, [audience]);
+  res.status(201).json({ doc: tableDocView(doc, req.user.userId, t.table) });
+});
+
+app.put('/api/waves/:id/table-docs/:docId', authenticateToken, sheetLimiter, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  const doc = db.getTableDoc(t.wave.id, req.params.docId);
+  if (!doc || !tableDocReadable(doc, req.user.userId, t.table)) return res.status(404).json({ error: 'Not found' });
+  if (!requireGm(t, req, res)) return;
+  const audience = req.body.audience == null ? doc.audience : req.body.audience;
+  if (!TABLE_DOC_KINDS[doc.kind].includes(audience)) return res.status(400).json({ error: 'That document can\'t have that audience', code: 'INVALID_DOC' });
+  const baseVersion = Number(req.body.baseVersion);
+  if (!Number.isInteger(baseVersion)) return res.status(400).json({ error: 'baseVersion is required', code: 'INVALID_DOC' });
+  const parsed = sheetBody(t.wave.id, req.body, 'GM documents');
+  if (parsed.error) return res.status(400).json(parsed);
+  const updated = db.updateTableDoc(t.wave.id, doc.id, baseVersion, { audience, body: parsed.body }, req.user.userId);
+  if (!updated) {
+    const current = db.getTableDoc(t.wave.id, doc.id);
+    return res.status(409).json({ error: 'Someone changed this first', code: 'DOC_CONFLICT', doc: current ? tableDocView(current, req.user.userId, t.table) : null });
+  }
+  announceTableDoc(t.wave, t.table, updated, [doc.audience, audience]);
+  res.json({ doc: tableDocView(updated, req.user.userId, t.table) });
+});
+
+app.delete('/api/waves/:id/table-docs/:docId', authenticateToken, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t) return;
+  const doc = db.getTableDoc(t.wave.id, req.params.docId);
+  if (!doc || !tableDocReadable(doc, req.user.userId, t.table)) return res.status(404).json({ error: 'Not found' });
+  if (!requireGm(t, req, res)) return;
+  db.deleteTableDoc(t.wave.id, doc.id);
+  announceTableDoc(t.wave, t.table, doc, [doc.audience]);
+  res.json({ success: true });
+});
+
+// "It's your turn", for play-by-post. The GM's device knows whose turn it is
+// (the encounter is sealed); the server only checks the GM and the player.
+app.post('/api/waves/:id/table/turn', authenticateToken, sheetLimiter, (req, res) => {
+  const t = sheetTable(req, res);
+  if (!t || !requireGm(t, req, res)) return;
+  const userId = req.body.userId;
+  if (typeof userId !== 'string' || !db.findUserById(userId) || !canAccessWaveFromCache(t.wave.id, userId)) {
+    return res.status(400).json({ error: 'That person isn\'t at this table', code: 'NOT_AT_TABLE' });
+  }
+  if (userId === req.user.userId) return res.json({ notified: false });
+  if (!shouldCreateNotification(userId, 'ttrpg_turn', t.wave.id)) return res.json({ notified: false });
+  const title = 'Your turn';
+  const body = `It's your turn in ${plainText(t.wave.title || T_WAVE())}`;
+  const notification = db.createNotification({
+    userId, type: 'ttrpg_turn', waveId: t.wave.id, actorId: req.user.userId, title, body,
+    groupKey: `ttrpg-turn:${t.wave.id}:${userId}`,
+  });
+  if (notification) {
+    broadcastToUser(userId, { type: 'notification', notification });
+    db.markNotificationPushSent(notification.id);
+  }
+  sendPushNotification(userId, { type: 'ttrpg_turn', title, body, url: `/?wave=${t.wave.id}`, tag: `ttrpg-turn-${t.wave.id}` });
+  res.json({ notified: true });
 });
 
 app.post('/api/pings', authenticateToken, (req, res) => {

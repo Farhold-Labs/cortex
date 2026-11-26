@@ -96,3 +96,101 @@ test('generic: {field} dice take whole numbers from fields, nothing else', async
   assert.ok(fillRoll('1d20+{Luck}', sheet).error);
   assert.ok(fillRoll('1d20{Agility}', sheet).error);
 });
+
+// ---------------------------------------------------------------- v2.160.0
+
+const encounter = () => import('../client/src/ttrpg/encounter.js');
+const monster = () => import('../client/src/ttrpg/monster.js');
+
+test('encounters: turns, rounds, skipping the fallen, going back', async () => {
+  const { blankEncounter, combatant, nextTurn, previousTurn } = await encounter();
+  const e = blankEncounter('Ambush', 'doc-gm');
+  const [a, b, c] = ['Vex', 'Goblin', 'Zoe'].map((name, i) => combatant({ name, kind: i === 1 ? 'monster' : 'pc' }));
+  e.combatants = [a, b, c];
+  nextTurn(e); assert.equal(e.round, 1); assert.equal(e.turn, a.id);
+  nextTurn(e); assert.equal(e.turn, b.id);
+  nextTurn(e); assert.equal(e.turn, c.id);
+  nextTurn(e); assert.equal(e.round, 2); assert.equal(e.turn, a.id);
+  // A downed monster loses its turn; a downed PC keeps it (death saves).
+  b.status = 'down'; c.status = 'down';
+  nextTurn(e); assert.equal(e.turn, c.id);
+  nextTurn(e); assert.equal(e.round, 3); assert.equal(e.turn, a.id);
+  previousTurn(e); assert.equal(e.round, 2); assert.equal(e.turn, c.id);
+  previousTurn(e); assert.equal(e.turn, a.id); assert.equal(e.round, 2);
+  previousTurn(e); previousTurn(e); assert.equal(e.round, 1); assert.equal(e.turn, a.id);
+  // The one whose turn it was removed: the next in line goes.
+  e.combatants = [b, c]; b.status = null; e.turn = a.id;
+  nextTurn(e); assert.equal(e.turn, b.id);
+});
+
+test('encounters: sorting, Bloodied, and initiative only from its owner\'s first roll', async () => {
+  const { combatant, sortByInitiative, statusFromHp, applyInitiativeRolls, initiativeRef } = await encounter();
+  const list = [
+    combatant({ name: 'slow', initBonus: 0 }), combatant({ name: 'tie-low', initBonus: 1 }),
+    combatant({ name: 'none' }), combatant({ name: 'tie-high', initBonus: 3 }), combatant({ name: 'fast' }),
+  ];
+  [5, 12, null, 12, 20].forEach((v, i) => { list[i].initiative = v; });
+  assert.deepEqual(sortByInitiative(list).map(c => c.name), ['fast', 'tie-high', 'tie-low', 'slow', 'none']);
+  assert.deepEqual([[10, 10], [6, 10], [5, 10], [1, 10], [0, 10], [5, 0]].map(([h, m]) => statusFromHp(h, m)), [null, null, 'bloodied', 'bloodied', 'down', null]);
+
+  const vex = combatant({ name: 'Vex', kind: 'pc', ownerId: 'ann' });
+  const zoe = combatant({ name: 'Zoe', kind: 'pc', ownerId: 'bob' });
+  const gob = combatant({ name: 'Goblin', kind: 'monster' });
+  const e = { combatants: [vex, zoe, gob] };
+  const rolls = [
+    { ref: initiativeRef('E', vex.id), rollerId: 'ann', total: 3, createdAt: '2026-01-01T00:00:02Z' },
+    { ref: initiativeRef('E', vex.id), rollerId: 'ann', total: 19, createdAt: '2026-01-01T00:00:05Z' }, // a re-roll
+    { ref: initiativeRef('E', zoe.id), rollerId: 'ann', total: 20, createdAt: '2026-01-01T00:00:01Z' }, // not hers
+    { ref: initiativeRef('OTHER', zoe.id), rollerId: 'bob', total: 18, createdAt: '2026-01-01T00:00:01Z' },
+    { ref: initiativeRef('E', gob.id), rollerId: 'bob', total: 20, createdAt: '2026-01-01T00:00:01Z' }, // no owner
+    { ref: initiativeRef('E', zoe.id), rollerId: 'bob', hidden: true, createdAt: '2026-01-01T00:00:00Z' },
+  ];
+  assert.equal(applyInitiativeRolls(e, rolls, 'E'), 1);
+  assert.equal(vex.initiative, 3); assert.equal(zoe.initiative, null); assert.equal(gob.initiative, null);
+});
+
+test('stat blocks: average hit points from hit dice', async () => {
+  const { averageOf, initiativeBonus, blankMonster } = await monster();
+  assert.equal(averageOf('2d8+2'), 11); assert.equal(averageOf('3d6'), 10); assert.equal(averageOf('d12-1'), 5);
+  assert.equal(averageOf('10d10+30'), 85); assert.equal(averageOf('1d4-5'), 1);
+  assert.equal(averageOf(''), null); assert.equal(averageOf('lots'), null); assert.equal(averageOf('7'), null);
+  const m = blankMonster('Wolf'); m.abilities.dex = 15;
+  assert.equal(initiativeBonus(m), 2);
+});
+
+test('5e 2014: half casters from level 2, rounded down multiclassed; Exhaustion and long rests by 2014', async () => {
+  const { blankSheet, derive, d20Roll, longRest, isDnd5e } = await rules();
+  assert.ok(isDnd5e('dnd5e-2014')); assert.ok(!isDnd5e('generic'));
+  const s14 = (classes) => { const s = blankSheet('', 'dnd5e-2014'); s.classes = classes; return s; };
+  assert.equal(blankSheet('', 'dnd5e-2014').system, 'dnd5e-2014');
+  assert.equal(blankSheet('', 'pathfinder').system, 'dnd5e-2024');
+  assert.deepEqual(derive(s14([{ name: 'Paladin', level: 1 }])).slotsMax.slice(0, 2), [0, 0]);
+  assert.deepEqual(derive(s14([{ name: 'Paladin', level: 2 }])).slotsMax.slice(0, 2), [2, 0]);
+  assert.deepEqual(derive(s14([{ name: 'Ranger', level: 5 }])).slotsMax.slice(0, 3), [4, 2, 0]);
+  // Multiclass 2014: Paladin 3 counts as 1 (rounded down) + Sorcerer 3 = caster level 4.
+  assert.deepEqual(derive(s14([{ name: 'Paladin', level: 3 }, { name: 'Sorcerer', level: 3 }])).slotsMax.slice(0, 3), [4, 3, 0]);
+  assert.deepEqual(derive(s14([{ name: 'Wizard', level: 5 }])).slotsMax.slice(0, 4), [4, 3, 2, 0]);
+
+  const s = s14([{ name: 'Fighter', level: 6 }]); s.speed = 30; s.exhaustion = 2;
+  const d = derive(s);
+  assert.equal(d.d20Penalty, 0); assert.equal(d20Roll(5, d), '1d20+5'); assert.equal(d.speed, 15);
+  assert.deepEqual(d.exhaustionEffects, ['Disadvantage on ability checks', 'Speed halved']);
+  s.exhaustion = 5; assert.equal(derive(s).speed, 0);
+  // Long rest, 2014: half the total Hit Dice back (6 d10 → 3).
+  s.exhaustion = 1; s.hitDiceUsed = { d10: 5 }; s.hp = { max: 50, current: 4, temp: 0 };
+  longRest(s);
+  assert.deepEqual(s.hitDiceUsed, { d10: 2 }); assert.equal(s.hp.current, 50); assert.equal(s.exhaustion, 0);
+  const one = s14([{ name: 'Wizard', level: 1 }]); one.hitDiceUsed = { d6: 1 }; longRest(one);
+  assert.deepEqual(one.hitDiceUsed, { d6: 0 });
+});
+
+test('generic: the FASERIP starting layout', async () => {
+  const { blankGenericSheet, GENERIC_PRESETS, fillRoll } = await generic();
+  const s = blankGenericSheet('Captain Test', 'faserip');
+  assert.equal(s.name, 'Captain Test'); assert.equal(s.system, 'generic');
+  assert.deepEqual(s.fields.slice(0, 7).map(f => f.label[0]).join(''), 'FASERIP');
+  assert.deepEqual(s.resources.map(r => r.name), ['Health', 'Karma']);
+  assert.deepEqual(fillRoll(s.rolls[0].expression, s), { expression: '1d100' });
+  assert.equal(blankGenericSheet('x', 'nope').fields[0].label, 'Level');
+  assert.ok(GENERIC_PRESETS.blank && GENERIC_PRESETS.faserip.label);
+});

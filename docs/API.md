@@ -4913,6 +4913,28 @@ At a table only (409 `NOT_A_TABLE`), on one server (409 `TTRPG_LOCAL_ONLY`). A s
 
 **A sheet:** `{ id, waveId, ownerId, system, visibility, version, data, encrypted, nonce, keyVersion, updatedBy, createdAt, updatedAt, canEdit, isOwner }`. **Who may read it:** its owner, the table's GMs, and, when `visibility` is `table`, everyone who can read the wave; decided on every read. A change sends WebSocket `character_sheet_updated` `{ waveId, sheetId }` (to the wave, or for a GM-only sheet to its owner and the GMs); clients read it again. Rate limited (`RATE_LIMIT_SHEETS_MAX`, 120 writes a minute per person).
 
+### The GM's tools (v2.160.0)
+
+Same gates as sheets (a table, on one server). Documents are blobs like sheets (JSON in a plain wave; ciphertext bound to `"cortex-tabledoc-v1" ‖ origin wave id ‖ doc id ‖ kind` in an encrypted one, else 400 `ENCRYPTION_REQUIRED`). **Only GMs create, change or delete them** (403 `GM_ONLY`).
+
+| Kind | Audiences | |
+|---|---|---|
+| `encounter` | `table` | the order, round, turn; never a monster's HP |
+| `encounter_gm` | `gm` | monster HP and AC, hidden combatants |
+| `monster` | `gm` | a stat block |
+| `note` | `gm` (default) or `table` | a GM note, or a handout when shared |
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/waves/:id/table-docs?kind=` | the ones this person may read: `table` ones for everyone at the table, `gm` ones for GMs |
+| GET | `/api/waves/:id/table-docs/:docId` | 404 for one they may not read |
+| POST | `/api/waves/:id/table-docs` | `{ id: 'doc-<uuid>', kind, audience?, data, encrypted?, nonce?, keyVersion? }`; 409 `DOC_ID_TAKEN`; at most 1000 a table (409 `DOC_LIMIT`) |
+| PUT | `/api/waves/:id/table-docs/:docId` | `{ baseVersion, data, …, audience? }`; a stale one is 409 `DOC_CONFLICT` with the current `doc` |
+| DELETE | `/api/waves/:id/table-docs/:docId` | |
+| POST | `/api/waves/:id/table/turn` | `{ userId }`, GMs only: "It's your turn" (notification `ttrpg_turn` and push). 400 `NOT_AT_TABLE` for someone who can't read the wave |
+
+A change sends WebSocket `table_doc_updated` `{ waveId, docId, kind }` (to the wave, or to the GMs for a GM-only one). **Rolls** (`POST /api/waves/:id/rolls`) take an optional `ref` (1–100 of `A-Z a-z 0-9 : _ -`, else 400 `INVALID_REF`), sent as WebSocket `table_roll` `{ waveId, rollId, ref }`; `GET /rolls?ref=<prefix>` lists rolls whose ref starts with it, each still through `rollView`. Systems: `dnd5e-2024`, `dnd5e-2014` (v2.160.0), `generic`.
+
 ## Voice channels (v2.118.0)
 
 A Community channel of type `voice` is a LiveKit room that always exists, named `vc-<channelId>`. It holds no waves. Opt-in instance feature `voiceChannels` (403 `FEATURE_DISABLED` when off), on top of `communities`; it needs LiveKit. Design: `docs/communities/03-voice-channels.md`.
