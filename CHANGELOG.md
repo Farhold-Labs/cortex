@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.168.0] - 2026-11-26
+
+More room for the conversation on a phone. Web client only, no migration.
+
+### Changed
+- **The wave view had lost space as features were added.** On a Pixel 7 (412×915) the messages had 504 of 915 pixels, and two GIFs didn't fit on screen together. They now have **649 pixels, 29% more**, and two GIFs fit with room to spare.
+  - **The message box is one row on a narrow screen:** ⋮, the text box, ➤. The formatting (Aa) and bigger-editor (⛶) buttons moved into the ⋮ menu, instead of a second row of buttons under the text box. The placeholder is short enough for one line ("Message · @ to mention"); the long one wrapped onto two lines, and the box grew to fit it. Down from 152 to about 86 pixels.
+  - **The pins and events bar is gone when there's nothing in it.** Its "No pins / No events" chips took a line of every wave. With a pin or an upcoming event it shows as before. **New event** moved to the wave's ⋮ menu.
+  - **The wave title is tighter on a phone:** 4px of padding, not 12px. Down from 69 to 53 pixels.
+  - **GIFs and clips in a message** are at most 240 pixels tall (or a third of the screen, whichever is less). In encrypted waves they were full width at their own height, so one tall GIF could fill a phone screen. Unencrypted waves already showed small thumbnails.
+- Desktop keeps its layout. The message box goes to one row only when it's narrow, which a wide thread panel isn't.
+
+### Verified
+- **Headless only** (Chrome at the Pixel 7's 412×915):
+  - The messages area measured 504 pixels before and 649 after.
+  - Two tall GIF-sized pictures with their name lines took 576 pixels and both showed at once.
+  - 880 tests pass.
+- Not tried on the phone itself.
+
+## [2.167.0] - 2026-11-26
+
+Maps follow the encounter, and a measuring tool. Web client only, no migration.
+
+### Added
+- **Tokens follow the running encounter**, on everyone's screen:
+  - A green pulsing ring shows whose turn it is.
+  - A red ring means **Bloodied**; greyed with a red cross means **Down**.
+  - The map says which encounter it's following, the round, and whose turn it is.
+  - A monster's state comes from the encounter, so players still never see its HP. A character's comes from their sheet, when the viewer can read it.
+  - A token is linked by the combatant it was made from, or by the character sheet it shares, so tokens placed before this version link too.
+- **Tokens from the encounter:** + Token on the GM's map offers each combatant without a token yet ("From the encounter…"), or **Add all**. New tokens are placed in a row across the middle to be dragged into position. Characters' tokens can be moved by their players.
+- **📏 Measure**, for everyone, GM and players. Drag from one square to another for a line and the distance, in squares and feet: a diagonal counts as one square, and the feet per square come from the grid. It stays until the next measurement.
+
+### Verified
+- **Tests:** 880 pass. New in `tests/ttrpg-rules.test.cjs`: whose turn and Bloodied/Down for monsters (from the encounter) and characters (from their sheets when readable); linking by combatant or sheet; nothing shown when not started or not running; the map following the running encounter touched last.
+- **Headless only** (Chrome on dev; mal at 1400×900 as GM, zoe at 390×844):
+  - mal started an encounter with Kaylee and two goblins, and Add all put the two goblins on the map. Kaylee already had a token, linked through her sheet, which showed Bloodied (her sheet has 3 of 10 HP).
+  - The turn ring moved from Kaylee to Goblin Warrior 1, which showed Bloodied after 6 damage. Goblin Warrior 2 showed Down after 20.
+  - zoe saw the same marks on what was visible to her, and measured 3 squares, 15 ft.
+
 ## [2.166.0] - 2026-11-25
 
 Tabletop role-playing, phase 5: maps. Server and web client, no app build. Migrates (one new column).
