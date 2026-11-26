@@ -33,6 +33,8 @@ import { parseRollCommand, rollFallback } from '../../utils/diceCommand.js';
 import { rememberRoll } from '../../utils/rolls.js';
 import { DiceTray, TableSettingsModal, RollLogModal } from '../ttrpg/TtrpgModals.jsx';
 import SheetsPanel from '../ttrpg/SheetsPanel.jsx';
+import GmPanel from '../ttrpg/GmPanel.jsx';
+import { plainText as plainTextOf } from '../../utils/plainText.js';
 import { useIsCongested } from '../../hooks/useNetworkStatus.js';
 import { lazyComponent } from '../../utils/lazyComponent.jsx';
 
@@ -156,7 +158,8 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
   const [tableCanManage, setTableCanManage] = useState(false);
   const [ttrpgModal, setTtrpgModal] = useState(null); // 'dice' | 'settings' | 'log' | null
   const [showSheets, setShowSheets] = useState(false); // character sheets (v2.159.0)
-  useEffect(() => { setShowSheets(false); }, [wave?.id]);
+  const [showGm, setShowGm] = useState(false); // the GM's screen (v2.160.0)
+  useEffect(() => { setShowSheets(false); setShowGm(false); }, [wave?.id]);
   const sheetWave = useMemo(() => ({ id: wave?.id, encrypted: !!waveData?.encrypted }), [wave?.id, waveData?.encrypted]);
   const loadTable = useCallback(async () => {
     if (!ttrpgEnabled || !wave?.id) { setTable(null); setTableCanManage(false); return; }
@@ -1155,7 +1158,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       try {
         const { roll } = await fetchAPI(`/waves/${encodeURIComponent(wave.id)}/rolls`, {
           method: 'POST',
-          body: { expression: rollToPost.expression, ...(rollToPost.visibility ? { visibility: rollToPost.visibility } : {}) },
+          body: { expression: rollToPost.expression, ...(rollToPost.visibility ? { visibility: rollToPost.visibility } : {}), ...(rollToPost.ref ? { ref: rollToPost.ref } : {}) },
         });
         rememberRoll(roll);
         rollId = roll.id;
@@ -1950,12 +1953,22 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
                   )}
                   {ttrpgEnabled && table && (
                     <div
-                      onClick={() => { setShowWaveMenu(false); setShowSheets(true); }}
+                      onClick={() => { setShowWaveMenu(false); setShowGm(false); setShowSheets(true); }}
                       style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-purple)', background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px' }}
                       onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
                       onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                     >
                       <span>📜</span><span>Character sheets</span>
+                    </div>
+                  )}
+                  {ttrpgEnabled && table && (
+                    <div
+                      onClick={() => { setShowWaveMenu(false); setShowSheets(false); setShowGm(true); }}
+                      style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-purple)', background: 'transparent', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>⚔</span><span>{table.isGm ? 'GM screen' : 'Encounter and handouts'}</span>
                     </div>
                   )}
                   {ttrpgEnabled && tableCanManage && (waveData?.federationState || 'local') === 'local' && waveData?.privacy !== 'crossServer' && (
@@ -3024,7 +3037,7 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
           plexConnections={plexConnections}
           onPlexClick={() => setShowPlexBrowser(true)}
           onDiceClick={table ? () => setTtrpgModal('dice') : undefined}
-          onSheetsClick={table ? () => setShowSheets(true) : undefined}
+          onSheetsClick={table ? () => { setShowGm(false); setShowSheets(true); } : undefined}
           fetchAPI={fetchAPI}
           expiry={pingExpiry}
           waveTtl={waveData?.pingTtl || null}
@@ -3144,6 +3157,23 @@ const WaveView = ({ wave, onBack, fetchAPI, showToast, currentUser, groups, onWa
       {ttrpgModal === 'settings' && (
         <TableSettingsModal waveId={wave.id} table={table} participants={participants} currentUserId={currentUser?.id}
           fetchAPI={fetchAPI} showToast={showToast} isMobile={isMobile} onClose={() => setTtrpgModal(null)} onSaved={loadTable} />
+      )}
+      {showGm && table && waveData && (
+        <GmPanel
+          wave={sheetWave} table={table} currentUser={currentUser} fetchAPI={fetchAPI} e2ee={e2ee} isMobile={isMobile} showToast={showToast}
+          names={Object.fromEntries((participants || []).map(p => [p.id, plainTextOf(p.name || p.handle || '')]))}
+          onClose={() => setShowGm(false)}
+          roll={({ expression, label, visibility, ref }) => handleSendMessage('', { roll: { expression, label, visibility, ref } })}
+          rollQuiet={async ({ expression, visibility, ref }) => {
+            try {
+              const { roll } = await fetchAPI(`/waves/${encodeURIComponent(wave.id)}/rolls`, { method: 'POST', body: { expression, visibility, ...(ref ? { ref } : {}) } });
+              rememberRoll(roll);
+              return roll;
+            } catch (err) { showToast(err.message || 'Could not roll', 'error'); return null; }
+          }}
+          notifyTurn={(userId) => fetchAPI(`/waves/${encodeURIComponent(wave.id)}/table/turn`, { method: 'POST', body: { userId } }).catch(() => {})}
+          onShare={(text) => handleSendMessage(text)}
+        />
       )}
       {showSheets && table && waveData && (
         <SheetsPanel

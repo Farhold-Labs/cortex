@@ -1762,8 +1762,9 @@ CREATE TABLE IF NOT EXISTS dice_rolls (
         visibility  TEXT NOT NULL,
         ping_id     TEXT UNIQUE,
         created_at  TEXT NOT NULL
-      );
+      , ref TEXT);
 CREATE INDEX IF NOT EXISTS idx_dice_rolls_wave ON dice_rolls(wave_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_dice_rolls_ref ON dice_rolls(wave_id, ref);
 
 CREATE TABLE IF NOT EXISTS character_sheets (
         id          TEXT PRIMARY KEY,
@@ -1781,6 +1782,23 @@ CREATE TABLE IF NOT EXISTS character_sheets (
         updated_at  TEXT NOT NULL
       );
 CREATE INDEX IF NOT EXISTS idx_character_sheets_wave ON character_sheets(wave_id, owner_id);
+
+CREATE TABLE IF NOT EXISTS table_docs (
+        id          TEXT PRIMARY KEY,
+        wave_id     TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL,
+        audience    TEXT NOT NULL,
+        version     INTEGER NOT NULL,
+        data        TEXT NOT NULL,
+        encrypted   INTEGER NOT NULL DEFAULT 0,
+        nonce       TEXT,
+        key_version INTEGER,
+        created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+        updated_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+CREATE INDEX IF NOT EXISTS idx_table_docs_wave ON table_docs(wave_id, kind);
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN

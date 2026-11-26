@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSealedDoc } from './sealedDoc.js';
 
 /**
  * Character sheets (v2.159.0, docs/ttrpg/README.md phase 2).
@@ -53,114 +53,14 @@ export function onSheetUpdated(handler) {
   return () => window.removeEventListener('cortex:sheet-updated', listener);
 }
 
-const clone = (v) => (typeof structuredClone === 'function' ? structuredClone(v) : JSON.parse(JSON.stringify(v)));
-
-/**
- * One open sheet. `change(fn)` applies fn to a copy at once, and saves after a
- * short pause (text typing) or straight away (`{ now: true }`, for buttons).
- */
+/** One open sheet: see useSealedDoc. `change(fn, { visibility })` also changes who sees it (its owner only). */
 export function useSheet({ fetchAPI, e2ee, wave, sheetId }) {
-  const [meta, setMeta] = useState(null);    // the stored sheet without its data
-  const [data, setData] = useState(null);    // what's shown: the stored data with pending changes
-  const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const stored = useRef(null);               // { meta, data } as last read or written
-  const pending = useRef([]);
-  const timer = useRef(null);
-  const inFlight = useRef(null);
-  const nextVisibility = useRef(null);       // only its owner changes who sees it
-  const url = `${base(wave.id)}/${encodeURIComponent(sheetId)}`;
-  // The e2ee value is a new object whenever its provider renders; read it late.
-  const e2eeRef = useRef(e2ee);
-  e2eeRef.current = e2ee;
-
-  const show = useCallback(() => {
-    if (!stored.current) return;
-    let d = clone(stored.current.data);
-    for (const fn of pending.current) { try { fn(d); } catch { /* a change that no longer applies */ } }
-    setMeta(stored.current.meta); setData(d);
-  }, []);
-
-  const accept = useCallback(async (sheet) => {
-    const parsed = await openSheet(e2eeRef.current, wave.id, sheet);
-    const { data: _ignored, ...rest } = sheet;
-    stored.current = { meta: rest, data: parsed };
-  }, [wave.id]);
-
-  const load = useCallback(async () => {
-    if (inFlight.current || pending.current.length) return; // our save will meet the newer one
-    try {
-      const { sheet } = await fetchAPI(url);
-      await accept(sheet);
-      setError(null);
-      show();
-    } catch (err) {
-      setError(err.locked ? 'locked' : (err.message || 'Could not load the sheet'));
-    }
-  }, [fetchAPI, url, accept, show]);
-
-  useEffect(() => { stored.current = null; pending.current = []; setMeta(null); setData(null); load(); }, [sheetId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (e2ee?.isUnlocked && !stored.current) load(); }, [e2ee?.isUnlocked]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => onSheetUpdated(({ waveId, sheetId: changed }) => {
-    if (waveId === wave.id && changed === sheetId) load();
-  }), [wave.id, sheetId, load]);
-
-  const flush = useCallback(async () => {
-    clearTimeout(timer.current); timer.current = null;
-    if (inFlight.current) { await inFlight.current; if (!pending.current.length) return; }
-    if (!pending.current.length || !stored.current) return;
-    const run = (async () => {
-      setSaving(true);
-      try {
-        for (let attempt = 0; attempt < 4; attempt++) {
-          const batch = pending.current.slice();
-          const next = clone(stored.current.data);
-          for (const fn of batch) { try { fn(next); } catch { /* skip */ } }
-          const visibility = nextVisibility.current;
-          const body = { baseVersion: stored.current.meta.version, ...(visibility ? { visibility } : {}), ...(await seal(e2eeRef.current, wave, sheetId, next)) };
-          try {
-            const { sheet } = await fetchAPI(url, { method: 'PUT', body });
-            const { data: _ignored, ...rest } = sheet;
-            stored.current = { meta: rest, data: next };
-            pending.current = pending.current.slice(batch.length);
-            if (visibility && nextVisibility.current === visibility) nextVisibility.current = null;
-            setError(null);
-            return;
-          } catch (err) {
-            if (err.data?.code === 'SHEET_CONFLICT' && err.data.sheet) { await accept(err.data.sheet); continue; }
-            throw err;
-          }
-        }
-        throw new Error('The sheet kept changing; try again');
-      } catch (err) {
-        // A change that can't be saved is dropped, and the sheet shows what's stored.
-        pending.current = [];
-        nextVisibility.current = null;
-        setError(err.message || 'Could not save the sheet');
-        load();
-      } finally {
-        setSaving(false);
-        show();
-      }
-    })();
-    inFlight.current = run;
-    try { await run; } finally { inFlight.current = null; }
-    if (pending.current.length) flush();
-  }, [wave, sheetId, fetchAPI, url, accept, show, load]);
-
-  const change = useCallback((fn, { now = false, visibility = null } = {}) => {
-    if (!stored.current) return;
-    if (visibility) nextVisibility.current = visibility;
-    pending.current.push(fn);
-    show();
-    clearTimeout(timer.current);
-    if (now) flush(); else timer.current = setTimeout(flush, 700);
-  }, [show, flush]);
-
-  // Don't lose a change typed just before closing.
-  const flushRef = useRef(flush);
-  flushRef.current = flush;
-  useEffect(() => () => { if (pending.current.length) flushRef.current(); }, []);
-
-  return { meta, data, error, saving, change, reload: load };
+  return useSealedDoc({
+    fetchAPI, e2ee, id: sheetId,
+    url: `${base(wave.id)}/${encodeURIComponent(sheetId)}`,
+    key: 'sheet', conflictCode: 'SHEET_CONFLICT', field: 'visibility', event: 'cortex:sheet-updated',
+    matches: (d) => d.waveId === wave.id && d.sheetId === sheetId,
+    open: (e, item) => openSheet(e, wave.id, item),
+    seal: (e, data) => seal(e, wave, sheetId, data),
+  });
 }

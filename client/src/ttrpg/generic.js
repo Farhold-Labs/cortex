@@ -5,7 +5,31 @@
  */
 import { newId } from './dnd5e2024.js';
 
-export function blankGenericSheet(name = '') {
+/**
+ * Starting layouts for the generic sheet (v2.160.0): fields and buttons
+ * already named, for games without their own template. Only the shape of a
+ * sheet; the group's rulebook stays at the table.
+ */
+export const GENERIC_PRESETS = {
+  blank: { label: 'Blank' },
+  faserip: {
+    label: 'Classic percentile super-heroes (FASERIP)',
+    build: (name) => ({
+      schema: 1, system: 'generic', name,
+      fields: ['Fighting', 'Agility', 'Strength', 'Endurance', 'Reason', 'Intuition', 'Psyche', 'Resources', 'Popularity']
+        .map(label => ({ id: newId(), label, value: '' })),
+      resources: [
+        { id: newId(), name: 'Health', current: 0, max: 0, reset: 'none' },
+        { id: newId(), name: 'Karma', current: 0, max: 0, reset: 'none' },
+      ],
+      rolls: [{ id: newId(), label: 'Action (d100)', expression: '1d100' }],
+      notes: 'Powers:\n\nTalents:\n\nContacts:\n\nOrigin and background:\n',
+    }),
+  },
+};
+
+export function blankGenericSheet(name = '', preset = 'blank') {
+  if (GENERIC_PRESETS[preset]?.build) return GENERIC_PRESETS[preset].build(name);
   return {
     schema: 1, system: 'generic', name,
     fields: [{ id: newId(), label: 'Level', value: '1' }],

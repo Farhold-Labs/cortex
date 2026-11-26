@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import {
-  ABILITIES, SKILLS, CLASSES, SPECIES, BACKGROUNDS, CONDITIONS,
+  ABILITIES, SKILLS, CLASSES, CONDITIONS, editionInfo,
   derive, signed, d20Roll, attackBonus, damageRoll, applyHp, shortRest, longRest, newId,
 } from '../../ttrpg/dnd5e2024.js';
 import { btn, rollBtn, labelStyle, inputStyle, box, sectionTitle, Field, Counter, Pips, ListRows } from './sheetUi.jsx';
 
 /**
- * A D&D 5e (2024) character sheet (v2.159.0). Numbers that follow from others
+ * A D&D 5e character sheet (v2.159.0; the 2014 rules too since v2.160.0). Numbers that follow from others
  * (modifiers, saves, skills, spell DC, slots) are worked out here; every roll
  * goes to the server as finished dice, with the label in the ping.
  */
@@ -94,7 +94,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
           ))}
           <span style={{ flex: 1 }} />
           <button type="button" disabled={!canEdit} aria-pressed={!!data.heroicInspiration} onClick={() => now(s => { s.heroicInspiration = !s.heroicInspiration; })}
-            style={{ ...btn(!!data.heroicInspiration, 'var(--accent-amber)'), minHeight: '30px', padding: '2px 10px' }}>✦ Inspiration</button>
+            style={{ ...btn(!!data.heroicInspiration, 'var(--accent-amber)'), minHeight: '30px', padding: '2px 10px' }}>✦ {d.edition === 2024 ? 'Heroic Inspiration' : 'Inspiration'}</button>
         </div>
         {hp.current === 0 && (
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -257,7 +257,7 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
           {canEdit && (
             <div style={{ display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap' }}>
               <button type="button" onClick={() => { if (window.confirm('Take a short rest? Pact Magic slots and short-rest features come back.')) now(shortRest); }} style={btn()}>Short rest</button>
-              <button type="button" onClick={() => { if (window.confirm('Take a long rest? Hit points, Hit Point Dice, spell slots and features come back, and one level of Exhaustion goes.')) now(longRest); }} style={btn()}>Long rest</button>
+              <button type="button" onClick={() => { if (window.confirm(`Take a long rest? Hit points, spell slots and features come back, ${d.edition === 2024 ? 'all' : 'half your'} Hit Point Dice, and one level of Exhaustion goes.`)) now(longRest); }} style={btn()}>Long rest</button>
             </div>
           )}
 
@@ -282,7 +282,7 @@ function Conditions({ data, canEdit, now, d }) {
         <button key={c} type="button" disabled={!canEdit} onClick={() => now(s => { s.conditions = (s.conditions || []).filter(x => x !== c); })}
           aria-label={`${c}: remove`} style={{ ...btn(), minHeight: '26px', padding: '1px 8px', color: 'var(--accent-orange)', borderColor: 'var(--accent-orange)' }}>{c}{canEdit ? ' ✕' : ''}</button>
       ))}
-      {d.exhaustion > 0 && <span style={{ color: 'var(--accent-orange)', fontSize: '0.75rem' }}>Exhaustion {d.exhaustion} (−{d.d20Penalty} to d20 rolls)</span>}
+      {d.exhaustion > 0 && <span style={{ color: 'var(--accent-orange)', fontSize: '0.75rem' }}>Exhaustion {d.exhaustion}: {d.exhaustionEffects.join('; ')}</span>}
       {canEdit && !adding && <button type="button" onClick={() => setAdding(true)} style={{ ...btn(), minHeight: '26px', padding: '1px 8px' }}>+ Condition</button>}
       {canEdit && adding && (
         <select autoFocus aria-label="Add a condition" value="" onBlur={() => setAdding(false)}
@@ -443,6 +443,7 @@ function SpellRow({ sp, d, canEdit, set, now, roll, name }) {
 }
 
 function About({ data, d, canEdit, set, now, isMobile }) {
+  const ed = editionInfo(data.system);
   const row = (label, key, list) => (
     <div>
       <div style={labelStyle}>{label}</div>
@@ -458,14 +459,14 @@ function About({ data, d, canEdit, set, now, isMobile }) {
           <Field disabled={!canEdit} value={data.name} onChange={(v) => set(s => { s.name = v.slice(0, 60); })} />
         </div>
         <div>
-          <div style={labelStyle}>SPECIES</div>
+          <div style={labelStyle}>{ed.speciesLabel}</div>
           <input list="dnd-species" disabled={!canEdit} value={data.species || ''} onChange={(e) => set(s => { s.species = e.target.value.slice(0, 40); })} style={inputStyle} />
-          <datalist id="dnd-species">{SPECIES.map(x => <option key={x} value={x} />)}</datalist>
+          <datalist id="dnd-species">{ed.species.map(x => <option key={x} value={x} />)}</datalist>
         </div>
         <div>
           <div style={labelStyle}>BACKGROUND</div>
           <input list="dnd-backgrounds" disabled={!canEdit} value={data.background || ''} onChange={(e) => set(s => { s.background = e.target.value.slice(0, 40); })} style={inputStyle} />
-          <datalist id="dnd-backgrounds">{BACKGROUNDS.map(x => <option key={x} value={x} />)}</datalist>
+          <datalist id="dnd-backgrounds">{ed.backgrounds.map(x => <option key={x} value={x} />)}</datalist>
         </div>
         {row('ALIGNMENT', 'alignment')}
         {row('SIZE', 'size')}

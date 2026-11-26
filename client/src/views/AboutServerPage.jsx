@@ -201,6 +201,11 @@ const AboutServerPage = ({ onBack }) => {
             available at <a href="https://www.dndbeyond.com/srd" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-teal)' }}>dndbeyond.com/srd</a>.
             The SRD 5.2 is licensed under the <a href="https://creativecommons.org/licenses/by/4.0/legalcode" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-teal)' }}>Creative Commons Attribution 4.0 International License</a>.
           </div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: '1.6', marginTop: '8px' }}>
+            This work includes material taken from the System Reference Document 5.1 ("SRD 5.1") by Wizards of the Coast LLC,
+            available at <a href="https://dnd.wizards.com/resources/systems-reference-document" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-teal)' }}>dnd.wizards.com/resources/systems-reference-document</a>.
+            The SRD 5.1 is licensed under the <a href="https://creativecommons.org/licenses/by/4.0/legalcode" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-teal)' }}>Creative Commons Attribution 4.0 International License</a>.
+          </div>
         </div>
 
         {/* Footer */}
