@@ -73,3 +73,30 @@ export function tokenVisibleToPlayer(token, map, userId, ownerId) {
   for (let dx = 0; dx < k; dx++) for (let dy = 0; dy < k; dy++) if (revealed.has(cellKey(token.x + dx, token.y + dy))) return true;
   return false;
 }
+
+/**
+ * A token's place in the encounter (v2.167.0): its combatant (by the
+ * combatant it was made from, or the character sheet it shares), whether
+ * it's their turn, and Bloodied or Down. A monster's state is what the
+ * encounter says (players never see its HP); a character's comes from their
+ * sheet when the viewer can read it, else from the encounter.
+ */
+export function tokenStatus(token, encounter, sheets = {}) {
+  if (!encounter?.active) return { combatant: null, turn: false, status: null };
+  const list = encounter.combatants || [];
+  const c = (token.combatantId && list.find(x => x.id === token.combatantId))
+    || (token.sheetId && list.find(x => x.sheetId === token.sheetId)) || null;
+  let status = c?.status || null;
+  const sheet = token.sheetId ? sheets[token.sheetId] : null;
+  if (sheet?.hp && Number(sheet.hp.max) > 0) {
+    const hp = Number(sheet.hp.current) || 0;
+    status = hp <= 0 ? 'down' : hp <= Number(sheet.hp.max) / 2 ? 'bloodied' : null;
+  }
+  return { combatant: c, turn: !!c && encounter.round > 0 && encounter.turn === c.id, status };
+}
+
+/** The encounter a map follows: the running one the GM touched last. */
+export function currentEncounter(encounters) {
+  return (encounters || []).filter(e => e.body?.active)
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0] || null;
+}

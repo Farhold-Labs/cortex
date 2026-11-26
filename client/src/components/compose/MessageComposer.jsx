@@ -128,7 +128,11 @@ const MessageComposer = forwardRef(({
   // Below ~26rem of row there isn't a usable textarea left once the attach,
   // format, pop-out and send buttons take their share, so drop the buttons onto
   // their own line underneath and give the textarea the full width.
-  const stackedActions = rowWidth > 0 && rowWidth < rootFontPx * 26;
+  // A narrow row (a phone) keeps one line (v2.168.0): formatting and the
+  // expanded editor move into the ⋮ menu and SEND becomes ➤, rather than the
+  // buttons wrapping onto a second line under the text box.
+  const narrow = rowWidth > 0 && rowWidth < rootFontPx * 26;
+  const stackedActions = false;
 
   const handleSend = () => {
     if (!newMessage.trim()) return;
@@ -472,6 +476,17 @@ const MessageComposer = forwardRef(({
               position: 'absolute', bottom: '100%', left: 0, marginBottom: '4px',
               background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', zIndex: 100, minWidth: '148px',
             }}>
+              {narrow && (
+                <>
+                  <button onClick={() => { setShowAttachMenu(false); setShowFormatBar(v => !v); }}
+                    aria-pressed={showFormatBar}
+                    style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: showFormatBar ? 'var(--accent-amber)' : 'var(--text-secondary)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 700 }}
+                  >Aa Formatting{showFormatBar ? ' ✓' : ''}</button>
+                  <button onClick={() => { setShowAttachMenu(false); setPoppedOut(true); }}
+                    style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-secondary)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 700 }}
+                  >⛶ Bigger editor</button>
+                </>
+              )}
               {onDiceClick && (
                 <button onClick={() => { setShowAttachMenu(false); onDiceClick(); }}
                   style={{ display: 'block', width: '100%', padding: '9px 12px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', color: 'var(--accent-purple)', cursor: 'pointer', textAlign: 'left', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 700 }}
@@ -703,7 +718,7 @@ const MessageComposer = forwardRef(({
               }
             }
           }}
-          placeholder={placeholder || 'Shift+Enter for new line, @ to mention'}
+          placeholder={placeholder || (narrow ? 'Message · @ to mention' : 'Shift+Enter for new line, @ to mention')}
           rows={1}
           style={{
             width: '100%',
@@ -852,7 +867,7 @@ const MessageComposer = forwardRef(({
         )}
         </div>
 
-        <button
+        {!narrow && <button
           onClick={() => setShowFormatBar((v) => !v)}
           title="Formatting"
           aria-label="Toggle formatting toolbar"
@@ -866,8 +881,8 @@ const MessageComposer = forwardRef(({
             cursor: 'pointer', fontFamily: 'monospace', fontSize: isMobile ? '0.85rem' : '0.75rem',
             flexShrink: 0, alignSelf: 'flex-end',
           }}
-        >Aa</button>
-        <button
+        >Aa</button>}
+        {!narrow && <button
           onClick={() => setPoppedOut(true)}
           title="Expand editor"
           aria-label="Expand editor"
@@ -878,13 +893,14 @@ const MessageComposer = forwardRef(({
             color: 'var(--text-dim)', cursor: 'pointer', fontFamily: 'monospace',
             fontSize: isMobile ? '0.85rem' : '0.75rem', flexShrink: 0, alignSelf: 'flex-end',
           }}
-        >⛶</button>
+        >⛶</button>}
 
         <button
           onClick={handleSend}
           disabled={!newMessage.trim() || uploading}
+          aria-label="Send"
           style={{
-            padding: isMobile ? '0 18px' : '0 14px',
+            padding: narrow ? '0 14px' : isMobile ? '0 18px' : '0 14px',
             height: CONTROL_H, boxSizing: 'border-box',
             background: newMessage.trim() ? 'var(--accent-amber)20' : 'transparent',
             border: `1px solid ${newMessage.trim() ? 'var(--accent-amber)' : 'var(--border-primary)'}`,
@@ -897,7 +913,7 @@ const MessageComposer = forwardRef(({
             marginLeft: stackedActions ? 'auto' : 0,
           }}
         >
-          SEND
+          {narrow ? '➤' : 'SEND'}
         </button>
       </div>
 
