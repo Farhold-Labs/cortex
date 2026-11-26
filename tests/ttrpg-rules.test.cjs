@@ -194,3 +194,80 @@ test('generic: the FASERIP starting layout', async () => {
   assert.equal(blankGenericSheet('x', 'nope').fields[0].label, 'Level');
   assert.ok(GENERIC_PRESETS.blank && GENERIC_PRESETS.faserip.label);
 });
+
+// ---------------------------------------------------------------- v2.165.0
+
+test('armor class: equipped armour, Dex caps, shields, Unarmored Defense, set by hand', async () => {
+  const { blankSheet, derive, parseArmor } = await rules();
+  assert.deepEqual(parseArmor('14 + Dex (max 2)'), { base: 14, dex: true, max: 2 });
+  assert.deepEqual(parseArmor('11 + dex'), { base: 11, dex: true, max: null });
+  assert.deepEqual(parseArmor('16'), { base: 16, dex: false, max: null });
+  assert.deepEqual(parseArmor('+2'), { bonus: 2 });
+  assert.equal(parseArmor('heavy'), null);
+
+  const s = blankSheet('Ac', 'dnd5e-2024'); s.abilities.dex = 16; s.abilities.con = 14; s.abilities.wis = 16;
+  assert.equal(derive(s).armorClass.value, 13, 'unarmoured 10 + Dex');
+  s.inventory = [
+    { name: 'Scale Mail', ac: '14 + Dex (max 2)', equipped: false },
+    { name: 'Plate Armor', ac: '18', equipped: false },
+    { name: 'Shield', ac: '+2', equipped: false },
+  ];
+  assert.equal(derive(s).armorClass.value, 13, 'carried, not worn');
+  s.inventory[0].equipped = true;
+  assert.equal(derive(s).armorClass.value, 16, 'Dex capped at 2');
+  s.inventory[1].equipped = true;
+  assert.equal(derive(s).armorClass.value, 18, 'the best armour worn counts');
+  s.inventory[2].equipped = true; s.acBonus = 1;
+  assert.equal(derive(s).armorClass.value, 21);
+  assert.match(derive(s).armorClass.parts.join(' '), /Plate Armor 18.*Shield \+2.*Other \+1/);
+
+  const barb = blankSheet('', 'dnd5e-2014'); barb.classes = [{ name: 'Barbarian', level: 1 }]; barb.abilities.dex = 14; barb.abilities.con = 16;
+  assert.equal(derive(barb).armorClass.value, 15, 'Barbarian: 10 + Dex + Con');
+  barb.inventory = [{ name: 'Shield', ac: '+2', equipped: true }];
+  assert.equal(derive(barb).armorClass.value, 17, 'a Barbarian keeps it with a shield');
+  const monk = blankSheet('', 'dnd5e-2024'); monk.classes = [{ name: 'Monk', level: 1 }]; monk.abilities.dex = 16; monk.abilities.wis = 14;
+  assert.equal(derive(monk).armorClass.value, 15, 'Monk: 10 + Dex + Wis');
+  monk.inventory = [{ name: 'Shield', ac: '+2', equipped: true }];
+  assert.equal(derive(monk).armorClass.value, 15, 'a Monk loses it with a shield (13 + 2)');
+
+  // Set by hand: kept, and a sheet from before with a typed AC stays as typed.
+  s.acMode = 'manual'; s.ac = 12;
+  assert.equal(derive(s).armorClass.value, 12); assert.equal(derive(s).armorClass.auto, 21);
+  const old = blankSheet(); delete old.acMode; old.ac = 17;
+  assert.equal(derive(old).armorClass.value, 17);
+  delete old.acMode; old.ac = 10; old.abilities.dex = 14;
+  assert.equal(derive(old).armorClass.value, 12, 'the blank 10 is worked out');
+});
+
+test('armour from the SRD carries its AC', async () => {
+  const { itemEntries } = await import('../client/src/ttrpg/fill.js');
+  const { blankSheet } = await rules();
+  const eq = JSON.parse(require('node:fs').readFileSync(require('node:path').resolve(__dirname, '../client/src/srd/2024/equipment.json'), 'utf8'));
+  const get = (n) => eq.find(x => x.name === n);
+  assert.equal(itemEntries(get('Breastplate'), 1, blankSheet()).inventory.ac, '14 + Dex (max 2)');
+  assert.equal(itemEntries(get('Shield'), 1, blankSheet()).inventory.ac, '+2');
+  assert.equal(itemEntries(get('Longsword'), 1, blankSheet()).inventory.ac, undefined);
+});
+
+test('ability scores: rolled 4d6 drop lowest on the server, standard array, point buy', async () => {
+  const { rollDice } = await import('../server/lib/dice.js');
+  // The generator's maths, without React.
+  const ROLL_EXPRESSION = Array(6).fill('4d6dl1').join('+');
+  const faces = [1, 6, 6, 6, 2, 3, 4, 5, 1, 1, 1, 1, 6, 6, 6, 6, 3, 3, 3, 3, 2, 4, 6, 1];
+  let i = 0;
+  const r = rollDice(ROLL_EXPRESSION, () => faces[i++]);
+  const scores = r.terms.filter(t => t.type === 'dice').map(t => t.subtotal);
+  assert.deepEqual(scores, [18, 12, 3, 18, 9, 12]);
+  for (let n = 0; n < 200; n++) {
+    for (const v of rollDice(ROLL_EXPRESSION).terms.map(t => t.subtotal)) assert.ok(v >= 3 && v <= 18);
+  }
+  const POINT_COST = { 8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9 };
+  const cost = (s) => Object.values(s).reduce((n, v) => n + POINT_COST[v], 0);
+  assert.equal(cost({ str: 15, dex: 15, con: 15, int: 8, wis: 8, cha: 8 }), 27);
+  assert.equal(cost({ str: 15, dex: 14, con: 13, int: 12, wis: 10, cha: 8 }), 27, 'the standard array costs exactly 27');
+  // The generator's own constants agree with these.
+  const src = require('node:fs').readFileSync(require('node:path').resolve(__dirname, '../client/src/components/ttrpg/ScoreGenerator.jsx'), 'utf8');
+  assert.match(src, /STANDARD_ARRAY = \[15, 14, 13, 12, 10, 8\]/);
+  assert.match(src, /POINT_COST = \{ 8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9 \}/);
+  assert.match(src, /ROLL_EXPRESSION = Array\(6\)\.fill\('4d6dl1'\)/);
+});

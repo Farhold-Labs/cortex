@@ -1,12 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ABILITIES, SKILLS, CLASSES, CONDITIONS, editionInfo,
-  derive, signed, d20Roll, attackBonus, damageRoll, applyHp, shortRest, longRest, newId, cantripDice,
+  derive, signed, d20Roll, attackBonus, damageRoll, applyHp, shortRest, longRest, newId, cantripDice, parseArmor,
 } from '../../ttrpg/dnd5e2024.js';
-import { editionOf, findSrd, srdFeatureText } from '../../srd/index.js';
+import { editionOf, findSrd, srdFeatureText, loadSrd } from '../../srd/index.js';
 import { SrdPicker, SrdEntry } from './SrdBrowser.jsx';
 import FillFromSrd from './FillFromSrd.jsx';
-import { asiKind } from '../../ttrpg/fill.js';
+import ScoreGenerator from './ScoreGenerator.jsx';
+import { asiKind, itemEntries } from '../../ttrpg/fill.js';
 import { btn, rollBtn, labelStyle, inputStyle, box, sectionTitle, Field, Counter, Pips, ListRows } from './sheetUi.jsx';
 
 /**
@@ -27,6 +28,25 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
   const [picker, setPicker] = useState(null); // an SRD list to pick from: 'spells' | 'equipment' | 'magic-items'
   const [fill, setFill] = useState(null); // fill from the SRD: { levelUp: { index } | null } (v2.163.0)
   const edition = editionOf(data.system);
+  // Armour taken from the SRD before v2.165.0 didn't carry its AC: fill it in once.
+  useEffect(() => {
+    if (!canEdit) return;
+    const missing = (data.inventory || []).filter(it => it.srd && !it.ac && !String(it.srd).startsWith('mi:'));
+    if (!missing.length) return;
+    let live = true;
+    loadSrd(edition, 'equipment').then((eq) => {
+      if (!live) return;
+      const byId = new Map(eq.filter(x => x.armor && x.ac).map(x => [x.id, x]));
+      if (!missing.some(it => byId.has(it.srd))) return;
+      change((s) => {
+        s.inventory = (s.inventory || []).map(it => {
+          const x = !it.ac && byId.get(it.srd);
+          return x ? { ...it, ac: /shield/i.test(x.category || x.name) ? `+${x.ac}` : x.ac } : it;
+        });
+      }, { now: true });
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [canEdit, edition, (data.inventory || []).map(it => `${it.srd || ''}:${it.ac || ''}`).join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
   const name = data.name || 'Unnamed';
 
   // Taking something from the SRD (v2.161.0): a copy of what a sheet needs,
@@ -47,19 +67,9 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
       now(s => { s.spells = [...(s.spells || []), spellEntry(x)]; });
     } else if (picker === 'equipment') {
       now(s => {
-        s.inventory = [...(s.inventory || []), {
-          id: newId(), name: x.name, qty: 1, weight: Number(x.weight) || 0, equipped: false, srd: x.id,
-          notes: [x.cost, x.damage && `${x.damage} ${x.damageType}`.trim(), x.ac && `AC ${x.ac}`, x.properties.join(', ')].filter(Boolean).join(' · '),
-        }];
-        if (x.weapon && x.damage) {
-          // Finesse uses the better of Strength and Dexterity; ranged weapons Dexterity.
-          const dd = derive(s);
-          const ability = x.finesse ? (dd.mods.dex >= dd.mods.str ? 'dex' : 'str') : x.ranged ? 'dex' : 'str';
-          s.attacks = [...(s.attacks || []), {
-            id: newId(), name: x.name, ability, proficient: true, bonus: 0, damage: x.damage, damageType: (x.damageType || '').toLowerCase(),
-            damageAbility: true, damageBonus: 0, notes: [x.properties.join(', '), x.range, x.mastery && `Mastery: ${x.mastery}`, x.versatile && `Two-handed ${x.versatile}`].filter(Boolean).join(' · '),
-          }];
-        }
+        const { inventory, attack } = itemEntries(x, 1, s);
+        s.inventory = [...(s.inventory || []), inventory];
+        if (attack) s.attacks = [...(s.attacks || []), attack];
       });
     } else if (picker === 'magic-items') {
       now(s => { s.inventory = [...(s.inventory || []), {
@@ -129,7 +139,12 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
           )}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '6px' }}>
-          {stat('AC', data.ac)}
+          <div style={{ ...box, textAlign: 'center', padding: '6px 4px', minWidth: 0 }}>
+            <div style={{ ...labelStyle, marginBottom: '2px' }}>AC</div>
+            <button type="button" onClick={() => setTab('about')} aria-label={`Armor class ${d.armorClass.value}: ${d.armorClass.manual ? 'set by hand' : d.armorClass.parts.join(', ')}. Change it`}
+              title={d.armorClass.manual ? 'Set by hand' : d.armorClass.parts.join(', ')}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', fontSize: '1.05rem', padding: '4px 0', width: '100%', cursor: 'pointer', fontFamily: 'monospace' }}>{d.armorClass.value}</button>
+          </div>
           {stat('INIT', signed(d.initiative), () => test(d.initiative, 'Initiative'))}
           {stat('SPEED', `${d.speed}`)}
           {stat('PROF', signed(d.prof))}
@@ -163,7 +178,8 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
         ))}
       </div>
 
-      {fill && (
+      {fill?.scores && <ScoreGenerator data={data} roll={roll} change={change} onClose={() => setFill(null)} />}
+      {fill && !fill.scores && (
         <FillFromSrd data={data} edition={edition} change={change} levelUp={fill.levelUp} asiFor={fill.asiFor} addClass={fill.addClass} onClose={() => setFill(null)} />
       )}
 
@@ -184,6 +200,11 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
 
       {!fill && !picker && tab === 'main' && (
         <div>
+          {canEdit && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '6px' }}>
+              <button type="button" onClick={() => setFill({ scores: true })} style={{ ...btn(), minHeight: '28px', padding: '2px 10px' }}>🎲 Roll or set ability scores…</button>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : 'repeat(6, minmax(0, 1fr))', gap: '6px' }}>
             {ABILITIES.map(a => (
               <div key={a.key} style={{ ...box, textAlign: 'center', padding: '6px 4px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -276,10 +297,13 @@ export default function Dnd5eSheet({ data, canEdit, change, roll, isMobile }) {
             onAdd={() => now(s => { s.inventory = [...(s.inventory || []), { id: newId(), name: '', qty: 1, weight: 0, equipped: false, notes: '' }]; })}
             onRemove={(i) => now(s => { s.inventory = s.inventory.filter((_, j) => j !== i); })}
             render={(it, i) => (
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 4em 4.5em auto', gap: '6px', alignItems: 'center' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 3.6em 4em 5.4em auto', gap: '6px', alignItems: 'center' }}>
                 <Field disabled={!canEdit} ariaLabel="Item" placeholder="Item" value={it.name} onChange={(v) => set(s => { s.inventory[i].name = v.slice(0, 80); })} />
                 <Field type="number" disabled={!canEdit} ariaLabel="Quantity" value={it.qty} onChange={(v) => set(s => { s.inventory[i].qty = Math.max(0, v); })} />
                 <Field type="number" disabled={!canEdit} ariaLabel="Weight (lb)" value={it.weight} onChange={(v) => set(s => { s.inventory[i].weight = Math.max(0, v); })} />
+                <Field disabled={!canEdit} ariaLabel="AC (armour: 14 + Dex max 2; shield: +2)" placeholder="AC" value={it.ac || ''}
+                  onChange={(v) => set(s => { s.inventory[i].ac = v.slice(0, 24); })}
+                  style={{ padding: '6px 4px', borderColor: it.ac && !parseArmor(it.ac) ? 'var(--accent-orange)' : undefined }} />
                 <label style={{ color: 'var(--text-dim)', fontSize: '0.7rem', display: 'flex', gap: '3px', alignItems: 'center' }}>
                   <input type="checkbox" disabled={!canEdit} checked={!!it.equipped} onChange={(e) => now(s => { s.inventory[i].equipped = e.target.checked; })} />EQ
                 </label>
@@ -591,7 +615,31 @@ function About({ data, d, canEdit, set, now, isMobile, onFill, onLevelUp, onAddC
       <div style={sectionTitle}>COMBAT</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '8px' }}>
         <div><div style={labelStyle}>MAX HP</div><Field type="number" disabled={!canEdit} value={data.hp?.max} onChange={(v) => set(s => { s.hp = { ...s.hp, max: Math.max(0, v), current: Math.min(Number(s.hp?.current) || 0, Math.max(0, v)) }; })} /></div>
-        <div><div style={labelStyle}>AC</div><Field type="number" disabled={!canEdit} value={data.ac} onChange={(v) => set(s => { s.ac = Math.max(0, v); })} /></div>
+        <div style={{ gridColumn: '1 / -1', ...box, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={labelStyle}>ARMOR CLASS</span>
+            <span style={{ fontSize: '1.2rem', color: 'var(--accent-amber)' }}>{d.armorClass.value}</span>
+            {canEdit && (
+              <span style={{ display: 'inline-flex', gap: '4px' }}>
+                <button type="button" aria-pressed={!d.armorClass.manual} onClick={() => now(s => { s.acMode = 'auto'; })} style={{ ...btn(!d.armorClass.manual), minHeight: '28px', padding: '2px 8px' }}>From equipment</button>
+                <button type="button" aria-pressed={d.armorClass.manual} onClick={() => now(s => { s.acMode = 'manual'; s.ac = d.armorClass.value; })} style={{ ...btn(d.armorClass.manual), minHeight: '28px', padding: '2px 8px' }}>Set it myself</button>
+              </span>
+            )}
+          </div>
+          {d.armorClass.manual ? (
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <Field type="number" disabled={!canEdit} ariaLabel="Armor class" value={data.ac} onChange={(v) => set(s => { s.acMode = 'manual'; s.ac = Math.max(0, v); })} style={{ width: '5em' }} />
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>From equipment it would be {d.armorClass.auto}.</span>
+            </div>
+          ) : (
+            <>
+              <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>{d.armorClass.parts.join(' · ')}. Tick EQ on armour and a shield in Gear; give any item an AC there.</div>
+              <label style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.75rem' }}>Other bonus (Defense style, a spell…)
+                <Field type="number" disabled={!canEdit} ariaLabel="Other AC bonus" value={data.acBonus || 0} onChange={(v) => set(s => { s.acBonus = v; })} style={{ width: '4em' }} />
+              </label>
+            </>
+          )}
+        </div>
         <div><div style={labelStyle}>SPEED</div><Field type="number" disabled={!canEdit} value={data.speed} onChange={(v) => set(s => { s.speed = Math.max(0, v); })} /></div>
         <div><div style={labelStyle}>EXTRA INIT</div><Field type="number" disabled={!canEdit} value={data.initiativeBonus} onChange={(v) => set(s => { s.initiativeBonus = v; })} /></div>
       </div>
