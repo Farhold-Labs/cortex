@@ -1371,6 +1371,9 @@ function MainApp({ sharePingId }) {
     } else if (data.type === 'table_doc_updated') {
       // The GM's documents (v2.160.0): only ids travel.
       window.dispatchEvent(new CustomEvent('cortex:table-doc-updated', { detail: { waveId: data.waveId, docId: data.docId, kind: data.kind } }));
+    } else if (data.type === 'table_gm_key') {
+      // The GM key changed or was shared with this person (v2.162.0).
+      window.dispatchEvent(new CustomEvent('cortex:table-gm-key', { detail: { waveId: data.waveId } }));
     } else if (data.type === 'table_roll') {
       window.dispatchEvent(new CustomEvent('cortex:table-roll', { detail: { waveId: data.waveId, rollId: data.rollId, ref: data.ref } }));
     } else if (data.type === 'character_sheet_updated') {

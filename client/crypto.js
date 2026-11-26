@@ -326,6 +326,20 @@ export function tableDocContext(originWaveId, docId, kind) {
   return sealContext('cortex-tabledoc-v1', originWaveId, docId, kind);
 }
 
+/**
+ * The GM key (v2.162.0): a table's key only its GMs hold. Wrapped for each GM
+ * bound to the wave, the version and that GM (a different label from a wave
+ * key, so one can never be taken for the other), and documents sealed with it
+ * bound to the wave, their id and kind.
+ */
+export function gmKeyContext(originWaveId, keyVersion, recipientAddress) {
+  if (!Number.isInteger(keyVersion) || keyVersion < 1) throw new Error('Invalid seal context');
+  return sealContext('cortex-gmkey-v1', originWaveId, keyVersion, recipientAddress);
+}
+export function gmDocContext(originWaveId, docId, kind) {
+  return sealContext('cortex-gmdoc-v1', originWaveId, docId, kind);
+}
+
 export async function sealSheet(text, waveKey, context) {
   requireContext(context);
   const nonce = generateNonce();

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { listTableDocs, createTableDoc, deleteTableDoc, onTableDocUpdated, useTableDoc } from '../../utils/tableDocs.js';
+import { listTableDocs, createTableDoc, deleteTableDoc, onTableDocUpdated, useTableDoc, resealGmDocs } from '../../utils/tableDocs.js';
 import { plainText } from '../../utils/plainText.js';
 import { btn, labelStyle, inputStyle, box, Field } from './sheetUi.jsx';
 import { Frame } from './SheetsPanel.jsx';
@@ -20,6 +20,7 @@ export default function GmPanel(props) {
   // The GM's own rolls from stat blocks: for the GMs (dice shown, result hidden) or for everyone.
   const [gmRollVisibility, setGmRollVisibility] = useState('gm');
   const shared = { ...props, isGm, gmRollVisibility };
+  const gmKey = useGmKey({ ...props, isGm });
   return (
     <Frame isMobile={isMobile} onClose={onClose} title={isGm ? 'GM screen' : 'Encounter and handouts'} label="Close the GM screen"
       right={isGm && (
@@ -29,6 +30,7 @@ export default function GmPanel(props) {
           <option value="public">My rolls: public</option>
         </select>
       )}>
+      {isGm && <GmKeyBanner gmKey={gmKey} names={props.names || {}} currentUser={props.currentUser} />}
       <div role="tablist" style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
         {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} type="button" onClick={() => setTab(k)} style={{ ...btn(tab === k), flex: 1 }}>{l}</button>)}
       </div>
@@ -38,6 +40,70 @@ export default function GmPanel(props) {
       )}
       {tab === 'notes' && <Notes {...shared} />}
     </Frame>
+  );
+}
+
+/**
+ * The GM key (v2.162.0), on a GM's device: make it the first time, make the
+ * next version when someone holding it is no longer a GM here, seal again
+ * what isn't sealed with the current one, and offer to share it with a GM
+ * who lacks it. Sharing is a GM's choice, never automatic, so a GM the server
+ * invented doesn't get it without a person agreeing.
+ */
+function useGmKey({ wave, isGm, e2ee, fetchAPI, showToast }) {
+  const [state, setState] = useState({ phase: 'loading' });
+  const busy = useRef(false);
+  const e2eeRef = useRef(e2ee); e2eeRef.current = e2ee;
+  const check = useCallback(async () => {
+    if (!isGm || busy.current) return;
+    const e = e2eeRef.current;
+    if (!e?.isUnlocked) { setState({ phase: 'locked' }); return; }
+    busy.current = true;
+    try {
+      let s = await e.loadGmKeys(wave.id, { fresh: true });
+      const holdCurrent = s.version > 0 && s.keys.has(s.version);
+      if (s.version === 0 || (s.needsRotation && holdCurrent)) {
+        s = await e.rotateGmKey(wave.id);
+        await resealGmDocs(fetchAPI, e, wave, s.version);
+      } else if (holdCurrent) {
+        await resealGmDocs(fetchAPI, e, wave, s.version);
+      }
+      setState({ phase: s.keys.has(s.version) ? 'ready' : 'waiting', ...s });
+    } catch (err) {
+      setState({ phase: 'error', error: err.code === 'GM_NO_KEYS' ? 'A GM has no verified encryption keys yet, so the GM key can\'t be made. They need to set up encryption.' : (err.message || 'The GM key is not available') });
+    } finally { busy.current = false; }
+  }, [isGm, wave, fetchAPI, e2ee?.isUnlocked]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { check(); }, [check]);
+  useEffect(() => {
+    const again = (ev) => { if (ev.detail?.waveId === wave.id) check(); };
+    window.addEventListener('cortex:table-gm-key', again);
+    window.addEventListener('cortex:wave-table-updated', again);
+    return () => { window.removeEventListener('cortex:table-gm-key', again); window.removeEventListener('cortex:wave-table-updated', again); };
+  }, [wave.id, check]);
+  const share = async (userId) => {
+    try { await e2eeRef.current.grantGmKey(wave.id, userId); showToast?.('GM key shared', 'success'); check(); }
+    catch (err) { showToast?.(err.code === 'GM_NO_KEYS' ? 'They have no verified encryption keys yet' : (err.message || 'Could not share the GM key'), 'error'); }
+  };
+  return { ...state, share, retry: check };
+}
+
+function GmKeyBanner({ gmKey, names, currentUser }) {
+  const note = { ...box, fontSize: '0.75rem', marginBottom: '8px' };
+  if (gmKey.phase === 'loading') return <div style={{ ...note, color: 'var(--text-dim)' }}>Getting the GM key…</div>;
+  if (gmKey.phase === 'locked') return <div style={{ ...note, color: 'var(--text-dim)' }}>🔒 Unlock encryption to use the GM-only parts of this screen.</div>;
+  if (gmKey.phase === 'error') return <div style={{ ...note, color: 'var(--accent-orange)' }}>{gmKey.error} <button type="button" onClick={gmKey.retry} style={{ ...btn(), minHeight: '26px', padding: '1px 8px' }}>Try again</button></div>;
+  if (gmKey.phase === 'waiting') return <div style={{ ...note, color: 'var(--accent-amber)' }}>🔑 Another GM has to share the GM key with you before you can see monster HP, stat blocks and GM notes. They'll be asked when they open the GM screen.</div>;
+  const others = (gmKey.missing || []).filter(id => id !== currentUser?.id);
+  return (
+    <>
+      {others.map(id => (
+        <div key={id} style={{ ...note, color: 'var(--accent-amber)', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ flex: 1 }}>🔑 {names[id] || 'A GM'} is a GM here but doesn't have the GM key yet.</span>
+          <button type="button" onClick={() => gmKey.share(id)} style={{ ...btn(true), minHeight: '28px', padding: '2px 10px' }}>Share it</button>
+        </div>
+      ))}
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem', marginBottom: '6px' }}>🔑 Monster HP, stat blocks and GM notes are sealed with the GM key: only the GMs' devices can open them.</div>
+    </>
   );
 }
 

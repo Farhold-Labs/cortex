@@ -1797,8 +1797,20 @@ CREATE TABLE IF NOT EXISTS table_docs (
         updated_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
         created_at  TEXT NOT NULL,
         updated_at  TEXT NOT NULL
-      );
+      , key_scope TEXT NOT NULL DEFAULT 'wave');
 CREATE INDEX IF NOT EXISTS idx_table_docs_wave ON table_docs(wave_id, kind);
+
+CREATE TABLE IF NOT EXISTS table_gm_keys (
+        wave_id            TEXT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+        user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key_version        INTEGER NOT NULL,
+        encrypted_key      TEXT NOT NULL,
+        nonce              TEXT NOT NULL,
+        wrapped_by         TEXT NOT NULL,
+        wrapper_public_key TEXT NOT NULL,
+        created_at         TEXT NOT NULL,
+        PRIMARY KEY (wave_id, user_id, key_version)
+      );
 
 -- ============ Full-text search triggers ============
 CREATE TRIGGER IF NOT EXISTS pings_fts_insert AFTER INSERT ON pings BEGIN
