@@ -141,6 +141,7 @@ As built: a **Map** tab on the GM screen (and on the players' screen).
   - A **hidden** token (a monster not yet seen) is GM-only, sealed with the GM key, so players never receive it.
   - Moves snap to the grid on release, show the distance while dragging (a diagonal counts as one square), and reach everyone through `table_doc_updated`.
 - **Moving around:** pan with a drag or two fingers, zoom with the wheel or a pinch.
+- **Following the encounter (v2.167.0):** tokens linked to a combatant (or sharing its character sheet) show whose turn it is and Bloodied or Down (`tokenStatus()` in `client/src/ttrpg/map.js`). The GM can make tokens from the encounter, one or all. **📏 Measure** draws a distance for anyone.
 
 What changed from the plan below:
 - **Only square grids;** hex isn't built.
