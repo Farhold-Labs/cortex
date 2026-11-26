@@ -141,6 +141,16 @@ As built: **📖 Rules reference** in a table's ⋮ menu, for everyone: spells, 
 
 The data comes from [5e-bits/5e-database](https://github.com/5e-bits/5e-database) at a pinned commit, converted by `tools/build-srd.mjs` into `client/src/srd/` (see its `SOURCE.md`); nothing was typed in from memory. A test checks every set, spot-checks numbers against the books, and rolls every dice string in it through the server's roller (a flat "5" for Aid, or a blowgun's 1, stays text). Each set is its own chunk, loaded when first opened and left out of the service worker's precache, so nobody downloads its 2 MB until they open it. Not yet: the table's own homebrew entries.
 
+**Fill from the SRD (v2.163.0).** A 5e sheet's About and Features tabs have **Fill from the SRD…**, and each class row **Level up**:
+- **Class and subclass features** for every level the character has (the subclass matched by name, or chosen), each kept as a reference (name, source, SRD id) whose text is read from the SRD, not stored in the sheet. Options of a feature (each Fighting Style) aren't added: they're chosen.
+- **Limited-use features become resources**, with the maximum and the rest that brings them back (`classResources()` in `client/src/ttrpg/fill.js`, our reading of the SRD class tables: Rage, Bardic Inspiration, Channel Divinity, Wild Shape, Second Wind, Action Surge, Indomitable, Ki or Focus Points, Divine Sense, Lay on Hands, Sorcery Points, Mystic Arcanum, Arcane Recovery, Favored Enemy). 2024 features that come back one at a time on a short rest are marked so. A fill again raises the maximum and adds the new uses to what's left.
+- **Species** (traits, speed, size; 2014 racial increases optionally added to the scores), **background** (skills, tools, feature or feat), the first class's **skills** (choose as many as it allows), **starting equipment** (each choice, and an item for "any martial weapon"; packs unpacked; weapons become attacks; gold to the purse) and **hit points** (the whole die at level 1, the fixed value after, plus Constitution).
+- **Level up** adds that level's features only, updates resources, and adds the fixed hit points (or not, for those who roll).
+- It **only adds**: nothing already on the sheet is added twice or replaced, and **Undo** takes it back out, leaving anything changed since.
+- **Several spells at once:** the spell picker can show only the character's classes' spells up to their highest slot, with a tick box each.
+
+Not yet: ability score improvements and feats chosen at a level are listed as features, not applied; class skills for a second class; 2024 background ability increases (shown, chosen by the player).
+
 As planned:
 - Searchable SRD text (spells, conditions, monsters, equipment) beside the wave, plus the table's own homebrew entries. Phase 2 already needs spell and equipment data for sheets, so most of this comes for free by then.
 

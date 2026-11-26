@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Build the rules reference (v2.161.0, docs/ttrpg/README.md phase 6) from the
- * 5e-bits SRD data: spells, monsters, equipment, magic items and conditions
+ * 5e-bits SRD data: spells, monsters, equipment, magic items and conditions,
+ * and since v2.163.0 classes, features, species, traits and backgrounds
  * for the 2014 rules (SRD 5.1) and the 2024 rules (SRD 5.2), both released by
  * Wizards of the Coast under CC-BY-4.0 (credited on the About page).
  *
@@ -135,6 +136,7 @@ function equipment(e, edition) {
     ranged: e.weapon_range === 'Ranged' || /Ranged/.test(category), range,
     finesse: (e.properties || []).some(p => p.index === 'finesse'),
     ac, strMin: e.str_minimum || 0, stealthDisadvantage: !!e.stealth_disadvantage,
+    contents: (e.contents || []).map(c => ({ id: c.item?.index, name: c.item?.name, qty: c.quantity || 1 })).filter(c => c.id),
     text: text(e.desc || e.description),
   };
 }
@@ -149,6 +151,132 @@ function magicItem(m) {
 
 function condition(c) { return { id: c.index, name: c.name, text: text(c.desc || c.description) }; }
 
+// ---- Characters (v2.163.0): classes, their features by level, species,
+// backgrounds and starting equipment, for "fill from the SRD" on a sheet.
+
+const SKILL_KEY = (name) => {
+  const words = String(name).replace(/^Skill:\s*/, '').split(/\s+/);
+  return words.map((w, i) => (i ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase())).join('');
+};
+const ABILITY_KEYS = { STR: 'str', DEX: 'dex', CON: 'con', INT: 'int', WIS: 'wis', CHA: 'cha' };
+
+// Starting equipment, flattened: a group is a choice between alternatives,
+// each some items, some gold, and picks from a category ("any martial melee weapon").
+function equipmentGroups(list, edition, ctx) {
+  const leaf = (o, alt) => {
+    if (!o) return;
+    if (o.option_type === 'counted_reference') {
+      const id = o.of?.index;
+      if (ctx.categories[id]) alt.picks.push({ name: o.of.name, count: o.count || 1, items: ctx.categories[id] });
+      else if (id) alt.items.push({ id, name: o.of.name + (o.of.note ? ` (${o.of.note})` : ''), qty: o.count || 1 });
+    } else if (o.option_type === 'money') alt.gp += o.unit === 'gp' ? o.count : o.unit === 'sp' ? o.count / 10 : o.count / 100;
+    else if (o.option_type === 'multiple') (o.items || []).forEach(i => leaf(i, alt));
+    else if (o.option_type === 'choice') {
+      const f = o.choice?.from;
+      if (f?.option_set_type === 'equipment_category') alt.picks.push({ name: f.equipment_category.name, count: o.choice.choose || 1, items: ctx.categories[f.equipment_category.index] || [] });
+    } else if (o.option_type === 'reference' && o.item) alt.items.push({ id: o.item.index, name: o.item.name, qty: 1 });
+  };
+  return (list || []).map((g) => {
+    const from = g.from || {};
+    const label = g.desc || '';
+    let alternatives;
+    if (from.option_set_type === 'equipment_category') {
+      alternatives = [{ items: [], gp: 0, picks: [{ name: from.equipment_category.name, count: g.choose || 1, items: ctx.categories[from.equipment_category.index] || [] }] }];
+    } else {
+      alternatives = (from.options || []).map((o) => { const alt = { items: [], gp: 0, picks: [] }; leaf(o, alt); return alt; });
+    }
+    alternatives.forEach((alt, i) => { alt.label = describeAlt(alt) || `Option ${i + 1}`; });
+    return { label, alternatives };
+  }).filter(g => g.alternatives.length);
+}
+function describeAlt(alt) {
+  return [
+    ...alt.items.map(i => (i.qty > 1 ? `${i.qty} × ${i.name}` : i.name)),
+    ...alt.picks.map(p => `${p.count > 1 ? `${p.count} × ` : ''}any ${p.name.replace(/s$/, '').toLowerCase()}`),
+    alt.gp ? `${alt.gp} GP` : '',
+  ].filter(Boolean).join(', ');
+}
+
+function characterSets(edition) {
+  const categories = Object.fromEntries(read(edition, 'Equipment-Categories').map(c => [c.index, (c.equipment || []).map(e => ({ id: e.index, name: e.name }))]));
+  const ctx = { categories };
+  const levels = read(edition, 'Levels');
+  const features = new Map();
+  for (const f of read(edition, 'Features')) {
+    if (f.parent) continue; // an option of another feature (a Fighting Style), chosen, not gained
+    features.set(f.index, { id: f.index, name: f.name, text: text(f.desc || f.description) });
+  }
+  for (const f of (fs.existsSync(path.join(srcDir, `${edition}-Feats.json`)) ? read(edition, 'Feats') : [])) {
+    features.set(`feat-${f.index}`, { id: `feat-${f.index}`, name: `Feat: ${f.name}`, text: text(f.desc || f.description) });
+  }
+  const subclasses = read(edition, 'Subclasses');
+  const classes = read(edition, 'Classes').map((c) => {
+    const lv = {};
+    for (const l of levels.filter(x => x.class?.index === c.index && !x.subclass)) {
+      const counters = Object.fromEntries(Object.entries(l.class_specific || {}).filter(([, v]) => typeof v === 'number'));
+      lv[l.level] = { features: (l.features || []).map(f => f.index).filter(id => features.has(id)), counters };
+    }
+    const subs = subclasses.filter(sc => sc.class?.index === c.index).map(sc => {
+      const sl = {};
+      for (const l of levels.filter(x => x.subclass?.index === sc.index)) sl[l.level] = (l.features || []).map(f => f.index).filter(id => features.has(id));
+      return { id: sc.index, name: sc.name, levels: sl };
+    });
+    const skillChoice = (c.proficiency_choices || []).find(pc => JSON.stringify(pc).includes('Skill:'));
+    const skillOptions = [];
+    const collect = (o) => { if (!o) return; if (o.item?.name?.startsWith('Skill:')) skillOptions.push(SKILL_KEY(o.item.name)); if (o.choice) (o.choice.from?.options || []).forEach(collect); };
+    (skillChoice?.from?.options || []).forEach(collect);
+    const fixed = (c.starting_equipment || []).map(e => ({ id: e.equipment.index, name: e.equipment.name, qty: e.quantity || 1 }));
+    return {
+      id: c.index, name: c.name, hitDie: c.hit_die,
+      skills: skillChoice ? { choose: skillChoice.choose, from: [...new Set(skillOptions)] } : null,
+      levels: lv, subclasses: subs,
+      equipment: { fixed, groups: equipmentGroups(c.starting_equipment_options, edition, ctx) },
+    };
+  });
+
+  const traitsData = read(edition, 'Traits');
+  const traits = traitsData.map(t => ({ id: t.index, name: t.name, text: text(t.desc || t.description) }));
+  const bonuses = (list) => (list || []).map(b => `${b.ability_score?.name} +${b.bonus}`).join(', ');
+  let species;
+  if (edition === '2014') {
+    const subraces = read(edition, 'Subraces');
+    species = read(edition, 'Races').map(r => ({
+      id: r.index, name: r.name, speed: r.speed, size: r.size, abilityBonuses: bonuses(r.ability_bonuses),
+      traits: (r.traits || []).map(t => t.index),
+      subspecies: subraces.filter(sr => sr.race?.index === r.index).map(sr => ({
+        id: sr.index, name: sr.name, abilityBonuses: bonuses(sr.ability_bonuses), traits: (sr.racial_traits || []).map(t => t.index),
+      })),
+    }));
+  } else {
+    const subspecies = read(edition, 'Subspecies');
+    species = read(edition, 'Species').map(r => ({
+      id: r.index, name: r.name, speed: r.speed, size: r.size, abilityBonuses: '',
+      traits: (r.traits || []).map(t => t.index),
+      subspecies: subspecies.filter(sr => sr.species?.index === r.index).map(sr => ({ id: sr.index, name: sr.name, abilityBonuses: '', traits: (sr.traits || []).map(t => t.index) })),
+    }));
+  }
+
+  const backgrounds = read(edition, 'Backgrounds').map(b => {
+    const profs = b.starting_proficiencies || b.proficiencies || [];
+    const feature = b.feature ? { id: `bg-${b.index}`, name: b.feature.name, text: text(b.feature.desc) } : null;
+    if (feature) features.set(feature.id, feature);
+    return {
+      id: b.index, name: b.name,
+      skills: profs.filter(p => p.name.startsWith('Skill:')).map(p => SKILL_KEY(p.name)),
+      tools: profs.filter(p => !p.name.startsWith('Skill:')).map(p => p.name.replace(/^Tool:\s*/, '')),
+      abilityScores: (b.ability_scores || []).map(a => ABILITY_KEYS[a.name] || a.index),
+      feature: feature ? feature.id : (b.feat ? `feat-${b.feat.index}` : null),
+      featNote: b.feat?.note || '',
+      equipment: {
+        fixed: (b.starting_equipment || []).map(e => ({ id: e.equipment.index, name: e.equipment.name, qty: e.quantity || 1 })),
+        gp: b.starting_gold?.unit === 'gp' ? b.starting_gold.quantity : 0,
+        groups: equipmentGroups(b.starting_equipment_options || b.equipment_options, edition, ctx),
+      },
+    };
+  });
+  return { classes, features: [...features.values()], species, traits, backgrounds };
+}
+
 const byName = (a, b) => a.name.localeCompare(b.name);
 const counts = {};
 for (const edition of ['2014', '2024']) {
@@ -160,6 +288,7 @@ for (const edition of ['2014', '2024']) {
     equipment: read(edition, 'Equipment').map(e => equipment(e, edition)),
     'magic-items': read(edition, 'Magic-Items').filter(m => !m.variant).map(magicItem),
     conditions: read(edition, 'Conditions').map(condition),
+    ...characterSets(edition),
   };
   for (const [name, list] of Object.entries(sets)) {
     list.sort(byName);

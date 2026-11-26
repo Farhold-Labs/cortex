@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.163.0] - 2026-11-25
+
+Tabletop role-playing: fill a character sheet from the SRD. Web client only, no migration.
+
+### Added
+- **Fill from the SRD…** on a D&D 5e sheet's About and Features tabs. It shows everything it would add, adds it in one go, and offers **Undo**.
+  - **Class and subclass features** for every level the character has. The subclass is matched by name, or chosen from the SRD's. They're listed on the Features tab by name and source ("Rage · Barbarian 1"); tap one for its full text.
+  - **Limited-use features become resources**, with the right maximum and the right rest to get them back: Rage, Bardic Inspiration, Channel Divinity, Wild Shape, Second Wind, Action Surge, Indomitable, Ki or Focus Points, Divine Sense, Lay on Hands, Sorcery Points, Mystic Arcanum, Arcane Recovery, Favored Enemy. In 2024 several come back one at a time on a short rest; those say so.
+  - **Species or race:** traits, speed and size. For 2014, the racial ability increases can be added to the scores if you choose.
+  - **Background:** skills, tools, and its feature (2014) or feat (2024).
+  - **Class skills:** choose as many as the class allows.
+  - **Starting equipment:** choose between each option, and pick an item where it says "any martial weapon". Packs are unpacked so their weight counts, weapons become attacks, and the gold goes in the purse.
+  - **Hit points:** the whole hit die at level 1, the fixed value after, plus Constitution each level. This is ticked for a sheet still on the blank 10 HP.
+- **Level up** on each class (About tab). It adds that level's features (and asks for a subclass at the level that brings one), raises resources (new uses added to what's left), and adds the fixed hit points, or leaves them to you if you roll.
+- **Several spells at once:** Spells → + From the SRD can show only your class's spells up to your highest spell slot, with a tick box on each; then **Add N spells**.
+- **It only adds.** Nothing on the sheet is replaced, and nothing already there is added twice, so filling or levelling again is safe. **Undo** takes a fill back out and leaves anything changed since.
+- **Sheet size:** feature text is read from the SRD when shown, not stored in the sheet, so sheets stay small.
+
+### How the data is made
+- `tools/build-srd.mjs` now also writes classes (features by level, the per-level counts such as Rages and Ki, subclasses, skill choices, starting equipment), all class and subclass features, species and their traits, backgrounds, and 2024 feats. It uses the same pinned 5e-bits commit, so everything is from the SRD.
+- **Who decided the resource rules:** which features count as limited-use, and which rest brings them back, is my reading of the SRD class tables. It's in `classResources()` in `client/src/ttrpg/fill.js`, covered by tests.
+
+### Not yet
+- Ability score improvements and feats you choose at a level are listed as features, not applied to the sheet.
+- No skill choices for a second class.
+- The 2024 background ability increases are shown for you to apply.
+
+### Verified
+- **Tests:** 869 pass. New: `tests/ttrpg-fill.test.cjs` (6), all run against the real generated data.
+  - Every class and level in both editions resolves to features, every species trait exists, and every item named in starting equipment is in the equipment list.
+  - A 2024 Fighter 5 Champion gets the right features, resources, skills, species, background and kit, and filling it twice adds nothing twice.
+  - A 2014 Barbarian levelling from 2 to 3 gets Primal Path and Frenzy only, and Rage goes from 2 to 3 with the new use added to what was left.
+  - Each edition's resource rules hold.
+  - Undo works and keeps later changes.
+  - Hit points are right, including multiclass.
+- **Headless only** (Chrome on dev, as zoe at 390×844): a new 2024 Wizard filled as a High Elf Sage.
+  - 12 features, Arcane Recovery, four skills, both kits and 13 GP, and 6 HP.
+  - Levelled to 2: Scholar, and 10 HP.
+  - Three spells added at once from the 45 Wizard spells of level 1 or lower.
+
 ## [2.162.0] - 2026-11-25
 
 Tabletop role-playing: the GM's notes, stat blocks and monster hit points are sealed to the GMs' own keys. Server and web client, no app build. Migrates (one new table, one new column).

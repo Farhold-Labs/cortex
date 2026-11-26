@@ -64,7 +64,8 @@ export function SrdEntry({ kind, x, roll }) {
  * A searchable list. With `onPick`, each open entry has a button to take it
  * (into a sheet or the GM's stat blocks).
  */
-export function SrdList({ edition, kind, onPick, pickLabel = 'Add', roll, filter: fixedFilter }) {
+export function SrdList({ edition, kind, onPick, pickLabel = 'Add', roll, filter: fixedFilter, onPickMany, taken }) {
+  const [selected, setSelected] = useState([]);
   const [all, setAll] = useState(null);
   const [error, setError] = useState(null);
   const [q, setQ] = useState('');
@@ -112,11 +113,19 @@ export function SrdList({ edition, kind, onPick, pickLabel = 'Add', roll, filter
       <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>{results.length} of {all.length}</div>
       {results.slice(0, shown).map(x => (
         <div key={x.id}>
-          <button type="button" onClick={() => setOpen(open === x.id ? null : x.id)} aria-expanded={open === x.id}
-            style={{ ...box, width: '100%', textAlign: 'left', cursor: 'pointer', color: 'var(--text-primary)', fontFamily: 'monospace', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span>{x.name}</span>
-            <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>{summary(kind, x)}</span>
-          </button>
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'stretch' }}>
+            {onPickMany && (
+              <label style={{ ...box, display: 'flex', alignItems: 'center', padding: '0 8px' }} title={taken?.has(x.id) ? 'Already on the sheet' : undefined}>
+                <input type="checkbox" aria-label={`Choose ${x.name}`} disabled={taken?.has(x.id)} checked={taken?.has(x.id) || selected.includes(x.id)}
+                  onChange={(e) => setSelected(sel => (e.target.checked ? [...sel, x.id] : sel.filter(y => y !== x.id)))} />
+              </label>
+            )}
+            <button type="button" onClick={() => setOpen(open === x.id ? null : x.id)} aria-expanded={open === x.id}
+              style={{ ...box, flex: 1, textAlign: 'left', cursor: 'pointer', color: 'var(--text-primary)', fontFamily: 'monospace', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span>{x.name}</span>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>{summary(kind, x)}</span>
+            </button>
+          </div>
           {open === x.id && (
             <div style={{ margin: '4px 0 8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {onPick && <button type="button" onClick={() => onPick(x)} style={{ ...btn(true), alignSelf: 'flex-start' }}>{pickLabel}</button>}
@@ -126,12 +135,20 @@ export function SrdList({ edition, kind, onPick, pickLabel = 'Add', roll, filter
         </div>
       ))}
       {results.length > shown && <button type="button" onClick={() => setShown(n => n + PAGE)} style={btn()}>Show more</button>}
+      {onPickMany && selected.length > 0 && (
+        <div style={{ position: 'sticky', bottom: 0, padding: '8px 0', background: 'var(--bg-surface)', display: 'flex', gap: '6px' }}>
+          <button type="button" onClick={() => { onPickMany(all.filter(x => selected.includes(x.id))); setSelected([]); }} style={btn(true)}>
+            Add {selected.length} {kind === 'spells' ? `spell${selected.length === 1 ? '' : 's'}` : ''}
+          </button>
+          <button type="button" onClick={() => setSelected([])} style={btn()}>Clear</button>
+        </div>
+      )}
     </div>
   );
 }
 
 /** A picker that takes over a panel's body, with a way back. */
-export function SrdPicker({ edition, kind, onPick, onClose, pickLabel, title, filter }) {
+export function SrdPicker({ edition, kind, onPick, onClose, pickLabel, title, filter, onPickMany, taken, extra }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -140,7 +157,8 @@ export function SrdPicker({ edition, kind, onPick, onClose, pickLabel, title, fi
         <span style={{ flex: 1 }} />
         <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>SRD {edition === '2014' ? '5.1 (2014)' : '5.2 (2024)'}</span>
       </div>
-      <SrdList edition={edition} kind={kind} onPick={onPick} pickLabel={pickLabel} filter={filter} />
+      {extra}
+      <SrdList edition={edition} kind={kind} onPick={onPick} pickLabel={pickLabel} filter={filter} onPickMany={onPickMany} taken={taken} />
     </div>
   );
 }
